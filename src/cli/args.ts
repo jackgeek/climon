@@ -5,7 +5,7 @@ export type ParsedCommand =
   | { command: "attach"; id: string }
   | { command: "ls" }
   | { command: "kill"; id: string }
-  | { command: "run"; argv: string[] };
+  | { command: "run"; argv: string[]; headless: boolean };
 
 export const helpText = `climon — web-based monitor for interactive CLI sessions
 
@@ -74,7 +74,22 @@ export function parseArgs(argv: string[]): ParsedCommand {
       }
       return { command: "kill", id };
     }
+    case "run": {
+      let headless = false;
+      const runArgv: string[] = [];
+      for (const arg of rest) {
+        if (arg === "--headless" && runArgv.length === 0) {
+          headless = true;
+        } else {
+          runArgv.push(arg);
+        }
+      }
+      if (runArgv.length === 0) {
+        throw new Error("Provide a command to run, e.g. `climon run npm test`.");
+      }
+      return { command: "run", argv: runArgv, headless };
+    }
     default:
-      return { command: "run", argv };
+      return { command: "run", argv, headless: false };
   }
 }
