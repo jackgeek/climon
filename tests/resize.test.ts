@@ -1,0 +1,30 @@
+import { describe, expect, test } from "bun:test";
+import { clampResize } from "../src/daemon/daemon.js";
+
+const host = { cols: 80, rows: 24 };
+
+describe("clampResize", () => {
+  test("caps a larger browser viewport to the host terminal size", () => {
+    expect(clampResize({ cols: 200, rows: 50, source: "viewer" }, host, true)).toEqual({ cols: 80, rows: 24 });
+  });
+
+  test("leaves a smaller browser viewport untouched", () => {
+    expect(clampResize({ cols: 60, rows: 20, source: "viewer" }, host, true)).toEqual({ cols: 60, rows: 20 });
+  });
+
+  test("never clamps the host terminal itself", () => {
+    expect(clampResize({ cols: 200, rows: 50, source: "host" }, host, true)).toEqual({ cols: 200, rows: 50 });
+  });
+
+  test("passes the browser viewport through when clamping is disabled", () => {
+    expect(clampResize({ cols: 200, rows: 50, source: "viewer" }, host, false)).toEqual({ cols: 200, rows: 50 });
+  });
+
+  test("treats a missing source as a viewer", () => {
+    expect(clampResize({ cols: 200, rows: 50 }, host, true)).toEqual({ cols: 80, rows: 24 });
+  });
+
+  test("floors dimensions at 1x1", () => {
+    expect(clampResize({ cols: 0, rows: -5, source: "host" }, host, true)).toEqual({ cols: 1, rows: 1 });
+  });
+});

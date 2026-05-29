@@ -1,0 +1,5 @@
+# Always use LF for source and config files so the `#!/usr/bin/env bun`
+# shebang and shell scripts work under WSL/POSIX even when edited on Windows.
+* text=auto eol=lf
+*.png binary
+*.ico binary

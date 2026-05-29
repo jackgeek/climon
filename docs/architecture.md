@@ -1,0 +1,119 @@
+# Architecture
+
+climon replaces the original tmux + ttyd design with a built-in, cross-platform
+session manager. There are three roles: the **launcher/client**, the per-session
+**daemon**, and the **dashboard server**. They are decoupled through the
+filesystem (session metadata) and per-session sockets.
+
+```
+climon <cmd>  ──spawn(detached)──►  session daemon  ──Bun.Terminal──►  user command
+     │  (local attach client)            │  owns PTY + scrollback ring buffer
+     │  raw-mode stdin/stdout            │  listens on per-session socket
+     └──────── IPC socket ───────────────┤  runs attention detection
+                                          │  writes ~/.climon/sessions/<id>.json
+climon server (Bun.serve)                 │  persists final buffer + status on exit
+     │  scans ~/.climon/sessions/*.json   │
+     │  fs.watch → SSE status updates     │
+     │  WS /api/sessions/:id/attach ──────┘  (bridges browser ⇆ daemon socket)
+     └─ serves dashboard + vendored xterm.js (no iframe)
+```
+
+## Components
+
+### PTY (`src/pty.ts`)
+
+Wraps Bun's native pseudo-terminal API (`new Bun.Terminal(...)` +
+`Bun.spawn(cmd, { terminal })`). Exposes a small `PtyHandle`:
+`onData`, `onExit`, `write`, `resize`, `kill`, `pid`.
+
+Early output and a fast exit are buffered inside `spawnPty` so a listener that
+attaches a moment after spawn never misses data. (This was the root cause of an
+early bug: node-pty under Bun closed the master fd prematurely and lost output —
+replacing it with `Bun.Terminal` fixed it.)
+
+### Session daemon (`src/daemon/daemon.ts`)
+
+Launched as `climon __session <id>`, detached from the launcher. It:
+
+1. Reads the session metadata file.
+2. Spawns the PTY and **synchronously** attaches `onData`/`onExit`.
+3. Patches metadata to `running` with its PID.
+4. Listens on the per-session socket (`createServer`), replaying the scrollback
+   buffer to each new client.
+5. Appends PTY output to a ring buffer (`src/daemon/buffer.ts`, ~256 KB),
+   broadcasts it to connected clients, and runs attention detection
+   (throttled to once per 750 ms, over the most recent 8 KB).
+6. On PTY exit: persists final scrollback, patches metadata to
+   `completed`/`failed` with the exit code, notifies clients, and shuts down.
+
+Because the daemon owns the PTY, the dashboard server can come and go freely.
+
+### IPC framing (`src/ipc/frame.ts`)
+
+A length-prefixed binary protocol over the socket:
+`[4-byte BE length][1-byte type][payload]`. Types: `Output`, `Input`, `Resize`,
+`Exit`, `Replay`, `PtySize`. `FrameDecoder` reassembles frames split across
+chunks. `Resize` payloads carry a `source` (`host` for the local terminal,
+`viewer` for a browser); the daemon clamps `viewer` resizes to the host
+terminal's size (configurable, on by default) and broadcasts the resulting
+`PtySize` so browsers render the same grid as the terminal.
+
+### Local client (`src/client/connect.ts`)
+
+Connects to the daemon socket, puts stdin in raw mode, forwards keystrokes as
+`Input` frames, renders `Output`/`Replay` to stdout, sends `Resize` on terminal
+resize, and detaches on **Ctrl-\ then d** without stopping the command.
+
+### Launcher (`src/launcher.ts`)
+
+`startMonitoredCommand` writes metadata, spawns the daemon (logging its output to
+`~/.climon/sessions/<id>.log`), waits for the socket, prints the dashboard URL,
+then attaches the local client. Also implements `attach`, `ls`, and `kill`.
+
+### Dashboard server (`src/server/server.ts`)
+
+A `Bun.serve` server, stateless with respect to PTYs:
+
+- `GET /health` — unauthenticated `{ ok: true }` liveness probe.
+- `GET /` — dashboard HTML (localhost allowed; LAN requires a token).
+- `GET /api/sessions` — current sessions, priority-sorted.
+- `DELETE /api/sessions/:id` — clean up a session, removing its metadata and
+  scrollback. Does not signal the daemon, so an attached climon client keeps
+  running.
+- `GET /api/sessions/:id/scrollback` — final output for completed sessions.
+- `GET /api/events` — Server-Sent Events; a debounced `fs.watch` on the sessions
+  directory pushes updated lists.
+- `WS /api/sessions/:id/attach` — bridges the browser WebSocket to the daemon
+  socket, translating between the JSON browser protocol and the binary frame
+  protocol.
+- `GET /assets/*` — vendored `xterm.js`, its CSS, and the fit addon, resolved
+  from `node_modules` via `Bun.resolveSync`.
+
+### Dashboard UI (`src/server/assets.ts`)
+
+Renders the session list with status badges and an `xterm.js` terminal. Live
+sessions (`running`/`needs-attention`) connect over the WebSocket; finished
+sessions fetch and display their saved scrollback read-only. Each session row
+has a close box (revealed on hover) that cleans up the session via
+`DELETE /api/sessions/:id` without ending an attached climon client.
+
+## Data locations (`$CLIMON_HOME`, default `~/.climon`)
+
+| Path | Purpose |
+|------|---------|
+| `config.json` | server host/port/lan/token, terminal clamp option |
+| `sessions/<id>.json` | session metadata |
+| `sessions/<id>.scrollback` | final captured output |
+| `sessions/<id>.log` | daemon stdout/stderr (diagnostics) |
+| `sock/<id>.sock` | per-session IPC socket (POSIX) |
+| `\\.\pipe\climon-<id>` | per-session IPC pipe (Windows) |
+
+## Priority ordering (`src/priority.ts`)
+
+`needs-attention` < `running` < `completed`/`failed` < `disconnected`, ties
+broken by most-recent update. This drives both the dashboard and `climon ls`.
+
+## Attention detection (`src/attention.ts`)
+
+Regex rules over recent output detect prompts such as "continue?", "[y/n]",
+"press enter", "waiting for input", and Copilot-style attention requests.
