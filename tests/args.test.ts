@@ -42,7 +42,32 @@ describe("parseArgs", () => {
   });
 
   test("treats unknown commands as run", () => {
-    expect(parseArgs(["copilot", "--foo"])).toEqual({ command: "run", argv: ["copilot", "--foo"] });
+    expect(parseArgs(["copilot", "--foo"])).toEqual({
+      command: "run",
+      argv: ["copilot", "--foo"],
+      headless: false
+    });
+  });
+
+  test("parses explicit run with --headless", () => {
+    expect(parseArgs(["run", "--headless", "npm", "test"])).toEqual({
+      command: "run",
+      argv: ["npm", "test"],
+      headless: true
+    });
+  });
+
+  test("parses explicit run without --headless", () => {
+    expect(parseArgs(["run", "npm", "test"])).toEqual({
+      command: "run",
+      argv: ["npm", "test"],
+      headless: false
+    });
+  });
+
+  test("throws when run has no command", () => {
+    expect(() => parseArgs(["run"])).toThrow();
+    expect(() => parseArgs(["run", "--headless"])).toThrow();
   });
 
   test("throws when session id missing", () => {

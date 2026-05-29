@@ -29,7 +29,7 @@ async function main(): Promise<number> {
     case "kill":
       return killSession(parsed.id);
     case "run":
-      return startMonitoredCommand(parsed.argv);
+      return startMonitoredCommand(parsed.argv, { headless: parsed.headless });
     default:
       process.stderr.write(helpText);
       return 1;

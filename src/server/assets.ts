@@ -61,7 +61,10 @@ export function renderDashboard(): string {
   * { box-sizing: border-box; }
   body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #0d1117; color: #e6edf3; display: flex; height: 100vh; }
   #sidebar { width: 320px; min-width: 320px; border-right: 1px solid #30363d; overflow-y: auto; display: flex; flex-direction: column; }
-  #sidebar h1 { font-size: 16px; margin: 0; padding: 16px; border-bottom: 1px solid #30363d; }
+  #sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 16px; border-bottom: 1px solid #30363d; }
+  #sidebar-header h1 { font-size: 16px; margin: 0; }
+  #new-session { background: transparent; border: 1px solid #30363d; color: #8b949e; border-radius: 4px; width: 26px; height: 26px; font-size: 18px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  #new-session:hover { background: #21262d; color: #e6edf3; }
   .session { padding: 12px 16px; border-bottom: 1px solid #21262d; cursor: pointer; position: relative; }
   .session:hover { background: #161b22; }
   .session.active { background: #1f6feb33; }
@@ -99,11 +102,24 @@ export function renderDashboard(): string {
   body.maximized #exit-maximize { display: block; }
   #exit-maximize { display: none; position: fixed; top: 8px; right: 8px; z-index: 20; border: 1px solid #30363d; background: #161b22cc; color: #e6edf3; border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
   #exit-maximize:hover { background: #21262d; }
+  #modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 30; align-items: center; justify-content: center; }
+  #modal-backdrop.open { display: flex; }
+  #modal { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; width: 440px; max-width: 90vw; }
+  #modal h2 { margin: 0 0 4px; font-size: 16px; }
+  #modal label { display: block; font-size: 12px; color: #8b949e; margin: 14px 0 4px; }
+  #modal input { width: 100%; padding: 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; font-family: ui-monospace, monospace; font-size: 13px; }
+  #modal input:focus { outline: none; border-color: #1f6feb; }
+  #modal-error { color: #ff7b72; font-size: 12px; margin-top: 12px; min-height: 16px; }
+  #modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #modal-actions button { padding: 8px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #30363d; }
+  #modal-cancel { background: #21262d; color: #e6edf3; }
+  #modal-create { background: #238636; color: #fff; border-color: #238636; }
+  #modal-create:disabled { opacity: 0.6; cursor: default; }
 </style>
 </head>
 <body>
   <div id="sidebar">
-    <h1>climon</h1>
+    <div id="sidebar-header"><h1>climon</h1><button id="new-session" title="New session">+</button></div>
     <div id="sessions"></div>
   </div>
   <div id="main">
@@ -111,6 +127,20 @@ export function renderDashboard(): string {
     <div id="terminal"></div>
   </div>
   <button id="exit-maximize" title="Exit fullscreen">&#10005; Exit</button>
+  <div id="modal-backdrop">
+    <div id="modal">
+      <h2>New Session</h2>
+      <label for="cmd-input">Command</label>
+      <input id="cmd-input" type="text" placeholder="e.g. npm run dev" autocomplete="off" spellcheck="false" />
+      <label for="cwd-input">Working directory (optional)</label>
+      <input id="cwd-input" type="text" placeholder="Leave blank for server's working directory" autocomplete="off" spellcheck="false" />
+      <div id="modal-error"></div>
+      <div id="modal-actions">
+        <button id="modal-cancel">Cancel</button>
+        <button id="modal-create">Create</button>
+      </div>
+    </div>
+  </div>
   <script src="/assets/xterm.js"></script>
   <script src="/assets/addon-fit.js"></script>
   <script>
@@ -124,6 +154,7 @@ export function renderDashboard(): string {
     let ws = null;
     let activeId = null;
     let sessions = [];
+    let pendingSelectId = null;
 
     function ensureTerm() {
       if (term) return;
@@ -270,10 +301,89 @@ export function renderDashboard(): string {
     function applySessions(list) {
       sessions = list;
       renderSessions();
-      if (!activeId && sessions.length > 0) {
+      if (pendingSelectId && sessions.find((s) => s.id === pendingSelectId)) {
+        const id = pendingSelectId;
+        pendingSelectId = null;
+        selectSession(id);
+      } else if (!activeId && sessions.length > 0) {
         selectSession(sessions[0].id);
       }
     }
+
+    const newSessionBtn = document.getElementById("new-session");
+    const backdrop = document.getElementById("modal-backdrop");
+    const cmdInput = document.getElementById("cmd-input");
+    const cwdInput = document.getElementById("cwd-input");
+    const modalError = document.getElementById("modal-error");
+    const createBtn = document.getElementById("modal-create");
+    const cancelBtn = document.getElementById("modal-cancel");
+
+    function openModal() {
+      modalError.textContent = "";
+      cmdInput.value = "";
+      cwdInput.value = "";
+      createBtn.disabled = false;
+      backdrop.classList.add("open");
+      cmdInput.focus();
+    }
+
+    function closeModal() {
+      backdrop.classList.remove("open");
+    }
+
+    async function createSession() {
+      if (createBtn.disabled) return;
+      const command = cmdInput.value.trim();
+      if (!command) {
+        modalError.textContent = "Command is required.";
+        return;
+      }
+      createBtn.disabled = true;
+      modalError.textContent = "";
+      const body = { command: command };
+      const cwd = cwdInput.value.trim();
+      if (cwd) {
+        body.cwd = cwd;
+      }
+      if (term) {
+        body.cols = term.cols;
+        body.rows = term.rows;
+      }
+      try {
+        const res = await fetch("/api/sessions" + (location.search || ""), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          modalError.textContent = text || ("Failed (" + res.status + ")");
+          createBtn.disabled = false;
+          return;
+        }
+        const data = await res.json();
+        closeModal();
+        const existing = sessions.find((s) => s.id === data.id);
+        if (existing) {
+          selectSession(data.id);
+        } else {
+          pendingSelectId = data.id;
+        }
+      } catch (e) {
+        modalError.textContent = "Network error.";
+        createBtn.disabled = false;
+      }
+    }
+
+    newSessionBtn.addEventListener("click", openModal);
+    cancelBtn.addEventListener("click", closeModal);
+    createBtn.addEventListener("click", createSession);
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeModal(); });
+    cmdInput.addEventListener("keydown", (e) => { if (e.key === "Enter") createSession(); });
+    cwdInput.addEventListener("keydown", (e) => { if (e.key === "Enter") createSession(); });
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && backdrop.classList.contains("open")) closeModal();
+    });
 
     const es = new EventSource("/api/events" + (location.search || ""));
     es.addEventListener("sessions", (ev) => {
