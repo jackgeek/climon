@@ -65,6 +65,12 @@ view, interact with, or manage your monitored sessions from a browser.
   dashboard.
 - `--port N` — use a custom port instead of the default `3131`.
 
+Once the server is running you can also start new sessions directly from the
+dashboard: click the **[+]** button in the sidebar, enter a command (and an
+optional working directory), and a new monitored session is spawned for you.
+For security this only works from the machine running the server (loopback);
+remote/LAN clients cannot create sessions.
+
 ### `climon ls`
 
 List all monitored sessions with their IDs, status, and the command that was
