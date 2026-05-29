@@ -120,12 +120,13 @@ export async function startMonitoredCommand(
   await writeSessionMeta(meta);
 
   spawnDaemon(id, process.env);
-  await waitForSocket(meta.socketPath);
 
   if (options.headless) {
     process.stdout.write(`${id}\n`);
     return 0;
   }
+
+  await waitForSocket(meta.socketPath);
 
   const dashboardUrl = `http://${config.server.host}:${config.server.port}/`;
   process.stdout.write(`climon monitoring session ${id} — dashboard: ${dashboardUrl}\r\n`);

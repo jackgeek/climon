@@ -1,6 +1,8 @@
 import { watch } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { connect, type Socket } from "node:net";
+import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import type { ServerWebSocket } from "bun";
 import {
@@ -36,6 +38,68 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+export function splitCommand(command: string): string[] {
+  return command.trim().split(/\s+/).filter((part) => part.length > 0);
+}
+
+function normalizeDimension(value: unknown, fallback: number): string {
+  const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  if (Number.isFinite(n) && n > 0) {
+    return String(Math.trunc(n));
+  }
+  return String(fallback);
+}
+
+/**
+ * Spawns `climon run --headless <argv>` using this process's own runtime and
+ * entry script (the same mechanism the per-session daemon uses), captures the
+ * session id it prints to stdout, and resolves with that id. Rejects on
+ * non-zero exit, spawn error, or timeout.
+ */
+function spawnHeadlessSession(
+  argv: string[],
+  cwd: string,
+  cols: string,
+  rows: string
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [process.argv[1], "run", "--headless", ...argv],
+      {
+        cwd,
+        env: { ...process.env, CLIMON_COLS: cols, CLIMON_ROWS: rows },
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("Timed out creating session"));
+    }, 15000);
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      const id = stdout.trim().split(/\s+/).pop() ?? "";
+      if (code === 0 && id) {
+        resolve(id);
+      } else {
+        reject(new Error(stderr.trim() || `climon run exited with code ${code ?? "unknown"}`));
+      }
+    });
+  });
 }
 
 function probeSocket(socketPath: string, timeoutMs = 2000): Promise<boolean> {
@@ -158,6 +222,46 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       if (url.pathname === "/") {
         return new Response(renderDashboard(), { headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+
+      if (url.pathname === "/api/sessions" && request.method === "POST") {
+        // Spawning processes is privileged: allow loopback only, even when a
+        // valid LAN token is present.
+        if (!isLocal(request, srv)) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let payload: { command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown };
+        try {
+          payload = (await request.json()) as typeof payload;
+        } catch {
+          return new Response("Invalid JSON body", { status: 400 });
+        }
+        const commandStr = typeof payload.command === "string" ? payload.command.trim() : "";
+        const argv = splitCommand(commandStr);
+        if (argv.length === 0) {
+          return new Response("Missing command", { status: 400 });
+        }
+        const cwd =
+          typeof payload.cwd === "string" && payload.cwd.trim().length > 0
+            ? payload.cwd.trim()
+            : process.cwd();
+        try {
+          const info = await stat(cwd);
+          if (!info.isDirectory()) {
+            return new Response(`Working directory is not a directory: ${cwd}`, { status: 400 });
+          }
+        } catch {
+          return new Response(`Working directory not found: ${cwd}`, { status: 400 });
+        }
+        const cols = normalizeDimension(payload.cols, 80);
+        const rows = normalizeDimension(payload.rows, 24);
+        try {
+          const id = await spawnHeadlessSession(argv, cwd, cols, rows);
+          return Response.json({ id }, { status: 201 });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return new Response(`Failed to create session: ${message}`, { status: 500 });
+        }
       }
 
       if (url.pathname === "/api/sessions") {
