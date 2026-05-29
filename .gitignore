@@ -3,6 +3,9 @@ dist/
 *.log
 .DS_Store
 
+# Generated at compile time by scripts/embed-assets.ts
+src/server/embedded-assets.ts
+
 # Local Netlify folder
 .netlify
 

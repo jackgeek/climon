@@ -5,11 +5,21 @@ interface StaticAsset {
   body: Buffer;
 }
 
-const assetSpecifiers: Record<string, { specifier: string; contentType: string }> = {
-  "/assets/xterm.js": { specifier: "@xterm/xterm/lib/xterm.js", contentType: "text/javascript; charset=utf-8" },
-  "/assets/xterm.css": { specifier: "@xterm/xterm/css/xterm.css", contentType: "text/css; charset=utf-8" },
-  "/assets/addon-fit.js": { specifier: "@xterm/addon-fit/lib/addon-fit.js", contentType: "text/javascript; charset=utf-8" }
+const assetSpecifiers: Record<string, { specifier: string; contentType: string; embeddedKey?: string }> = {
+  "/assets/xterm.js": { specifier: "@xterm/xterm/lib/xterm.js", contentType: "text/javascript; charset=utf-8", embeddedKey: "XTERM_JS" },
+  "/assets/xterm.css": { specifier: "@xterm/xterm/css/xterm.css", contentType: "text/css; charset=utf-8", embeddedKey: "XTERM_CSS" },
+  "/assets/addon-fit.js": { specifier: "@xterm/addon-fit/lib/addon-fit.js", contentType: "text/javascript; charset=utf-8", embeddedKey: "ADDON_FIT_JS" }
 };
+
+// Try to load embedded assets (available in compiled binary).
+let embedded: Record<string, Buffer> | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const mod = require("./embedded-assets.js");
+  embedded = mod as Record<string, Buffer>;
+} catch {
+  // Not available — running from source; will fall back to node_modules.
+}
 
 const assetCache = new Map<string, StaticAsset>();
 
@@ -23,8 +33,14 @@ export function getStaticAsset(pathname: string): StaticAsset | undefined {
     return cached;
   }
   try {
-    const resolved = Bun.resolveSync(entry.specifier, import.meta.dir);
-    const asset: StaticAsset = { contentType: entry.contentType, body: readFileSync(resolved) };
+    let body: Buffer;
+    if (embedded && entry.embeddedKey && embedded[entry.embeddedKey]) {
+      body = embedded[entry.embeddedKey];
+    } else {
+      const resolved = Bun.resolveSync(entry.specifier, import.meta.dir);
+      body = readFileSync(resolved) as Buffer;
+    }
+    const asset: StaticAsset = { contentType: entry.contentType, body };
     assetCache.set(pathname, asset);
     return asset;
   } catch {

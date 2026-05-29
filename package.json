@@ -9,6 +9,7 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build ./src/index.ts --outdir ./dist --target bun --format esm",
+    "compile": "bun scripts/compile.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "bun run typecheck",
     "test": "bun test tests",
