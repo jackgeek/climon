@@ -1,9 +1,9 @@
 # Architecture
 
-climon replaces the original tmux + ttyd design with a built-in, cross-platform
-session manager. There are three roles: the **launcher/client**, the per-session
-**daemon**, and the **dashboard server**. They are decoupled through the
-filesystem (session metadata) and per-session sockets.
+climon is a built-in, cross-platform session manager. There are three roles: the
+**launcher/client**, the per-session **daemon**, and the **dashboard server**.
+They are decoupled through the filesystem (session metadata) and per-session
+sockets.
 
 ```
 climon <cmd>  ──spawn(detached)──►  session daemon  ──Bun.Terminal──►  user command

@@ -5,7 +5,7 @@
 - **Bun >= 1.3.0.** climon relies on Bun's native PTY (`Bun.Terminal`), which is
   only available in recent Bun releases. Check with `bun --version`.
 
-No other runtime dependencies are required — there is **no tmux and no ttyd**.
+No other runtime dependencies are required.
 
 ### Installing Bun
 

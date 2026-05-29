@@ -8,8 +8,7 @@ or run `bun link` in the project root to get a global `climon` command. Ensure
 
 ## The web terminal is blank / black
 
-This was a known problem with the old ttyd-based design and is fixed in the
-current `xterm.js` + WebSocket implementation. If you still see nothing:
+If the web terminal renders as a blank or black box:
 
 1. Confirm the session is **running** (live sessions stream over WebSocket;
    completed sessions show saved scrollback).
