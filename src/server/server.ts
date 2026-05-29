@@ -30,6 +30,7 @@ interface WsData {
 const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -38,6 +39,52 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Extracts the hostname from a Host header value, stripping an optional port
+ * and IPv6 brackets. Examples: "127.0.0.1:3131" -> "127.0.0.1",
+ * "[::1]:3131" -> "::1", "localhost" -> "localhost".
+ */
+function hostHeaderHostname(value: string): string {
+  let host = value.trim();
+  const match = host.match(/^(\[[^\]]+\]|[^:]+)(?::\d+)?$/);
+  if (match) {
+    host = match[1];
+  }
+  return host.replace(/^\[|\]$/g, "").toLowerCase();
+}
+
+/**
+ * Authorizes a privileged spawn request beyond loopback source-IP checking, to
+ * defend against browser-mediated CSRF and DNS-rebinding from a page running on
+ * the same machine. Requires a JSON content-type (so cross-origin requests must
+ * attempt a CORS preflight, which the server never grants) and rejects any
+ * non-loopback Origin or Host.
+ */
+export function isAllowedSpawnRequest(
+  contentType: string | null,
+  origin: string | null,
+  host: string | null
+): boolean {
+  if (!contentType || !contentType.toLowerCase().includes("application/json")) {
+    return false;
+  }
+  if (origin !== null) {
+    let originHost: string;
+    try {
+      originHost = new URL(origin).hostname;
+    } catch {
+      return false;
+    }
+    if (!LOOPBACK_HOSTS.has(originHost.replace(/^\[|\]$/g, "").toLowerCase())) {
+      return false;
+    }
+  }
+  if (host !== null && !LOOPBACK_HOSTS.has(hostHeaderHostname(host))) {
+    return false;
+  }
+  return true;
 }
 
 export function splitCommand(command: string): string[] {
@@ -228,6 +275,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         // Spawning processes is privileged: allow loopback only, even when a
         // valid LAN token is present.
         if (!isLocal(request, srv)) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        // Defend against browser-mediated CSRF / DNS-rebinding: the user's own
+        // browser is a loopback client, so source-IP alone is not enough.
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
           return new Response("Forbidden", { status: 403 });
         }
         let payload: { command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown };
