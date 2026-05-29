@@ -11,7 +11,7 @@ import {
 } from "../config.js";
 import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload, type ExitPayload, type PtySizePayload } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
-import { listSessions, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
+import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { ClimonConfig } from "../types.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 
@@ -29,6 +29,51 @@ const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function probeSocket(socketPath: string, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect(socketPath);
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve(false);
+    }, timeoutMs);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.end();
+      resolve(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+async function cleanupStaleSessions(): Promise<void> {
+  const sessions = await listSessions();
+  for (const session of sessions) {
+    if (session.status !== "running" && session.status !== "needs-attention") {
+      continue;
+    }
+    const pidAlive = session.daemonPid ? isProcessAlive(session.daemonPid) : false;
+    const socketOk = pidAlive ? await probeSocket(session.socketPath) : false;
+    if (!socketOk) {
+      await patchSessionMeta(session.id, {
+        status: "disconnected",
+        priorityReason: "disconnected",
+      });
+    }
+  }
+}
+
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
@@ -40,6 +85,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   }
   config.server.host = config.server.lan ? "0.0.0.0" : "127.0.0.1";
   await saveConfig(config);
+
+  // Clean up stale sessions whose daemons are no longer responsive.
+  await cleanupStaleSessions();
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
