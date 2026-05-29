@@ -29,6 +29,15 @@ function terminalSize(): { cols: number; rows: number } {
   };
 }
 
+export function resolveLaunchSize(env: NodeJS.ProcessEnv): { cols: number; rows: number } {
+  const cols = Number.parseInt(env.CLIMON_COLS ?? "", 10);
+  const rows = Number.parseInt(env.CLIMON_ROWS ?? "", 10);
+  return {
+    cols: Number.isFinite(cols) && cols > 0 ? cols : 80,
+    rows: Number.isFinite(rows) && rows > 0 ? rows : 24
+  };
+}
+
 async function waitForSocket(socketPath: string, timeoutMs = 10000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -78,18 +87,21 @@ function runCommandDirectly(command: string[]): Promise<number> {
   });
 }
 
-export async function startMonitoredCommand(command: string[]): Promise<number> {
+export async function startMonitoredCommand(
+  command: string[],
+  options: { headless?: boolean } = {}
+): Promise<number> {
   if (command.length === 0) {
     throw new Error("Provide a command to monitor, e.g. `climon copilot`.");
   }
-  if (process.env[SESSION_ENV_VAR]) {
+  if (!options.headless && process.env[SESSION_ENV_VAR]) {
     return runCommandDirectly(command);
   }
   await ensureClimonHome();
   const config = await loadConfig();
 
   const id = generateSessionId();
-  const { cols, rows } = terminalSize();
+  const { cols, rows } = options.headless ? resolveLaunchSize(process.env) : terminalSize();
   const now = new Date().toISOString();
   const meta: SessionMeta = {
     id,
@@ -109,6 +121,11 @@ export async function startMonitoredCommand(command: string[]): Promise<number> 
 
   spawnDaemon(id, process.env);
   await waitForSocket(meta.socketPath);
+
+  if (options.headless) {
+    process.stdout.write(`${id}\n`);
+    return 0;
+  }
 
   const dashboardUrl = `http://${config.server.host}:${config.server.port}/`;
   process.stdout.write(`climon monitoring session ${id} — dashboard: ${dashboardUrl}\r\n`);
