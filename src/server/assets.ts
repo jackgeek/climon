@@ -91,7 +91,12 @@ export function renderDashboard(): string {
      maximize button becomes available to give the terminal the full screen. */
   @media (max-width: 768px) {
     body { flex-direction: column; height: 100dvh; }
-    #sidebar { width: 100%; min-width: 0; max-height: 40vh; border-right: none; border-bottom: 1px solid #30363d; }
+    /* flex: none keeps the sidebar from being shrunk to zero height by the
+       terminal in #main (the sidebar's overflow-y:auto sets its min-height to
+       0, so without this it collapses and the [+] button and session list
+       disappear). #main shrinks instead via min-height: 0. */
+    #sidebar { width: 100%; min-width: 0; flex: none; max-height: 40vh; border-right: none; border-bottom: 1px solid #30363d; }
+    #main { min-height: 0; }
     #maximize { display: block; }
   }
 
