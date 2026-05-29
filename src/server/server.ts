@@ -90,7 +90,7 @@ function spawnHeadlessSession(
       clearTimeout(timer);
       reject(error);
     });
-    child.once("exit", (code) => {
+    child.once("close", (code) => {
       clearTimeout(timer);
       const id = stdout.trim().split(/\s+/).pop() ?? "";
       if (code === 0 && id) {
