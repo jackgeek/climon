@@ -10,14 +10,24 @@ const assetSpecifiers: Record<string, { specifier: string; contentType: string; 
   "/assets/xterm.css": { specifier: "@xterm/xterm/css/xterm.css", contentType: "text/css; charset=utf-8", embeddedKey: "XTERM_CSS" }
 };
 
-// Try to load embedded assets (available in the compiled binary).
+// Embedded assets are compiled into the standalone binary via
+// `scripts/embed-assets.ts` + `bun build --compile`. The compile step sets the
+// `__CLIMON_EMBEDDED__` define so this code path is active ONLY in the binary.
+// In source mode the define is absent, so we always build the dashboard on the
+// fly — even if a stale `embedded-assets.ts` is left on disk from a prior
+// `compile` run (which previously caused `climon server` to serve an outdated
+// bundle).
+declare const __CLIMON_EMBEDDED__: boolean | undefined;
+
 let embedded: Record<string, Buffer> | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const mod = require("./embedded-assets.js");
-  embedded = mod as Record<string, Buffer>;
-} catch {
-  // Not available — running from source; will fall back to node_modules / on-the-fly build.
+if (typeof __CLIMON_EMBEDDED__ !== "undefined" && __CLIMON_EMBEDDED__) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("./embedded-assets.js");
+    embedded = mod as Record<string, Buffer>;
+  } catch {
+    // Should not happen in a correctly compiled binary; fall back to a build.
+  }
 }
 
 const assetCache = new Map<string, StaticAsset>();

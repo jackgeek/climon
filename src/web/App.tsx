@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
-import { Dismiss20Regular, Keyboard20Regular } from "@fluentui/react-icons";
+import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
 import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -79,17 +79,19 @@ const useStyles = makeStyles({
   empty: {
     color: tokens.colorNeutralForeground3
   },
-  keyToggleBtn: {
+  keyBarBackdrop: {
     position: "fixed",
-    top: "8px",
-    left: "8px",
-    zIndex: 20,
+    inset: 0,
+    zIndex: 14,
+    backgroundColor: "transparent",
     display: "none",
     "@media (max-width: 768px)": {
-      display: "inline-flex"
+      display: "block"
     }
   },
   keyBarWrap: {
+    position: "relative",
+    zIndex: 15,
     display: "none",
     "@media (max-width: 768px)": {
       display: "flex"
@@ -123,6 +125,7 @@ export function App() {
   const [remoteOpen, setRemoteOpen] = useState(false);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
+  const swipeStartRef = useRef<{ x: number; y: number; fromRightEdge: boolean } | null>(null);
 
   // Subscribe to live session updates and load the initial list.
   useEffect(() => {
@@ -174,6 +177,56 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [maximized]);
+
+  // Leaving fullscreen always closes the special-key bar so re-entering
+  // fullscreen starts with it hidden.
+  useEffect(() => {
+    if (!maximized) {
+      setKeyBarOpen(false);
+    }
+  }, [maximized]);
+
+  // Reveal the special-key bar with a right-to-left edge swipe while maximized.
+  // Native window listeners in the capture phase are used (rather than React
+  // synthetic handlers on the terminal element) so the gesture is detected
+  // reliably even though xterm.js owns the touch events inside the terminal.
+  // Starting near the right edge makes it a deliberate "pull-in" gesture that
+  // does not clash with xterm's own touch scrolling in the body.
+  useEffect(() => {
+    if (!maximized) {
+      return;
+    }
+    const onStart = (e: TouchEvent): void => {
+      const t = e.touches[0];
+      if (!t) {
+        return;
+      }
+      swipeStartRef.current = {
+        x: t.clientX,
+        y: t.clientY,
+        fromRightEdge: t.clientX >= window.innerWidth - 40
+      };
+    };
+    const onEnd = (e: TouchEvent): void => {
+      const start = swipeStartRef.current;
+      swipeStartRef.current = null;
+      const t = e.changedTouches[0];
+      if (!start || !t || !start.fromRightEdge) {
+        return;
+      }
+      const dx = t.clientX - start.x;
+      const dy = t.clientY - start.y;
+      if (dx <= -50 && Math.abs(dy) <= Math.abs(dx)) {
+        setKeyBarOpen(true);
+      }
+    };
+    window.addEventListener("touchstart", onStart, { passive: true, capture: true });
+    window.addEventListener("touchend", onEnd, { passive: true, capture: true });
+    return () => {
+      window.removeEventListener("touchstart", onStart, { capture: true });
+      window.removeEventListener("touchend", onEnd, { capture: true });
+    };
   }, [maximized]);
 
   // Track the mobile breakpoint so the terminal is only "displayed" (and thus
@@ -300,9 +353,19 @@ export function App() {
         </div>
         <TerminalView ref={terminalRef} session={activeSession} maximized={maximized} visible={terminalVisible} />
         {keyBarOpen && maximized && activeSession && isLiveStatus(activeSession.status) && (
-          <div className={styles.keyBarWrap}>
-            <KeyBar onSend={(d) => terminalRef.current?.sendInput(d)} />
-          </div>
+          <>
+            <div
+              className={styles.keyBarBackdrop}
+              onClick={() => setKeyBarOpen(false)}
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                setKeyBarOpen(false);
+              }}
+            />
+            <div className={styles.keyBarWrap}>
+              <KeyBar onSend={(d) => terminalRef.current?.sendInput(d)} />
+            </div>
+          </>
         )}
       </div>
       {maximized && (
@@ -316,20 +379,6 @@ export function App() {
           onClick={() => setMaximized(false)}
         >
           Exit
-        </Button>
-      )}
-      {maximized && (
-        <Button
-          className={styles.keyToggleBtn}
-          appearance={keyBarOpen ? "primary" : "outline"}
-          size="small"
-          icon={<Keyboard20Regular />}
-          title="Toggle special-key bar"
-          aria-label="Toggle special-key bar"
-          aria-pressed={keyBarOpen}
-          onClick={() => setKeyBarOpen((v) => !v)}
-        >
-          Keys
         </Button>
       )}
       <NewSessionDialog
