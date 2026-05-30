@@ -70,15 +70,15 @@ view, interact with, or manage your monitored sessions from a browser.
 - `--port N` — use a custom port instead of the default `3131`.
 
 Once the server is running you can also start new sessions directly from the
-dashboard. Session creation is **per-session**: hover any session that has a
-locally attached `climon` client and click its **[+]** button to launch a new
-session from that client. The new session inherits the selected session's working
-directory and you are prompted only for the command. A "Wait for session to
-launch" checkbox (on by default) keeps the dialog open until the new session
-appears; uncheck it to dispatch the launch asynchronously and have the session
-surface on its own via live updates.
+dashboard. Session creation is **per-session**: hover any live session
+(`running`, `needs-attention`, or `disconnected`) and click its **[+]** button to
+launch a new session from it. The server spawns the new session directly,
+inheriting the selected session's working directory, so you are prompted only for
+the command. Because this no longer depends on an attached terminal, you can
+launch a session from any live session — including ones that were themselves
+spawned this way (arbitrary nesting).
 
-When **no** session has an attached client, a global **[+]** appears in the
+When there are **no** sessions at all, a global **[+]** appears in the
 sidebar header instead. It asks the dashboard server to spawn a session for you
 (prompting for a command and optional working directory); the server does this by
 invoking the `climon` client binary — looked up via `CLIMON_CLIENT_BIN`, then a

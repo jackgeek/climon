@@ -34,16 +34,16 @@ describe("patchSessionMeta concurrency", () => {
     const id = "concurrent-1";
     await writeSessionMeta(baseMeta(id), env);
 
-    // Simulate the client-connect burst: an `attached:true` patch and a
-    // `status` patch fired on the same tick. A non-atomic read-merge-write
-    // races and drops one of the two fields.
+    // Simulate the client-connect burst: two patches on different fields fired
+    // on the same tick. A non-atomic read-merge-write races and drops one of
+    // the two fields.
     await Promise.all([
-      patchSessionMeta(id, { attached: true }, env),
+      patchSessionMeta(id, { daemonPid: 4242 }, env),
       patchSessionMeta(id, { status: "needs-attention", priorityReason: "attention" }, env)
     ]);
 
     const meta = await readSessionMeta(id, env);
-    expect(meta?.attached).toBe(true);
+    expect(meta?.daemonPid).toBe(4242);
     expect(meta?.status).toBe("needs-attention");
     expect(meta?.priorityReason).toBe("attention");
   });
@@ -53,16 +53,16 @@ describe("patchSessionMeta concurrency", () => {
     await writeSessionMeta(baseMeta(id), env);
 
     await Promise.all([
-      patchSessionMeta(id, { attached: true }, env),
       patchSessionMeta(id, { daemonPid: 4242 }, env),
+      patchSessionMeta(id, { exitCode: 0 }, env),
       patchSessionMeta(id, { status: "needs-attention" }, env),
       patchSessionMeta(id, { attentionReason: "Screen idle for 10s" }, env),
       patchSessionMeta(id, { cols: 120, rows: 40 }, env)
     ]);
 
     const meta = await readSessionMeta(id, env);
-    expect(meta?.attached).toBe(true);
     expect(meta?.daemonPid).toBe(4242);
+    expect(meta?.exitCode).toBe(0);
     expect(meta?.status).toBe("needs-attention");
     expect(meta?.attentionReason).toBe("Screen idle for 10s");
     expect(meta?.cols).toBe(120);

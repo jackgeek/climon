@@ -7,9 +7,7 @@ export enum FrameType {
   Exit = 4,
   Replay = 5,
   PtySize = 6,
-  Attention = 7,
-  Spawn = 8,
-  Spawned = 9
+  Attention = 7
 }
 
 export interface ResizePayload {
@@ -32,21 +30,6 @@ export interface PtySizePayload {
 export interface AttentionPayload {
   needsAttention: boolean;
   reason?: string;
-}
-
-export interface SpawnPayload {
-  /** Correlates the request to its Spawned reply. */
-  token: string;
-  command: string[];
-  cwd: string;
-}
-
-export interface SpawnedPayload {
-  token: string;
-  /** Present on success: the new session's id. */
-  id?: string;
-  /** Present on failure: a human-readable reason. */
-  error?: string;
 }
 
 export interface ExitPayload {

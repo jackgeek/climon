@@ -8,11 +8,9 @@ import {
   FrameType,
   parseJsonPayload,
   type ExitPayload,
-  type PtySizePayload,
-  type SpawnPayload
+  type PtySizePayload
 } from "../ipc/frame.js";
 import { ScreenIdleDetector } from "./idle-detector.js";
-import { spawnHeadlessSession } from "./spawn-session.js";
 
 const DETACH_PREFIX = 0x1c; // Ctrl-\
 const DETACH_KEY = 0x64; // 'd'
@@ -172,16 +170,6 @@ export function connectToSession(socketPath: string, options: AttachOptions): Pr
           headless.resize(Math.max(size.cols, 1), Math.max(size.rows, 1));
         } else if (frame.type === FrameType.Exit) {
           exitCode = parseJsonPayload<ExitPayload>(frame.payload).exitCode;
-        } else if (frame.type === FrameType.Spawn) {
-          const req = parseJsonPayload<SpawnPayload>(frame.payload);
-          void spawnHeadlessSession(req.command, req.cwd, { cols: options.cols, rows: options.rows })
-            .then((id) => {
-              socket.write(encodeJsonFrame(FrameType.Spawned, { token: req.token, id }));
-            })
-            .catch((error: unknown) => {
-              const message = error instanceof Error ? error.message : String(error);
-              socket.write(encodeJsonFrame(FrameType.Spawned, { token: req.token, error: message }));
-            });
         }
       }
     });

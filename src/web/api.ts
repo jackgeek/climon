@@ -14,10 +14,8 @@ export interface CreateSessionBody {
   cwd?: string;
   cols?: number;
   rows?: number;
-  /** When set, the session is spawned by the attached client of this session. */
+  /** When set, the session is spawned directly from this parent session. */
   parentId?: string;
-  /** When false, the request returns as soon as the spawn is dispatched. */
-  wait?: boolean;
 }
 
 export async function fetchSessions(): Promise<SessionMeta[]> {
@@ -45,10 +43,6 @@ export async function createSession(body: CreateSessionBody): Promise<CreateSess
     if (!res.ok) {
       const text = await res.text();
       return { ok: false, error: text || `Failed (${res.status})` };
-    }
-    if (res.status === 202) {
-      // Async spawn dispatched; the session will arrive via SSE.
-      return { ok: true };
     }
     const data = (await res.json()) as { id?: string };
     return { ok: true, id: data.id };

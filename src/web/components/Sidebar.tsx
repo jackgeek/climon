@@ -44,12 +44,11 @@ interface Props {
 
 export function Sidebar({ sessions, activeId, onSelect, onClose, onNew, onNewFrom }: Props) {
   const styles = useStyles();
-  const anyAttached = sessions.some((s) => s.attached);
   return (
     <div className={styles.root}>
       <div className={styles.header}>
         <Text className={styles.title}>climon</Text>
-        {!anyAttached && (
+        {sessions.length === 0 && (
           <Button
             appearance="subtle"
             icon={<Add20Regular />}

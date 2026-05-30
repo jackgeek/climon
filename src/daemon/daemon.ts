@@ -9,9 +9,7 @@ import {
   FrameType,
   parseJsonPayload,
   type ResizePayload,
-  type AttentionPayload,
-  type SpawnPayload,
-  type SpawnedPayload
+  type AttentionPayload
 } from "../ipc/frame.js";
 import { spawnPty, resolveCommand, type PtyHandle } from "../pty.js";
 import { ScrollbackBuffer } from "./buffer.js";
@@ -39,48 +37,6 @@ export function clampResize(
   return { cols, rows };
 }
 
-/**
- * Tracks which connected sockets are local host clients (the interactive
- * `climon` terminal, identified by a host-sourced Resize). Reports the
- * attached/detached edges so the daemon patches session metadata exactly once
- * per transition, and selects a host client to service a spawn request.
- */
-export class HostClientTracker {
-  private hosts = new Set<unknown>();
-
-  /** Marks a socket as a host client. Returns true on the 0->1 edge. */
-  markHost(socket: unknown): boolean {
-    if (this.hosts.has(socket)) {
-      return false;
-    }
-    const wasAttached = this.hosts.size > 0;
-    this.hosts.add(socket);
-    return !wasAttached;
-  }
-
-  /** Removes a socket. Returns true on the 1->0 edge (was a host, now none). */
-  remove(socket: unknown): boolean {
-    if (!this.hosts.delete(socket)) {
-      return false;
-    }
-    return this.hosts.size === 0;
-  }
-
-  get attached(): boolean {
-    return this.hosts.size > 0;
-  }
-
-  /** Returns any host client that is not `exclude`, or undefined. */
-  pickHost(exclude: unknown): unknown | undefined {
-    for (const host of this.hosts) {
-      if (host !== exclude) {
-        return host;
-      }
-    }
-    return undefined;
-  }
-}
-
 export async function runSessionDaemon(id: string): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
@@ -91,51 +47,6 @@ export async function runSessionDaemon(id: string): Promise<void> {
 
   const scrollback = new ScrollbackBuffer();
   const clients = new Set<Socket>();
-  const hostTracker = new HostClientTracker();
-
-  // Maps a spawn request token to the in-flight spawn it represents: the socket
-  // that initiated it (the server's short-lived spawn connection), the host
-  // client we forwarded it to, and a backstop timer. Entries are removed when a
-  // correlated Spawned reply arrives, when either side disconnects, or when the
-  // timer fires — so the map never retains dead sockets.
-  interface PendingSpawn {
-    requester: Socket;
-    host: Socket;
-    timer: ReturnType<typeof setTimeout>;
-  }
-  const pendingSpawns = new Map<string, PendingSpawn>();
-  const SPAWN_TIMEOUT_MS = 20000;
-
-  // Resolves an in-flight spawn: clears its timer, drops it from the map, and
-  // (if the requester is still connected) relays the Spawned reply.
-  const settleSpawn = (token: string, reply: SpawnedPayload): void => {
-    const pending = pendingSpawns.get(token);
-    if (!pending) {
-      return;
-    }
-    clearTimeout(pending.timer);
-    pendingSpawns.delete(token);
-    if (!pending.requester.destroyed) {
-      pending.requester.write(encodeJsonFrame(FrameType.Spawned, reply));
-    }
-  };
-
-  // Drops any in-flight spawns tied to a disconnected socket: a dead requester
-  // is silently abandoned, while a dead host fails its outstanding spawn so the
-  // requester is not left waiting.
-  const reapSocketSpawns = (socket: Socket): void => {
-    for (const [token, pending] of pendingSpawns) {
-      if (pending.requester === socket) {
-        clearTimeout(pending.timer);
-        pendingSpawns.delete(token);
-      } else if (pending.host === socket) {
-        settleSpawn(token, {
-          token,
-          error: "attached client disconnected before launch"
-        });
-      }
-    }
-  };
 
   const clampBrowserToHost = config.terminal.clampBrowserToHost;
   // The host terminal owns the maximum PTY size when clamping is enabled. It is
@@ -239,7 +150,6 @@ export async function runSessionDaemon(id: string): Promise<void> {
       priorityReason: exitCode === 0 ? "completed" : "failed",
       completedAt: new Date().toISOString(),
       exitCode,
-      attached: false,
       lastActivityAt: new Date().toISOString()
     }).catch(() => undefined);
     broadcast(encodeJsonFrame(FrameType.Exit, { exitCode }));
@@ -269,49 +179,17 @@ export async function runSessionDaemon(id: string): Promise<void> {
           pty.write(frame.payload.toString("utf8"));
         } else if (frame.type === FrameType.Resize) {
           const size = parseJsonPayload<ResizePayload>(frame.payload);
-          if (size.source === "host" && hostTracker.markHost(socket)) {
-            void patchSessionMeta(id, { attached: true });
-          }
           applyResize(size);
         } else if (frame.type === FrameType.Attention) {
           applyAttention(parseJsonPayload<AttentionPayload>(frame.payload));
-        } else if (frame.type === FrameType.Spawn) {
-          const req = parseJsonPayload<SpawnPayload>(frame.payload);
-          const host = hostTracker.pickHost(socket) as Socket | undefined;
-          if (!host) {
-            socket.write(
-              encodeJsonFrame(FrameType.Spawned, {
-                token: req.token,
-                error: "no attached client to launch from"
-              })
-            );
-          } else {
-            const timer = setTimeout(() => {
-              settleSpawn(req.token, { token: req.token, error: "Timed out creating session" });
-            }, SPAWN_TIMEOUT_MS);
-            timer.unref?.();
-            pendingSpawns.set(req.token, { requester: socket, host, timer });
-            host.write(encodeJsonFrame(FrameType.Spawn, req));
-          }
-        } else if (frame.type === FrameType.Spawned) {
-          const reply = parseJsonPayload<SpawnedPayload>(frame.payload);
-          settleSpawn(reply.token, reply);
         }
       }
     });
     socket.on("error", () => {
       clients.delete(socket);
-      reapSocketSpawns(socket);
-      if (hostTracker.remove(socket)) {
-        void patchSessionMeta(id, { attached: false });
-      }
     });
     socket.on("close", () => {
       clients.delete(socket);
-      reapSocketSpawns(socket);
-      if (hostTracker.remove(socket)) {
-        void patchSessionMeta(id, { attached: false });
-      }
     });
   });
 

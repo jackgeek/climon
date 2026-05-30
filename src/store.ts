@@ -29,8 +29,8 @@ export async function readSessionMeta(id: string, env: NodeJS.ProcessEnv = proce
 }
 
 // Serializes patchSessionMeta calls per session id within this process. The
-// patch is a read-merge-write, so concurrent patches (e.g. an `attached:true`
-// write and a `status` write fired on the same client-connect tick) would
+// patch is a read-merge-write, so concurrent patches (e.g. a `daemonPid` write
+// and a `status` write fired on the same tick) would
 // otherwise race and silently drop one field. Each daemon and the server run
 // in their own process, so a per-process per-id promise chain is sufficient to
 // keep that process's own bursts of patches consistent.
