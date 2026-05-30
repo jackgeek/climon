@@ -23,6 +23,15 @@ export interface TerminalConfig {
   clampBrowserToHost: boolean;
 }
 
+export interface RemoteConfig {
+  enabled?: boolean;
+  host?: string;
+  port?: number;
+  user?: string;
+  hostKey?: string;
+  keyFile?: string;
+}
+
 export interface AttentionConfig {
   /**
    * Number of seconds the rendered terminal grid must remain unchanged before
@@ -38,6 +47,7 @@ export interface ClimonConfig {
   server: ServerConfig;
   terminal: TerminalConfig;
   attention: AttentionConfig;
+  remote?: RemoteConfig;
 }
 
 export interface SessionMeta {
@@ -59,6 +69,8 @@ export interface SessionMeta {
   completedAt?: string;
   exitCode?: number;
   error?: string;
+  origin?: "local" | "remote";
+  clientLabel?: string;
 }
 
 export interface SessionMetaPatch {
