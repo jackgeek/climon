@@ -23,6 +23,10 @@ interact with each one from the browser.
   dashboard.
 - **Completion pops.** Finished sessions move up the queue and keep their final
   scrollback so you can review the output.
+- **Remote clients over hardened SSH.** Monitor sessions running on another
+  machine from your local dashboard. Traffic rides a single OpenSSH connection
+  (no tunneled ports, host-key pinning, forced-command containment). See
+  [docs/security.md](docs/security.md).
 
 ## Requirements
 
