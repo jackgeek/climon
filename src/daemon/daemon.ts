@@ -9,7 +9,9 @@ import {
   FrameType,
   parseJsonPayload,
   type ResizePayload,
-  type AttentionPayload
+  type AttentionPayload,
+  type SpawnPayload,
+  type SpawnedPayload
 } from "../ipc/frame.js";
 import { spawnPty, resolveCommand, type PtyHandle } from "../pty.js";
 import { ScrollbackBuffer } from "./buffer.js";
@@ -90,6 +92,11 @@ export async function runSessionDaemon(id: string): Promise<void> {
   const scrollback = new ScrollbackBuffer();
   const clients = new Set<Socket>();
   const hostTracker = new HostClientTracker();
+
+  // Maps a spawn request token to the socket that initiated it (the server's
+  // short-lived spawn connection), so the host client's reply can be routed
+  // back to the right requester.
+  const pendingSpawns = new Map<string, Socket>();
 
   const clampBrowserToHost = config.terminal.clampBrowserToHost;
   // The host terminal owns the maximum PTY size when clamping is enabled. It is
@@ -229,6 +236,27 @@ export async function runSessionDaemon(id: string): Promise<void> {
           applyResize(size);
         } else if (frame.type === FrameType.Attention) {
           applyAttention(parseJsonPayload<AttentionPayload>(frame.payload));
+        } else if (frame.type === FrameType.Spawn) {
+          const req = parseJsonPayload<SpawnPayload>(frame.payload);
+          const host = hostTracker.pickHost(socket) as Socket | undefined;
+          if (!host) {
+            socket.write(
+              encodeJsonFrame(FrameType.Spawned, {
+                token: req.token,
+                error: "no attached client to launch from"
+              })
+            );
+          } else {
+            pendingSpawns.set(req.token, socket);
+            host.write(encodeJsonFrame(FrameType.Spawn, req));
+          }
+        } else if (frame.type === FrameType.Spawned) {
+          const reply = parseJsonPayload<SpawnedPayload>(frame.payload);
+          const requester = pendingSpawns.get(reply.token);
+          pendingSpawns.delete(reply.token);
+          if (requester && !requester.destroyed) {
+            requester.write(encodeJsonFrame(FrameType.Spawned, reply));
+          }
         }
       }
     });
