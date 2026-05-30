@@ -73,4 +73,26 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["attach"])).toThrow();
     expect(() => parseArgs(["kill"])).toThrow();
   });
+
+  test("parses config passthrough argv", () => {
+    expect(parseArgs(["config", "--global", "remote.host", "h"])).toEqual({
+      command: "config",
+      argv: ["--global", "remote.host", "h"]
+    });
+  });
+
+  test("parses internal uplink entrypoint", () => {
+    expect(parseArgs(["__uplink"])).toEqual({ command: "uplink" });
+  });
+
+  test("parses ssh-accept with label", () => {
+    expect(parseArgs(["--ssh-accept", "--label", "devbox-1"])).toEqual({
+      command: "ssh-accept",
+      label: "devbox-1"
+    });
+  });
+
+  test("throws when ssh-accept label missing", () => {
+    expect(() => parseArgs(["--ssh-accept"])).toThrow();
+  });
 });
