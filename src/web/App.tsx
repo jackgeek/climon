@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
-import { FullScreenMaximize20Regular, Dismiss20Regular } from "@fluentui/react-icons";
+import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
 import { eventsUrl, fetchSessions, deleteSession, fetchHealth } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -30,9 +30,9 @@ const useStyles = makeStyles({
     "@media (max-width: 768px)": {
       width: "100%",
       minWidth: 0,
-      maxHeight: "40vh",
+      maxHeight: "none",
       borderRight: "none",
-      borderBottom: `1px solid ${tokens.colorNeutralStroke1}`
+      borderBottom: "none"
     }
   },
   main: {
@@ -47,6 +47,11 @@ const useStyles = makeStyles({
     inset: 0,
     zIndex: 10,
     backgroundColor: tokens.colorNeutralBackground1
+  },
+  mainHiddenMobile: {
+    "@media (max-width: 768px)": {
+      display: "none"
+    }
   },
   hidden: {
     display: "none"
@@ -73,13 +78,6 @@ const useStyles = makeStyles({
   empty: {
     color: tokens.colorNeutralForeground3
   },
-  maximizeBtn: {
-    flex: "0 0 auto",
-    display: "none",
-    "@media (max-width: 768px)": {
-      display: "inline-flex"
-    }
-  },
   exitBtn: {
     position: "fixed",
     top: "8px",
@@ -97,6 +95,9 @@ export function App() {
   const [closeTarget, setCloseTarget] = useState<SessionMeta | null>(null);
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches
+  );
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const pendingSelectRef = useRef<string | null>(null);
@@ -153,6 +154,16 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [maximized]);
+
+  // Track the mobile breakpoint so the terminal is only "displayed" (and thus
+  // holds the PTY size) when it is actually on screen: always on desktop, but
+  // only when maximized on mobile.
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 768px)");
+    const onChange = (e: MediaQueryListEvent): void => setIsMobile(e.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
 
   function removeFromList(id: string): void {
     if (activeId === id) {
@@ -214,6 +225,7 @@ export function App() {
   }
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
+  const terminalVisible = activeSession !== null && (!isMobile || maximized);
 
   return (
     <div className={styles.root}>
@@ -233,9 +245,19 @@ export function App() {
             setDialogOpen(true);
           }}
           onManageRemote={() => setRemoteOpen(true)}
+          onMaximize={(id) => {
+            setActiveId(id);
+            setMaximized(true);
+          }}
         />
       </div>
-      <div className={mergeClasses(styles.main, maximized && styles.mainMaximized)}>
+      <div
+        className={mergeClasses(
+          styles.main,
+          maximized && styles.mainMaximized,
+          !maximized && styles.mainHiddenMobile
+        )}
+      >
         <div className={mergeClasses(styles.header, maximized && styles.hidden)}>
           <Text className={styles.headerText}>
             {activeSession ? (
@@ -244,17 +266,8 @@ export function App() {
               <span className={styles.empty}>Select a session</span>
             )}
           </Text>
-          <Button
-            className={styles.maximizeBtn}
-            appearance="outline"
-            size="small"
-            icon={<FullScreenMaximize20Regular />}
-            title="Maximize terminal"
-            aria-label="Maximize terminal"
-            onClick={() => setMaximized(true)}
-          />
         </div>
-        <TerminalView ref={terminalRef} session={activeSession} maximized={maximized} />
+        <TerminalView ref={terminalRef} session={activeSession} maximized={maximized} visible={terminalVisible} />
       </div>
       {maximized && (
         <Button
