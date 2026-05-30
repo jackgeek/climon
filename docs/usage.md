@@ -71,6 +71,21 @@ climon kill <id>          # terminate a session and remove its metadata
 - The list updates automatically as sessions change state (via Server-Sent
   Events).
 
+## Creating sessions from the dashboard
+
+Session creation happens **from a session**. Hover any session that has a
+locally attached `climon` client and click its **[+]** to launch a new session
+from that client. The new session inherits the originating session's working
+directory, so you are prompted only for the command. Leave **Wait for session to
+launch** checked to keep the dialog open until the session appears, or uncheck it
+to dispatch the launch asynchronously (the session shows up on its own via
+Server-Sent Events).
+
+When no session has an attached client, the sidebar header shows a single **[+]**
+instead, which asks the server to create a session for you (prompting for a
+command and optional working directory). Creation only works from the machine
+running the server (loopback).
+
 ## Attention queue
 
 While you have a session attached locally, climon watches its rendered screen. If
