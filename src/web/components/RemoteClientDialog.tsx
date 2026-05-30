@@ -9,6 +9,7 @@ import {
   DialogTitle,
   Field,
   Input,
+  Switch,
   Text,
   Textarea,
   makeStyles,
@@ -21,7 +22,9 @@ import {
   deleteRemoteClient,
   fetchRemoteClients,
   fetchRemoteSetup,
-  type RemoteClient
+  type IpFamily,
+  type RemoteClient,
+  type RemoteSetup
 } from "../api.js";
 
 const useStyles = makeStyles({
@@ -35,6 +38,12 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium
   },
   section: { marginTop: "16px" },
+  familyRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    marginTop: "8px"
+  },
   clientRow: {
     display: "flex",
     alignItems: "center",
@@ -53,17 +62,20 @@ interface Props {
 
 export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const styles = useStyles();
-  const [command, setCommand] = useState("");
+  const [setup, setSetup] = useState<RemoteSetup | null>(null);
+  const [family, setFamily] = useState<IpFamily>("ipv6");
   const [clients, setClients] = useState<RemoteClient[]>([]);
   const [label, setLabel] = useState("");
   const [publicKey, setPublicKey] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
+  const command = setup ? buildSetupCommand(setup, family) : "";
+
   async function refresh(): Promise<void> {
     try {
-      const [setup, list] = await Promise.all([fetchRemoteSetup(), fetchRemoteClients()]);
-      setCommand(buildSetupCommand(setup));
+      const [s, list] = await Promise.all([fetchRemoteSetup(), fetchRemoteClients()]);
+      setSetup(s);
       setClients(list);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load remote setup.");
@@ -104,6 +116,16 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
           <DialogTitle>Remote Clients</DialogTitle>
           <DialogContent>
             <Text>Run this on the devbox you want to connect, then paste the printed public key below:</Text>
+            <div className={styles.familyRow}>
+              <Switch
+                checked={family === "ipv6"}
+                onChange={(_, d) => {
+                  setFamily(d.checked ? "ipv6" : "ipv4");
+                  setCopied(false);
+                }}
+              />
+              <Text>Use {family === "ipv6" ? "IPv6" : "IPv4"} address</Text>
+            </div>
             <div className={styles.command} style={{ marginTop: "8px" }}>{command}</div>
             <Button
               appearance="primary"

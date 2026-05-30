@@ -178,17 +178,31 @@ export async function deleteRemoteClient(label: string): Promise<void> {
   }
 }
 
+export type IpFamily = "ipv4" | "ipv6";
+
+/** Classifies a host string by IP family; non-IP values (e.g. a hostname) are "hostname". */
+function hostFamily(host: string): IpFamily | "hostname" {
+  if (host.includes(":")) return "ipv6";
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return "ipv4";
+  return "hostname";
+}
+
 /**
  * Builds the one-line bash command a user pastes on a devbox. It generates a
  * client keypair (if missing), pins the home host key into the project
  * known_hosts, and records the connection config via `climon config`. The user
  * still pastes the printed public key back into the dashboard to authorize it —
  * no secret ever leaves the devbox.
+ *
+ * `family` selects which advertised address to connect to (IPv6 by default).
+ * The pinned known_hosts line is anchored to the same address so host-key
+ * verification (StrictHostKeyChecking=yes) stays consistent.
  */
-export function buildSetupCommand(setup: RemoteSetup): string {
-  const host = setup.hosts[0];
+export function buildSetupCommand(setup: RemoteSetup, family: IpFamily = "ipv6"): string {
+  const host = setup.hosts.find((h) => hostFamily(h) === family);
   if (!host) {
-    return "# No reachable IP address detected on the server. Set one manually with: climon config remote.host <ip-address>";
+    const label = family === "ipv6" ? "IPv6" : "IPv4";
+    return `# No reachable ${label} address detected on the server. Set one manually with: climon config remote.host <ip-address>`;
   }
   const lines = [
     "climon config remote.enabled true",
@@ -197,7 +211,7 @@ export function buildSetupCommand(setup: RemoteSetup): string {
     `climon config remote.port ${setup.sshPort}`
   ];
   if (setup.hostKey) {
-    lines.push(`climon config known-host '${setup.hostKey.replace(/'/g, "")}'`);
+    lines.push(`climon config known-host '${host} ${setup.hostKey.replace(/'/g, "")}'`);
   }
   lines.push("climon config keygen");
   return lines.join(" && ");
