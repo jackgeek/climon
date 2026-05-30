@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { ensureClimonHome, getSessionsDir, getSocketPath } from "../config.js";
 import { writeSessionMeta } from "../store.js";
-import type { SessionMeta } from "../types.js";
+import type { AnsiColor, SessionMeta } from "../types.js";
 import { VERSION } from "../version.js";
 
 function generateSessionId(): string {
@@ -29,10 +29,17 @@ function spawnDaemon(id: string, env: NodeJS.ProcessEnv): void {
  * the CLI launcher (for `climon run --headless`) and the attached client (when
  * it spawns a sibling on behalf of a dashboard [+] click).
  */
+export interface SessionMetaOptions {
+  name?: string;
+  priority?: number;
+  color?: AnsiColor | null;
+}
+
 export async function spawnHeadlessSession(
   command: string[],
   cwd: string,
   size: { cols: number; rows: number },
+  options: SessionMetaOptions = {},
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string> {
   if (command.length === 0) {
@@ -45,6 +52,9 @@ export async function spawnHeadlessSession(
     id,
     command,
     displayCommand: command.join(" "),
+    name: options.name,
+    priority: options.priority,
+    color: options.color ?? undefined,
     cwd,
     status: "running",
     priorityReason: "running",

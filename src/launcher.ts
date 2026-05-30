@@ -14,7 +14,7 @@ import {
   SESSION_ENV_VAR
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
-import { spawnHeadlessSession } from "./client/spawn-session.js";
+import { spawnHeadlessSession, type SessionMetaOptions } from "./client/spawn-session.js";
 import { sortSessionsByPriority } from "./priority.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { resolveCommand } from "./pty.js";
@@ -125,7 +125,7 @@ function runCommandDirectly(command: string[]): Promise<number> {
 
 export async function startMonitoredCommand(
   command: string[],
-  options: { headless?: boolean } = {}
+  options: { headless?: boolean } & SessionMetaOptions = {}
 ): Promise<number> {
   if (command.length === 0) {
     throw new Error("Provide a command to monitor, e.g. `climon copilot`.");
@@ -138,7 +138,11 @@ export async function startMonitoredCommand(
 
   if (options.headless) {
     const size = resolveLaunchSize(process.env);
-    const id = await spawnHeadlessSession(command, process.cwd(), size);
+    const id = await spawnHeadlessSession(command, process.cwd(), size, {
+      name: options.name,
+      priority: options.priority,
+      color: options.color
+    });
     const meta = await readSessionMeta(id);
     if (!meta) {
       throw new Error(`Session metadata for '${id}' not found.`);
@@ -155,6 +159,9 @@ export async function startMonitoredCommand(
     id,
     command,
     displayCommand: command.join(" "),
+    name: options.name,
+    priority: options.priority,
+    color: options.color ?? undefined,
     cwd: process.cwd(),
     status: "running",
     priorityReason: "running",
