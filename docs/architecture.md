@@ -89,6 +89,14 @@ A `Bun.serve` server, stateless with respect to PTYs:
 - `GET /assets/*` — vendored `xterm.js`, its CSS, and the fit addon, resolved
   from `node_modules` via `Bun.resolveSync`.
 
+The server is compiled from its own entrypoint (`src/server.ts`) into a separate
+`climon-server` binary. The client entrypoint (`src/index.ts`) never imports server
+code; its `server` subcommand resolves and execs `climon-server`
+(`src/cli/server-exec.ts`, looked up via `CLIMON_SERVER_BIN` → sibling binary → dev
+source entrypoint → `PATH`). This keeps the xterm assets
+(`src/server/embedded-assets.ts`) and `@xterm/*` dependencies out of the client binary,
+so server-side growth never inflates the client.
+
 ### Dashboard UI (`src/server/assets.ts`)
 
 Renders the session list with status badges and an `xterm.js` terminal. Live
