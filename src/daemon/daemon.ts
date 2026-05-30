@@ -37,6 +37,48 @@ export function clampResize(
   return { cols, rows };
 }
 
+/**
+ * Tracks which connected sockets are local host clients (the interactive
+ * `climon` terminal, identified by a host-sourced Resize). Reports the
+ * attached/detached edges so the daemon patches session metadata exactly once
+ * per transition, and selects a host client to service a spawn request.
+ */
+export class HostClientTracker {
+  private hosts = new Set<unknown>();
+
+  /** Marks a socket as a host client. Returns true on the 0->1 edge. */
+  markHost(socket: unknown): boolean {
+    if (this.hosts.has(socket)) {
+      return false;
+    }
+    const wasAttached = this.hosts.size > 0;
+    this.hosts.add(socket);
+    return !wasAttached;
+  }
+
+  /** Removes a socket. Returns true on the 1->0 edge (was a host, now none). */
+  remove(socket: unknown): boolean {
+    if (!this.hosts.delete(socket)) {
+      return false;
+    }
+    return this.hosts.size === 0;
+  }
+
+  get attached(): boolean {
+    return this.hosts.size > 0;
+  }
+
+  /** Returns any host client that is not `exclude`, or undefined. */
+  pickHost(exclude: unknown): unknown | undefined {
+    for (const host of this.hosts) {
+      if (host !== exclude) {
+        return host;
+      }
+    }
+    return undefined;
+  }
+}
+
 export async function runSessionDaemon(id: string): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
@@ -47,6 +89,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
 
   const scrollback = new ScrollbackBuffer();
   const clients = new Set<Socket>();
+  const hostTracker = new HostClientTracker();
 
   const clampBrowserToHost = config.terminal.clampBrowserToHost;
   // The host terminal owns the maximum PTY size when clamping is enabled. It is
@@ -150,6 +193,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
       priorityReason: exitCode === 0 ? "completed" : "failed",
       completedAt: new Date().toISOString(),
       exitCode,
+      attached: false,
       lastActivityAt: new Date().toISOString()
     }).catch(() => undefined);
     broadcast(encodeJsonFrame(FrameType.Exit, { exitCode }));
@@ -179,14 +223,27 @@ export async function runSessionDaemon(id: string): Promise<void> {
           pty.write(frame.payload.toString("utf8"));
         } else if (frame.type === FrameType.Resize) {
           const size = parseJsonPayload<ResizePayload>(frame.payload);
+          if (size.source === "host" && hostTracker.markHost(socket)) {
+            void patchSessionMeta(id, { attached: true });
+          }
           applyResize(size);
         } else if (frame.type === FrameType.Attention) {
           applyAttention(parseJsonPayload<AttentionPayload>(frame.payload));
         }
       }
     });
-    socket.on("error", () => clients.delete(socket));
-    socket.on("close", () => clients.delete(socket));
+    socket.on("error", () => {
+      clients.delete(socket);
+      if (hostTracker.remove(socket)) {
+        void patchSessionMeta(id, { attached: false });
+      }
+    });
+    socket.on("close", () => {
+      clients.delete(socket);
+      if (hostTracker.remove(socket)) {
+        void patchSessionMeta(id, { attached: false });
+      }
+    });
   });
 
   await listen(server, meta.socketPath);
