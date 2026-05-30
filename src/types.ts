@@ -25,10 +25,21 @@ export interface TerminalConfig {
   clampBrowserToHost: boolean;
 }
 
+export interface AttentionConfig {
+  /**
+   * Number of seconds the rendered terminal grid must remain unchanged before
+   * the session is flagged as needing attention. A blinking cursor does not
+   * count as a change because only cell contents are fingerprinted. Set to 0 or
+   * a negative number to disable static-screen detection.
+   */
+  idleSeconds: number;
+}
+
 export interface ClimonConfig {
   version: 1;
   server: ServerConfig;
   terminal: TerminalConfig;
+  attention: AttentionConfig;
 }
 
 export interface SessionMeta {

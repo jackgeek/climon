@@ -71,6 +71,9 @@ export function defaultConfig(token = generateToken()): ClimonConfig {
     },
     terminal: {
       clampBrowserToHost: true
+    },
+    attention: {
+      idleSeconds: 10
     }
   };
 }
@@ -87,6 +90,10 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     // Backfill sections added after a config file was first written.
     if (!parsed.terminal || typeof parsed.terminal.clampBrowserToHost !== "boolean") {
       parsed.terminal = { ...(parsed.terminal ?? {}), clampBrowserToHost: true };
+    }
+    // Backfill the attention section for configs written before it existed.
+    if (!parsed.attention || typeof parsed.attention.idleSeconds !== "number") {
+      parsed.attention = { ...(parsed.attention ?? {}), idleSeconds: 10 };
     }
     return parsed;
   } catch (error) {

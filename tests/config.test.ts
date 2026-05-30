@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { loadConfig } from "../src/config.js";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import {
   defaultConfig,
   generateToken,
@@ -38,5 +41,28 @@ describe("config defaults", () => {
 
   test("clamps browser to host terminal size by default", () => {
     expect(defaultConfig("tok").terminal.clampBrowserToHost).toBe(true);
+  });
+
+  test("defaults attention idle window to 10 seconds", () => {
+    expect(defaultConfig("tok").attention.idleSeconds).toBe(10);
+  });
+});
+
+describe("config migration", () => {
+  test("backfills a missing attention section", async () => {
+    const home = await mkdtemp(join(tmpdir(), "climon-cfg-"));
+    const migrationEnv = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131, lan: false, token: "tok" },
+        terminal: { clampBrowserToHost: true }
+      })
+    );
+    const config = await loadConfig(migrationEnv);
+    expect(config.attention.idleSeconds).toBe(10);
+    await rm(home, { recursive: true, force: true });
   });
 });
