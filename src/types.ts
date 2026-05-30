@@ -11,8 +11,6 @@ export type PriorityReason =
 export interface ServerConfig {
   host: string;
   port: number;
-  lan: boolean;
-  token: string;
 }
 
 export interface TerminalConfig {

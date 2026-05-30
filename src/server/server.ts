@@ -1,5 +1,4 @@
 import { existsSync, watch } from "node:fs";
-import { networkInterfaces } from "node:os";
 import { connect, type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
@@ -20,7 +19,6 @@ import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 
 interface StartServerOptions {
-  lan?: boolean;
   port?: number;
 }
 
@@ -212,13 +210,10 @@ async function cleanupStaleSessions(): Promise<void> {
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
-  if (options.lan !== undefined) {
-    config.server.lan = options.lan;
-  }
   if (options.port !== undefined) {
     config.server.port = options.port;
   }
-  config.server.host = config.server.lan ? "0.0.0.0" : "127.0.0.1";
+  config.server.host = "127.0.0.1";
   await saveConfig(config);
 
   // Clean up stale sessions whose daemons are no longer responsive.
@@ -259,15 +254,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   }
 
   function authorize(request: Request, server: Bun.Server<WsData>): boolean {
-    if (isLocal(request, server)) {
-      return true;
-    }
-    if (!config.server.lan) {
-      return false;
-    }
-    const url = new URL(request.url);
-    const token = url.searchParams.get("token") ?? request.headers.get("x-climon-token");
-    return token === config.server.token;
+    return isLocal(request, server);
   }
 
   let server: Bun.Server<WsData>;
@@ -296,8 +283,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/sessions" && request.method === "POST") {
-        // Spawning processes is privileged: allow loopback only, even when a
-        // valid LAN token is present.
+        // Spawning processes is privileged: loopback only.
         if (!isLocal(request, srv)) {
           return new Response("Forbidden", { status: 403 });
         }
@@ -500,20 +486,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   });
 }
 
-/**
- * Returns the non-internal IPv4 addresses of this machine, so the LAN startup
- * banner can show how to reach the server instead of a placeholder.
- */
-function localLanAddresses(): string[] {
-  const addresses: string[] = [];
-  for (const iface of Object.values(networkInterfaces())) {
-    for (const info of iface ?? []) {
-      if (info.family === "IPv4" && !info.internal) {
-        addresses.push(info.address);
-      }
-    }
-  }
-  return addresses;
+function printStartup(config: ClimonConfig, port: number): void {
+  void config;
+  process.stdout.write(`climon server listening on http://127.0.0.1:${port}/\n`);
 }
 
 /**
@@ -534,21 +509,4 @@ export function describeListenError(error: unknown, host: string, port: number):
     return new Error(`${host}:${port} is already in use. Choose another port with --port N.`);
   }
   return error instanceof Error ? error : new Error(message);
-}
-
-function printStartup(config: ClimonConfig, port: number): void {
-  if (config.server.lan) {
-    const addresses = localLanAddresses();
-    const query = `?token=${config.server.token}`;
-    if (addresses.length > 0) {
-      for (const address of addresses) {
-        process.stdout.write(`climon server listening on http://${address}:${port}/${query}\n`);
-      }
-    } else {
-      process.stdout.write(`climon server listening on http://<this-machine-ip>:${port}/${query}\n`);
-    }
-    process.stdout.write(`LAN access enabled. Open a URL above (token included) from another machine.\n`);
-    return;
-  }
-  process.stdout.write(`climon server listening on http://127.0.0.1:${port}/\n`);
 }

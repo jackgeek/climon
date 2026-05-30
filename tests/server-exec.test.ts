@@ -11,9 +11,9 @@ function tmp(): string {
 describe("resolveServerInvocation", () => {
   test("honors CLIMON_SERVER_BIN override", () => {
     const env = { CLIMON_SERVER_BIN: "/opt/climon-server" } as NodeJS.ProcessEnv;
-    expect(resolveServerInvocation(["server", "--lan"], env, "/usr/bin/climon")).toEqual({
+    expect(resolveServerInvocation(["server", "--port", "9000"], env, "/usr/bin/climon")).toEqual({
       file: "/opt/climon-server",
-      args: ["server", "--lan"]
+      args: ["server", "--port", "9000"]
     });
   });
 

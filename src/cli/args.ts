@@ -1,6 +1,6 @@
 export type ParsedCommand =
   | { command: "help" }
-  | { command: "server"; lan: boolean; port?: number }
+  | { command: "server"; port?: number }
   | { command: "session"; id: string }
   | { command: "attach"; id: string }
   | { command: "ls" }
@@ -11,8 +11,7 @@ export const helpText = `climon — web-based monitor for interactive CLI sessio
 
 Usage:
   climon <command> [args...]   Run a command in a monitored PTY session
-  climon server [--lan] [--port N]
-                               Start the dashboard web server
+  climon server [--port N]      Start the dashboard web server (loopback only)
   climon ls                    List monitored sessions
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
@@ -34,20 +33,17 @@ export function parseArgs(argv: string[]): ParsedCommand {
     case "-h":
       return { command: "help" };
     case "server": {
-      let lan = false;
       let port: number | undefined;
       for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
-        if (arg === "--lan") {
-          lan = true;
-        } else if (arg === "--port") {
+        if (arg === "--port") {
           port = Number(rest[i + 1]);
           i += 1;
         } else if (arg.startsWith("--port=")) {
           port = Number(arg.slice("--port=".length));
         }
       }
-      return { command: "server", lan, port };
+      return { command: "server", port };
     }
     case "__session": {
       const id = rest[0];

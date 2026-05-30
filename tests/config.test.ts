@@ -5,7 +5,6 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   defaultConfig,
-  generateToken,
   getScrollbackPath,
   getSessionMetaPath,
   getSessionsDir
@@ -28,23 +27,20 @@ describe("config paths", () => {
 });
 
 describe("config defaults", () => {
-  test("generates a non-empty token", () => {
-    expect(generateToken().length).toBeGreaterThan(10);
+  test("default config binds to localhost", () => {
+    const config = defaultConfig();
+    expect(config.server.host).toBe("127.0.0.1");
+    expect(config.server.port).toBe(3131);
   });
 
-  test("default config binds to localhost", () => {
-    const config = defaultConfig("tok");
-    expect(config.server.host).toBe("127.0.0.1");
-    expect(config.server.lan).toBe(false);
-    expect(config.server.token).toBe("tok");
+  test("default config has no lan or token fields", () => {
+    const config = defaultConfig() as unknown as Record<string, unknown> & { server: Record<string, unknown> };
+    expect("lan" in config.server).toBe(false);
+    expect("token" in config.server).toBe(false);
   });
 
   test("clamps browser to host terminal size by default", () => {
-    expect(defaultConfig("tok").terminal.clampBrowserToHost).toBe(true);
-  });
-
-  test("defaults attention idle window to 10 seconds", () => {
-    expect(defaultConfig("tok").attention.idleSeconds).toBe(10);
+    expect(defaultConfig().terminal.clampBrowserToHost).toBe(true);
   });
 });
 

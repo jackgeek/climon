@@ -11,10 +11,9 @@ describe("parseArgs", () => {
     expect(parseArgs(["-h"])).toEqual({ command: "help" });
   });
 
-  test("parses server with lan and port", () => {
-    expect(parseArgs(["server", "--lan", "--port", "9000"])).toEqual({
+  test("parses server with port", () => {
+    expect(parseArgs(["server", "--port", "9000"])).toEqual({
       command: "server",
-      lan: true,
       port: 9000
     });
   });
@@ -22,7 +21,6 @@ describe("parseArgs", () => {
   test("parses server with --port= form", () => {
     expect(parseArgs(["server", "--port=4000"])).toEqual({
       command: "server",
-      lan: false,
       port: 4000
     });
   });

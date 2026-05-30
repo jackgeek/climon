@@ -1,12 +1,12 @@
 import type { SessionMeta } from "../types.js";
 
 /**
- * Appends the current page's query string (e.g. a LAN `?token=…`) to an API
- * path so every request and socket carries the credentials the dashboard was
- * loaded with.
+ * The dashboard is loopback-only and unauthenticated at the HTTP layer, so API
+ * paths need no query credentials. Kept as a thin indirection so call sites stay
+ * stable if a query suffix is ever reintroduced.
  */
 export function withQuery(path: string): string {
-  return path + (location.search || "");
+  return path;
 }
 
 export interface CreateSessionBody {

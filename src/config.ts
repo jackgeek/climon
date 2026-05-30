@@ -2,7 +2,6 @@ import { constants } from "node:fs";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
 import type { ClimonConfig } from "./types.js";
 
 const CONFIG_VERSION = 1;
@@ -56,18 +55,12 @@ export async function ensureClimonHome(env: NodeJS.ProcessEnv = process.env): Pr
   return dir;
 }
 
-export function generateToken(): string {
-  return randomBytes(32).toString("base64url");
-}
-
-export function defaultConfig(token = generateToken()): ClimonConfig {
+export function defaultConfig(): ClimonConfig {
   return {
     version: CONFIG_VERSION,
     server: {
       host: "127.0.0.1",
-      port: 3131,
-      lan: false,
-      token
+      port: 3131
     },
     terminal: {
       clampBrowserToHost: true
@@ -84,7 +77,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
   try {
     const raw = await readFile(configPath, "utf8");
     const parsed = JSON.parse(raw) as ClimonConfig;
-    if (parsed.version !== CONFIG_VERSION || !parsed.server?.token) {
+    if (parsed.version !== CONFIG_VERSION || !parsed.server?.host) {
       throw new Error(`Unsupported climon config format in ${configPath}`);
     }
     // Backfill sections added after a config file was first written.
@@ -115,13 +108,6 @@ export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = 
   } catch {
     // Windows and some filesystems do not support POSIX permissions.
   }
-}
-
-export async function rotateToken(env: NodeJS.ProcessEnv = process.env): Promise<ClimonConfig> {
-  const config = await loadConfig(env);
-  config.server.token = generateToken();
-  await saveConfig(config, env);
-  return config;
 }
 
 export async function assertConfigReadable(env: NodeJS.ProcessEnv = process.env): Promise<void> {
