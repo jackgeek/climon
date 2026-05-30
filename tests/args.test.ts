@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { parseArgs } from "../src/cli/args.js";
+import { parseArgs, helpText } from "../src/cli/args.js";
+import { VERSION } from "../src/version.js";
+
+describe("helpText", () => {
+  test("includes the climon version", () => {
+    expect(helpText).toContain(`v${VERSION}`);
+  });
+});
 
 describe("parseArgs", () => {
   test("defaults to help with no args", () => {
