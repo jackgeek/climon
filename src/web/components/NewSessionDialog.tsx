@@ -84,6 +84,8 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated 
                 value={command}
                 placeholder="e.g. npm run dev"
                 autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
                 spellCheck={false}
                 // eslint-disable-next-line jsx-a11y/no-autofocus
                 autoFocus
@@ -100,6 +102,8 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated 
                 value={cwd}
                 placeholder="Leave blank for the server's working directory"
                 autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
                 spellCheck={false}
                 onChange={(_, data) => setCwd(data.value)}
                 onKeyDown={(e) => {
