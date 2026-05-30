@@ -171,10 +171,11 @@ Notes:
   triggers on any push to `main`, not on a local Git hook.
 - The release commit message starts with `chore(release):`, and the workflow
   skips those, so the bump it pushes never triggers another bump.
-- The workflow pushes with `GITHUB_TOKEN`. If `main` is a protected branch that
-  forbids direct pushes, add a PAT (or GitHub App token) with `contents: write`
-  as the `RELEASE_TOKEN` secret and allow it to bypass the protection; the
-  workflow prefers it when present.
+- The workflow pushes with `GITHUB_TOKEN`, which works because `main` is not a
+  protected branch. If you later protect `main` against direct pushes, the bot
+  token can only bypass it on **organization** repositories; on a user-owned
+  repo you must supply an **admin-owned** PAT with `contents: write` as the
+  `RELEASE_TOKEN` secret (the workflow prefers it when present).
 - To cut a `minor`/`major` release instead, run `bun run release minor|major`
   locally and push with `git push --follow-tags`.
 
