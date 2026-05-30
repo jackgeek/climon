@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -28,23 +29,27 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   getDimensions: () => { cols: number; rows: number } | null;
   onCreated: (id: string) => void;
+  /** When set, spawn from this session's attached client (cwd is inherited). */
+  parent?: { id: string; cwd: string } | null;
 }
 
-export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated }: Props) {
+export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated, parent }: Props) {
   const styles = useStyles();
   const [command, setCommand] = useState("");
   const [cwd, setCwd] = useState("");
+  const [waitForLaunch, setWaitForLaunch] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
       setCommand("");
-      setCwd("");
+      setCwd(parent ? parent.cwd : "");
+      setWaitForLaunch(true);
       setError("");
       setBusy(false);
     }
-  }, [open]);
+  }, [open, parent]);
 
   async function submit(): Promise<void> {
     if (busy) {
@@ -60,16 +65,20 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated 
     const dims = getDimensions();
     const result = await createSession({
       command: trimmed,
-      cwd: cwd.trim() || undefined,
+      cwd: parent ? undefined : cwd.trim() || undefined,
       cols: dims?.cols,
-      rows: dims?.rows
+      rows: dims?.rows,
+      parentId: parent?.id,
+      wait: parent ? waitForLaunch : undefined
     });
-    if (!result.ok || !result.id) {
+    if (!result.ok) {
       setError(result.error || "Failed to create session.");
       setBusy(false);
       return;
     }
-    onCreated(result.id);
+    if (result.id) {
+      onCreated(result.id);
+    }
     onOpenChange(false);
   }
 
@@ -97,22 +106,36 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated 
                 }}
               />
             </Field>
-            <Field label="Working directory (optional)" style={{ marginTop: "12px" }}>
-              <Input
-                value={cwd}
-                placeholder="Leave blank for the server's working directory"
-                autoComplete="off"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                onChange={(_, data) => setCwd(data.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    void submit();
-                  }
-                }}
+            {parent ? (
+              <Field label="Working directory (from selected session)" style={{ marginTop: "12px" }}>
+                <Input value={cwd} readOnly />
+              </Field>
+            ) : (
+              <Field label="Working directory (optional)" style={{ marginTop: "12px" }}>
+                <Input
+                  value={cwd}
+                  placeholder="Leave blank for the server's working directory"
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  onChange={(_, data) => setCwd(data.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      void submit();
+                    }
+                  }}
+                />
+              </Field>
+            )}
+            {parent && (
+              <Checkbox
+                style={{ marginTop: "12px" }}
+                checked={waitForLaunch}
+                label="Wait for session to launch"
+                onChange={(_, data) => setWaitForLaunch(data.checked === true)}
               />
-            </Field>
+            )}
             <Text className={styles.error} style={{ display: "block", marginTop: "12px" }}>
               {error}
             </Text>
