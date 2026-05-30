@@ -1,9 +1,10 @@
-import { watch } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { connect, type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { fileURLToPath } from "node:url";
 import type { ServerWebSocket } from "bun";
 import {
   ensureClimonHome,
@@ -16,6 +17,7 @@ import { sortSessionsByPriority } from "../priority.js";
 import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { ClimonConfig } from "../types.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
+import { resolveClientInvocation } from "../cli/client-exec.js";
 
 interface StartServerOptions {
   lan?: boolean;
@@ -99,6 +101,18 @@ function normalizeDimension(value: unknown, fallback: number): string {
   return String(fallback);
 }
 
+function resolveDevClientEntrypoint(): string | undefined {
+  if (!import.meta.url.startsWith("file:")) {
+    return undefined;
+  }
+  try {
+    const candidate = fileURLToPath(new URL("../index.ts", import.meta.url));
+    return existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Spawns `climon run --headless <argv>` using this process's own runtime and
  * entry script (the same mechanism the per-session daemon uses), captures the
@@ -112,15 +126,17 @@ function spawnHeadlessSession(
   rows: string
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
+    const { file, args } = resolveClientInvocation(
+      ["run", "--headless", ...argv],
+      process.env,
       process.execPath,
-      [process.argv[1], "run", "--headless", ...argv],
-      {
-        cwd,
-        env: { ...process.env, CLIMON_COLS: cols, CLIMON_ROWS: rows },
-        stdio: ["ignore", "pipe", "pipe"]
-      }
+      resolveDevClientEntrypoint()
     );
+    const child = spawn(file, args, {
+      cwd,
+      env: { ...process.env, CLIMON_COLS: cols, CLIMON_ROWS: rows },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -135,6 +151,10 @@ function spawnHeadlessSession(
     });
     child.once("error", (error) => {
       clearTimeout(timer);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        reject(new Error("climon client binary not found; set CLIMON_CLIENT_BIN to its path"));
+        return;
+      }
       reject(error);
     });
     child.once("close", (code) => {
