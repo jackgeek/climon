@@ -1,3 +1,5 @@
+import { VERSION } from "../version.js";
+
 export type ParsedCommand =
   | { command: "help" }
   | { command: "server"; port?: number }
@@ -10,7 +12,7 @@ export type ParsedCommand =
   | { command: "uplink" }
   | { command: "ssh-accept"; label: string };
 
-export const helpText = `climon — web-based monitor for interactive CLI sessions
+export const helpText = `climon v${VERSION} — web-based monitor for interactive CLI sessions
 
 Usage:
   climon <command> [args...]   Run a command in a monitored PTY session

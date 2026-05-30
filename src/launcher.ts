@@ -176,7 +176,7 @@ export async function startMonitoredCommand(
   await waitForSocket(meta.socketPath);
 
   const dashboardUrl = `http://${config.server.host}:${config.server.port}/`;
-  process.stdout.write(`climon monitoring session ${id} — dashboard: ${dashboardUrl}\r\n`);
+  process.stdout.write(`climon v${VERSION} monitoring session ${id} — dashboard: ${dashboardUrl}\r\n`);
   process.stdout.write("Detach with Ctrl-\\ then d.\r\n");
 
   const result = await connectToSession(meta.socketPath);
@@ -196,6 +196,7 @@ export async function reconnectSession(id: string): Promise<number> {
     process.stdout.write(`Session ${id} already ${meta.status} (exit code ${meta.exitCode ?? 0}).\r\n`);
     return meta.exitCode ?? 0;
   }
+  process.stdout.write(`climon v${VERSION} attaching to session ${id}\r\n`);
   const result = await connectToSession(meta.socketPath);
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
