@@ -136,6 +136,45 @@ directly. No Bun installation or `node_modules` needed. Install both the `climon
 (client) and `climon-server` binaries side by side so `climon server` can find and
 launch the dashboard.
 
+## Releasing
+
+The version lives in `package.json` and is the single source of truth: both
+binaries and the dashboard read it via `src/version.ts`, so a bump flows
+everywhere on the next build.
+
+Bump it with the release script, which rewrites `package.json`, commits the
+change, and creates a matching `vX.Y.Z` git tag:
+
+```bash
+bun run release            # patch bump (default): 0.1.0 -> 0.1.1
+bun run release minor      # 0.1.0 -> 0.2.0
+bun run release major      # 0.1.0 -> 1.0.0
+```
+
+The script refuses to run with a dirty working tree (so the release commit only
+contains the bump) and does **not** push — finish with `git push --follow-tags`.
+
+### Automatic bump on merge to `main`
+
+A husky `post-merge` hook (installed via the `prepare` script on `bun install`)
+runs a patch release automatically when a feature branch is merged into `main`.
+Because Git hooks are local and there is no native "merged to main" event, the
+hook is deliberately conservative — it only bumps when:
+
+- the current branch is `main`, **and**
+- the merge created a real merge commit (so fast-forward `git pull`s of an
+  already-bumped `main` never double-bump).
+
+Notes:
+
+- Merge feature branches into `main` with a merge commit (`git merge --no-ff`, or
+  GitHub's "Create a merge commit") so the hook fires; pure fast-forward merges
+  are intentionally skipped.
+- Server-side PR merges (squash/rebase on GitHub) don't run local hooks; the
+  bump then happens for whoever next integrates `main` with a merge commit.
+- Set `CLIMON_SKIP_RELEASE=1` to opt out for a given merge.
+- The bump is committed and tagged locally only; push with `git push --follow-tags`.
+
 ## Further reading
 
 See [`docs/setup.md`](docs/setup.md), [`docs/usage.md`](docs/usage.md),
