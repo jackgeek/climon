@@ -51,11 +51,35 @@ export async function createSession(body: CreateSessionBody): Promise<CreateSess
   }
 }
 
-export async function deleteSession(id: string): Promise<void> {
+export interface DeleteSessionResult {
+  /**
+   * True only when the server responded `200 { stillRunning: true }` — a
+   * graceful kill whose daemon survived SIGTERM. False otherwise (including
+   * cleanup-only deletes, successful kills, and network errors).
+   */
+  stillRunning: boolean;
+}
+
+export async function deleteSession(
+  id: string,
+  opts?: { kill?: "graceful" | "force" }
+): Promise<DeleteSessionResult> {
   try {
-    await fetch(withQuery(`/api/sessions/${id}`), { method: "DELETE" });
+    const params = new URLSearchParams(location.search);
+    if (opts?.kill) {
+      params.set("kill", opts.kill);
+    }
+    const query = params.toString();
+    const path = `/api/sessions/${id}${query ? `?${query}` : ""}`;
+    const res = await fetch(path, { method: "DELETE" });
+    if (res.status === 200) {
+      const data = (await res.json().catch(() => null)) as { stillRunning?: boolean } | null;
+      return { stillRunning: data?.stillRunning === true };
+    }
+    return { stillRunning: false };
   } catch {
     // Best effort: the SSE stream will reconcile the list regardless.
+    return { stillRunning: false };
   }
 }
 

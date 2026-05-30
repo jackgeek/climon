@@ -94,8 +94,8 @@ export function SessionItem({ session, active, onSelect, onClose, onNew }: Props
         appearance="subtle"
         size="small"
         icon={<Dismiss16Regular />}
-        title="Clean up session"
-        aria-label="Clean up session"
+        title="Close session"
+        aria-label="Close session"
         onClick={(e) => {
           e.stopPropagation();
           onClose(session.id);

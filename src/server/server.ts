@@ -43,6 +43,58 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+export type KillMode = "none" | "graceful" | "force";
+
+/**
+ * Parses the `kill` query parameter of a DELETE request. An absent (`null`),
+ * empty, or `"none"` value means cleanup-only. `"graceful"` and `"force"` are
+ * passed through. Anything else is invalid (caller should reject with 400).
+ */
+export function parseKillMode(value: string | null): KillMode | null {
+  if (value === null || value === "" || value === "none") {
+    return "none";
+  }
+  if (value === "graceful" || value === "force") {
+    return value;
+  }
+  return null;
+}
+
+/** Grace period before rechecking liveness after a graceful (SIGTERM) kill. */
+const KILL_GRACE_MS = 3000;
+
+/**
+ * Applies the requested kill mode to a session's daemon and reports whether the
+ * daemon is still running afterwards. Signaling is best-effort: an already-dead
+ * process (ESRCH) is treated as success. Only `graceful` can report
+ * `stillRunning: true`, when the process survives SIGTERM past the grace period.
+ */
+export async function applySessionKill(
+  pid: number | undefined,
+  mode: KillMode,
+  graceMs: number = KILL_GRACE_MS
+): Promise<{ stillRunning: boolean }> {
+  if (mode === "none" || pid === undefined) {
+    return { stillRunning: false };
+  }
+  if (mode === "force") {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+    return { stillRunning: false };
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    // Already gone.
+    return { stillRunning: false };
+  }
+  await new Promise((resolve) => setTimeout(resolve, graceMs));
+  return { stillRunning: isProcessAlive(pid) };
+}
+
 /**
  * Extracts the hostname from a Host header value, stripping an optional port
  * and IPv6 brackets. Examples: "127.0.0.1:3131" -> "127.0.0.1",
@@ -370,10 +422,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const sessionMatch = SESSION_PATH.exec(url.pathname);
       if (sessionMatch && request.method === "DELETE") {
-        // Clean up only removes the recorded session (metadata + scrollback) from
-        // the dashboard. It deliberately does NOT signal the daemon, so any climon
-        // client still attached to this session keeps running uninterrupted.
-        const removed = await removeSessionMeta(sessionMatch[1]);
+        // The optional `kill` query parameter decides whether to also stop the
+        // per-session daemon. Absent/`none` is cleanup only (metadata +
+        // scrollback): it deliberately does NOT signal the daemon, so any climon
+        // client still attached keeps running. `graceful` SIGTERMs and rechecks;
+        // if the daemon survives the grace period the session is left intact and
+        // the client is told so it can confirm a `force` (SIGKILL).
+        const id = sessionMatch[1];
+        const mode = parseKillMode(url.searchParams.get("kill"));
+        if (mode === null) {
+          return new Response("Invalid kill mode", { status: 400 });
+        }
+        const meta = await readSessionMeta(id);
+        const { stillRunning } = await applySessionKill(meta?.daemonPid, mode);
+        if (stillRunning) {
+          return Response.json({ stillRunning: true }, { status: 200 });
+        }
+        const removed = await removeSessionMeta(id);
         if (!removed) {
           return new Response("Not found", { status: 404 });
         }

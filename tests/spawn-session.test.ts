@@ -20,10 +20,12 @@ describe("spawnHeadlessSession", () => {
       command: string[];
       cols: number;
       rows: number;
+      headless: boolean;
     };
     expect(meta.cwd).toBe("/tmp");
     expect(meta.command).toEqual(["sleep", "30"]);
     expect(meta.cols).toBe(100);
     expect(meta.rows).toBe(40);
+    expect(meta.headless).toBe(true);
   });
 });

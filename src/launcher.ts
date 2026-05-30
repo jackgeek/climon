@@ -149,6 +149,7 @@ export async function startMonitoredCommand(
     socketPath: getSocketPath(id),
     cols,
     rows,
+    headless: false,
     createdAt: now,
     updatedAt: now,
     lastActivityAt: now

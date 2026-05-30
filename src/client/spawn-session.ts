@@ -50,6 +50,7 @@ export async function spawnHeadlessSession(
     socketPath: getSocketPath(id, env),
     cols: Math.max(size.cols, 1),
     rows: Math.max(size.rows, 1),
+    headless: true,
     createdAt: now,
     updatedAt: now,
     lastActivityAt: now

@@ -53,6 +53,12 @@ export interface SessionMeta {
   socketPath: string;
   cols: number;
   rows: number;
+  /**
+   * Whether the session was created without a local terminal attached (the
+   * dashboard "New session" button or `climon run --headless`). A missing flag
+   * (sessions persisted before this field existed) is treated as non-headless.
+   */
+  headless?: boolean;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;

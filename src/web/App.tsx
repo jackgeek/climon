@@ -5,6 +5,7 @@ import type { SessionMeta } from "../types.js";
 import { eventsUrl, fetchSessions, deleteSession } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
+import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 
 const useStyles = makeStyles({
@@ -92,6 +93,8 @@ export function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogParent, setDialogParent] = useState<{ id: string; cwd: string } | null>(null);
+  const [closeTarget, setCloseTarget] = useState<SessionMeta | null>(null);
+  const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
@@ -143,12 +146,55 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [maximized]);
 
-  async function handleClose(id: string): Promise<void> {
-    await deleteSession(id);
+  function removeFromList(id: string): void {
     if (activeId === id) {
       setActiveId(null);
     }
     setSessions((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  // The ✕ button signals intent to close. Finished sessions are cleaned up
+  // immediately; live ones open the confirmation flow so the user can decide
+  // whether to also kill the underlying process.
+  function requestClose(id: string): void {
+    const session = sessions.find((s) => s.id === id);
+    if (!session) {
+      return;
+    }
+    if (session.status === "completed" || session.status === "failed") {
+      void deleteSession(id).then(() => removeFromList(id));
+      return;
+    }
+    setCloseTarget(session);
+  }
+
+  async function handleCloseConfirm(kill: boolean): Promise<void> {
+    const session = closeTarget;
+    setCloseTarget(null);
+    if (!session) {
+      return;
+    }
+    if (!kill) {
+      await deleteSession(session.id);
+      removeFromList(session.id);
+      return;
+    }
+    const { stillRunning } = await deleteSession(session.id, { kill: "graceful" });
+    if (stillRunning) {
+      setForceTarget(session);
+    } else {
+      removeFromList(session.id);
+    }
+  }
+
+  async function handleForceKill(): Promise<void> {
+    const session = forceTarget;
+    setForceTarget(null);
+    if (!session) {
+      return;
+    }
+    await deleteSession(session.id, { kill: "force" });
+    removeFromList(session.id);
   }
 
   function handleCreated(id: string): void {
@@ -168,7 +214,7 @@ export function App() {
           sessions={sessions}
           activeId={activeId}
           onSelect={setActiveId}
-          onClose={(id) => void handleClose(id)}
+          onClose={(id) => requestClose(id)}
           onNew={() => {
             setDialogParent(null);
             setDialogOpen(true);
@@ -219,6 +265,16 @@ export function App() {
         getDimensions={() => terminalRef.current?.getDimensions() ?? null}
         onCreated={handleCreated}
         parent={dialogParent}
+      />
+      <CloseSessionDialog
+        session={closeTarget}
+        onCancel={() => setCloseTarget(null)}
+        onConfirm={(kill) => void handleCloseConfirm(kill)}
+      />
+      <ForceKillDialog
+        session={forceTarget}
+        onNo={() => setForceTarget(null)}
+        onKill={() => void handleForceKill()}
       />
     </div>
   );
