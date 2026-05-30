@@ -20,5 +20,12 @@ branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 # Require a real merge commit (two parents). Fast-forward pulls have none.
 git rev-parse --verify -q HEAD^2 >/dev/null 2>&1 || exit 0
 
+# The merge commit already exists by the time post-merge runs, but Git leaves
+# MERGE_HEAD/MERGE_MSG behind until the next commit. Clear this stale state so
+# the release bump is a clean single-parent commit rather than an accidental
+# two-parent merge commit.
+git_dir=$(git rev-parse --git-dir)
+rm -f "$git_dir/MERGE_HEAD" "$git_dir/MERGE_MSG" "$git_dir/MERGE_MODE"
+
 echo "husky: main updated by a merge — running patch release..."
 bun run release || echo "husky: release skipped (see message above)."
