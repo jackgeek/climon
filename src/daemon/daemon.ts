@@ -1,7 +1,6 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { rm } from "node:fs/promises";
 import { Buffer } from "node:buffer";
-import { detectAttention } from "../attention.js";
 import { ensureClimonHome, loadConfig, SESSION_ENV_VAR } from "../config.js";
 import {
   encodeFrame,
@@ -9,14 +8,12 @@ import {
   FrameDecoder,
   FrameType,
   parseJsonPayload,
-  type ResizePayload
+  type ResizePayload,
+  type AttentionPayload
 } from "../ipc/frame.js";
 import { spawnPty, resolveCommand, type PtyHandle } from "../pty.js";
 import { ScrollbackBuffer } from "./buffer.js";
 import { patchSessionMeta, readSessionMeta, writeScrollback } from "../store.js";
-
-const ATTENTION_INTERVAL_MS = 750;
-const ATTENTION_WINDOW_BYTES = 8 * 1024;
 
 /**
  * Resolves a requested resize to the dimensions actually applied to the PTY.
@@ -62,8 +59,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
   let appliedCols = meta.cols;
   let appliedRows = meta.rows;
 
-  let lastAttentionReason: string | undefined;
-  let lastAttentionCheck = 0;
+  let lastAttentionState: boolean | undefined;
   let exited = false;
   let exitInfo: { exitCode: number } | undefined;
   let resolveExit: (() => void) | undefined;
@@ -96,23 +92,34 @@ export async function runSessionDaemon(id: string): Promise<void> {
     }
   }
 
-  function maybeDetectAttention(): void {
-    const now = Date.now();
-    if (now - lastAttentionCheck < ATTENTION_INTERVAL_MS) {
+  /**
+   * Applies a client-reported attention transition. The daemon is the only
+   * writer of session metadata, so detection state from the client funnels
+   * through here. Transitions are de-duped against the last applied value and
+   * ignored after the PTY exits so the completed/failed patch always wins.
+   */
+  function applyAttention(payload: AttentionPayload): void {
+    if (exited) {
       return;
     }
-    lastAttentionCheck = now;
-    const window = scrollback.snapshot();
-    const text = window.subarray(Math.max(0, window.length - ATTENTION_WINDOW_BYTES)).toString("utf8");
-    const attention = detectAttention(text);
-    if (attention.matched && attention.reason !== lastAttentionReason) {
-      lastAttentionReason = attention.reason;
+    if (lastAttentionState === payload.needsAttention) {
+      return;
+    }
+    lastAttentionState = payload.needsAttention;
+    const now = new Date().toISOString();
+    if (payload.needsAttention) {
       void patchSessionMeta(id, {
         status: "needs-attention",
         priorityReason: "attention",
-        attentionMatchedAt: new Date().toISOString(),
-        attentionReason: attention.reason,
-        lastActivityAt: new Date().toISOString()
+        attentionMatchedAt: now,
+        attentionReason: payload.reason,
+        lastActivityAt: now
+      });
+    } else {
+      void patchSessionMeta(id, {
+        status: "running",
+        priorityReason: "running",
+        lastActivityAt: now
       });
     }
   }
@@ -132,7 +139,6 @@ export async function runSessionDaemon(id: string): Promise<void> {
   pty.onData((data) => {
     scrollback.append(data);
     broadcast(encodeFrame(FrameType.Output, data));
-    maybeDetectAttention();
   });
 
   pty.onExit(async (exitCode) => {
@@ -174,6 +180,8 @@ export async function runSessionDaemon(id: string): Promise<void> {
         } else if (frame.type === FrameType.Resize) {
           const size = parseJsonPayload<ResizePayload>(frame.payload);
           applyResize(size);
+        } else if (frame.type === FrameType.Attention) {
+          applyAttention(parseJsonPayload<AttentionPayload>(frame.payload));
         }
       }
     });

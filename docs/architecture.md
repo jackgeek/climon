@@ -9,7 +9,8 @@ sockets.
 climon <cmd>  ──spawn(detached)──►  session daemon  ──Bun.Terminal──►  user command
      │  (local attach client)            │  owns PTY + scrollback ring buffer
      │  raw-mode stdin/stdout            │  listens on per-session socket
-     └──────── IPC socket ───────────────┤  runs attention detection
+     │  static-screen attention det.     │  (single writer of session metadata)
+     └──────── IPC socket ───────────────┤  applies client attention frames
                                           │  writes ~/.climon/sessions/<id>.json
 climon server (Bun.serve)                 │  persists final buffer + status on exit
      │  scans ~/.climon/sessions/*.json   │
@@ -41,8 +42,9 @@ Launched as `climon __session <id>`, detached from the launcher. It:
 4. Listens on the per-session socket (`createServer`), replaying the scrollback
    buffer to each new client.
 5. Appends PTY output to a ring buffer (`src/daemon/buffer.ts`, ~256 KB),
-   broadcasts it to connected clients, and runs attention detection
-   (throttled to once per 750 ms, over the most recent 8 KB).
+   broadcasts it to connected clients, and applies attention transitions
+   reported by the attached client (it is the single writer of session
+   metadata).
 6. On PTY exit: persists final scrollback, patches metadata to
    `completed`/`failed` with the exit code, notifies clients, and shuts down.
 
@@ -128,7 +130,17 @@ and asset serving live in `src/server/assets.ts`.
 `needs-attention` < `running` < `completed`/`failed` < `disconnected`, ties
 broken by most-recent update. This drives both the dashboard and `climon ls`.
 
-## Attention detection (`src/attention.ts`)
+## Attention detection (`src/client/idle-detector.ts`)
 
-Regex rules over recent output detect prompts such as "continue?", "[y/n]",
-"press enter", "waiting for input", and Copilot-style attention requests.
+Detection is client-side and based on a static screen, not text patterns. While a
+local client is attached it feeds every PTY output byte into a headless
+`@xterm/headless` grid and, once per second, fingerprints the visible rows
+(`translateToString` joined per row). The pure `ScreenIdleDetector` compares
+successive fingerprints: if the screen stops changing for
+`attention.idleSeconds` (default 10) the client sends a `FrameType.Attention`
+frame to the daemon, which is the single writer that patches the session to
+`needs-attention`; when the screen changes again it reverts to `running`.
+
+Because only cell contents are fingerprinted (not the cursor position), a
+blinking cursor is treated as static. Detection runs only while a local client is
+attached, and setting `attention.idleSeconds` to `0` or less disables it.

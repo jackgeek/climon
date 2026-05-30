@@ -73,11 +73,17 @@ climon kill <id>          # terminate a session and remove its metadata
 
 ## Attention queue
 
-When a monitored command prints a prompt that looks like it needs you — for
-example `Continue? [y/n]`, `Press enter to continue`, `waiting for input`, or a
-Copilot-style approval request — climon flags the session as `needs-attention`
-and bumps it to the top of the dashboard. Open it and type the response in the
-web terminal to unblock the command.
+While you have a session attached locally, climon watches its rendered screen. If
+the visible terminal content stops changing for `attention.idleSeconds` (default
+10) — for example a command paused at a prompt, where only a blinking cursor
+remains — climon flags the session as `needs-attention` and bumps it to the top
+of the dashboard. As soon as the screen changes again the session reverts to
+`running`. Open it and type the response in the web terminal to unblock the
+command.
+
+Tune the idle window in `~/.climon/config.json` under `attention.idleSeconds`;
+set it to `0` (or less) to disable static-screen detection. Detection runs only
+while a local client is attached.
 
 ## Completion
 

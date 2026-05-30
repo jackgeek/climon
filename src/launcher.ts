@@ -132,7 +132,11 @@ export async function startMonitoredCommand(
   process.stdout.write(`climon monitoring session ${id} — dashboard: ${dashboardUrl}\r\n`);
   process.stdout.write("Detach with Ctrl-\\ then d.\r\n");
 
-  const result = await connectToSession(meta.socketPath);
+  const result = await connectToSession(meta.socketPath, {
+    idleSeconds: config.attention.idleSeconds,
+    cols: meta.cols,
+    rows: meta.rows
+  });
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
     return 0;
@@ -149,7 +153,12 @@ export async function reconnectSession(id: string): Promise<number> {
     process.stdout.write(`Session ${id} already ${meta.status} (exit code ${meta.exitCode ?? 0}).\r\n`);
     return meta.exitCode ?? 0;
   }
-  const result = await connectToSession(meta.socketPath);
+  const config = await loadConfig();
+  const result = await connectToSession(meta.socketPath, {
+    idleSeconds: config.attention.idleSeconds,
+    cols: meta.cols,
+    rows: meta.rows
+  });
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
     return 0;

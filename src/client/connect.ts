@@ -1,6 +1,16 @@
 import { connect, type Socket } from "node:net";
 import { Buffer } from "node:buffer";
-import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload, type ExitPayload } from "../ipc/frame.js";
+import { Terminal } from "@xterm/headless";
+import {
+  encodeFrame,
+  encodeJsonFrame,
+  FrameDecoder,
+  FrameType,
+  parseJsonPayload,
+  type ExitPayload,
+  type PtySizePayload
+} from "../ipc/frame.js";
+import { ScreenIdleDetector } from "./idle-detector.js";
 
 const DETACH_PREFIX = 0x1c; // Ctrl-\
 const DETACH_KEY = 0x64; // 'd'
@@ -8,6 +18,14 @@ const DETACH_KEY = 0x64; // 'd'
 export interface AttachResult {
   detached: boolean;
   exitCode: number;
+}
+
+export interface AttachOptions {
+  /** Idle window in seconds for static-screen detection. <= 0 disables it. */
+  idleSeconds: number;
+  /** Initial headless grid size; refreshed by PtySize frames. */
+  cols: number;
+  rows: number;
 }
 
 interface ProcessedInput {
@@ -48,7 +66,7 @@ function terminalSize(): { cols: number; rows: number } {
  * Connects the local terminal to a running session daemon. Forwards keystrokes,
  * renders PTY output, and supports detaching with Ctrl-\ then d.
  */
-export function connectToSession(socketPath: string): Promise<AttachResult> {
+export function connectToSession(socketPath: string, options: AttachOptions): Promise<AttachResult> {
   return new Promise<AttachResult>((resolve, reject) => {
     const socket: Socket = connect(socketPath);
     const decoder = new FrameDecoder();
@@ -57,6 +75,32 @@ export function connectToSession(socketPath: string): Promise<AttachResult> {
     let settled = false;
     let exitCode = 0;
     let detached = false;
+
+    const headless = new Terminal({
+      cols: Math.max(options.cols, 1),
+      rows: Math.max(options.rows, 1),
+      allowProposedApi: true
+    });
+    const detector = new ScreenIdleDetector(options.idleSeconds);
+
+    function fingerprint(): string {
+      const buffer = headless.buffer.active;
+      const rows: string[] = [];
+      for (let i = 0; i < headless.rows; i++) {
+        rows.push(buffer.getLine(buffer.viewportY + i)?.translateToString(true) ?? "");
+      }
+      return rows.join("\n");
+    }
+
+    const idleTimer =
+      options.idleSeconds > 0
+        ? setInterval(() => {
+            const transition = detector.update(fingerprint(), Date.now());
+            if (transition) {
+              socket.write(encodeJsonFrame(FrameType.Attention, transition));
+            }
+          }, 1000)
+        : undefined;
 
     const onStdin = (chunk: Buffer): void => {
       const { forward, detach } = inputProcessor.process(chunk);
@@ -82,6 +126,10 @@ export function connectToSession(socketPath: string): Promise<AttachResult> {
       if (stdin.isTTY) {
         stdin.setRawMode(false);
       }
+      if (idleTimer) {
+        clearInterval(idleTimer);
+      }
+      headless.dispose();
       stdin.pause();
     }
 
@@ -101,12 +149,25 @@ export function connectToSession(socketPath: string): Promise<AttachResult> {
       stdin.on("data", onStdin);
       process.stdout.on("resize", onResize);
       onResize();
+      // Clear any stale "needs attention" flag the moment this detecting client
+      // attaches. The daemon's attention state persists across clients, but each
+      // client starts with a fresh detector that only reverts a flag it raised
+      // itself — so without this baseline a session flagged by a previous client
+      // would stay stuck on "needs attention" while actively in use. If the
+      // screen is still idle, the detector re-flags after the idle window.
+      if (options.idleSeconds > 0) {
+        socket.write(encodeJsonFrame(FrameType.Attention, { needsAttention: false }));
+      }
     });
 
     socket.on("data", (chunk) => {
       for (const frame of decoder.push(chunk)) {
         if (frame.type === FrameType.Output || frame.type === FrameType.Replay) {
           process.stdout.write(frame.payload);
+          headless.write(frame.payload);
+        } else if (frame.type === FrameType.PtySize) {
+          const size = parseJsonPayload<PtySizePayload>(frame.payload);
+          headless.resize(Math.max(size.cols, 1), Math.max(size.rows, 1));
         } else if (frame.type === FrameType.Exit) {
           exitCode = parseJsonPayload<ExitPayload>(frame.payload).exitCode;
         }

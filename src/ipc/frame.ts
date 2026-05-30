@@ -6,7 +6,8 @@ export enum FrameType {
   Resize = 3,
   Exit = 4,
   Replay = 5,
-  PtySize = 6
+  PtySize = 6,
+  Attention = 7
 }
 
 export interface ResizePayload {
@@ -24,6 +25,11 @@ export interface ResizePayload {
 export interface PtySizePayload {
   cols: number;
   rows: number;
+}
+
+export interface AttentionPayload {
+  needsAttention: boolean;
+  reason?: string;
 }
 
 export interface ExitPayload {
