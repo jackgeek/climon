@@ -9,7 +9,8 @@ import { resolve, dirname } from "node:path";
 
 const projectRoot = dirname(dirname(import.meta.path));
 const distDir = resolve(projectRoot, "dist");
-const entrypoint = resolve(projectRoot, "src/index.ts");
+const clientEntrypoint = resolve(projectRoot, "src/index.ts");
+const serverEntrypoint = resolve(projectRoot, "src/server.ts");
 
 const targets = [
   { name: "climon-linux-x64", target: "bun-linux-x64" },
@@ -26,12 +27,17 @@ async function main() {
   // Step 2: Ensure dist directory exists
   mkdirSync(distDir, { recursive: true });
 
-  // Step 3: Compile for each target
+  // Step 3: Compile a client and a server binary for each target
   for (const { name, target } of targets) {
-    const outfile = resolve(distDir, name);
+    const clientOut = resolve(distDir, name);
+    const serverName = name.replace(/^climon/, "climon-server");
+    const serverOut = resolve(distDir, serverName);
     console.log(`→ Compiling ${name} (${target})...`);
-    await $`bun build ${entrypoint} --compile --target ${target} --outfile ${outfile}`;
-    console.log(`  ✓ ${outfile}`);
+    await $`bun build ${clientEntrypoint} --compile --target ${target} --outfile ${clientOut}`;
+    console.log(`  ✓ ${clientOut}`);
+    console.log(`→ Compiling ${serverName} (${target})...`);
+    await $`bun build ${serverEntrypoint} --compile --target ${target} --outfile ${serverOut}`;
+    console.log(`  ✓ ${serverOut}`);
   }
 
   console.log(`\n✓ All binaries written to ${distDir}/`);

@@ -27,8 +27,8 @@ interact with each one from the browser.
 ## Quick start
 
 ```bash
-bun build                    # compile the CLI
-bun link                     # make `climon` available globally
+bun run build:all            # bundle the client and the server
+bun link                     # make `climon` and `climon-server` available globally
 climon server                # terminal 1: start the dashboard
 ```
 
@@ -71,6 +71,12 @@ optional working directory), and a new monitored session is spawned for you.
 For security this only works from the machine running the server (loopback);
 remote/LAN clients cannot create sessions.
 
+The client and dashboard server ship as two binaries: a lean `climon` (client) and
+`climon-server` (dashboard). Running `climon server` locates and runs `climon-server`
+— looked up via `CLIMON_SERVER_BIN`, then a sibling binary next to `climon`, then your
+`PATH`. Keeping the xterm assets in `climon-server` means client-only usage stays small
+as the server grows.
+
 ### `climon ls`
 
 List all monitored sessions with their IDs, status, and the command that was
@@ -104,13 +110,15 @@ This outputs binaries to `dist/`:
 
 | File | Platform |
 |------|----------|
-| `climon-linux-x64` | Linux x86_64 |
-| `climon-linux-arm64` | Linux aarch64 |
-| `climon-darwin-x64` | macOS Intel |
-| `climon-darwin-arm64` | macOS Apple Silicon |
+| `climon-linux-x64` / `climon-server-linux-x64` | Linux x86_64 |
+| `climon-linux-arm64` / `climon-server-linux-arm64` | Linux aarch64 |
+| `climon-darwin-x64` / `climon-server-darwin-x64` | macOS Intel |
+| `climon-darwin-arm64` / `climon-server-darwin-arm64` | macOS Apple Silicon |
 
 Each binary is fully standalone — copy it to the target machine and run it
-directly. No Bun installation or `node_modules` needed.
+directly. No Bun installation or `node_modules` needed. Install both the `climon`
+(client) and `climon-server` binaries side by side so `climon server` can find and
+launch the dashboard.
 
 ## Further reading
 

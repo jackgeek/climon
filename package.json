@@ -4,16 +4,20 @@
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
   "type": "module",
   "bin": {
-    "climon": "./src/index.ts"
+    "climon": "./src/index.ts",
+    "climon-server": "./src/server.ts"
   },
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build ./src/index.ts --outdir ./dist --target bun --format esm",
+    "build:server": "bun build ./src/server.ts --outdir ./dist --target bun --format esm",
+    "build:all": "bun run build && bun run build:server",
     "compile": "bun scripts/compile.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "bun run typecheck",
     "test": "bun test tests",
     "dev": "bun src/index.ts",
+    "server": "bun src/server.ts server",
     "start": "bun src/index.ts"
   },
   "engines": {
