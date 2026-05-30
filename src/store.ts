@@ -3,9 +3,11 @@ import { dirname, join } from "node:path";
 import { getScrollbackPath, getSessionMetaPath, getSessionsDir } from "./config.js";
 import type { SessionMeta, SessionMetaPatch } from "./types.js";
 
+let tempCounter = 0;
+
 async function atomicWrite(path: string, data: Buffer | string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  const tempPath = `${path}.${process.pid}.${Date.now()}.${tempCounter++}.tmp`;
   await writeFile(tempPath, data);
   await rename(tempPath, path);
 }
@@ -26,18 +28,42 @@ export async function readSessionMeta(id: string, env: NodeJS.ProcessEnv = proce
   }
 }
 
+// Serializes patchSessionMeta calls per session id within this process. The
+// patch is a read-merge-write, so concurrent patches (e.g. an `attached:true`
+// write and a `status` write fired on the same client-connect tick) would
+// otherwise race and silently drop one field. Each daemon and the server run
+// in their own process, so a per-process per-id promise chain is sufficient to
+// keep that process's own bursts of patches consistent.
+const patchQueues = new Map<string, Promise<unknown>>();
+
 export async function patchSessionMeta(
   id: string,
   patch: SessionMetaPatch,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<SessionMeta | undefined> {
-  const current = await readSessionMeta(id, env);
-  if (!current) {
-    return undefined;
-  }
-  const updated: SessionMeta = { ...current, ...patch, updatedAt: new Date().toISOString() };
-  await writeSessionMeta(updated, env);
-  return updated;
+  const prior = patchQueues.get(id) ?? Promise.resolve();
+  const run = prior.then(async () => {
+    const current = await readSessionMeta(id, env);
+    if (!current) {
+      return undefined;
+    }
+    const updated: SessionMeta = { ...current, ...patch, updatedAt: new Date().toISOString() };
+    await writeSessionMeta(updated, env);
+    return updated;
+  });
+  // The queued tail never rejects, so later patches always run after this one.
+  const tail = run.then(
+    () => undefined,
+    () => undefined
+  );
+  patchQueues.set(id, tail);
+  void tail.then(() => {
+    // Prune once this was the last patch in the chain.
+    if (patchQueues.get(id) === tail) {
+      patchQueues.delete(id);
+    }
+  });
+  return run;
 }
 
 export async function listSessions(env: NodeJS.ProcessEnv = process.env): Promise<SessionMeta[]> {
