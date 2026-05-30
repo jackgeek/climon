@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   Button,
-  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -29,7 +28,7 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   getDimensions: () => { cols: number; rows: number } | null;
   onCreated: (id: string) => void;
-  /** When set, spawn from this session's attached client (cwd is inherited). */
+  /** When set, spawn a new session from this session (cwd is inherited). */
   parent?: { id: string; cwd: string } | null;
 }
 
@@ -37,7 +36,6 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
   const styles = useStyles();
   const [command, setCommand] = useState("");
   const [cwd, setCwd] = useState("");
-  const [waitForLaunch, setWaitForLaunch] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -45,7 +43,6 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
     if (open) {
       setCommand("");
       setCwd(parent ? parent.cwd : "");
-      setWaitForLaunch(true);
       setError("");
       setBusy(false);
     }
@@ -68,8 +65,7 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
       cwd: parent ? undefined : cwd.trim() || undefined,
       cols: dims?.cols,
       rows: dims?.rows,
-      parentId: parent?.id,
-      wait: parent ? waitForLaunch : undefined
+      parentId: parent?.id
     });
     if (!result.ok) {
       setError(result.error || "Failed to create session.");
@@ -127,14 +123,6 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
                   }}
                 />
               </Field>
-            )}
-            {parent && (
-              <Checkbox
-                style={{ marginTop: "12px" }}
-                checked={waitForLaunch}
-                label="Wait for session to launch"
-                onChange={(_, data) => setWaitForLaunch(data.checked === true)}
-              />
             )}
             <Text className={styles.error} style={{ display: "block", marginTop: "12px" }}>
               {error}

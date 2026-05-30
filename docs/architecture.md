@@ -54,16 +54,12 @@ Because the daemon owns the PTY, the dashboard server can come and go freely.
 
 A length-prefixed binary protocol over the socket:
 `[4-byte BE length][1-byte type][payload]`. Types: `Output`, `Input`, `Resize`,
-`Exit`, `Replay`, `PtySize`, `Attention`, `Spawn`, `Spawned`. `FrameDecoder`
+`Exit`, `Replay`, `PtySize`, `Attention`. `FrameDecoder`
 reassembles frames split across
 chunks. `Resize` payloads carry a `source` (`host` for the local terminal,
 `viewer` for a browser); the daemon clamps `viewer` resizes to the host
 terminal's size (configurable, on by default) and broadcasts the resulting
-`PtySize` so browsers render the same grid as the terminal. A host-sourced
-`Resize` also marks the connection as an attached host client, which the daemon
-records in session metadata (`attached: true`). `Spawn`/`Spawned` carry a
-correlation `token` and let the server ask a session's attached client to launch
-a sibling session (see *Session creation* below).
+`PtySize` so browsers render the same grid as the terminal.
 
 ### Local client (`src/client/connect.ts`)
 
@@ -86,9 +82,10 @@ A `Bun.serve` server, stateless with respect to PTYs:
   allowed; LAN requires a token).
 - `GET /api/sessions` — current sessions, priority-sorted.
 - `POST /api/sessions` — create a session (loopback only). With a `parentId`, the
-  server relays a `Spawn` to that session's attached client and waits for the
-  correlated `Spawned` reply (`wait: false` returns `202` immediately instead);
-  without one, the server spawns a session itself by invoking the `climon` client
+  server spawns the new session itself, inheriting the parent's recorded working
+  directory (and grid size); the parent only needs to be a live session, not
+  attached to a local terminal. Without a `parentId`, the server spawns a session
+  using the posted working directory. Either way it invokes the `climon` client
   binary (`src/cli/client-exec.ts`, looked up via `CLIMON_CLIENT_BIN` → sibling
   binary → dev source entrypoint → `PATH`).
 - `DELETE /api/sessions/:id` — clean up a session, removing its metadata and
@@ -122,11 +119,13 @@ session list with status badges and an `xterm.js` terminal (`TerminalView`). Liv
 sessions (`running`/`needs-attention`) connect over the WebSocket; finished
 sessions fetch and display their saved scrollback read-only. Each session row
 has a close box (revealed on hover) that cleans up the session via
-`DELETE /api/sessions/:id` without ending an attached climon client. Sessions
-whose metadata reports `attached: true` also show a per-session **[+]** on hover
-that launches a sibling session from that client (inheriting its working
-directory); when no session is attached, a single header **[+]** falls back to
-server-side creation. The HTML shell
+`DELETE /api/sessions/:id` without ending an attached climon client. Live
+sessions (`running`/`needs-attention`/`disconnected`) show a per-session **[+]**
+on hover that spawns a new session directly (server-side), inheriting that
+session's recorded working directory — so you can launch a session from any live
+session, including ones that were themselves spawned this way (arbitrary
+nesting). When there are no sessions at all, a single header **[+]** offers the
+same server-side creation. The HTML shell
 and asset serving live in `src/server/assets.ts`.
 
 ## Data locations (`$CLIMON_HOME`, default `~/.climon`)

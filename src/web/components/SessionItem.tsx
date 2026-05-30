@@ -75,7 +75,7 @@ export function SessionItem({ session, active, onSelect, onClose, onNew }: Props
         }
       }}
     >
-      {session.attached && (
+      {["running", "needs-attention", "disconnected"].includes(session.status) && (
         <Button
           className={mergeClasses("climon-new", styles.newBtn)}
           appearance="subtle"
