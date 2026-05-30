@@ -16,8 +16,11 @@ interact with each one from the browser.
 - **Live web terminal.** The dashboard is a React + Fluent UI app that embeds an
   `xterm.js` terminal wired to the session over a WebSocket — fully interactive,
   no iframe.
-- **Attention queue.** When a session prints a prompt (e.g. "continue?", "[y/n]",
-  "waiting for input"), it is flagged and bumped to the top of the dashboard.
+- **Attention queue.** While a session is attached locally, climon mirrors its
+  output into a headless terminal and watches the rendered screen. If the visible
+  content stops changing for `attention.idleSeconds` (default 10) — a blinking
+  cursor counts as static — the session is flagged and bumped to the top of the
+  dashboard.
 - **Completion pops.** Finished sessions move up the queue and keep their final
   scrollback so you can review the output.
 
