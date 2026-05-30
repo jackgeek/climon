@@ -7,7 +7,9 @@ import {
   FrameType,
   parseJsonPayload,
   type ResizePayload,
-  type AttentionPayload
+  type AttentionPayload,
+  type SpawnPayload,
+  type SpawnedPayload
 } from "../src/ipc/frame.js";
 
 describe("frame codec", () => {
@@ -60,6 +62,31 @@ describe("frame codec", () => {
     expect(parseJsonPayload<AttentionPayload>(decoded.payload)).toEqual({
       needsAttention: true,
       reason: "Screen idle for 10s"
+    });
+  });
+
+  test("round-trips a Spawn frame", () => {
+    const frame = encodeJsonFrame(FrameType.Spawn, {
+      token: "abc123",
+      command: ["npm", "run", "dev"],
+      cwd: "/home/dev/app"
+    });
+    const decoded = new FrameDecoder().push(frame);
+    expect(decoded[0].type).toBe(FrameType.Spawn);
+    expect(parseJsonPayload<SpawnPayload>(decoded[0].payload)).toEqual({
+      token: "abc123",
+      command: ["npm", "run", "dev"],
+      cwd: "/home/dev/app"
+    });
+  });
+
+  test("round-trips a Spawned reply frame", () => {
+    const frame = encodeJsonFrame(FrameType.Spawned, { token: "abc123", id: "k1-aaaa" });
+    const decoded = new FrameDecoder().push(frame);
+    expect(decoded[0].type).toBe(FrameType.Spawned);
+    expect(parseJsonPayload<SpawnedPayload>(decoded[0].payload)).toEqual({
+      token: "abc123",
+      id: "k1-aaaa"
     });
   });
 });
