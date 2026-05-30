@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { FullScreenMaximize20Regular, Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
-import { eventsUrl, fetchSessions, deleteSession } from "./api.js";
+import { eventsUrl, fetchSessions, deleteSession, fetchHealth } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
@@ -96,6 +96,7 @@ export function App() {
   const [closeTarget, setCloseTarget] = useState<SessionMeta | null>(null);
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
 
@@ -116,6 +117,11 @@ export function App() {
         // SSE will deliver the list once connected.
       });
     return () => es.close();
+  }, []);
+
+  // Load the running server's version for the sidebar heading.
+  useEffect(() => {
+    void fetchHealth().then(({ version }) => setServerVersion(version));
   }, []);
 
   // Reconcile the active selection whenever the list changes.
@@ -213,6 +219,7 @@ export function App() {
         <Sidebar
           sessions={sessions}
           activeId={activeId}
+          serverVersion={serverVersion}
           onSelect={setActiveId}
           onClose={(id) => requestClose(id)}
           onNew={() => {

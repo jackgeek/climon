@@ -59,6 +59,11 @@ export interface SessionMeta {
    * (sessions persisted before this field existed) is treated as non-headless.
    */
   headless?: boolean;
+  /**
+   * The climon client version that created this session. Absent on sessions
+   * persisted before this field existed.
+   */
+  clientVersion?: string;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;

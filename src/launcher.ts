@@ -18,6 +18,7 @@ import { sortSessionsByPriority } from "./priority.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { resolveCommand } from "./pty.js";
 import type { SessionMeta } from "./types.js";
+import { VERSION } from "./version.js";
 
 function generateSessionId(): string {
   return `${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
@@ -150,6 +151,7 @@ export async function startMonitoredCommand(
     cols,
     rows,
     headless: false,
+    clientVersion: VERSION,
     createdAt: now,
     updatedAt: now,
     lastActivityAt: now

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ensureClimonHome, getSessionsDir, getSocketPath } from "../config.js";
 import { writeSessionMeta } from "../store.js";
 import type { SessionMeta } from "../types.js";
+import { VERSION } from "../version.js";
 
 function generateSessionId(): string {
   return `${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
@@ -51,6 +52,7 @@ export async function spawnHeadlessSession(
     cols: Math.max(size.cols, 1),
     rows: Math.max(size.rows, 1),
     headless: true,
+    clientVersion: VERSION,
     createdAt: now,
     updatedAt: now,
     lastActivityAt: now
