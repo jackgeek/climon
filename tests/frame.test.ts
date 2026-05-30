@@ -6,7 +6,8 @@ import {
   FrameDecoder,
   FrameType,
   parseJsonPayload,
-  type ResizePayload
+  type ResizePayload,
+  type AttentionPayload
 } from "../src/ipc/frame.js";
 
 describe("frame codec", () => {
@@ -47,5 +48,18 @@ describe("frame codec", () => {
     const frame = encodeFrame(FrameType.Exit);
     const decoded = new FrameDecoder().push(frame)[0];
     expect(decoded.payload.length).toBe(0);
+  });
+
+  test("round-trips an attention frame payload", () => {
+    const frame = encodeJsonFrame(FrameType.Attention, {
+      needsAttention: true,
+      reason: "Screen idle for 10s"
+    });
+    const decoded = new FrameDecoder().push(frame)[0];
+    expect(decoded.type).toBe(FrameType.Attention);
+    expect(parseJsonPayload<AttentionPayload>(decoded.payload)).toEqual({
+      needsAttention: true,
+      reason: "Screen idle for 10s"
+    });
   });
 });
