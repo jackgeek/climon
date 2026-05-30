@@ -188,7 +188,7 @@ export async function deleteRemoteClient(label: string): Promise<void> {
 export function buildSetupCommand(setup: RemoteSetup): string {
   const host = setup.hosts[0];
   if (!host) {
-    return "# No reachable host detected on the server. Set remote.host manually with: climon config remote.host <hostname>";
+    return "# No reachable IP address detected on the server. Set one manually with: climon config remote.host <ip-address>";
   }
   const lines = [
     "climon config remote.enabled true",

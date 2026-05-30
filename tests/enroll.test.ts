@@ -8,6 +8,7 @@ import {
   buildAuthorizedKeysEntry,
   listClients,
   listManagedClients,
+  orderHostCandidates,
   parsePublicKey,
   revokeClient,
   revokeManagedClient,
@@ -106,5 +107,34 @@ describe("enrollment service", () => {
     expect(await revokeClient("box-a", path)).toBe(false);
     clients = await listClients(path);
     expect(clients).toEqual([]);
+  });
+});
+
+describe("orderHostCandidates", () => {
+  const ifaces = [
+    { address: "127.0.0.1", family: "IPv4", internal: true },
+    { address: "::1", family: "IPv6", internal: true },
+    { address: "192.168.1.50", family: "IPv4", internal: false },
+    { address: "fe80::1", family: "IPv6", internal: false },
+    { address: "2001:db8::5", family: "IPv6", internal: false }
+  ];
+
+  test("puts a routable IPv4 address first so the setup command never relies on the hostname", () => {
+    const hosts = orderHostCandidates("my-laptop.local", ifaces);
+    expect(hosts[0]).toBe("192.168.1.50");
+    expect(hosts).not.toContain("127.0.0.1");
+    expect(hosts).not.toContain("::1");
+    // IPv6 link-local is unusable without a scope id, so it is dropped.
+    expect(hosts).not.toContain("fe80::1");
+    // The hostname remains only as a last-resort fallback.
+    expect(hosts).toContain("my-laptop.local");
+    expect(hosts.indexOf("192.168.1.50")).toBeLessThan(hosts.indexOf("my-laptop.local"));
+  });
+
+  test("falls back to the hostname only when no external IP exists", () => {
+    const hosts = orderHostCandidates("my-laptop.local", [
+      { address: "127.0.0.1", family: "IPv4", internal: true }
+    ]);
+    expect(hosts).toEqual(["my-laptop.local"]);
   });
 });

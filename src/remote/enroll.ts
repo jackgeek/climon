@@ -144,18 +144,47 @@ export async function writeAuthorizedKeys(path: string, content: string): Promis
   }
 }
 
-/** Candidate SSH host addresses for the setup command: hostname + non-internal IPs. */
-export function hostCandidates(): string[] {
-  const candidates = new Set<string>();
-  candidates.add(hostname());
-  for (const iface of Object.values(networkInterfaces())) {
-    for (const info of iface ?? []) {
-      if (!info.internal) {
-        candidates.add(info.address);
-      }
+/** Network interface info needed to rank SSH host candidates (subset of os.NetworkInterfaceInfo). */
+export interface HostInterface {
+  address: string;
+  family: string | number;
+  internal: boolean;
+}
+
+/**
+ * Ranks SSH host candidates for the setup command. Routable IPv4 addresses come
+ * first (the hostname is frequently unresolvable from a remote devbox), then
+ * routable global IPv6, and finally the hostname as a last-resort fallback.
+ * Loopback/internal addresses and unusable IPv6 link-local (`fe80::`) addresses
+ * are excluded.
+ */
+export function orderHostCandidates(host: string, ifaces: HostInterface[]): string[] {
+  const ipv4: string[] = [];
+  const ipv6: string[] = [];
+  for (const info of ifaces) {
+    if (info.internal) continue;
+    const family = String(info.family);
+    if (family === "4" || family === "IPv4") {
+      ipv4.push(info.address);
+    } else if (family === "6" || family === "IPv6") {
+      if (info.address.toLowerCase().startsWith("fe80")) continue;
+      ipv6.push(info.address);
     }
   }
-  return [...candidates];
+  const ordered = [...ipv4, ...ipv6];
+  if (host) ordered.push(host);
+  return [...new Set(ordered)];
+}
+
+/** Candidate SSH host addresses for the setup command: routable IPs first, hostname last. */
+export function hostCandidates(): string[] {
+  const ifaces: HostInterface[] = [];
+  for (const iface of Object.values(networkInterfaces())) {
+    for (const info of iface ?? []) {
+      ifaces.push({ address: info.address, family: info.family, internal: info.internal });
+    }
+  }
+  return orderHostCandidates(hostname(), ifaces);
 }
 
 /**

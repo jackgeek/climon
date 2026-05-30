@@ -19,6 +19,6 @@ describe("buildSetupCommand", () => {
 
   test("returns a guidance string when no host is known", () => {
     const cmd = buildSetupCommand({ user: "alice", sshPort: 22, hosts: [], hostKey: "" });
-    expect(cmd).toContain("# No reachable host");
+    expect(cmd).toContain("# No reachable IP");
   });
 });
