@@ -1,5 +1,5 @@
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
-import { Dismiss16Regular, Add16Regular } from "@fluentui/react-icons";
+import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../../types.js";
 import { StatusBadge } from "./StatusBadge.js";
 
@@ -61,6 +61,14 @@ const useStyles = makeStyles({
     top: "8px",
     right: "36px",
     display: "none"
+  },
+  maximize: {
+    display: "none",
+    marginTop: "8px",
+    width: "100%",
+    "@media (max-width: 768px)": {
+      display: "inline-flex"
+    }
   }
 });
 
@@ -70,9 +78,10 @@ interface Props {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: (session: SessionMeta) => void;
+  onMaximize: (id: string) => void;
 }
 
-export function SessionItem({ session, active, onSelect, onClose, onNew }: Props) {
+export function SessionItem({ session, active, onSelect, onClose, onNew, onMaximize }: Props) {
   const styles = useStyles();
   return (
     <div
@@ -130,6 +139,20 @@ export function SessionItem({ session, active, onSelect, onClose, onNew }: Props
           </span>
         )}
       </div>
+      {active && (
+        <Button
+          className={styles.maximize}
+          appearance="primary"
+          size="small"
+          icon={<FullScreenMaximize16Regular />}
+          onClick={(e) => {
+            e.stopPropagation();
+            onMaximize(session.id);
+          }}
+        >
+          Open terminal
+        </Button>
+      )}
     </div>
   );
 }

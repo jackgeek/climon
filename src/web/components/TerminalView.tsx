@@ -22,10 +22,11 @@ const useStyles = makeStyles({
 interface Props {
   session: SessionMeta | null;
   maximized: boolean;
+  visible: boolean;
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { session, maximized },
+  { session, maximized, visible },
   ref
 ) {
   const styles = useStyles();
@@ -125,6 +126,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     let cancelled = false;
 
     if (isLiveStatus(session.status)) {
+      // Only hold the PTY (via the WebSocket) while the terminal is actually
+      // displayed. When hidden, the daemon reverts the PTY to the host size.
+      if (!visible) {
+        return;
+      }
       const ws = new WebSocket(attachSocketUrl(session.id));
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -169,12 +175,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     return () => {
       cancelled = true;
     };
-  }, [session?.id, session?.status]);
+  }, [session?.id, session?.status, visible]);
 
-  // Refit when entering/leaving fullscreen so xterm re-measures.
+  // Refit when entering/leaving fullscreen or becoming visible so xterm
+  // re-measures after the container's size changes.
   useEffect(() => {
     refit();
-  }, [maximized]);
+  }, [maximized, visible]);
 
   useImperativeHandle(ref, () => ({
     getDimensions: () => {

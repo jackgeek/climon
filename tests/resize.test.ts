@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { clampResize } from "../src/daemon/daemon.js";
+import { clampResize, revertSize } from "../src/daemon/daemon.js";
 
 const host = { cols: 80, rows: 24 };
 
@@ -26,5 +26,19 @@ describe("clampResize", () => {
 
   test("floors dimensions at 1x1", () => {
     expect(clampResize({ cols: 0, rows: -5, source: "host" }, host, true)).toEqual({ cols: 1, rows: 1 });
+  });
+});
+
+describe("revertSize", () => {
+  test("returns the host size when the applied size differs", () => {
+    expect(revertSize({ cols: 80, rows: 24 }, { cols: 40, rows: 12 })).toEqual({ cols: 80, rows: 24 });
+  });
+
+  test("returns null when applied already matches host", () => {
+    expect(revertSize({ cols: 80, rows: 24 }, { cols: 80, rows: 24 })).toBeNull();
+  });
+
+  test("floors the host dimensions at 1x1", () => {
+    expect(revertSize({ cols: 0, rows: -3 }, { cols: 40, rows: 12 })).toEqual({ cols: 1, rows: 1 });
   });
 });

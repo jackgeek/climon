@@ -647,7 +647,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
 function printStartup(config: ClimonConfig, port: number): void {
   void config;
-  process.stdout.write(`climon server listening on http://127.0.0.1:${port}/\n`);
+  process.stdout.write(`climon server v${VERSION} listening on http://127.0.0.1:${port}/\n`);
 }
 
 /**

@@ -39,6 +39,24 @@ export function clampResize(
   return { cols, rows };
 }
 
+/**
+ * Resolves the size to restore when the last browser viewer disconnects. The
+ * PTY returns to the host terminal's dimensions (floored at 1x1). Returns null
+ * when the applied size already matches the host, so callers can skip a no-op
+ * resize and broadcast.
+ */
+export function revertSize(
+  host: { cols: number; rows: number },
+  applied: { cols: number; rows: number }
+): { cols: number; rows: number } | null {
+  const cols = Math.max(host.cols, 1);
+  const rows = Math.max(host.rows, 1);
+  if (cols === applied.cols && rows === applied.rows) {
+    return null;
+  }
+  return { cols, rows };
+}
+
 export async function runSessionDaemon(id: string): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
@@ -49,6 +67,10 @@ export async function runSessionDaemon(id: string): Promise<void> {
 
   const scrollback = new ScrollbackBuffer();
   const clients = new Set<Socket>();
+  // Sockets that have acted as browser viewers (sent a non-host Resize). When
+  // the last one disconnects, the PTY reverts to the host terminal's size so a
+  // still-attached host terminal is not left rendering into a shrunken grid.
+  const viewers = new Set<Socket>();
 
   const clampBrowserToHost = config.terminal.clampBrowserToHost;
   // The host terminal owns the maximum PTY size when clamping is enabled. It is
@@ -113,6 +135,27 @@ export async function runSessionDaemon(id: string): Promise<void> {
       void patchSessionMeta(id, { cols, rows });
       broadcast(encodeJsonFrame(FrameType.PtySize, { cols, rows }));
     }
+  }
+
+  /**
+   * Restores the PTY to the host terminal's dimensions. Called when the last
+   * browser viewer disconnects. No-op after the PTY exits or when the applied
+   * size already matches the host.
+   */
+  function revertToHostSize(): void {
+    if (exited) {
+      return;
+    }
+    const target = revertSize({ cols: hostCols, rows: hostRows }, { cols: appliedCols, rows: appliedRows });
+    if (!target) {
+      return;
+    }
+    appliedCols = target.cols;
+    appliedRows = target.rows;
+    pty.resize(target.cols, target.rows);
+    headlessTerm.resize(Math.max(target.cols, 1), Math.max(target.rows, 1));
+    void patchSessionMeta(id, { cols: target.cols, rows: target.rows });
+    broadcast(encodeJsonFrame(FrameType.PtySize, { cols: target.cols, rows: target.rows }));
   }
 
   /**
@@ -221,6 +264,9 @@ export async function runSessionDaemon(id: string): Promise<void> {
           pty.write(frame.payload.toString("utf8"));
         } else if (frame.type === FrameType.Resize) {
           const size = parseJsonPayload<ResizePayload>(frame.payload);
+          if (size.source !== "host") {
+            viewers.add(socket);
+          }
           applyResize(size);
         } else if (frame.type === FrameType.Attention) {
           applyAttention(parseJsonPayload<AttentionPayload>(frame.payload));
@@ -232,6 +278,9 @@ export async function runSessionDaemon(id: string): Promise<void> {
     });
     socket.on("close", () => {
       clients.delete(socket);
+      if (viewers.delete(socket) && viewers.size === 0) {
+        revertToHostSize();
+      }
     });
   });
 
