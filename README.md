@@ -13,8 +13,9 @@ interact with each one from the browser.
 - **Sessions survive server restarts.** Each command runs under its own detached
   per-session daemon that owns the PTY. Restarting `climon server` never kills a
   session.
-- **Live web terminal.** The dashboard embeds an `xterm.js` terminal wired to the
-  session over a WebSocket — fully interactive, no iframe.
+- **Live web terminal.** The dashboard is a React + Fluent UI app that embeds an
+  `xterm.js` terminal wired to the session over a WebSocket — fully interactive,
+  no iframe.
 - **Attention queue.** When a session prints a prompt (e.g. "continue?", "[y/n]",
   "waiting for input"), it is flagged and bumped to the top of the dashboard.
 - **Completion pops.** Finished sessions move up the queue and keep their final
@@ -74,8 +75,9 @@ remote/LAN clients cannot create sessions.
 The client and dashboard server ship as two binaries: a lean `climon` (client) and
 `climon-server` (dashboard). Running `climon server` locates and runs `climon-server`
 — looked up via `CLIMON_SERVER_BIN`, then a sibling binary next to `climon`, then your
-`PATH`. Keeping the xterm assets in `climon-server` means client-only usage stays small
-as the server grows.
+`PATH`. The dashboard is a React + Fluent UI single-page app (`src/web/`) bundled and
+embedded into `climon-server`; keeping it out of `climon` means client-only usage stays
+small as the server grows.
 
 ### `climon ls`
 

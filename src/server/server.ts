@@ -258,7 +258,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         return Response.json({ ok: true });
       }
 
-      const asset = getStaticAsset(url.pathname);
+      const asset = await getStaticAsset(url.pathname);
       if (asset) {
         return new Response(new Uint8Array(asset.body), { headers: { "content-type": asset.contentType } });
       }

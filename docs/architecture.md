@@ -15,7 +15,7 @@ climon server (Bun.serve)                 │  persists final buffer + status on
      │  scans ~/.climon/sessions/*.json   │
      │  fs.watch → SSE status updates     │
      │  WS /api/sessions/:id/attach ──────┘  (bridges browser ⇆ daemon socket)
-     └─ serves dashboard + vendored xterm.js (no iframe)
+     └─ serves React + Fluent UI dashboard (bundled xterm.js, no iframe)
 ```
 
 ## Components
@@ -75,7 +75,8 @@ then attaches the local client. Also implements `attach`, `ls`, and `kill`.
 A `Bun.serve` server, stateless with respect to PTYs:
 
 - `GET /health` — unauthenticated `{ ok: true }` liveness probe.
-- `GET /` — dashboard HTML (localhost allowed; LAN requires a token).
+- `GET /` — dashboard HTML shell that loads the React app bundle (localhost
+  allowed; LAN requires a token).
 - `GET /api/sessions` — current sessions, priority-sorted.
 - `DELETE /api/sessions/:id` — clean up a session, removing its metadata and
   scrollback. Does not signal the daemon, so an attached climon client keeps
@@ -86,24 +87,30 @@ A `Bun.serve` server, stateless with respect to PTYs:
 - `WS /api/sessions/:id/attach` — bridges the browser WebSocket to the daemon
   socket, translating between the JSON browser protocol and the binary frame
   protocol.
-- `GET /assets/*` — vendored `xterm.js`, its CSS, and the fit addon, resolved
+- `GET /assets/app.js` — the bundled React + Fluent UI dashboard. In the compiled
+  binary it is served from the base64-embedded copy; running from source it is
+  built on demand with `Bun.build` (`src/server/web-build.ts`) and cached.
+- `GET /assets/xterm.css` — xterm's stylesheet, embedded in the binary or resolved
   from `node_modules` via `Bun.resolveSync`.
 
 The server is compiled from its own entrypoint (`src/server.ts`) into a separate
 `climon-server` binary. The client entrypoint (`src/index.ts`) never imports server
 code; its `server` subcommand resolves and execs `climon-server`
 (`src/cli/server-exec.ts`, looked up via `CLIMON_SERVER_BIN` → sibling binary → dev
-source entrypoint → `PATH`). This keeps the xterm assets
-(`src/server/embedded-assets.ts`) and `@xterm/*` dependencies out of the client binary,
-so server-side growth never inflates the client.
+source entrypoint → `PATH`). This keeps the embedded dashboard bundle
+(`src/server/embedded-assets.ts`) and the React/Fluent/`@xterm/*` dependencies out of
+the client binary, so server-side growth never inflates the client.
 
-### Dashboard UI (`src/server/assets.ts`)
+### Dashboard UI (`src/web/`)
 
-Renders the session list with status badges and an `xterm.js` terminal. Live
+A React 19 single-page app styled with Fluent UI v9 (`@fluentui/react-components`),
+mounted by `src/web/main.tsx` and bundled into `/assets/app.js`. It renders the
+session list with status badges and an `xterm.js` terminal (`TerminalView`). Live
 sessions (`running`/`needs-attention`) connect over the WebSocket; finished
 sessions fetch and display their saved scrollback read-only. Each session row
 has a close box (revealed on hover) that cleans up the session via
-`DELETE /api/sessions/:id` without ending an attached climon client.
+`DELETE /api/sessions/:id` without ending an attached climon client. The HTML shell
+and asset serving live in `src/server/assets.ts`.
 
 ## Data locations (`$CLIMON_HOME`, default `~/.climon`)
 
