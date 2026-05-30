@@ -2,7 +2,9 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { helpText, parseArgs } from "./cli/args.js";
+import { runConfigCommand } from "./cli/config-cmd.js";
 import { delegateToServer } from "./cli/server-exec.js";
+import { runUplink } from "./remote/uplink.js";
 import { runSessionDaemon } from "./daemon/daemon.js";
 import {
   killSession,
@@ -48,6 +50,10 @@ async function main(): Promise<number> {
       return killSession(parsed.id);
     case "run":
       return startMonitoredCommand(parsed.argv, { headless: parsed.headless });
+    case "config":
+      return runConfigCommand(parsed.argv);
+    case "uplink":
+      return await runUplink();
     default:
       process.stderr.write(helpText);
       return 1;

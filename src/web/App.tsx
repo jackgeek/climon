@@ -6,6 +6,7 @@ import { eventsUrl, fetchSessions, deleteSession, fetchHealth } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
+import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 
 const useStyles = makeStyles({
@@ -97,6 +98,7 @@ export function App() {
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
   const [serverVersion, setServerVersion] = useState<string | null>(null);
+  const [remoteOpen, setRemoteOpen] = useState(false);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
 
@@ -230,6 +232,7 @@ export function App() {
             setDialogParent({ id: session.id, cwd: session.cwd });
             setDialogOpen(true);
           }}
+          onManageRemote={() => setRemoteOpen(true)}
         />
       </div>
       <div className={mergeClasses(styles.main, maximized && styles.mainMaximized)}>
@@ -283,6 +286,7 @@ export function App() {
         onNo={() => setForceTarget(null)}
         onKill={() => void handleForceKill()}
       />
+      <RemoteClientDialog open={remoteOpen} onOpenChange={setRemoteOpen} />
     </div>
   );
 }

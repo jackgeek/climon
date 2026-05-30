@@ -10,6 +10,7 @@ import {
   getSessionsDir,
   getSocketPath,
   loadConfig,
+  loadRemoteConfig,
   SESSION_ENV_VAR
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
@@ -93,6 +94,16 @@ function spawnDaemon(id: string, env: NodeJS.ProcessEnv): void {
   child.unref();
 }
 
+async function ensureUplink(): Promise<void> {
+  const { remote } = await loadRemoteConfig(process.env, process.cwd());
+  if (!remote?.enabled) return;
+  const child = spawn(process.execPath, [process.argv[1] ?? "climon", "__uplink"], {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+}
+
 /**
  * Runs a command directly with inherited stdio, without starting a monitored
  * session. Used when climon is invoked from inside an existing climon session
@@ -159,6 +170,8 @@ export async function startMonitoredCommand(
   await writeSessionMeta(meta);
 
   spawnDaemon(id, process.env);
+
+  await ensureUplink();
 
   await waitForSocket(meta.socketPath);
 

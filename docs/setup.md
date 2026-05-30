@@ -79,3 +79,10 @@ bun src/index.ts echo hello  # terminal 2
 ```
 
 Open http://127.0.0.1:3131 — you should see the session and its output.
+
+## Remote clients
+
+The remote-client feature uses the system `ssh` client (devbox side) and `sshd`
+(home side). No extra packages are required beyond a standard OpenSSH install.
+The home machine must accept public-key authentication. See
+[security.md](./security.md) for hardening details.

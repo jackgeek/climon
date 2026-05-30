@@ -1,9 +1,8 @@
-import { constants } from "node:fs";
+import { constants, existsSync, readFileSync } from "node:fs";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { randomBytes } from "node:crypto";
-import type { ClimonConfig } from "./types.js";
+import { dirname, join, resolve } from "node:path";
+import type { ClimonConfig, RemoteConfig } from "./types.js";
 
 const CONFIG_VERSION = 1;
 
@@ -56,18 +55,12 @@ export async function ensureClimonHome(env: NodeJS.ProcessEnv = process.env): Pr
   return dir;
 }
 
-export function generateToken(): string {
-  return randomBytes(32).toString("base64url");
-}
-
-export function defaultConfig(token = generateToken()): ClimonConfig {
+export function defaultConfig(): ClimonConfig {
   return {
     version: CONFIG_VERSION,
     server: {
       host: "127.0.0.1",
-      port: 3131,
-      lan: false,
-      token
+      port: 3131
     },
     terminal: {
       clampBrowserToHost: true
@@ -84,7 +77,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
   try {
     const raw = await readFile(configPath, "utf8");
     const parsed = JSON.parse(raw) as ClimonConfig;
-    if (parsed.version !== CONFIG_VERSION || !parsed.server?.token) {
+    if (parsed.version !== CONFIG_VERSION || !parsed.server?.host) {
       throw new Error(`Unsupported climon config format in ${configPath}`);
     }
     // Backfill sections added after a config file was first written.
@@ -117,13 +110,56 @@ export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = 
   }
 }
 
-export async function rotateToken(env: NodeJS.ProcessEnv = process.env): Promise<ClimonConfig> {
-  const config = await loadConfig(env);
-  config.server.token = generateToken();
-  await saveConfig(config, env);
-  return config;
-}
-
 export async function assertConfigReadable(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   await access(getConfigPath(env), constants.R_OK);
+}
+
+/**
+ * Walks up from `startDir` (inclusive) looking for a directory that contains a
+ * `.climon/config.json`. Returns the `.climon` directory path, or undefined.
+ */
+export function findAncestorClimonDir(startDir: string): string | undefined {
+  let dir = resolve(startDir);
+  for (;;) {
+    if (existsSync(join(dir, ".climon", "config.json"))) {
+      return join(dir, ".climon");
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      return undefined;
+    }
+    dir = parent;
+  }
+}
+
+/**
+ * Resolves which directory provides the `remote` (uplink) configuration.
+ * Order: CLIMON_HOME → nearest ancestor `.climon` → `~/.climon`.
+ */
+export function resolveRemoteConfigDir(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): string {
+  if (env.CLIMON_HOME) {
+    return getClimonHome(env);
+  }
+  return findAncestorClimonDir(cwd) ?? getClimonHome(env);
+}
+
+/**
+ * Loads the resolved `.climon` directory and its `remote` section (if any).
+ * The directory is always returned so callers can resolve keyFile/known_hosts
+ * paths relative to it.
+ */
+export function loadRemoteConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): { dir: string; remote?: RemoteConfig } {
+  const dir = resolveRemoteConfigDir(env, cwd);
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, "config.json"), "utf8")) as ClimonConfig;
+    return { dir, remote: parsed.remote };
+  } catch {
+    return { dir };
+  }
 }

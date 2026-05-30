@@ -1,19 +1,22 @@
 export type ParsedCommand =
   | { command: "help" }
-  | { command: "server"; lan: boolean; port?: number }
+  | { command: "server"; port?: number }
   | { command: "session"; id: string }
   | { command: "attach"; id: string }
   | { command: "ls" }
   | { command: "kill"; id: string }
-  | { command: "run"; argv: string[]; headless: boolean };
+  | { command: "run"; argv: string[]; headless: boolean }
+  | { command: "config"; argv: string[] }
+  | { command: "uplink" }
+  | { command: "ssh-accept"; label: string };
 
 export const helpText = `climon — web-based monitor for interactive CLI sessions
 
 Usage:
   climon <command> [args...]   Run a command in a monitored PTY session
-  climon server [--lan] [--port N]
-                               Start the dashboard web server
+  climon server [--port N]      Start the dashboard web server (loopback only)
   climon ls                    List monitored sessions
+  climon config <key> [value]   Get/set remote connection config (git-style)
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
   climon help                  Show this help
@@ -34,20 +37,17 @@ export function parseArgs(argv: string[]): ParsedCommand {
     case "-h":
       return { command: "help" };
     case "server": {
-      let lan = false;
       let port: number | undefined;
       for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
-        if (arg === "--lan") {
-          lan = true;
-        } else if (arg === "--port") {
+        if (arg === "--port") {
           port = Number(rest[i + 1]);
           i += 1;
         } else if (arg.startsWith("--port=")) {
           port = Number(arg.slice("--port=".length));
         }
       }
-      return { command: "server", lan, port };
+      return { command: "server", port };
     }
     case "__session": {
       const id = rest[0];
@@ -88,6 +88,18 @@ export function parseArgs(argv: string[]): ParsedCommand {
         throw new Error("Provide a command to run, e.g. `climon run npm test`.");
       }
       return { command: "run", argv: runArgv, headless };
+    }
+    case "config":
+      return { command: "config", argv: rest };
+    case "__uplink":
+      return { command: "uplink" };
+    case "--ssh-accept": {
+      const idx = rest.indexOf("--label");
+      const label = idx >= 0 ? rest[idx + 1] : undefined;
+      if (!label) {
+        throw new Error("Internal: --ssh-accept requires --label <label>.");
+      }
+      return { command: "ssh-accept", label };
     }
     default:
       return { command: "run", argv, headless: false };

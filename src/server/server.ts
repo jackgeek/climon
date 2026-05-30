@@ -1,5 +1,4 @@
 import { existsSync, watch } from "node:fs";
-import { networkInterfaces } from "node:os";
 import { connect, type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
@@ -19,9 +18,17 @@ import type { ClimonConfig } from "../types.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
+import {
+  authorizeClient,
+  detectHostKey,
+  hostCandidates,
+  listClients,
+  parsePublicKey,
+  revokeClient,
+  sanitizeLabel
+} from "../remote/enroll.js";
 
 interface StartServerOptions {
-  lan?: boolean;
   port?: number;
 }
 
@@ -33,6 +40,7 @@ interface WsData {
 const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
+const REMOTE_CLIENT_PATH = /^\/api\/remote\/clients\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 function isProcessAlive(pid: number): boolean {
@@ -265,13 +273,10 @@ async function cleanupStaleSessions(): Promise<void> {
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
-  if (options.lan !== undefined) {
-    config.server.lan = options.lan;
-  }
   if (options.port !== undefined) {
     config.server.port = options.port;
   }
-  config.server.host = config.server.lan ? "0.0.0.0" : "127.0.0.1";
+  config.server.host = "127.0.0.1";
   await saveConfig(config);
 
   // Clean up stale sessions whose daemons are no longer responsive.
@@ -312,15 +317,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   }
 
   function authorize(request: Request, server: Bun.Server<WsData>): boolean {
-    if (isLocal(request, server)) {
-      return true;
-    }
-    if (!config.server.lan) {
-      return false;
-    }
-    const url = new URL(request.url);
-    const token = url.searchParams.get("token") ?? request.headers.get("x-climon-token");
-    return token === config.server.token;
+    return isLocal(request, server);
   }
 
   let server: Bun.Server<WsData>;
@@ -349,8 +346,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/sessions" && request.method === "POST") {
-        // Spawning processes is privileged: allow loopback only, even when a
-        // valid LAN token is present.
+        // Spawning processes is privileged: loopback only.
         if (!isLocal(request, srv)) {
           return new Response("Forbidden", { status: 403 });
         }
@@ -415,6 +411,89 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           const message = error instanceof Error ? error.message : String(error);
           return new Response(`Failed to create session: ${message}`, { status: 500 });
         }
+      }
+
+      // ---- Remote client management (loopback only) ----
+
+      if (url.pathname === "/api/remote/setup") {
+        if (!isLocal(request, srv)) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        const hosts = hostCandidates();
+        const hostKey = await detectHostKey();
+        // Return a ready-to-pin known_hosts line (host + key), or "" if unknown.
+        const hostLine = hostKey && hosts[0] ? `${hosts[0]} ${hostKey}` : "";
+        return Response.json({
+          user: process.env.USER ?? "",
+          sshPort: 22,
+          hosts,
+          hostKey: hostLine
+        });
+      }
+
+      if (url.pathname === "/api/remote/clients" && request.method === "GET") {
+        if (!isLocal(request, srv)) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        return Response.json({ clients: await listClients() });
+      }
+
+      if (url.pathname === "/api/remote/clients" && request.method === "POST") {
+        if (!isLocal(request, srv)) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let payload: { label?: unknown; publicKey?: unknown };
+        try {
+          payload = (await request.json()) as typeof payload;
+        } catch {
+          return new Response("Invalid JSON body", { status: 400 });
+        }
+        let label: string;
+        try {
+          label = sanitizeLabel(typeof payload.label === "string" ? payload.label : "");
+        } catch (error) {
+          return new Response(error instanceof Error ? error.message : "Invalid label", { status: 400 });
+        }
+        let key;
+        try {
+          key = parsePublicKey(typeof payload.publicKey === "string" ? payload.publicKey : "");
+        } catch (error) {
+          return new Response(error instanceof Error ? error.message : "Invalid public key", { status: 400 });
+        }
+        await authorizeClient(label, key);
+        return Response.json({ clients: await listClients() }, { status: 201 });
+      }
+
+      const clientMatch = REMOTE_CLIENT_PATH.exec(url.pathname);
+      if (clientMatch && request.method === "DELETE") {
+        if (!isLocal(request, srv)) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type") ?? "application/json",
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let label: string;
+        try {
+          label = sanitizeLabel(decodeURIComponent(clientMatch[1]));
+        } catch {
+          return new Response("Invalid label", { status: 400 });
+        }
+        const removed = await revokeClient(label);
+        if (!removed) {
+          return new Response("Not found", { status: 404 });
+        }
+        return new Response(null, { status: 204 });
       }
 
       if (url.pathname === "/api/sessions") {
@@ -566,20 +645,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   });
 }
 
-/**
- * Returns the non-internal IPv4 addresses of this machine, so the LAN startup
- * banner can show how to reach the server instead of a placeholder.
- */
-function localLanAddresses(): string[] {
-  const addresses: string[] = [];
-  for (const iface of Object.values(networkInterfaces())) {
-    for (const info of iface ?? []) {
-      if (info.family === "IPv4" && !info.internal) {
-        addresses.push(info.address);
-      }
-    }
-  }
-  return addresses;
+function printStartup(config: ClimonConfig, port: number): void {
+  void config;
+  process.stdout.write(`climon server listening on http://127.0.0.1:${port}/\n`);
 }
 
 /**
@@ -600,21 +668,4 @@ export function describeListenError(error: unknown, host: string, port: number):
     return new Error(`${host}:${port} is already in use. Choose another port with --port N.`);
   }
   return error instanceof Error ? error : new Error(message);
-}
-
-function printStartup(config: ClimonConfig, port: number): void {
-  if (config.server.lan) {
-    const addresses = localLanAddresses();
-    const query = `?token=${config.server.token}`;
-    if (addresses.length > 0) {
-      for (const address of addresses) {
-        process.stdout.write(`climon server listening on http://${address}:${port}/${query}\n`);
-      }
-    } else {
-      process.stdout.write(`climon server listening on http://<this-machine-ip>:${port}/${query}\n`);
-    }
-    process.stdout.write(`LAN access enabled. Open a URL above (token included) from another machine.\n`);
-    return;
-  }
-  process.stdout.write(`climon server listening on http://127.0.0.1:${port}/\n`);
 }

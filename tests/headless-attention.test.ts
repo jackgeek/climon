@@ -35,7 +35,7 @@ describe("headless session attention", () => {
   test("a headless session with no attached client flags needs-attention when idle", async () => {
     // Short idle window so the static screen flags quickly.
     await mkdir(home, { recursive: true });
-    const config = defaultConfig("test-token");
+    const config = defaultConfig();
     config.attention.idleSeconds = 1;
     await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
 

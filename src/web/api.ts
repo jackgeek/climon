@@ -1,12 +1,12 @@
 import type { SessionMeta } from "../types.js";
 
 /**
- * Appends the current page's query string (e.g. a LAN `?token=…`) to an API
- * path so every request and socket carries the credentials the dashboard was
- * loaded with.
+ * The dashboard is loopback-only and unauthenticated at the HTTP layer, so API
+ * paths need no query credentials. Kept as a thin indirection so call sites stay
+ * stable if a query suffix is ever reintroduced.
  */
 export function withQuery(path: string): string {
-  return path + (location.search || "");
+  return path;
 }
 
 export interface CreateSessionBody {
@@ -119,4 +119,110 @@ export function attachSocketUrl(id: string): string {
 
 export function isLiveStatus(status: SessionMeta["status"]): boolean {
   return status === "running" || status === "needs-attention";
+}
+
+export interface RemoteSetup {
+  user: string;
+  sshPort: number;
+  hosts: string[];
+  hostKey: string;
+}
+
+export interface RemoteClient {
+  label: string;
+  keyType: string;
+  fingerprint: string;
+}
+
+export async function fetchRemoteSetup(): Promise<RemoteSetup> {
+  const res = await fetch(withQuery("/api/remote/setup"));
+  if (!res.ok) {
+    throw new Error(`Failed to load setup (${res.status})`);
+  }
+  return (await res.json()) as RemoteSetup;
+}
+
+export async function fetchRemoteClients(): Promise<RemoteClient[]> {
+  const res = await fetch(withQuery("/api/remote/clients"));
+  if (!res.ok) {
+    throw new Error(`Failed to load clients (${res.status})`);
+  }
+  const data = (await res.json()) as { clients?: RemoteClient[] };
+  return data.clients ?? [];
+}
+
+export async function addRemoteClient(label: string, publicKey: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(withQuery("/api/remote/clients"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ label, publicKey })
+    });
+    if (!res.ok) {
+      return { ok: false, error: (await res.text()) || `Failed (${res.status})` };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Network error." };
+  }
+}
+
+export async function deleteRemoteClient(label: string): Promise<void> {
+  try {
+    await fetch(withQuery(`/api/remote/clients/${encodeURIComponent(label)}`), {
+      method: "DELETE",
+      headers: { "content-type": "application/json" }
+    });
+  } catch {
+    // Best effort.
+  }
+}
+
+/**
+ * Builds the one-line bash command a user pastes on a devbox. It generates a
+ * client keypair (if missing), pins the home host key into the project
+ * known_hosts, and records the connection config via `climon config`. The user
+ * still pastes the printed public key back into the dashboard to authorize it —
+ * no secret ever leaves the devbox.
+ */
+export function buildSetupCommand(setup: RemoteSetup): string {
+  const host = setup.hosts[0];
+  if (!host) {
+    return "# No reachable host detected on the server. Set remote.host manually with: climon config remote.host <hostname>";
+  }
+  const lines = [
+    "climon config remote.enabled true",
+    `climon config remote.host ${host}`,
+    `climon config remote.user ${setup.user}`,
+    `climon config remote.port ${setup.sshPort}`
+  ];
+  if (setup.hostKey) {
+    lines.push(`climon config known-host '${setup.hostKey.replace(/'/g, "")}'`);
+  }
+  lines.push("climon config keygen");
+  return lines.join(" && ");
+}
+
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the legacy path.
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    return ok;
+  } catch {
+    return false;
+  }
 }

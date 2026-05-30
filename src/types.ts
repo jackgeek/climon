@@ -11,8 +11,6 @@ export type PriorityReason =
 export interface ServerConfig {
   host: string;
   port: number;
-  lan: boolean;
-  token: string;
 }
 
 export interface TerminalConfig {
@@ -23,6 +21,15 @@ export interface TerminalConfig {
    * content instead of the browser's larger viewport mangling the terminal.
    */
   clampBrowserToHost: boolean;
+}
+
+export interface RemoteConfig {
+  enabled?: boolean;
+  host?: string;
+  port?: number;
+  user?: string;
+  hostKey?: string;
+  keyFile?: string;
 }
 
 export interface AttentionConfig {
@@ -40,6 +47,7 @@ export interface ClimonConfig {
   server: ServerConfig;
   terminal: TerminalConfig;
   attention: AttentionConfig;
+  remote?: RemoteConfig;
 }
 
 export interface SessionMeta {
@@ -72,6 +80,8 @@ export interface SessionMeta {
   completedAt?: string;
   exitCode?: number;
   error?: string;
+  origin?: "local" | "remote";
+  clientLabel?: string;
 }
 
 export interface SessionMetaPatch {

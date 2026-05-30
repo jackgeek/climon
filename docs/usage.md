@@ -104,3 +104,35 @@ while a local client is attached.
 When a command exits, its session moves up the queue (above plain `running`
 sessions) and retains its final scrollback, so you can review what happened
 without reattaching.
+
+## Connecting a remote client over SSH
+
+You can monitor sessions that run on another machine (a "devbox") from your local
+dashboard. Traffic rides a single hardened SSH connection — see
+[security.md](./security.md) for the full threat model.
+
+1. On the machine running `climon server`, open the dashboard, click the
+   hamburger menu, and choose **Remote clients…**.
+2. Copy the generated command and run it on the devbox. It records the connection
+   config with `climon config`, generates an ed25519 client key, pins your host
+   key, and prints the devbox's public key.
+3. Paste that public key (and a label, e.g. `devbox-1`) back into the dialog and
+   click **Authorize client**.
+4. Run any command on the devbox with `climon <cmd>`. The session appears on your
+   dashboard tagged with the client label.
+
+Revoke a devbox anytime from the same dialog.
+
+### `climon config`
+
+`climon config` works like `git config`. It reads/writes a project-local or
+global `.climon/config.json`:
+
+- `climon config remote.host <host>` — set a value.
+- `climon config remote.host` — print a value (exit 1 if unset).
+- `climon config --list` — print all values.
+- `climon config --unset remote.host` — remove a value.
+- `--global` (default) writes `~/.climon`; `--local` writes `./.climon`.
+
+When climon runs it discovers config by walking up from the current directory to
+the nearest ancestor `.climon`, falling back to `~/.climon`.

@@ -43,6 +43,13 @@ const useStyles = makeStyles({
     fontSize: "11px",
     color: tokens.colorNeutralForeground3
   },
+  origin: {
+    fontSize: "10px",
+    padding: "1px 6px",
+    borderRadius: tokens.borderRadiusSmall,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground2
+  },
   close: {
     position: "absolute",
     top: "8px",
@@ -115,6 +122,11 @@ export function SessionItem({ session, active, onSelect, onClose, onNew }: Props
         {session.clientVersion && (
           <span className={styles.version} title="Client version">
             v{session.clientVersion}
+          </span>
+        )}
+        {session.origin === "remote" && (
+          <span className={styles.origin} title={session.clientLabel ?? "remote"}>
+            {session.clientLabel ?? "remote"}
           </span>
         )}
       </div>
