@@ -149,6 +149,15 @@ export function connectToSession(socketPath: string, options: AttachOptions): Pr
       stdin.on("data", onStdin);
       process.stdout.on("resize", onResize);
       onResize();
+      // Clear any stale "needs attention" flag the moment this detecting client
+      // attaches. The daemon's attention state persists across clients, but each
+      // client starts with a fresh detector that only reverts a flag it raised
+      // itself — so without this baseline a session flagged by a previous client
+      // would stay stuck on "needs attention" while actively in use. If the
+      // screen is still idle, the detector re-flags after the idle window.
+      if (options.idleSeconds > 0) {
+        socket.write(encodeJsonFrame(FrameType.Attention, { needsAttention: false }));
+      }
     });
 
     socket.on("data", (chunk) => {
