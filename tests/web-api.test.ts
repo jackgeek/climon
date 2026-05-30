@@ -1,5 +1,56 @@
 import { describe, expect, test } from "bun:test";
-import { buildSetupCommand } from "../src/web/api.js";
+import { attachKey, buildSetupCommand } from "../src/web/api.js";
+import type { SessionMeta } from "../src/types.js";
+
+function session(overrides: Partial<SessionMeta>): SessionMeta {
+  return {
+    id: "sess-1",
+    command: ["bash"],
+    displayCommand: "bash",
+    cwd: "/tmp",
+    status: "running",
+    priorityReason: "none",
+    socketPath: "/tmp/sess-1.sock",
+    cols: 80,
+    rows: 24,
+    createdAt: "",
+    updatedAt: "",
+    lastActivityAt: "",
+    ...overrides
+  } as SessionMeta;
+}
+
+describe("attachKey", () => {
+  test("is stable across live-status transitions so the socket is not re-attached", () => {
+    // Idle detection flips a live session running <-> needs-attention. Both are
+    // "live", so the terminal must keep the same WebSocket (no reset/refit flicker).
+    const running = attachKey(session({ status: "running" }), true);
+    const attention = attachKey(session({ status: "needs-attention" }), true);
+    expect(running).toBe(attention);
+  });
+
+  test("changes when the session stops being live", () => {
+    const live = attachKey(session({ status: "running" }), true);
+    const done = attachKey(session({ status: "completed" }), true);
+    expect(live).not.toBe(done);
+  });
+
+  test("changes when the session id changes", () => {
+    const a = attachKey(session({ id: "a" }), true);
+    const b = attachKey(session({ id: "b" }), true);
+    expect(a).not.toBe(b);
+  });
+
+  test("changes when visibility toggles", () => {
+    const shown = attachKey(session({}), true);
+    const hidden = attachKey(session({}), false);
+    expect(shown).not.toBe(hidden);
+  });
+
+  test("returns a stable sentinel when there is no session", () => {
+    expect(attachKey(null, true)).toBe(attachKey(null, false));
+  });
+});
 
 const SETUP = {
   user: "alice",

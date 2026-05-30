@@ -3,7 +3,7 @@ import { makeStyles } from "@fluentui/react-components";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { SessionMeta } from "../../types.js";
-import { attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
+import { attachKey, attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
 
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
@@ -176,7 +176,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     return () => {
       cancelled = true;
     };
-  }, [session?.id, session?.status, visible]);
+    // Re-attach only when the session, its live/terminated state, or visibility
+    // changes -- never on running <-> needs-attention idle toggles, which would
+    // reset the terminal and cause a periodic resize flicker.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachKey(session, visible)]);
 
   // Refit when entering/leaving fullscreen or becoming visible so xterm
   // re-measures after the container's size changes.
