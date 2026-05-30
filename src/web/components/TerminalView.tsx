@@ -8,6 +8,7 @@ import { attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
   refit: () => void;
+  sendInput: (data: string) => void;
 }
 
 const useStyles = makeStyles({
@@ -181,7 +182,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       const term = termRef.current;
       return term ? { cols: term.cols, rows: term.rows } : null;
     },
-    refit
+    refit,
+    sendInput: (data: string) => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "input", data }));
+      }
+    }
   }));
 
   return <div ref={containerRef} className={styles.root} />;
