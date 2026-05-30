@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ScreenIdleDetector } from "../src/client/idle-detector.js";
+import { ScreenIdleDetector } from "../src/daemon/idle-detector.js";
 
 describe("ScreenIdleDetector", () => {
   test("seeds on first update and does not flag immediately", () => {

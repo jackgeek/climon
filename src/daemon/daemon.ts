@@ -1,6 +1,7 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { rm } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { Terminal } from "@xterm/headless";
 import { ensureClimonHome, loadConfig, SESSION_ENV_VAR } from "../config.js";
 import {
   encodeFrame,
@@ -13,6 +14,7 @@ import {
 } from "../ipc/frame.js";
 import { spawnPty, resolveCommand, type PtyHandle } from "../pty.js";
 import { ScrollbackBuffer } from "./buffer.js";
+import { ScreenIdleDetector } from "./idle-detector.js";
 import { patchSessionMeta, readSessionMeta, writeScrollback } from "../store.js";
 
 /**
@@ -64,6 +66,26 @@ export async function runSessionDaemon(id: string): Promise<void> {
   let exitInfo: { exitCode: number } | undefined;
   let resolveExit: (() => void) | undefined;
 
+  // The daemon owns the PTY, so it runs static-screen attention detection
+  // itself: PTY output is mirrored into a headless terminal grid whose
+  // fingerprint is sampled on an interval. This works for every session,
+  // including headless ones that have no interactive client attached.
+  const headlessTerm = new Terminal({
+    cols: Math.max(appliedCols, 1),
+    rows: Math.max(appliedRows, 1),
+    allowProposedApi: true
+  });
+  const idleDetector = new ScreenIdleDetector(config.attention.idleSeconds);
+
+  function fingerprint(): string {
+    const buffer = headlessTerm.buffer.active;
+    const rows: string[] = [];
+    for (let i = 0; i < headlessTerm.rows; i++) {
+      rows.push(buffer.getLine(buffer.viewportY + i)?.translateToString(true) ?? "");
+    }
+    return rows.join("\n");
+  }
+
   function broadcast(frame: Buffer): void {
     for (const client of clients) {
       client.write(frame);
@@ -87,16 +109,17 @@ export async function runSessionDaemon(id: string): Promise<void> {
     appliedRows = rows;
     pty.resize(cols, rows);
     if (changed) {
+      headlessTerm.resize(Math.max(cols, 1), Math.max(rows, 1));
       void patchSessionMeta(id, { cols, rows });
       broadcast(encodeJsonFrame(FrameType.PtySize, { cols, rows }));
     }
   }
 
   /**
-   * Applies a client-reported attention transition. The daemon is the only
-   * writer of session metadata, so detection state from the client funnels
-   * through here. Transitions are de-duped against the last applied value and
-   * ignored after the PTY exits so the completed/failed patch always wins.
+   * Applies an attention transition from the idle detector. The daemon is the
+   * only writer of session metadata, so detection state funnels through here.
+   * Transitions are de-duped against the last applied value and ignored after
+   * the PTY exits so the completed/failed patch always wins.
    */
   function applyAttention(payload: AttentionPayload): void {
     if (exited) {
@@ -138,12 +161,31 @@ export async function runSessionDaemon(id: string): Promise<void> {
   // fast-exiting command are never missed while metadata is being written.
   pty.onData((data) => {
     scrollback.append(data);
+    headlessTerm.write(data);
     broadcast(encodeFrame(FrameType.Output, data));
   });
+
+  // Sample the rendered screen once a second; a fingerprint unchanged for
+  // `idleSeconds` flips the session to "needs-attention" (and back when output
+  // resumes). Disabled when idle detection is turned off (idleSeconds <= 0).
+  const idleTimer =
+    config.attention.idleSeconds > 0
+      ? setInterval(() => {
+          const transition = idleDetector.update(fingerprint(), Date.now());
+          if (transition) {
+            applyAttention(transition);
+          }
+        }, 1000)
+      : undefined;
+  idleTimer?.unref?.();
 
   pty.onExit(async (exitCode) => {
     exited = true;
     exitInfo = { exitCode };
+    if (idleTimer) {
+      clearInterval(idleTimer);
+    }
+    headlessTerm.dispose();
     await writeScrollback(id, scrollback.snapshot()).catch(() => undefined);
     await patchSessionMeta(id, {
       status: exitCode === 0 ? "completed" : "failed",
