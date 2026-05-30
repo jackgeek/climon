@@ -421,13 +421,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
         const hosts = hostCandidates();
         const hostKey = await detectHostKey();
-        // Return a ready-to-pin known_hosts line (host + key), or "" if unknown.
-        const hostLine = hostKey && hosts[0] ? `${hosts[0]} ${hostKey}` : "";
+        // Return the bare host public key (type + base64); the dashboard pairs it
+        // with the chosen address to form the pinned known_hosts line.
         return Response.json({
           user: process.env.USER ?? "",
           sshPort: 22,
           hosts,
-          hostKey: hostLine
+          hostKey: hostKey ?? ""
         });
       }
 
