@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { helpText, parseArgs } from "./cli/args.js";
+import { delegateToServer } from "./cli/server-exec.js";
 import { runSessionDaemon } from "./daemon/daemon.js";
 import {
   killSession,
@@ -7,7 +10,18 @@ import {
   reconnectSession,
   startMonitoredCommand
 } from "./launcher.js";
-import { startServer } from "./server/server.js";
+
+function resolveDevServerEntrypoint(): string | undefined {
+  if (!import.meta.url.startsWith("file:")) {
+    return undefined;
+  }
+  try {
+    const candidate = fileURLToPath(new URL("./server.ts", import.meta.url));
+    return existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2));
@@ -17,8 +31,12 @@ async function main(): Promise<number> {
       process.stdout.write(helpText);
       return 0;
     case "server":
-      await startServer({ lan: parsed.lan, port: parsed.port });
-      return 0;
+      return delegateToServer(
+        process.argv.slice(2),
+        process.env,
+        process.execPath,
+        resolveDevServerEntrypoint()
+      );
     case "session":
       await runSessionDaemon(parsed.id);
       return 0;
