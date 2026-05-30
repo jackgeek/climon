@@ -1,5 +1,15 @@
-import { Button, Text, makeStyles, tokens } from "@fluentui/react-components";
-import { Add20Regular } from "@fluentui/react-icons";
+import {
+  Button,
+  Menu,
+  MenuItem,
+  MenuList,
+  MenuPopover,
+  MenuTrigger,
+  Text,
+  makeStyles,
+  tokens
+} from "@fluentui/react-components";
+import { Add20Regular, Navigation20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../../types.js";
 import { SessionItem } from "./SessionItem.js";
 
@@ -30,6 +40,11 @@ const useStyles = makeStyles({
     padding: "16px",
     color: tokens.colorNeutralForeground3,
     fontSize: "13px"
+  },
+  actions: {
+    display: "flex",
+    alignItems: "center",
+    gap: "4px"
   }
 });
 
@@ -40,23 +55,41 @@ interface Props {
   onClose: (id: string) => void;
   onNew: () => void;
   onNewFrom: (session: SessionMeta) => void;
+  onManageRemote: () => void;
 }
 
-export function Sidebar({ sessions, activeId, onSelect, onClose, onNew, onNewFrom }: Props) {
+export function Sidebar({ sessions, activeId, onSelect, onClose, onNew, onNewFrom, onManageRemote }: Props) {
   const styles = useStyles();
   return (
     <div className={styles.root}>
       <div className={styles.header}>
         <Text className={styles.title}>climon</Text>
-        {sessions.length === 0 && (
-          <Button
-            appearance="subtle"
-            icon={<Add20Regular />}
-            title="New session"
-            aria-label="New session"
-            onClick={onNew}
-          />
-        )}
+        <div className={styles.actions}>
+          {sessions.length === 0 && (
+            <Button
+              appearance="subtle"
+              icon={<Add20Regular />}
+              title="New session"
+              aria-label="New session"
+              onClick={onNew}
+            />
+          )}
+          <Menu>
+            <MenuTrigger disableButtonEnhancement>
+              <Button
+                appearance="subtle"
+                icon={<Navigation20Regular />}
+                title="Menu"
+                aria-label="Menu"
+              />
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                <MenuItem onClick={onManageRemote}>Remote clients…</MenuItem>
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+        </div>
       </div>
       <div className={styles.list}>
         {sessions.length === 0 ? (

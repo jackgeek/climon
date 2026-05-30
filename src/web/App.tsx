@@ -5,6 +5,7 @@ import type { SessionMeta } from "../types.js";
 import { eventsUrl, fetchSessions, deleteSession } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
+import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 
 const useStyles = makeStyles({
@@ -93,6 +94,7 @@ export function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogParent, setDialogParent] = useState<{ id: string; cwd: string } | null>(null);
   const [maximized, setMaximized] = useState(false);
+  const [remoteOpen, setRemoteOpen] = useState(false);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
 
@@ -177,6 +179,7 @@ export function App() {
             setDialogParent({ id: session.id, cwd: session.cwd });
             setDialogOpen(true);
           }}
+          onManageRemote={() => setRemoteOpen(true)}
         />
       </div>
       <div className={mergeClasses(styles.main, maximized && styles.mainMaximized)}>
@@ -220,6 +223,7 @@ export function App() {
         onCreated={handleCreated}
         parent={dialogParent}
       />
+      <RemoteClientDialog open={remoteOpen} onOpenChange={setRemoteOpen} />
     </div>
   );
 }
