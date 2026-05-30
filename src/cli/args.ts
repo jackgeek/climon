@@ -1,4 +1,6 @@
 import { VERSION } from "../version.js";
+import { parseColor, parsePriority } from "../session-meta.js";
+import type { AnsiColor } from "../types.js";
 
 export type ParsedCommand =
   | { command: "help" }
@@ -7,7 +9,7 @@ export type ParsedCommand =
   | { command: "attach"; id: string }
   | { command: "ls" }
   | { command: "kill"; id: string }
-  | { command: "run"; argv: string[]; headless: boolean }
+  | { command: "run"; argv: string[]; headless: boolean; priority?: number; color?: AnsiColor | null; name?: string }
   | { command: "config"; argv: string[] }
   | { command: "uplink" }
   | { command: "ssh-accept"; label: string };
@@ -15,7 +17,10 @@ export type ParsedCommand =
 export const helpText = `climon v${VERSION} — web-based monitor for interactive CLI sessions
 
 Usage:
-  climon <command> [args...]   Run a command in a monitored PTY session
+  climon [--priority N] [--color C] [--name S] <command> [args...]
+                               Run a command in a monitored PTY session
+                               (priority 0-1000; color: none|black|red|green|
+                               yellow|blue|magenta|cyan|white)
   climon server [--port N]      Start the dashboard web server (loopback only)
   climon ls                    List monitored sessions
   climon config <key> [value]   Get/set remote connection config (git-style)
@@ -25,6 +30,51 @@ Usage:
 
 While attached, detach without stopping the command using: Ctrl-\\ then d
 `;
+
+interface SessionFlags {
+  priority?: number;
+  color?: AnsiColor | null;
+  name?: string;
+}
+
+/**
+ * Consumes leading --priority/--color/--name flags (both `--flag value` and
+ * `--flag=value` forms) from the front of `tokens`, stopping at the first token
+ * that is not one of those flags. Returns the parsed flags plus the remaining
+ * tokens (the monitored command and its arguments). Throws on invalid values.
+ */
+function parseSessionFlags(tokens: string[]): { flags: SessionFlags; rest: string[] } {
+  const flags: SessionFlags = {};
+  let i = 0;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    const eq = token.indexOf("=");
+    const key = token.startsWith("--") && eq !== -1 ? token.slice(0, eq) : token;
+    const inlineValue = token.startsWith("--") && eq !== -1 ? token.slice(eq + 1) : undefined;
+    const takeValue = (): string => {
+      if (inlineValue !== undefined) {
+        return inlineValue;
+      }
+      const next = tokens[i + 1];
+      if (next === undefined) {
+        throw new Error(`Missing value for ${key}.`);
+      }
+      i += 1;
+      return next;
+    };
+    if (key === "--priority") {
+      flags.priority = parsePriority(takeValue());
+    } else if (key === "--color") {
+      flags.color = parseColor(takeValue());
+    } else if (key === "--name") {
+      flags.name = takeValue();
+    } else {
+      break;
+    }
+    i += 1;
+  }
+  return { flags, rest: tokens.slice(i) };
+}
 
 export function parseArgs(argv: string[]): ParsedCommand {
   if (argv.length === 0) {
@@ -78,18 +128,21 @@ export function parseArgs(argv: string[]): ParsedCommand {
     }
     case "run": {
       let headless = false;
-      const runArgv: string[] = [];
+      const remaining: string[] = [];
+      let sawNonHeadless = false;
       for (const arg of rest) {
-        if (arg === "--headless" && runArgv.length === 0) {
+        if (arg === "--headless" && !sawNonHeadless && remaining.length === 0) {
           headless = true;
         } else {
-          runArgv.push(arg);
+          sawNonHeadless = true;
+          remaining.push(arg);
         }
       }
+      const { flags, rest: runArgv } = parseSessionFlags(remaining);
       if (runArgv.length === 0) {
         throw new Error("Provide a command to run, e.g. `climon run npm test`.");
       }
-      return { command: "run", argv: runArgv, headless };
+      return { command: "run", argv: runArgv, headless, ...flags };
     }
     case "config":
       return { command: "config", argv: rest };
@@ -103,7 +156,12 @@ export function parseArgs(argv: string[]): ParsedCommand {
       }
       return { command: "ssh-accept", label };
     }
-    default:
-      return { command: "run", argv, headless: false };
+    default: {
+      const { flags, rest: runArgv } = parseSessionFlags(argv);
+      if (runArgv.length === 0) {
+        throw new Error("Provide a command to run, e.g. `climon npm test`.");
+      }
+      return { command: "run", argv: runArgv, headless: false, ...flags };
+    }
   }
 }
