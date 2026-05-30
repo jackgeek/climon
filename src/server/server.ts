@@ -4,6 +4,7 @@ import { connect, type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { ServerWebSocket } from "bun";
 import {
@@ -12,7 +13,7 @@ import {
   loadConfig,
   saveConfig
 } from "../config.js";
-import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload, type ExitPayload, type PtySizePayload } from "../ipc/frame.js";
+import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload, type ExitPayload, type PtySizePayload, type SpawnedPayload } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { ClimonConfig } from "../types.js";
@@ -169,6 +170,64 @@ function spawnHeadlessSession(
   });
 }
 
+/**
+ * Asks the host client attached to `socketPath` to spawn a new session with the
+ * given command and cwd, by writing a Spawn frame and awaiting the correlated
+ * Spawned reply. When `wait` is false, returns immediately after sending and
+ * never resolves to an id (the session surfaces via the session scan/SSE).
+ */
+function requestClientSpawn(
+  socketPath: string,
+  command: string[],
+  cwd: string,
+  wait: boolean
+): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    const token = randomBytes(8).toString("hex");
+    const socket = connect(socketPath);
+    const decoder = new FrameDecoder();
+    let settled = false;
+    const finish = (fn: () => void): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      fn();
+    };
+    const timer = setTimeout(() => {
+      finish(() => reject(new Error("Timed out creating session")));
+    }, 15000);
+    socket.once("connect", () => {
+      socket.write(encodeJsonFrame(FrameType.Spawn, { token, command, cwd }));
+      if (!wait) {
+        // Give the frame a tick to flush, then resolve without an id.
+        setTimeout(() => finish(() => resolve(undefined)), 50);
+      }
+    });
+    socket.on("data", (chunk) => {
+      if (!wait) {
+        return;
+      }
+      for (const frame of decoder.push(chunk)) {
+        if (frame.type === FrameType.Spawned) {
+          const reply = parseJsonPayload<SpawnedPayload>(frame.payload);
+          if (reply.token !== token) {
+            continue;
+          }
+          if (reply.id) {
+            finish(() => resolve(reply.id));
+          } else {
+            finish(() => reject(new Error(reply.error || "Failed to create session")));
+          }
+        }
+      }
+    });
+    socket.once("error", (error) => finish(() => reject(error)));
+  });
+}
+
 function probeSocket(socketPath: string, timeoutMs = 2000): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect(socketPath);
@@ -306,7 +365,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let payload: { command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown };
+        let payload: { command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown; parentId?: unknown; wait?: unknown };
         try {
           payload = (await request.json()) as typeof payload;
         } catch {
@@ -316,6 +375,28 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         const argv = splitCommand(commandStr);
         if (argv.length === 0) {
           return new Response("Missing command", { status: 400 });
+        }
+
+        const parentId = typeof payload.parentId === "string" ? payload.parentId.trim() : "";
+        if (parentId) {
+          const parent = await readSessionMeta(parentId);
+          if (!parent) {
+            return new Response("Parent session not found", { status: 404 });
+          }
+          if (!parent.attached) {
+            return new Response("This session is no longer attached", { status: 409 });
+          }
+          const wait = payload.wait !== false; // default: wait
+          try {
+            const id = await requestClientSpawn(parent.socketPath, argv, parent.cwd, wait);
+            if (wait && id) {
+              return Response.json({ id }, { status: 201 });
+            }
+            return new Response(null, { status: 202 });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return new Response(`Failed to create session: ${message}`, { status: 500 });
+          }
         }
         const cwd =
           typeof payload.cwd === "string" && payload.cwd.trim().length > 0
