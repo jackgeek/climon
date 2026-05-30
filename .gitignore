@@ -11,3 +11,7 @@ src/server/embedded-assets.ts
 
 
 CUsersjackallan.superpowers/
+
+# Stray Windows-path / tunnel artifacts (never part of the repo)
+C:Usersjackallan/
+DevTunnels/
