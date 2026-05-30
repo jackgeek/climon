@@ -59,7 +59,10 @@ reassembles frames split across
 chunks. `Resize` payloads carry a `source` (`host` for the local terminal,
 `viewer` for a browser); the daemon clamps `viewer` resizes to the host
 terminal's size (configurable, on by default) and broadcasts the resulting
-`PtySize` so browsers render the same grid as the terminal.
+`PtySize` so browsers render the same grid as the terminal. When the last
+browser viewer disconnects, the daemon reverts the PTY to the host terminal's
+size so a still-attached host terminal is not left rendering into a shrunken
+grid.
 
 ### Local client (`src/client/connect.ts`)
 
