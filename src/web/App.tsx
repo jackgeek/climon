@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
-import { FullScreenMaximize20Regular, Dismiss20Regular } from "@fluentui/react-icons";
+import { FullScreenMaximize20Regular, Dismiss20Regular, Keyboard20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
-import { eventsUrl, fetchSessions, deleteSession, fetchHealth } from "./api.js";
+import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
+import { KeyBar } from "./components/KeyBar.js";
 
 const useStyles = makeStyles({
   root: {
@@ -80,6 +81,19 @@ const useStyles = makeStyles({
       display: "inline-flex"
     }
   },
+  keyToggleBtn: {
+    flex: "0 0 auto",
+    display: "none",
+    "@media (max-width: 768px)": {
+      display: "inline-flex"
+    }
+  },
+  keyBarWrap: {
+    display: "none",
+    "@media (max-width: 768px)": {
+      display: "flex"
+    }
+  },
   exitBtn: {
     position: "fixed",
     top: "8px",
@@ -97,6 +111,7 @@ export function App() {
   const [closeTarget, setCloseTarget] = useState<SessionMeta | null>(null);
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
+  const [keyBarOpen, setKeyBarOpen] = useState(false);
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const pendingSelectRef = useRef<string | null>(null);
@@ -245,6 +260,16 @@ export function App() {
             )}
           </Text>
           <Button
+            className={styles.keyToggleBtn}
+            appearance={keyBarOpen ? "primary" : "outline"}
+            size="small"
+            icon={<Keyboard20Regular />}
+            title="Toggle special-key bar"
+            aria-label="Toggle special-key bar"
+            aria-pressed={keyBarOpen}
+            onClick={() => setKeyBarOpen((v) => !v)}
+          />
+          <Button
             className={styles.maximizeBtn}
             appearance="outline"
             size="small"
@@ -255,6 +280,11 @@ export function App() {
           />
         </div>
         <TerminalView ref={terminalRef} session={activeSession} maximized={maximized} />
+        {keyBarOpen && !maximized && activeSession && isLiveStatus(activeSession.status) && (
+          <div className={styles.keyBarWrap}>
+            <KeyBar onSend={(d) => terminalRef.current?.sendInput(d)} />
+          </div>
+        )}
       </div>
       {maximized && (
         <Button
