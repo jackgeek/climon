@@ -128,4 +128,52 @@ describe("daemon spawn routing", () => {
     proc.kill();
     await proc.exited;
   }, 20000);
+
+  test("fails the spawn when the host client disconnects before replying", async () => {
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", "sleep", "30"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const parentId = (await new Response(proc.stdout).text()).trim();
+    const parentSocket = (await waitFor(async () => (await readMeta(parentId)).socketPath)).toString();
+
+    // Fake host that announces itself but, instead of replying, drops its
+    // connection the moment it receives a Spawn frame.
+    const host: Socket = connect(parentSocket);
+    const hostDecoder = new FrameDecoder();
+    await new Promise<void>((resolve) => host.once("connect", () => resolve()));
+    host.write(encodeJsonFrame(FrameType.Resize, { cols: 80, rows: 24, source: "host" }));
+    host.on("data", (chunk) => {
+      for (const frame of hostDecoder.push(chunk)) {
+        if (frame.type === FrameType.Spawn) {
+          host.destroy();
+        }
+      }
+    });
+    await waitFor(async () => ((await readMeta(parentId)).attached ? true : undefined));
+
+    const server: Socket = connect(parentSocket);
+    const serverDecoder = new FrameDecoder();
+    await new Promise<void>((resolve) => server.once("connect", () => resolve()));
+    const reply = await new Promise<SpawnedPayload>((resolve) => {
+      server.on("data", (chunk) => {
+        for (const frame of serverDecoder.push(chunk)) {
+          if (frame.type === FrameType.Spawned) {
+            resolve(parseJsonPayload<SpawnedPayload>(frame.payload));
+          }
+        }
+      });
+      server.write(
+        encodeJsonFrame(FrameType.Spawn, { token: "tok-d", command: ["sleep", "5"], cwd: "/tmp" })
+      );
+    });
+
+    expect(reply.token).toBe("tok-d");
+    expect(reply.id).toBeUndefined();
+    expect(reply.error).toContain("disconnected");
+
+    server.destroy();
+    proc.kill();
+    await proc.exited;
+  }, 20000);
 });

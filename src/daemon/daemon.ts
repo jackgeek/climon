@@ -93,10 +93,49 @@ export async function runSessionDaemon(id: string): Promise<void> {
   const clients = new Set<Socket>();
   const hostTracker = new HostClientTracker();
 
-  // Maps a spawn request token to the socket that initiated it (the server's
-  // short-lived spawn connection), so the host client's reply can be routed
-  // back to the right requester.
-  const pendingSpawns = new Map<string, Socket>();
+  // Maps a spawn request token to the in-flight spawn it represents: the socket
+  // that initiated it (the server's short-lived spawn connection), the host
+  // client we forwarded it to, and a backstop timer. Entries are removed when a
+  // correlated Spawned reply arrives, when either side disconnects, or when the
+  // timer fires — so the map never retains dead sockets.
+  interface PendingSpawn {
+    requester: Socket;
+    host: Socket;
+    timer: ReturnType<typeof setTimeout>;
+  }
+  const pendingSpawns = new Map<string, PendingSpawn>();
+  const SPAWN_TIMEOUT_MS = 20000;
+
+  // Resolves an in-flight spawn: clears its timer, drops it from the map, and
+  // (if the requester is still connected) relays the Spawned reply.
+  const settleSpawn = (token: string, reply: SpawnedPayload): void => {
+    const pending = pendingSpawns.get(token);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pendingSpawns.delete(token);
+    if (!pending.requester.destroyed) {
+      pending.requester.write(encodeJsonFrame(FrameType.Spawned, reply));
+    }
+  };
+
+  // Drops any in-flight spawns tied to a disconnected socket: a dead requester
+  // is silently abandoned, while a dead host fails its outstanding spawn so the
+  // requester is not left waiting.
+  const reapSocketSpawns = (socket: Socket): void => {
+    for (const [token, pending] of pendingSpawns) {
+      if (pending.requester === socket) {
+        clearTimeout(pending.timer);
+        pendingSpawns.delete(token);
+      } else if (pending.host === socket) {
+        settleSpawn(token, {
+          token,
+          error: "attached client disconnected before launch"
+        });
+      }
+    }
+  };
 
   const clampBrowserToHost = config.terminal.clampBrowserToHost;
   // The host terminal owns the maximum PTY size when clamping is enabled. It is
@@ -247,27 +286,29 @@ export async function runSessionDaemon(id: string): Promise<void> {
               })
             );
           } else {
-            pendingSpawns.set(req.token, socket);
+            const timer = setTimeout(() => {
+              settleSpawn(req.token, { token: req.token, error: "Timed out creating session" });
+            }, SPAWN_TIMEOUT_MS);
+            timer.unref?.();
+            pendingSpawns.set(req.token, { requester: socket, host, timer });
             host.write(encodeJsonFrame(FrameType.Spawn, req));
           }
         } else if (frame.type === FrameType.Spawned) {
           const reply = parseJsonPayload<SpawnedPayload>(frame.payload);
-          const requester = pendingSpawns.get(reply.token);
-          pendingSpawns.delete(reply.token);
-          if (requester && !requester.destroyed) {
-            requester.write(encodeJsonFrame(FrameType.Spawned, reply));
-          }
+          settleSpawn(reply.token, reply);
         }
       }
     });
     socket.on("error", () => {
       clients.delete(socket);
+      reapSocketSpawns(socket);
       if (hostTracker.remove(socket)) {
         void patchSessionMeta(id, { attached: false });
       }
     });
     socket.on("close", () => {
       clients.delete(socket);
+      reapSocketSpawns(socket);
       if (hostTracker.remove(socket)) {
         void patchSessionMeta(id, { attached: false });
       }
