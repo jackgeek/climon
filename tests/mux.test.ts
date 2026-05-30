@@ -47,4 +47,16 @@ describe("mux round-trip", () => {
     header.writeUInt8(2, 4);
     expect(() => decoder.push(header)).toThrow();
   });
+
+  test("encodes and decodes attach/detach control", () => {
+    const decoder = new MuxDecoder();
+    const out = decoder.push(Buffer.concat([
+      encodeControl({ kind: "attach", id: "s1" }),
+      encodeControl({ kind: "detach", id: "s1" })
+    ]));
+    expect(out).toEqual([
+      { type: "control", message: { kind: "attach", id: "s1" } },
+      { type: "control", message: { kind: "detach", id: "s1" } }
+    ]);
+  });
 });

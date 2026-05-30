@@ -12,7 +12,9 @@ export const MAX_MUX_PAYLOAD = 8 * 1024 * 1024;
 export type ControlMessage =
   | { kind: "session-added"; meta: SessionMeta }
   | { kind: "session-updated"; id: string; patch: SessionMetaPatch }
-  | { kind: "session-removed"; id: string };
+  | { kind: "session-removed"; id: string }
+  | { kind: "attach"; id: string }
+  | { kind: "detach"; id: string };
 
 export type MuxMessage =
   | { type: "control"; message: ControlMessage }
