@@ -187,6 +187,48 @@ export function App() {
     }
   }, [maximized]);
 
+  // Reveal the special-key bar with a right-to-left edge swipe while maximized.
+  // Native window listeners in the capture phase are used (rather than React
+  // synthetic handlers on the terminal element) so the gesture is detected
+  // reliably even though xterm.js owns the touch events inside the terminal.
+  // Starting near the right edge makes it a deliberate "pull-in" gesture that
+  // does not clash with xterm's own touch scrolling in the body.
+  useEffect(() => {
+    if (!maximized) {
+      return;
+    }
+    const onStart = (e: TouchEvent): void => {
+      const t = e.touches[0];
+      if (!t) {
+        return;
+      }
+      swipeStartRef.current = {
+        x: t.clientX,
+        y: t.clientY,
+        fromRightEdge: t.clientX >= window.innerWidth - 40
+      };
+    };
+    const onEnd = (e: TouchEvent): void => {
+      const start = swipeStartRef.current;
+      swipeStartRef.current = null;
+      const t = e.changedTouches[0];
+      if (!start || !t || !start.fromRightEdge) {
+        return;
+      }
+      const dx = t.clientX - start.x;
+      const dy = t.clientY - start.y;
+      if (dx <= -50 && Math.abs(dy) <= Math.abs(dx)) {
+        setKeyBarOpen(true);
+      }
+    };
+    window.addEventListener("touchstart", onStart, { passive: true, capture: true });
+    window.addEventListener("touchend", onEnd, { passive: true, capture: true });
+    return () => {
+      window.removeEventListener("touchstart", onStart, { capture: true });
+      window.removeEventListener("touchend", onEnd, { capture: true });
+    };
+  }, [maximized]);
+
   // Track the mobile breakpoint so the terminal is only "displayed" (and thus
   // holds the PTY size) when it is actually on screen: always on desktop, but
   // only when maximized on mobile.
@@ -212,35 +254,6 @@ export function App() {
       setActiveId(null);
     }
     setSessions((prev) => prev.filter((s) => s.id !== id));
-  }
-
-  // Reveal the special-key bar with a right-to-left edge swipe while maximized.
-  // Starting the gesture at the right edge keeps it from clashing with xterm's
-  // own touch scrolling/selection in the body of the terminal.
-  function onSwipeTouchStart(e: React.TouchEvent): void {
-    const t = e.touches[0];
-    if (!t) {
-      return;
-    }
-    swipeStartRef.current = {
-      x: t.clientX,
-      y: t.clientY,
-      fromRightEdge: t.clientX >= window.innerWidth - 24
-    };
-  }
-
-  function onSwipeTouchEnd(e: React.TouchEvent): void {
-    const start = swipeStartRef.current;
-    swipeStartRef.current = null;
-    const t = e.changedTouches[0];
-    if (!start || !t || !start.fromRightEdge) {
-      return;
-    }
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
-    if (dx <= -50 && Math.abs(dy) <= Math.abs(dx)) {
-      setKeyBarOpen(true);
-    }
   }
 
   // The ✕ button signals intent to close. Finished sessions are cleaned up
@@ -328,8 +341,6 @@ export function App() {
           maximized && styles.mainMaximized,
           !maximized && styles.mainHiddenMobile
         )}
-        onTouchStart={maximized ? onSwipeTouchStart : undefined}
-        onTouchEnd={maximized ? onSwipeTouchEnd : undefined}
       >
         <div className={mergeClasses(styles.header, maximized && styles.hidden)}>
           <Text className={styles.headerText}>
