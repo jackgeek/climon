@@ -91,6 +91,7 @@ export function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogParent, setDialogParent] = useState<{ id: string; cwd: string } | null>(null);
   const [maximized, setMaximized] = useState(false);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
@@ -168,8 +169,14 @@ export function App() {
           activeId={activeId}
           onSelect={setActiveId}
           onClose={(id) => void handleClose(id)}
-          onNew={() => setDialogOpen(true)}
-          canCreate
+          onNew={() => {
+            setDialogParent(null);
+            setDialogOpen(true);
+          }}
+          onNewFrom={(session) => {
+            setDialogParent({ id: session.id, cwd: session.cwd });
+            setDialogOpen(true);
+          }}
         />
       </div>
       <div className={mergeClasses(styles.main, maximized && styles.mainMaximized)}>
@@ -211,6 +218,7 @@ export function App() {
         onOpenChange={setDialogOpen}
         getDimensions={() => terminalRef.current?.getDimensions() ?? null}
         onCreated={handleCreated}
+        parent={dialogParent}
       />
     </div>
   );

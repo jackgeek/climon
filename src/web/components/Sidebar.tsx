@@ -39,16 +39,17 @@ interface Props {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
-  canCreate: boolean;
+  onNewFrom: (session: SessionMeta) => void;
 }
 
-export function Sidebar({ sessions, activeId, onSelect, onClose, onNew, canCreate }: Props) {
+export function Sidebar({ sessions, activeId, onSelect, onClose, onNew, onNewFrom }: Props) {
   const styles = useStyles();
+  const anyAttached = sessions.some((s) => s.attached);
   return (
     <div className={styles.root}>
       <div className={styles.header}>
         <Text className={styles.title}>climon</Text>
-        {canCreate && (
+        {!anyAttached && (
           <Button
             appearance="subtle"
             icon={<Add20Regular />}
@@ -69,6 +70,7 @@ export function Sidebar({ sessions, activeId, onSelect, onClose, onNew, canCreat
               active={s.id === activeId}
               onSelect={onSelect}
               onClose={onClose}
+              onNew={onNewFrom}
             />
           ))
         )}

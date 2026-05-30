@@ -1,5 +1,5 @@
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
-import { Dismiss16Regular } from "@fluentui/react-icons";
+import { Dismiss16Regular, Add16Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../../types.js";
 import { StatusBadge } from "./StatusBadge.js";
 
@@ -10,7 +10,8 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     cursor: "pointer",
     ":hover": { backgroundColor: tokens.colorNeutralBackground1Hover },
-    ":hover .climon-close": { display: "inline-flex" }
+    ":hover .climon-close": { display: "inline-flex" },
+    ":hover .climon-new": { display: "inline-flex" }
   },
   active: {
     backgroundColor: tokens.colorNeutralBackground1Selected
@@ -42,6 +43,12 @@ const useStyles = makeStyles({
     top: "8px",
     right: "8px",
     display: "none"
+  },
+  newBtn: {
+    position: "absolute",
+    top: "8px",
+    right: "36px",
+    display: "none"
   }
 });
 
@@ -50,9 +57,10 @@ interface Props {
   active: boolean;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
+  onNew: (session: SessionMeta) => void;
 }
 
-export function SessionItem({ session, active, onSelect, onClose }: Props) {
+export function SessionItem({ session, active, onSelect, onClose, onNew }: Props) {
   const styles = useStyles();
   return (
     <div
@@ -67,6 +75,20 @@ export function SessionItem({ session, active, onSelect, onClose }: Props) {
         }
       }}
     >
+      {session.attached && (
+        <Button
+          className={mergeClasses("climon-new", styles.newBtn)}
+          appearance="subtle"
+          size="small"
+          icon={<Add16Regular />}
+          title="New session from here"
+          aria-label="New session from here"
+          onClick={(e) => {
+            e.stopPropagation();
+            onNew(session);
+          }}
+        />
+      )}
       <Button
         className={mergeClasses("climon-close", styles.close)}
         appearance="subtle"
