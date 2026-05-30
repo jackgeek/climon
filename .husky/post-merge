@@ -1,0 +1,24 @@
+#!/usr/bin/env sh
+# Auto-bump the package version when a feature branch is merged into main.
+#
+# Caveats (husky hooks are local/client-side; Git has no "merged to main" hook):
+#   * post-merge fires after every `git merge` / `git pull` that completes.
+#   * We therefore only act when:
+#       - the current branch is `main`, AND
+#       - the merge produced a real merge commit (HEAD has 2+ parents),
+#         which excludes fast-forward `git pull`s of an already-bumped main.
+#   * The release commit is an ordinary single-parent commit, so it never
+#     re-triggers this hook (no loop).
+#   * Set CLIMON_SKIP_RELEASE=1 to opt out (e.g. for scripted merges/CI).
+#   * The bump is committed and tagged locally only; nothing is pushed.
+
+[ "$CLIMON_SKIP_RELEASE" = "1" ] && exit 0
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+[ "$branch" = "main" ] || exit 0
+
+# Require a real merge commit (two parents). Fast-forward pulls have none.
+git rev-parse --verify -q HEAD^2 >/dev/null 2>&1 || exit 0
+
+echo "husky: main updated by a merge — running patch release..."
+bun run release || echo "husky: release skipped (see message above)."

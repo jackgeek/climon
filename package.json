@@ -17,9 +17,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "bun run typecheck",
     "test": "bun test tests",
+    "release": "bun scripts/release.ts",
     "dev": "bun src/index.ts",
     "server": "bun src/server.ts server",
-    "start": "bun src/index.ts"
+    "start": "bun src/index.ts",
+    "prepare": "husky"
   },
   "engines": {
     "bun": ">=1.1.0"
@@ -39,6 +41,7 @@
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "bun-types": "^1.3.10",
+    "husky": "^9.1.7",
     "typescript": "^5.5.4"
   }
 }
