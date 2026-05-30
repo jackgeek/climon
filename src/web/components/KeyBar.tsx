@@ -31,21 +31,23 @@ const FKEYS: { label: string; key: SpecialKey }[] = Array.from({ length: 12 }, (
 const useStyles = makeStyles({
   root: {
     display: "flex",
-    flexWrap: "nowrap",
+    flexWrap: "wrap",
+    justifyContent: "center",
     alignItems: "center",
     gap: "6px",
     padding: "8px",
-    overflowX: "auto",
+    width: "100%",
+    boxSizing: "border-box",
     borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground2,
     flex: "0 0 auto"
   },
   group: {
     display: "flex",
-    flexWrap: "nowrap",
+    flexWrap: "wrap",
+    justifyContent: "center",
     alignItems: "center",
-    gap: "4px",
-    flex: "0 0 auto"
+    gap: "4px"
   },
   field: {
     width: "48px",
@@ -57,7 +59,8 @@ const useStyles = makeStyles({
   },
   divider: {
     width: "1px",
-    alignSelf: "stretch",
+    height: "24px",
+    alignSelf: "center",
     backgroundColor: tokens.colorNeutralStroke2,
     flex: "0 0 auto"
   }
