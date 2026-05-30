@@ -16,6 +16,7 @@ import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload
 import { sortSessionsByPriority } from "../priority.js";
 import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { ClimonConfig } from "../types.js";
+import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 
@@ -331,7 +332,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       const url = new URL(request.url);
 
       if (url.pathname === "/health") {
-        return Response.json({ ok: true });
+        return Response.json({ ok: true, version: VERSION });
       }
 
       const asset = await getStaticAsset(url.pathname);

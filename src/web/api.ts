@@ -99,6 +99,19 @@ export function eventsUrl(): string {
   return withQuery("/api/events");
 }
 
+export async function fetchHealth(): Promise<{ version: string | null }> {
+  try {
+    const res = await fetch(withQuery("/health"));
+    if (!res.ok) {
+      return { version: null };
+    }
+    const data = (await res.json()) as { version?: string };
+    return { version: typeof data.version === "string" ? data.version : null };
+  } catch {
+    return { version: null };
+  }
+}
+
 export function attachSocketUrl(id: string): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${location.host}/api/sessions/${id}/attach${location.search || ""}`;

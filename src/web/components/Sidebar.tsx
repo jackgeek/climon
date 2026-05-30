@@ -22,6 +22,12 @@ const useStyles = makeStyles({
     fontSize: "16px",
     fontWeight: tokens.fontWeightSemibold
   },
+  version: {
+    marginLeft: "6px",
+    fontSize: "11px",
+    fontWeight: tokens.fontWeightRegular,
+    color: tokens.colorNeutralForeground3
+  },
   list: {
     overflowY: "auto",
     flex: "1 1 auto"
@@ -36,18 +42,22 @@ const useStyles = makeStyles({
 interface Props {
   sessions: SessionMeta[];
   activeId: string | null;
+  serverVersion?: string | null;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
   onNewFrom: (session: SessionMeta) => void;
 }
 
-export function Sidebar({ sessions, activeId, onSelect, onClose, onNew, onNewFrom }: Props) {
+export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, onNew, onNewFrom }: Props) {
   const styles = useStyles();
   return (
     <div className={styles.root}>
       <div className={styles.header}>
-        <Text className={styles.title}>climon</Text>
+        <Text className={styles.title}>
+          climon
+          {serverVersion && <span className={styles.version}>v{serverVersion}</span>}
+        </Text>
         {sessions.length === 0 && (
           <Button
             appearance="subtle"

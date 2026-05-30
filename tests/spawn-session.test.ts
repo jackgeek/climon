@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnHeadlessSession } from "../src/client/spawn-session.js";
+import { VERSION } from "../src/version.js";
 
 const home = join(process.cwd(), `.climon-spawn-session-${process.pid}`);
 const env = { ...process.env, CLIMON_HOME: home };
@@ -21,11 +22,13 @@ describe("spawnHeadlessSession", () => {
       cols: number;
       rows: number;
       headless: boolean;
+      clientVersion: string;
     };
     expect(meta.cwd).toBe("/tmp");
     expect(meta.command).toEqual(["sleep", "30"]);
     expect(meta.cols).toBe(100);
     expect(meta.rows).toBe(40);
     expect(meta.headless).toBe(true);
+    expect(meta.clientVersion).toBe(VERSION);
   });
 });
