@@ -58,6 +58,29 @@ async function waitForSocket(socketPath: string, timeoutMs = 10000): Promise<voi
   throw new Error(`Timed out waiting for session daemon socket at ${socketPath}`);
 }
 
+async function waitForHeadlessReady(id: string, socketPath: string, timeoutMs = 10000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ok = await new Promise<boolean>((resolve) => {
+      const socket = connect(socketPath);
+      socket.once("connect", () => {
+        socket.end();
+        resolve(true);
+      });
+      socket.once("error", () => resolve(false));
+    });
+    if (ok) {
+      return;
+    }
+    const current = await readSessionMeta(id);
+    if (current?.status === "completed" || current?.status === "failed") {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for session daemon socket at ${socketPath}`);
+}
+
 function spawnDaemon(id: string, env: NodeJS.ProcessEnv): void {
   const logPath = join(getSessionsDir(env), `${id}.log`);
   const logFd = openSync(logPath, "a");
@@ -104,6 +127,11 @@ export async function startMonitoredCommand(
   if (options.headless) {
     const size = resolveLaunchSize(process.env);
     const id = await spawnHeadlessSession(command, process.cwd(), size);
+    const meta = await readSessionMeta(id);
+    if (!meta) {
+      throw new Error(`Session metadata for '${id}' not found.`);
+    }
+    await waitForHeadlessReady(id, meta.socketPath);
     process.stdout.write(`${id}\n`);
     return 0;
   }
