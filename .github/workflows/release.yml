@@ -1,0 +1,47 @@
+name: Release
+
+# Automatically bump the patch version (and tag it) whenever `main` is updated —
+# i.e. when a pull request is merged. This replaces the old local husky
+# `post-merge` hook so the bump happens for every merge style (merge commit,
+# squash, or rebase), not just local `--no-ff` merges.
+on:
+  push:
+    branches: [main]
+
+# Never run two releases against `main` at once.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Skip the bump commit the release itself pushes, otherwise it would loop.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use a token that is allowed to push to `main`. GITHUB_TOKEN works
+          # unless branch protection forbids direct pushes; in that case set a
+          # PAT/app token in the RELEASE_TOKEN secret and it is used instead.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Patch release (bump + commit + tag)
+        run: bun run release
+
+      - name: Push bump commit and tag
+        run: git push --follow-tags origin HEAD:main

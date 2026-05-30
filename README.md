@@ -160,24 +160,23 @@ contains the bump) and does **not** push — finish with `git push --follow-tags
 
 ### Automatic bump on merge to `main`
 
-A husky `post-merge` hook (installed via the `prepare` script on `bun install`)
-runs a patch release automatically when a feature branch is merged into `main`.
-Because Git hooks are local and there is no native "merged to main" event, the
-hook is deliberately conservative — it only bumps when:
-
-- the current branch is `main`, **and**
-- the merge created a real merge commit (so fast-forward `git pull`s of an
-  already-bumped `main` never double-bump).
+The patch bump runs automatically in CI whenever `main` is updated — i.e. when a
+pull request is merged. The [`Release`](.github/workflows/release.yml) workflow
+checks out `main`, runs `bun run release`, and pushes the bump commit and tag
+back to `main`.
 
 Notes:
 
-- Merge feature branches into `main` with a merge commit (`git merge --no-ff`, or
-  GitHub's "Create a merge commit") so the hook fires; pure fast-forward merges
-  are intentionally skipped.
-- Server-side PR merges (squash/rebase on GitHub) don't run local hooks; the
-  bump then happens for whoever next integrates `main` with a merge commit.
-- Set `CLIMON_SKIP_RELEASE=1` to opt out for a given merge.
-- The bump is committed and tagged locally only; push with `git push --follow-tags`.
+- Works for **every** merge style — merge commit, squash, or rebase — because it
+  triggers on any push to `main`, not on a local Git hook.
+- The release commit message starts with `chore(release):`, and the workflow
+  skips those, so the bump it pushes never triggers another bump.
+- The workflow pushes with `GITHUB_TOKEN`. If `main` is a protected branch that
+  forbids direct pushes, add a PAT (or GitHub App token) with `contents: write`
+  as the `RELEASE_TOKEN` secret and allow it to bypass the protection; the
+  workflow prefers it when present.
+- To cut a `minor`/`major` release instead, run `bun run release minor|major`
+  locally and push with `git push --follow-tags`.
 
 ## Further reading
 

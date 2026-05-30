@@ -56,7 +56,7 @@ async function main(): Promise<void> {
 
   await $`git add ${pkgPath}`.cwd(projectRoot);
   await $`git commit -m ${`chore(release): ${tag}`}`.cwd(projectRoot);
-  await $`git tag ${tag}`.cwd(projectRoot);
+  await $`git tag -a ${tag} -m ${tag}`.cwd(projectRoot);
 
   console.log(`✓ Released ${tag} (${current} → ${next}, ${level} bump)`);
   console.log(`  Push with: git push --follow-tags`);

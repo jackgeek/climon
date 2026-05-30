@@ -18,7 +18,6 @@
         "@types/react": "^19.2.15",
         "@types/react-dom": "^19.2.3",
         "bun-types": "^1.3.10",
-        "husky": "^9.1.7",
         "typescript": "^5.5.4",
       },
     },
@@ -203,8 +202,6 @@
     "embla-carousel-autoplay": ["embla-carousel-autoplay@8.6.0", "", { "peerDependencies": { "embla-carousel": "8.6.0" } }, "sha512-OBu5G3nwaSXkZCo1A6LTaFMZ8EpkYbwIaH+bPqdBnDGQ2fh4+NbzjXjs2SktoPNKCtflfVMc75njaDHOYXcrsA=="],
 
     "embla-carousel-fade": ["embla-carousel-fade@8.6.0", "", { "peerDependencies": { "embla-carousel": "8.6.0" } }, "sha512-qaYsx5mwCz72ZrjlsXgs1nKejSrW+UhkbOMwLgfRT7w2LtdEB03nPRI06GHuHv5ac2USvbEiX2/nAHctcDwvpg=="],
-
-    "husky": ["husky@9.1.7", "", { "bin": { "husky": "bin.js" } }, "sha512-5gs5ytaNjBrh5Ow3zrvdUUY+0VxIuWVL4i9irt6friV+BqdCfmV11CQTWMiBYWHbXhco+J1kHfTOUkePhCDvMA=="],
 
     "keyborg": ["keyborg@2.14.1", "", {}, "sha512-/WmmVBa6Me3hIKAOIyIq1sql+6oydQZzGMBDLNfOcJ8710byMsq3KSLS8GQhBJHOMtvnXnUBrDAIbABcZVipcg=="],
 
