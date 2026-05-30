@@ -13,6 +13,7 @@ import {
   SESSION_ENV_VAR
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
+import { spawnHeadlessSession } from "./client/spawn-session.js";
 import { sortSessionsByPriority } from "./priority.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { resolveCommand } from "./pty.js";
@@ -100,8 +101,15 @@ export async function startMonitoredCommand(
   await ensureClimonHome();
   const config = await loadConfig();
 
+  if (options.headless) {
+    const size = resolveLaunchSize(process.env);
+    const id = await spawnHeadlessSession(command, process.cwd(), size);
+    process.stdout.write(`${id}\n`);
+    return 0;
+  }
+
   const id = generateSessionId();
-  const { cols, rows } = options.headless ? resolveLaunchSize(process.env) : terminalSize();
+  const { cols, rows } = terminalSize();
   const now = new Date().toISOString();
   const meta: SessionMeta = {
     id,
@@ -120,11 +128,6 @@ export async function startMonitoredCommand(
   await writeSessionMeta(meta);
 
   spawnDaemon(id, process.env);
-
-  if (options.headless) {
-    process.stdout.write(`${id}\n`);
-    return 0;
-  }
 
   await waitForSocket(meta.socketPath);
 
