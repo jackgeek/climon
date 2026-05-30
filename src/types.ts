@@ -61,6 +61,13 @@ export interface SessionMeta {
   completedAt?: string;
   exitCode?: number;
   error?: string;
+  /**
+   * True while a local host client (the interactive `climon` terminal) is
+   * attached to this session's daemon. Maintained by the daemon. Drives the
+   * dashboard's per-session "new session" button, which can only be served by
+   * an attached client.
+   */
+  attached?: boolean;
 }
 
 export interface SessionMetaPatch {
@@ -73,6 +80,7 @@ export interface SessionMetaPatch {
   completedAt?: string;
   exitCode?: number;
   error?: string;
+  attached?: boolean;
   cols?: number;
   rows?: number;
 }
