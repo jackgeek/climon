@@ -39,6 +39,24 @@ export function clampResize(
   return { cols, rows };
 }
 
+/**
+ * Resolves the size to restore when the last browser viewer disconnects. The
+ * PTY returns to the host terminal's dimensions (floored at 1x1). Returns null
+ * when the applied size already matches the host, so callers can skip a no-op
+ * resize and broadcast.
+ */
+export function revertSize(
+  host: { cols: number; rows: number },
+  applied: { cols: number; rows: number }
+): { cols: number; rows: number } | null {
+  const cols = Math.max(host.cols, 1);
+  const rows = Math.max(host.rows, 1);
+  if (cols === applied.cols && rows === applied.rows) {
+    return null;
+  }
+  return { cols, rows };
+}
+
 export async function runSessionDaemon(id: string): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
