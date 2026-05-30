@@ -98,6 +98,9 @@ export function App() {
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches
   );
+  const [pageVisible, setPageVisible] = useState(() =>
+    typeof document === "undefined" || document.visibilityState !== "hidden"
+  );
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const pendingSelectRef = useRef<string | null>(null);
@@ -165,6 +168,16 @@ export function App() {
     return () => mql.removeEventListener("change", onChange);
   }, []);
 
+  // Track page visibility so the terminal is only "displayed" while the tab is
+  // actually on screen. When the tab is hidden (switched away, minimized, or
+  // backgrounded on mobile) the WebSocket is dropped, which the daemon observes
+  // as a viewer leaving and reverts the PTY to the host terminal's size.
+  useEffect(() => {
+    const onVisibility = (): void => setPageVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
   function removeFromList(id: string): void {
     if (activeId === id) {
       setActiveId(null);
@@ -225,7 +238,7 @@ export function App() {
   }
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
-  const terminalVisible = activeSession !== null && (!isMobile || maximized);
+  const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
 
   return (
     <div className={styles.root}>
