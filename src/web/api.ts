@@ -1,4 +1,5 @@
 import type { SessionMeta } from "../types.js";
+import type { AnsiColor } from "../types.js";
 
 /**
  * The dashboard is loopback-only and unauthenticated at the HTTP layer, so API
@@ -16,6 +17,9 @@ export interface CreateSessionBody {
   rows?: number;
   /** When set, the session is spawned directly from this parent session. */
   parentId?: string;
+  name?: string;
+  priority?: number;
+  color?: AnsiColor | null;
 }
 
 export async function fetchSessions(): Promise<SessionMeta[]> {
@@ -46,6 +50,31 @@ export async function createSession(body: CreateSessionBody): Promise<CreateSess
     }
     const data = (await res.json()) as { id?: string };
     return { ok: true, id: data.id };
+  } catch {
+    return { ok: false, error: "Network error." };
+  }
+}
+
+export interface UpdateSessionBody {
+  name?: string;
+  priority?: number;
+  color?: AnsiColor | null;
+}
+
+export async function updateSession(
+  id: string,
+  body: UpdateSessionBody
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(withQuery(`/api/sessions/${id}`), {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      return { ok: false, error: (await res.text()) || `Failed (${res.status})` };
+    }
+    return { ok: true };
   } catch {
     return { ok: false, error: "Network error." };
   }
