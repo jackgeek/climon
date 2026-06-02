@@ -14,10 +14,11 @@ import {
 import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload, type ExitPayload, type PtySizePayload } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
-import type { ClimonConfig } from "../types.js";
+import type { AnsiColor, ClimonConfig } from "../types.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
+import { parseColor, parsePriority } from "../session-meta.js";
 import {
   authorizeClient,
   detectHostKey,
@@ -154,6 +155,32 @@ export function splitCommand(command: string): string[] {
   return command.trim().split(/\s+/).filter((part) => part.length > 0);
 }
 
+export interface SpawnMetaOptions {
+  name?: string;
+  priority?: number;
+  color?: AnsiColor | null;
+}
+
+/**
+ * Builds the argv passed to the climon client to spawn a headless session,
+ * prepending --priority/--color/--name flags (when set) before the monitored
+ * command. `color: null` is emitted as `--color none` so an inherited color can
+ * be explicitly cleared.
+ */
+export function buildRunArgs(command: string[], meta: SpawnMetaOptions): string[] {
+  const flags: string[] = [];
+  if (typeof meta.priority === "number") {
+    flags.push("--priority", String(meta.priority));
+  }
+  if (meta.color !== undefined) {
+    flags.push("--color", meta.color ?? "none");
+  }
+  if (meta.name !== undefined && meta.name !== "") {
+    flags.push("--name", meta.name);
+  }
+  return ["run", "--headless", ...flags, ...command];
+}
+
 function normalizeDimension(value: unknown, fallback: number): string {
   const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
   if (Number.isFinite(n) && n > 0) {
@@ -184,11 +211,12 @@ function spawnHeadlessSession(
   argv: string[],
   cwd: string,
   cols: string,
-  rows: string
+  rows: string,
+  meta: SpawnMetaOptions = {}
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const { file, args } = resolveClientInvocation(
-      ["run", "--headless", ...argv],
+      buildRunArgs(argv, meta),
       process.env,
       process.execPath,
       resolveDevClientEntrypoint()
@@ -359,7 +387,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let payload: { command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown; parentId?: unknown };
+        let payload: {
+          command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown; parentId?: unknown;
+          name?: unknown; priority?: unknown; color?: unknown;
+        };
         try {
           payload = (await request.json()) as typeof payload;
         } catch {
@@ -369,6 +400,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         const argv = splitCommand(commandStr);
         if (argv.length === 0) {
           return new Response("Missing command", { status: 400 });
+        }
+
+        let metaInput: SpawnMetaOptions;
+        try {
+          metaInput = {
+            name: typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : undefined,
+            priority: payload.priority === undefined || payload.priority === null
+              ? undefined
+              : parsePriority(payload.priority as string | number),
+            color: payload.color === undefined
+              ? undefined
+              : payload.color === null
+                ? null
+                : parseColor(String(payload.color))
+          };
+        } catch (error) {
+          return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
         }
 
         const parentId = typeof payload.parentId === "string" ? payload.parentId.trim() : "";
@@ -382,7 +430,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               argv,
               parent.cwd,
               String(parent.cols),
-              String(parent.rows)
+              String(parent.rows),
+              {
+                name: metaInput.name,
+                priority: metaInput.priority ?? parent.priority,
+                color: metaInput.color !== undefined ? metaInput.color : parent.color
+              }
             );
             return Response.json({ id }, { status: 201 });
           } catch (error) {
@@ -405,7 +458,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         const cols = normalizeDimension(payload.cols, 80);
         const rows = normalizeDimension(payload.rows, 24);
         try {
-          const id = await spawnHeadlessSession(argv, cwd, cols, rows);
+          const id = await spawnHeadlessSession(argv, cwd, cols, rows, metaInput);
           return Response.json({ id }, { status: 201 });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -498,6 +551,43 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       if (url.pathname === "/api/sessions") {
         return new Response(await sessionsPayload(), { headers: { "content-type": "application/json" } });
+      }
+
+      const patchMatch = SESSION_PATH.exec(url.pathname);
+      if (patchMatch && request.method === "PATCH") {
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let body: { name?: unknown; priority?: unknown; color?: unknown };
+        try {
+          body = (await request.json()) as typeof body;
+        } catch {
+          return new Response("Invalid JSON body", { status: 400 });
+        }
+        const patch: { name?: string; priority?: number; color?: AnsiColor | null } = {};
+        try {
+          if (body.name !== undefined) {
+            patch.name = String(body.name);
+          }
+          if (body.priority !== undefined) {
+            patch.priority = parsePriority(body.priority as string | number);
+          }
+          if (body.color !== undefined) {
+            patch.color = body.color === null ? null : parseColor(String(body.color));
+          }
+        } catch (error) {
+          return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
+        }
+        const updated = await patchSessionMeta(patchMatch[1], patch);
+        if (!updated) {
+          return new Response("Not found", { status: 404 });
+        }
+        broadcastSessions(await sessionsPayload());
+        return Response.json(updated, { status: 200 });
       }
 
       const sessionMatch = SESSION_PATH.exec(url.pathname);
