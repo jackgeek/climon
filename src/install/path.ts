@@ -30,19 +30,17 @@ export function pathContainsEntry(
     .some((part) => normalizePathEntry(part, expandEnvironmentString) === normalizedEntry);
 }
 
-export function appendPathEntryIfMissing(
+export function ensurePathEntryFirst(
   currentPath: string,
   entry: string,
   expandEnvironmentString: ExpandEnvironmentString
 ): string {
-  if (pathContainsEntry(currentPath, entry, expandEnvironmentString)) {
-    return currentPath;
-  }
-
+  const normalizedEntry = normalizePathEntry(entry, expandEnvironmentString);
   const existingEntries = currentPath
     .split(";")
     .map((part) => part.trim())
-    .filter((part) => part.length > 0);
+    .filter((part) => part.length > 0)
+    .filter((part) => normalizePathEntry(part, expandEnvironmentString) !== normalizedEntry);
 
-  return [...existingEntries, entry].join(";");
+  return [entry, ...existingEntries].join(";");
 }
