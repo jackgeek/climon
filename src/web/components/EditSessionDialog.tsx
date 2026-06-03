@@ -57,10 +57,11 @@ export function EditSessionDialog({ session, onClose }: Props) {
     }
     setBusy(true);
     setError("");
+    const color = fields.color === "auto" ? session.color ?? null : fields.color === "none" ? null : fields.color;
     const result = await updateSession(session.id, {
       name: fields.name.trim(),
       priority: priorityNum,
-      color: fields.color === "none" ? null : fields.color
+      color
     });
     if (!result.ok) {
       setError(result.error || "Failed to update session.");
