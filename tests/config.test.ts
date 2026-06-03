@@ -7,7 +7,8 @@ import {
   defaultConfig,
   getScrollbackPath,
   getSessionMetaPath,
-  getSessionsDir
+  getSessionsDir,
+  getSocketPath
 } from "../src/config.js";
 
 const env = { CLIMON_HOME: "/tmp/climon-test" } as NodeJS.ProcessEnv;
@@ -23,6 +24,14 @@ describe("config paths", () => {
 
   test("scrollback path uses id", () => {
     expect(getScrollbackPath("abc", env)).toBe(join("/tmp/climon-test", "sessions", "abc.scrollback"));
+  });
+
+  test("socket path is a unix socket on posix", () => {
+    expect(getSocketPath("abc", env, "linux")).toBe(join("/tmp/climon-test", "sock", "abc.sock"));
+  });
+
+  test("socket path is a named pipe on win32", () => {
+    expect(getSocketPath("abc", env, "win32")).toBe("\\\\.\\pipe\\climon-abc");
   });
 });
 
@@ -81,6 +90,47 @@ describe("config migration", () => {
     );
     const config = await loadConfig(migrationEnv);
     expect(config.terminal.setTitle).toBe(true);
+    await rm(home, { recursive: true, force: true });
+  });
+});
+
+describe("detach prefix config", () => {
+  test("default config sets detachPrefix to 0x1c (Ctrl-\\)", () => {
+    expect(defaultConfig().terminal.detachPrefix).toBe(0x1c);
+  });
+
+  test("loadConfig backfills detachPrefix for configs written before it existed", async () => {
+    const home = await mkdtemp(join(tmpdir(), "climon-detach-"));
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(join(home), { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true },
+        attention: { idleSeconds: 10 }
+      })
+    );
+    const config = await loadConfig(env);
+    expect(config.terminal.detachPrefix).toBe(0x1c);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("loadConfig clamps an out-of-range detachPrefix back to the default", async () => {
+    const home = await mkdtemp(join(tmpdir(), "climon-detach2-"));
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, detachPrefix: 999 },
+        attention: { idleSeconds: 10 }
+      })
+    );
+    const config = await loadConfig(env);
+    expect(config.terminal.detachPrefix).toBe(0x1c);
     await rm(home, { recursive: true, force: true });
   });
 });

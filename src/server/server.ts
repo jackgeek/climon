@@ -19,6 +19,7 @@ import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 import { parseColor, parsePriority } from "../session-meta.js";
+import { isProcessAlive, killProcess } from "../process-kill.js";
 import {
   authorizeClient,
   detectHostKey,
@@ -43,15 +44,6 @@ const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
 const REMOTE_CLIENT_PATH = /^\/api\/remote\/clients\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export type KillMode = "none" | "graceful" | "force";
 
@@ -88,17 +80,10 @@ export async function applySessionKill(
     return { stillRunning: false };
   }
   if (mode === "force") {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Already gone.
-    }
+    killProcess(pid, true);
     return { stillRunning: false };
   }
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    // Already gone.
+  if (!killProcess(pid, false)) {
     return { stillRunning: false };
   }
   await new Promise((resolve) => setTimeout(resolve, graceMs));

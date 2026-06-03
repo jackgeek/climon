@@ -11,7 +11,6 @@ import {
 } from "../ipc/frame.js";
 import { TitleController } from "./title.js";
 
-const DETACH_PREFIX = 0x1c; // Ctrl-\
 const DETACH_KEY = 0x64; // 'd'
 
 export interface AttachResult {
@@ -27,6 +26,8 @@ interface ProcessedInput {
 class InputProcessor {
   private armed = false;
 
+  constructor(private readonly prefix: number) {}
+
   process(chunk: Buffer): ProcessedInput {
     const out: number[] = [];
     for (const byte of chunk) {
@@ -35,8 +36,8 @@ class InputProcessor {
         if (byte === DETACH_KEY) {
           return { forward: Buffer.from(out), detach: true };
         }
-        out.push(DETACH_PREFIX, byte);
-      } else if (byte === DETACH_PREFIX) {
+        out.push(this.prefix, byte);
+      } else if (byte === this.prefix) {
         this.armed = true;
       } else {
         out.push(byte);
@@ -55,13 +56,13 @@ function terminalSize(): { cols: number; rows: number } {
 
 /**
  * Connects the local terminal to a running session daemon. Forwards keystrokes,
- * renders PTY output, and supports detaching with Ctrl-\ then d.
+ * renders PTY output, and supports detaching with the configured prefix then d.
  */
-export function connectToSession(socketPath: string): Promise<AttachResult> {
+export function connectToSession(socketPath: string, detachPrefix: number = 0x1c): Promise<AttachResult> {
   return new Promise<AttachResult>((resolve, reject) => {
     const socket: Socket = connect(socketPath);
     const decoder = new FrameDecoder();
-    const inputProcessor = new InputProcessor();
+    const inputProcessor = new InputProcessor(detachPrefix);
     const stdin = process.stdin;
     let settled = false;
     let exitCode = 0;
