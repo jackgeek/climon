@@ -90,7 +90,7 @@ describe("POST /api/sessions with a parentId", () => {
       const childMeta = JSON.parse(
         await readFile(join(home, "sessions", `${childId}.json`), "utf8")
       ) as SessionMeta;
-      expect(childMeta.cwd).toBe("/tmp");
+      expect(childMeta.cwd).toBe(process.platform === "win32" ? "C:\\tmp" : "/tmp");
 
       const missing = await fetch(`${base}/api/sessions`, {
         method: "POST",

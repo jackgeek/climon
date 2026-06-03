@@ -1,5 +1,5 @@
 import { existsSync, watch } from "node:fs";
-import { connect, type Socket } from "node:net";
+import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
@@ -17,6 +17,7 @@ import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, remove
 import type { AnsiColor, ClimonConfig, SessionMeta } from "../types.js";
 import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
+import { connectSessionSocket } from "../session-socket.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
@@ -241,7 +242,7 @@ function spawnHeadlessSession(
  */
 function probeSocket(socketPath: string, timeoutMs = 2000): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = connect(socketPath);
+    const socket = connectSessionSocket(socketPath);
     const timer = setTimeout(() => {
       socket.destroy();
       resolve(false);
@@ -718,7 +719,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     },
     websocket: {
       open(ws: ServerWebSocket<WsData>) {
-        const daemon: Socket = connect(ws.data.socketPath);
+        const daemon: Socket = connectSessionSocket(ws.data.socketPath);
         const decoder = new FrameDecoder();
         (ws.data as WsData & { daemon?: Socket }).daemon = daemon;
 

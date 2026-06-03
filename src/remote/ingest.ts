@@ -1,15 +1,16 @@
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { watch, type FSWatcher } from "node:fs";
-import { mkdir, readFile, unlink } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
-import { dirname, join } from "node:path";
-import { getClimonHome, getRemoteHostPath, getSocketPath } from "../config.js";
+import { join } from "node:path";
+import { getClimonHome, getRemoteHostPath } from "../config.js";
 import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
 import { acquireSingleton } from "./singleton.js";
 import { devtunnelEnv } from "./tunnel.js";
+import { cleanupSessionSocket, formatSessionSocketRef, listenOnSessionSocket } from "../session-socket.js";
 
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
@@ -146,9 +147,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     }
     if (sessions.size >= maxSessions) return;
     const localId = namespacedId(label, meta.id);
-    const socketPath = getSocketPath(localId, env);
-    await mkdir(dirname(socketPath), { recursive: true });
-    await unlink(socketPath).catch(() => {});
+    const socketPath = formatSessionSocketRef("127.0.0.1", 0);
     await writeSessionMeta(toLocalMeta(meta, label, localId, socketPath, env), env);
     const sockets = new Set<Socket>();
     const server = createNetServer((socket) => {
@@ -163,8 +162,9 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       socket.on("error", cleanup);
     });
     server.on("error", () => {});
-    server.listen(socketPath);
-    sessions.set(meta.id, { localId, socketPath, server, sockets });
+    const actualSocketPath = await listenOnSessionSocket(server, socketPath);
+    await patchSessionMeta(localId, { socketPath: actualSocketPath }, env);
+    sessions.set(meta.id, { localId, socketPath: actualSocketPath, server, sockets });
   }
 
   async function removeSession(remoteId: string): Promise<void> {
@@ -176,7 +176,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     } catch {
       // Already closed or failed to listen.
     }
-    await unlink(session.socketPath).catch(() => {});
+    await cleanupSessionSocket(session.socketPath);
     await patchSessionMeta(session.localId, { status: "disconnected", priorityReason: "disconnected" }, env);
     sessions.delete(remoteId);
   }
@@ -225,6 +225,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     const teardown = async (): Promise<void> => {
       if (tearingDown) return;
       tearingDown = true;
+      await controlChain;
       for (const remoteId of [...sessions.keys()]) await removeSession(remoteId);
       resolve();
     };

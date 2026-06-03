@@ -1,4 +1,4 @@
-import { connect, type Socket } from "node:net";
+import { type Socket } from "node:net";
 import { Buffer } from "node:buffer";
 import {
   encodeFrame,
@@ -10,6 +10,7 @@ import {
   type TitlePayload
 } from "../ipc/frame.js";
 import { TitleController } from "./title.js";
+import { connectSessionSocket } from "../session-socket.js";
 
 const DETACH_KEY = 0x64; // 'd'
 
@@ -60,7 +61,7 @@ function terminalSize(): { cols: number; rows: number } {
  */
 export function connectToSession(socketPath: string, detachPrefix: number = 0x1c): Promise<AttachResult> {
   return new Promise<AttachResult>((resolve, reject) => {
-    const socket: Socket = connect(socketPath);
+    const socket: Socket = connectSessionSocket(socketPath);
     const decoder = new FrameDecoder();
     const inputProcessor = new InputProcessor(detachPrefix);
     const stdin = process.stdin;

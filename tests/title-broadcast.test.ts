@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
-import { connect, type Socket } from "node:net";
+import { type Socket } from "node:net";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultConfig } from "../src/config.js";
 import { patchSessionMeta } from "../src/store.js";
 import { FrameDecoder, FrameType, parseJsonPayload, type TitlePayload } from "../src/ipc/frame.js";
+import { connectSessionSocket, isResolvedSessionSocketRef } from "../src/session-socket.js";
 import type { SessionMeta } from "../src/types.js";
 
 // Real Linux-filesystem temp dir: unix sockets do not work on DrvFs mounts.
@@ -65,7 +66,17 @@ describe("daemon Title broadcast", () => {
     await writeFile(join(home, "config.json"), JSON.stringify(defaultConfig()), "utf8");
 
     const proc = Bun.spawn(
-      [process.execPath, "src/index.ts", "run", "--headless", "--name", "first name", "sleep", "30"],
+      [
+        process.execPath,
+        "src/index.ts",
+        "run",
+        "--headless",
+        "--name",
+        "first name",
+        process.execPath,
+        "-e",
+        "setTimeout(()=>{},30000)"
+      ],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const id = (await new Response(proc.stdout).text()).trim();
@@ -74,10 +85,10 @@ describe("daemon Title broadcast", () => {
     try {
       const meta = await waitFor(async () => {
         const m = await readMeta(id);
-        return m.socketPath ? m : undefined;
+        return isResolvedSessionSocketRef(m.socketPath) ? m : undefined;
       });
 
-      socket = connect(meta.socketPath);
+      socket = connectSessionSocket(meta.socketPath);
       await new Promise<void>((resolve, reject) => {
         socket!.once("connect", () => resolve());
         socket!.once("error", reject);

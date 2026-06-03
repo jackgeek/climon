@@ -1,5 +1,4 @@
 import { createServer, type Server, type Socket } from "node:net";
-import { rm } from "node:fs/promises";
 import { unwatchFile, watchFile } from "node:fs";
 import { Buffer } from "node:buffer";
 import { Terminal } from "@xterm/headless";
@@ -17,6 +16,7 @@ import { spawnPty, resolveCommand, type PtyHandle } from "../pty.js";
 import { ScrollbackBuffer } from "./buffer.js";
 import { ScreenIdleDetector } from "./idle-detector.js";
 import { patchSessionMeta, readSessionMeta, writeScrollback } from "../store.js";
+import { cleanupSessionSocket, listenOnSessionSocket } from "../session-socket.js";
 
 /**
  * Resolves a requested resize to the dimensions actually applied to the PTY.
@@ -196,14 +196,29 @@ export async function runSessionDaemon(id: string): Promise<void> {
   }
 
   const { file, args } = resolveCommand(meta.command);
-  const pty: PtyHandle = spawnPty({
-    command: file,
-    args,
-    cwd: meta.cwd,
-    cols: meta.cols,
-    rows: meta.rows,
-    env: { ...process.env, [SESSION_ENV_VAR]: id }
-  });
+  let pty: PtyHandle;
+  try {
+    pty = spawnPty({
+      command: file,
+      args,
+      cwd: meta.cwd,
+      cols: meta.cols,
+      rows: meta.rows,
+      env: { ...process.env, [SESSION_ENV_VAR]: id }
+    });
+  } catch (error) {
+    const now = new Date().toISOString();
+    await patchSessionMeta(id, {
+      status: "failed",
+      priorityReason: "failed",
+      completedAt: now,
+      exitCode: 1,
+      error: error instanceof Error ? error.message : String(error),
+      lastActivityAt: now
+    });
+    headlessTerm.dispose();
+    return;
+  }
 
   // Attach PTY listeners synchronously, before any await, so early output and a
   // fast-exiting command are never missed while metadata is being written.
@@ -293,7 +308,8 @@ export async function runSessionDaemon(id: string): Promise<void> {
     });
   });
 
-  await listen(server, meta.socketPath);
+  meta.socketPath = await listen(server, meta.socketPath);
+  await patchSessionMeta(id, { socketPath: meta.socketPath });
 
   const metaPath = getSessionMetaPath(id);
   if (setTitle) {
@@ -338,20 +354,10 @@ export async function runSessionDaemon(id: string): Promise<void> {
   await cleanupSocket(meta.socketPath);
 }
 
-async function listen(server: Server, socketPath: string): Promise<void> {
-  await cleanupSocket(socketPath);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+async function listen(server: Server, socketPath: string): Promise<string> {
+  return await listenOnSessionSocket(server, socketPath);
 }
 
 async function cleanupSocket(socketPath: string): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  await rm(socketPath, { force: true }).catch(() => undefined);
+  await cleanupSessionSocket(socketPath);
 }

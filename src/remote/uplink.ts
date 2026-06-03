@@ -13,6 +13,7 @@ import { listSessions, readSessionMeta } from "../store.js";
 import { acquireSingleton } from "./singleton.js";
 import { encodeControl, encodeData, MuxDecoder } from "./mux.js";
 import { devtunnelEnv } from "./tunnel.js";
+import { connectSessionSocket } from "../session-socket.js";
 
 export interface UplinkConfig {
   enabled: boolean;
@@ -81,7 +82,7 @@ function attach(bridge: Bridge, sessionId: string): void {
   if (bridge.attached.has(sessionId)) return;
   void readSessionMeta(sessionId, bridge.env).then((meta) => {
     if (!meta) return;
-    const socket = connect(meta.socketPath);
+    const socket = connectSessionSocket(meta.socketPath);
     bridge.attached.set(sessionId, socket);
     socket.on("data", (chunk: Buffer) => bridge.write(encodeData(sessionId, chunk)));
     const cleanup = (): void => {
