@@ -1,102 +1,95 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  applyConfig,
-  coerceValue,
-  parseConfigArgs,
-  runConfigCommand,
-  validateKey
-} from "../src/cli/config-cmd.js";
-import { defaultConfig } from "../src/config.js";
+import { parseConfigArgs, runConfigCommand } from "../src/cli/config-cmd.js";
 
-function tmp(): string {
-  return mkdtempSync(join(tmpdir(), "climon-cfgcmd-"));
+let root: string;
+let home: string;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "climon-cfgcmd-"));
+  home = join(root, ".climon");
+});
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+function env(): NodeJS.ProcessEnv {
+  return { CLIMON_HOME: home };
 }
 
 describe("parseConfigArgs", () => {
-  test("defaults to global scope get", () => {
-    expect(parseConfigArgs(["remote.host"])).toEqual({ action: "get", scope: "global", key: "remote.host" });
-  });
-  test("parses local set", () => {
-    expect(parseConfigArgs(["--local", "remote.host", "h"])).toEqual({ action: "set", scope: "local", key: "remote.host", value: "h" });
-  });
-  test("parses list", () => {
-    expect(parseConfigArgs(["--list"])).toEqual({ action: "list", scope: "global" });
-  });
-  test("parses unset", () => {
-    expect(parseConfigArgs(["--unset", "remote.port"])).toEqual({ action: "unset", scope: "global", key: "remote.port" });
-  });
   test("rejects unknown keys", () => {
-    expect(() => parseConfigArgs(["server.token"])).toThrow();
+    expect(() => parseConfigArgs(["remote.host", "x"])).toThrow(/Unknown config key/);
   });
-});
 
-describe("coerceValue", () => {
-  test("coerces boolean", () => {
-    expect(coerceValue("remote.enabled", "true")).toBe(true);
-    expect(coerceValue("remote.enabled", "false")).toBe(false);
-    expect(() => coerceValue("remote.enabled", "yes")).toThrow();
+  test("no longer recognizes keygen or known-host", () => {
+    // These are now plain (invalid) keys, not subcommands.
+    expect(() => parseConfigArgs(["keygen"])).toThrow(/Unknown config key/);
+    expect(() => parseConfigArgs(["known-host", "x"])).toThrow(/Unknown config key/);
   });
-  test("coerces positive integer port", () => {
-    expect(coerceValue("remote.port", "22")).toBe(22);
-    expect(() => coerceValue("remote.port", "0")).toThrow();
-    expect(() => coerceValue("remote.port", "x")).toThrow();
-  });
-  test("passes strings through", () => {
-    expect(coerceValue("remote.host", "home.example.com")).toBe("home.example.com");
-  });
-});
 
-describe("applyConfig", () => {
-  test("set then get round-trips", () => {
-    const base = defaultConfig();
-    const { config } = applyConfig(base, { action: "set", scope: "global", key: "remote.host", value: "h" });
-    expect(applyConfig(config, { action: "get", scope: "global", key: "remote.host" }).output).toBe("h");
-  });
-  test("get missing returns code 1", () => {
-    expect(applyConfig(defaultConfig(), { action: "get", scope: "global", key: "remote.host" }).code).toBe(1);
-  });
-  test("unset removes a key", () => {
-    let config = applyConfig(defaultConfig(), { action: "set", scope: "global", key: "remote.user", value: "alice" }).config;
-    config = applyConfig(config, { action: "unset", scope: "global", key: "remote.user" }).config;
-    expect(config.remote?.user).toBeUndefined();
-  });
-  test("list shows set keys", () => {
-    const config = applyConfig(defaultConfig(), { action: "set", scope: "global", key: "remote.host", value: "h" }).config;
-    expect(applyConfig(config, { action: "list", scope: "global" }).output).toBe("remote.host=h");
-  });
-  test("validateKey rejects junk", () => {
-    expect(() => validateKey("nope")).toThrow();
+  test("parses set with scope", () => {
+    expect(parseConfigArgs(["--local", "remote.port", "6666"])).toEqual({
+      action: "set",
+      scope: "local",
+      key: "remote.port",
+      value: "6666"
+    });
   });
 });
 
 describe("runConfigCommand", () => {
-  test("global scope writes ~/.climon (CLIMON_HOME) config.json", () => {
-    const home = tmp();
-    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
-    expect(runConfigCommand(["--global", "remote.host", "home.example.com"], env, "/")).toBe(0);
-    const written = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-    expect(written.remote.host).toBe("home.example.com");
+  test("set then get round-trips through the cascade", () => {
+    expect(runConfigCommand(["remote.port", "6666"], env(), root)).toBe(0);
+    expect(runConfigCommand(["remote.port"], env(), root)).toBe(0);
+    const raw = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+    expect(raw.remote.port).toBe(6666);
   });
 
-  test("local scope writes ./.climon/config.json", () => {
-    const cwd = tmp();
-    const env = {} as NodeJS.ProcessEnv;
-    expect(runConfigCommand(["--local", "remote.enabled", "true"], env, cwd)).toBe(0);
-    expect(existsSync(join(cwd, ".climon", "config.json"))).toBe(true);
-    const written = JSON.parse(readFileSync(join(cwd, ".climon", "config.json"), "utf8"));
-    expect(written.remote.enabled).toBe(true);
+  test("auto scope writes nearest existing .climon", () => {
+    const repo = join(root, "repo");
+    mkdirSync(join(repo, ".climon"), { recursive: true });
+    require("node:fs").writeFileSync(join(repo, ".climon", "config.json"), "{}");
+    expect(runConfigCommand(["session.color", "green"], env(), repo)).toBe(0);
+    const raw = JSON.parse(readFileSync(join(repo, ".climon", "config.json"), "utf8"));
+    expect(raw.session.color).toBe("green");
   });
 
-  test("known-host pins a host key line into known_hosts (idempotent)", () => {
-    const cwd = tmp();
-    const env = {} as NodeJS.ProcessEnv;
-    const line = "home.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5";
-    expect(runConfigCommand(["--local", "known-host", line], env, cwd)).toBe(0);
-    expect(runConfigCommand(["--local", "known-host", line], env, cwd)).toBe(0);
-    const known = readFileSync(join(cwd, ".climon", "known_hosts"), "utf8");
-    expect(known.match(/AAAAC3NzaC1lZDI1NTE5/g)?.length).toBe(1);
+  test("rejects bad priority range", () => {
+    expect(runConfigCommand(["session.priority", "9999"], env(), root)).toBe(2);
+  });
+
+  test("unset removes the key", () => {
+    runConfigCommand(["--global", "remote.enabled", "true"], env(), root);
+    expect(runConfigCommand(["--global", "--unset", "remote.enabled"], env(), root)).toBe(0);
+    const raw = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+    expect(raw.remote?.enabled).toBeUndefined();
+  });
+
+  test("get of an unset key returns exit code 1", () => {
+    expect(runConfigCommand(["remote.port"], env(), root)).toBe(1);
+  });
+
+  test("--list prints only the keys that are set", () => {
+    runConfigCommand(["--global", "remote.port", "6666"], env(), root);
+    runConfigCommand(["--global", "session.color", "green"], env(), root);
+    const out: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk: string) => {
+      out.push(String(chunk));
+      return true;
+    };
+    try {
+      expect(runConfigCommand(["--list", "--global"], env(), root)).toBe(0);
+    } finally {
+      process.stdout.write = original;
+    }
+    const printed = out.join("");
+    expect(printed).toContain("remote.port=6666");
+    expect(printed).toContain("session.color=green");
+    expect(printed).not.toContain("remote.enabled");
   });
 });
