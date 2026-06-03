@@ -22,7 +22,7 @@ describe("resolveClientInvocation", () => {
     const sibling = join(dir, "climon");
     writeFileSync(sibling, "");
     const execPath = join(dir, "climon-server");
-    expect(resolveClientInvocation(["run"], {} as NodeJS.ProcessEnv, execPath)).toEqual({
+    expect(resolveClientInvocation(["run"], {} as NodeJS.ProcessEnv, execPath, undefined, "linux")).toEqual({
       file: sibling,
       args: ["run"]
     });
@@ -53,7 +53,7 @@ describe("resolveClientInvocation", () => {
   test("falls back to bare name on PATH when nothing else resolves", () => {
     const dir = tmp();
     const execPath = join(dir, "climon-server");
-    expect(resolveClientInvocation(["run"], {} as NodeJS.ProcessEnv, execPath)).toEqual({
+    expect(resolveClientInvocation(["run"], {} as NodeJS.ProcessEnv, execPath, undefined, "linux")).toEqual({
       file: "climon",
       args: ["run"]
     });
