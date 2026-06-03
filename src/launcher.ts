@@ -221,18 +221,29 @@ export async function listSessionsCommand(): Promise<number> {
   return 0;
 }
 
-export async function killSession(id: string): Promise<number> {
+export async function killSession(
+  id: string,
+  kill: (pid: number, force: boolean) => boolean = killProcess,
+  isAlive: (pid: number) => boolean = isProcessAlive
+): Promise<number> {
   const meta = await readSessionMeta(id);
   if (!meta) {
     throw new Error(`No session found with id '${id}'.`);
   }
   if (meta.daemonPid) {
-    const issued = killProcess(meta.daemonPid, false);
-    if (!issued && isProcessAlive(meta.daemonPid)) {
-      process.stdout.write(
-        `climon: could not terminate session ${id}; it may still be running.\n`
-      );
-      return 1;
+    // Try a graceful stop first. On POSIX a SIGTERM is "issued" successfully even
+    // though the shell exits a moment later, so a successful graceful kill ends
+    // here. If the graceful kill could not be delivered and the process is still
+    // alive — e.g. a windowless console process on Windows, which `taskkill`
+    // cannot stop without `/F` — escalate to a forced kill.
+    if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
+      kill(meta.daemonPid, true);
+      if (isAlive(meta.daemonPid)) {
+        process.stdout.write(
+          `climon: could not terminate session ${id}; it may still be running.\n`
+        );
+        return 1;
+      }
     }
   }
   await patchSessionMeta(id, { status: "failed", priorityReason: "failed" });
