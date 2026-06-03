@@ -18,14 +18,16 @@ export function resolveClientInvocation(
   forwardArgs: string[],
   env: NodeJS.ProcessEnv,
   execPath: string,
-  devEntrypoint?: string
+  devEntrypoint?: string,
+  platform: NodeJS.Platform = process.platform
 ): ClientInvocation {
   const override = env.CLIMON_CLIENT_BIN?.trim();
   if (override) {
     return { file: override, args: forwardArgs };
   }
 
-  const sibling = join(dirname(execPath), CLIENT_BIN_NAME);
+  const exe = platform === "win32" ? ".exe" : "";
+  const sibling = join(dirname(execPath), `${CLIENT_BIN_NAME}${exe}`);
   if (existsSync(sibling)) {
     return { file: sibling, args: forwardArgs };
   }

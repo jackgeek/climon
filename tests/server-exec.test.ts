@@ -28,6 +28,17 @@ describe("resolveServerInvocation", () => {
     });
   });
 
+  test("prefers a sibling climon-server.exe on win32", () => {
+    const dir = tmp();
+    const sibling = join(dir, "climon-server.exe");
+    writeFileSync(sibling, "");
+    const execPath = join(dir, "climon.exe");
+    expect(resolveServerInvocation([], {} as NodeJS.ProcessEnv, execPath, undefined, "win32")).toEqual({
+      file: sibling,
+      args: []
+    });
+  });
+
   test("falls back to the dev entrypoint via execPath", () => {
     const dir = tmp();
     const devEntry = join(dir, "server.ts");
