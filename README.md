@@ -23,11 +23,11 @@ interact with each one from the browser.
   dashboard.
 - **Completion pops.** Finished sessions move up the queue and keep their final
   scrollback so you can review the output.
-- **Remote clients over dev tunnels.** Monitor sessions running on another
-  machine (a "devbox") from your local dashboard. Traffic rides a Microsoft
-  [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/) to a
-  loopback-only ingest port — set up entirely from the dashboard's **Remotes…**
-  menu. See [Remote clients (dev tunnels)](#remote-clients-dev-tunnels) and
+- **Remote clients.** Monitor sessions running on another machine over Microsoft
+  [dev tunnels](https://learn.microsoft.com/azure/developer/dev-tunnels/), or
+  bridge Windows and WSL directly on the same machine without a dev tunnel. See
+  [Windows/WSL same-machine bridge](#windowswsl-same-machine-bridge-no-dev-tunnel),
+  [Remote clients (dev tunnels)](#remote-clients-dev-tunnels), and
   [docs/security.md](docs/security.md).
 
 ## Requirements
@@ -140,6 +140,90 @@ Detach without stopping the command using: `Ctrl-\` then `d`.
 Terminate a monitored session and its underlying process. Use this to clean up
 sessions you no longer need — finished builds, abandoned REPLs, or any process
 you want to stop.
+
+## Windows/WSL same-machine bridge (no dev tunnel)
+
+Windows and WSL can share sessions without a dev tunnel by using climon's local
+ingest/uplink bridge directly. The dashboard side runs the ingest daemon; the
+client side runs an uplink that sends its local sessions to that ingest port.
+
+Use the same port on both sides. `3132` is the default ingest port, but setting
+it explicitly makes the setup easier to inspect with `climon config --debug`.
+
+### Server on Windows, client in WSL
+
+Use this when `climon server` runs in PowerShell or another Windows terminal,
+and WSL sessions should appear in that Windows dashboard.
+
+1. In PowerShell, find the Windows address that WSL can reach:
+
+   ```powershell
+   Get-NetIPAddress -AddressFamily IPv4 |
+     Where-Object InterfaceAlias -like 'vEthernet (WSL*' |
+     Select-Object InterfaceAlias,IPAddress
+   ```
+
+2. On Windows, bind the ingest daemon to that WSL adapter address, then start the
+   dashboard:
+
+   ```powershell
+   climon config remote.ingestHost <windows-wsl-adapter-ip>
+   climon config remote.port 3132
+   climon server
+   ```
+
+3. In WSL, point the uplink at the same Windows adapter address:
+
+   ```bash
+   climon config remote.enabled true
+   climon config remote.host <windows-wsl-adapter-ip>
+   climon config remote.port 3132
+   climon bash
+   ```
+
+The WSL `climon bash` session should appear in the Windows dashboard. Prefer the
+specific `vEthernet (WSL...)` address over `0.0.0.0`; direct mode trusts clients
+that can reach `remote.ingestHost:remote.port`.
+
+### Server in WSL, client on Windows
+
+Use this when `climon server` runs inside WSL, and Windows sessions should appear
+in that WSL dashboard.
+
+1. In WSL, bind the ingest daemon to loopback and start the dashboard:
+
+   ```bash
+   climon config remote.ingestHost 127.0.0.1
+   climon config remote.port 3132
+   climon server
+   ```
+
+2. On Windows, point the uplink at WSL through Windows localhost forwarding:
+
+   ```powershell
+   climon config remote.enabled true
+   climon config remote.host 127.0.0.1
+   climon config remote.port 3132
+   climon powershell
+   ```
+
+The Windows `climon powershell` session should appear in the WSL dashboard. If
+localhost forwarding is disabled or another Windows process owns port `3132`,
+use the WSL VM IP instead: bind `remote.ingestHost` to that WSL address and set
+the Windows `remote.host` to the same address.
+
+### Debugging Windows/WSL config
+
+Run this on either side to see every config file climon considered, in resolution
+order, and the keys found in each file:
+
+```bash
+climon config --debug
+```
+
+For direct Windows/WSL bridging, the client side must show
+`remote.enabled`, `remote.host`, and `remote.port`. The server side should show
+`remote.ingestHost` and `remote.port` when you use an explicit bind address.
 
 ## Remote clients (dev tunnels)
 

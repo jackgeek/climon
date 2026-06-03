@@ -126,6 +126,31 @@ dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port �
 
 Revoke a devbox by deleting or rotating the dev tunnel (or its connect token).
 
+## Connecting Windows and WSL on the same machine
+
+Windows and WSL can use the same remote ingest/uplink bridge without a dev
+tunnel. Configure the dashboard side to bind its ingest daemon on an address the
+other side can reach, then configure the session side to connect directly to
+that address:
+
+```bash
+# Dashboard side: choose an address reachable from the other side.
+climon config remote.ingestHost <dashboard-reachable-host>
+climon config remote.port 3132
+
+# Session side: point the uplink at the dashboard side.
+climon config remote.enabled true
+climon config remote.host <dashboard-reachable-host>
+climon config remote.port 3132
+```
+
+For WSL sessions shown in a Windows dashboard, `<dashboard-reachable-host>` is
+usually the Windows WSL adapter address, visible in PowerShell with
+`Get-NetIPAddress -AddressFamily IPv4`. Prefer the specific `vEthernet (WSL...)`
+address over `0.0.0.0`. For Windows sessions shown in a WSL dashboard, Windows
+can usually reach WSL services via `127.0.0.1` when WSL localhost forwarding is
+enabled.
+
 ### Creating the dev tunnel manually
 
 Use this path if you do not want the Remotes dialog to create the tunnel for you.
@@ -156,6 +181,8 @@ global `.climon/config.json`:
 - `climon config remote.tunnelId <id>` — set a value.
 - `climon config remote.tunnelId` — print a value (exit 1 if unset).
 - `climon config --list` — print all values.
+- `climon config --debug` — print each candidate config file and the keys found
+  in resolution order.
 - `climon config --unset remote.tunnelId` — remove a value.
 - `--global` (default) writes `~/.climon`; `--local` writes `./.climon`.
 

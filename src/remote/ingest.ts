@@ -4,7 +4,7 @@ import { watch, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
-import { getClimonHome, getRemoteHostPath } from "../config.js";
+import { getClimonHome, getRemoteHostPath, resolveConfigSetting } from "../config.js";
 import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
@@ -240,6 +240,7 @@ export interface RemoteHostState {
   tunnelId: string;
   connectToken?: string;
   ingestPort: number;
+  ingestHost?: string;
   tokenExpiresAt?: string;
   canHost?: boolean;
 }
@@ -324,6 +325,14 @@ export function getIngestPidPath(env: NodeJS.ProcessEnv = process.env): string {
 /** Default loopback port the ingest daemon listens on. */
 export const DEFAULT_INGEST_PORT = 3132;
 
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+function asNumber(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) ? v : undefined;
+}
+
 /** Marks any leftover running remote sessions from a previous daemon as disconnected. */
 async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<void> {
   for (const meta of await listSessions(env)) {
@@ -343,14 +352,15 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   await reconcileStaleRemoteSessions(env);
 
   const state = await readRemoteHostState(env);
-  const port = state?.ingestPort ?? DEFAULT_INGEST_PORT;
+  const port = state?.ingestPort ?? asNumber(resolveConfigSetting("remote.port", env)) ?? DEFAULT_INGEST_PORT;
+  const host = asString(resolveConfigSetting("remote.ingestHost", env)) ?? state?.ingestHost ?? "127.0.0.1";
 
   const server = createNetServer((socket) => {
     void runIngestConnection(socket, { env });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
+    server.listen(port, host, resolve);
   });
 
   const supervisor = new TunnelHostSupervisor({ env });

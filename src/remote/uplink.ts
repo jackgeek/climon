@@ -17,6 +17,7 @@ import { connectSessionSocket } from "../session-socket.js";
 
 export interface UplinkConfig {
   enabled: boolean;
+  host?: string;
   tunnelId?: string;
   tunnelToken?: string;
   port?: number;
@@ -24,19 +25,23 @@ export interface UplinkConfig {
 
 /**
  * Resolves the devbox uplink config from the cascade. Remote is only considered
- * enabled when tunnelId, tunnelToken and port are all present — this defends
- * against stale SSH-era `remote.enabled: true` files.
+ * enabled when a direct host+port or tunnel id+token+port are present. This
+ * defends against stale SSH-era `remote.enabled: true` files.
  */
 export function resolveUplinkConfig(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): UplinkConfig {
   const enabledFlag = resolveConfigSetting("remote.enabled", env, cwd) === true;
+  const host = asString(resolveConfigSetting("remote.host", env, cwd));
   const tunnelId = asString(resolveConfigSetting("remote.tunnelId", env, cwd));
   const tunnelToken = asString(resolveConfigSetting("remote.tunnelToken", env, cwd));
   const port = asNumber(resolveConfigSetting("remote.port", env, cwd));
+  const hasDirectTarget = !!host && !!port;
+  const hasTunnelTarget = !!tunnelId && !!tunnelToken && !!port;
   return {
-    enabled: enabledFlag && !!tunnelId && !!tunnelToken && !!port,
+    enabled: enabledFlag && (hasDirectTarget || hasTunnelTarget),
+    host,
     tunnelId,
     tunnelToken,
     port
@@ -69,6 +74,7 @@ interface Bridge {
 async function reconcile(bridge: Bridge): Promise<void> {
   const current = new Set<string>();
   for (const meta of await listSessions(bridge.env)) {
+    if (meta.origin === "remote") continue;
     current.add(meta.id);
     bridge.write(encodeControl({ kind: "session-added", meta }));
   }
@@ -102,9 +108,9 @@ function detach(bridge: Bridge, sessionId: string): void {
 }
 
 /**
- * Runs the mux bridge over an already-connected channel (a TCP socket to the
- * ingest daemon via the dev tunnel). Sends `hello` first, advertises local
- * sessions, and bridges attach/detach/data until the channel closes.
+ * Runs the mux bridge over an already-connected channel to an ingest daemon.
+ * Sends `hello` first, advertises local sessions, and bridges attach/detach/data
+ * until the channel closes.
  */
 export async function runUplinkBridge(
   channel: Socket,
@@ -184,11 +190,11 @@ function spawnConnect(tunnelId: string, token: string): ConnectChild {
   return { child, authRejected: () => authRejected };
 }
 
-async function waitForPort(port: number, timeoutMs = 15000): Promise<boolean> {
+async function waitForPort(port: number, host = "127.0.0.1", timeoutMs = 15000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const ok = await new Promise<boolean>((resolve) => {
-      const s = connect(port, "127.0.0.1");
+      const s = connect(port, host);
       s.once("connect", () => {
         s.end();
         resolve(true);
@@ -202,16 +208,17 @@ async function waitForPort(port: number, timeoutMs = 15000): Promise<boolean> {
 }
 
 /**
- * Devbox uplink supervisor. Singleton; spawns `devtunnel connect`, opens a TCP
- * channel to the forwarded local port, and runs the bridge with backoff. Stops
- * retrying on a clear authentication rejection (expired/invalid token).
+ * Devbox uplink supervisor. Singleton; opens a direct TCP channel when
+ * `remote.host` is configured, otherwise spawns `devtunnel connect` and opens a
+ * channel to the forwarded local port. Stops retrying on clear tunnel auth
+ * rejection.
  */
 export async function runUplink(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): Promise<number> {
   const config = resolveUplinkConfig(env, cwd);
-  if (!config.enabled || !config.tunnelId || !config.tunnelToken || !config.port) return 0;
+  if (!config.enabled || !config.port) return 0;
 
   const pidFile = join(getClimonHome(env), "uplink.pid");
   if (!(await acquireSingleton(pidFile))) return 0;
@@ -221,18 +228,25 @@ export async function runUplink(
 
   for (;;) {
     const startedAt = Date.now();
-    const conn = spawnConnect(config.tunnelId, config.tunnelToken);
+    const directHost = config.host;
+    const conn = directHost
+      ? undefined
+      : config.tunnelId && config.tunnelToken
+        ? spawnConnect(config.tunnelId, config.tunnelToken)
+        : undefined;
+    if (!directHost && !conn) return 0;
     try {
-      const reachable = await waitForPort(config.port);
+      const host = directHost ?? "127.0.0.1";
+      const reachable = await waitForPort(config.port, host);
       if (!reachable) {
-        if (conn.authRejected()) {
+        if (conn?.authRejected()) {
           process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
           conn.child.kill();
           return 1;
         }
-        throw new Error("forwarded port not reachable");
+        throw new Error(directHost ? "ingest port not reachable" : "forwarded port not reachable");
       }
-      const channel = connect(config.port, "127.0.0.1");
+      const channel = connect(config.port, host);
       await new Promise<void>((resolve, reject) => {
         channel.once("connect", resolve);
         channel.once("error", reject);
@@ -242,14 +256,14 @@ export async function runUplink(
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EADDRINUSE") {
         process.stderr.write(`climon uplink: local port ${config.port} already in use.\n`);
-        conn.child.kill();
+        conn?.child.kill();
         return 1;
       }
       // transient: fall through to backoff
     } finally {
-      conn.child.kill();
+      conn?.child.kill();
     }
-    if (conn.authRejected()) {
+    if (conn?.authRejected()) {
       process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
       return 1;
     }

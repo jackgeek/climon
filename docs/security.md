@@ -36,6 +36,18 @@ tunnel token**, not an SSH key:
   the tunnel stays up and never presents an interactive confirmation page to a
   browser.
 
+## Direct same-machine bridge
+
+For Windows/WSL on the same machine, `remote.host` lets an uplink connect
+directly to the dashboard side's ingest daemon without `devtunnel`. The dashboard
+side can set `remote.ingestHost` to bind that ingest daemon on a host address the
+other side can reach.
+
+Direct mode has no dev tunnel token in front of the ingest port. Treat
+`remote.ingestHost:remote.port` as trusted-local infrastructure: bind to the
+specific same-machine adapter where possible, not a broad LAN address, and rely
+on the OS firewall to keep that port scoped to the local Windows/WSL boundary.
+
 ## Secrets at rest
 
 - `remote.tunnelToken` — the devbox's connect token, stored in the devbox's
