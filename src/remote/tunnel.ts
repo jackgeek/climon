@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { rm, writeFile, chmod, rename } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { getRemoteHostPath } from "../config.js";
 import type { RemoteHostState } from "./ingest.js";
 
@@ -13,9 +16,18 @@ export interface RunResult {
 
 export type Runner = (cmd: string, args: string[]) => Promise<RunResult>;
 
+export function devtunnelEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (env.LD_LIBRARY_PATH) return env;
+  const icuLib = join(env.HOME ?? homedir(), ".local", "icu", "usr", "lib", "x86_64-linux-gnu");
+  return existsSync(icuLib) ? { ...env, LD_LIBRARY_PATH: icuLib } : env;
+}
+
 const defaultRunner: Runner = (cmd, args) =>
   new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: cmd === "devtunnel" ? devtunnelEnv() : process.env
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (b: Buffer) => (stdout += b.toString("utf8")));

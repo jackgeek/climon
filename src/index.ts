@@ -12,6 +12,7 @@ import {
   reconnectSession,
   startMonitoredCommand
 } from "./launcher.js";
+import { VERSION } from "./version.js";
 
 function resolveDevServerEntrypoint(): string | undefined {
   if (!import.meta.url.startsWith("file:")) {
@@ -31,6 +32,9 @@ async function main(): Promise<number> {
   switch (parsed.command) {
     case "help":
       process.stdout.write(helpText);
+      return 0;
+    case "version":
+      process.stdout.write(`climon v${VERSION}\n`);
       return 0;
     case "server":
       return delegateToServer(

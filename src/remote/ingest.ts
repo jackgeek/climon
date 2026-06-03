@@ -9,6 +9,7 @@ import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
 import { acquireSingleton } from "./singleton.js";
+import { devtunnelEnv } from "./tunnel.js";
 
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
@@ -266,7 +267,8 @@ export async function readRemoteHostState(env: NodeJS.ProcessEnv = process.env):
 
 function defaultSpawnHost(tunnelId: string): HostProcess {
   const child: ChildProcess = spawn("devtunnel", ["host", tunnelId], {
-    stdio: ["ignore", "inherit", "inherit"]
+    stdio: ["ignore", "inherit", "inherit"],
+    env: devtunnelEnv()
   });
   return {
     stop: () => {

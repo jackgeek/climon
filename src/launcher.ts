@@ -21,6 +21,7 @@ import { selfSpawnArgs } from "./self-spawn.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { resolveCommand } from "./pty.js";
 import { isProcessAlive, killProcess } from "./process-kill.js";
+import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
 import type { AnsiColor, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 
@@ -86,12 +87,40 @@ async function waitForHeadlessReady(id: string, socketPath: string, timeoutMs = 
   throw new Error(`Timed out waiting for session daemon socket at ${socketPath}`);
 }
 
+interface UplinkStartConfig {
+  enabled: boolean;
+  tunnelId?: unknown;
+  tunnelToken?: unknown;
+  port?: unknown;
+}
+
+interface UplinkStartPlan {
+  shouldSpawn: boolean;
+  warning?: string;
+}
+
+export function planUplinkStart(config: UplinkStartConfig, detect: DetectResult): UplinkStartPlan {
+  if (!config.enabled || !config.tunnelId || !config.tunnelToken || !config.port) {
+    return { shouldSpawn: false };
+  }
+  if (!detect.available) {
+    return {
+      shouldSpawn: false,
+      warning:
+        "climon: remote monitoring is configured, but the devtunnel CLI is not installed or not runnable on this machine. Install devtunnel for sessions to appear on the remote dashboard.\n"
+    };
+  }
+  return { shouldSpawn: true };
+}
+
 async function ensureUplink(): Promise<void> {
   const enabled = resolveConfigSetting("remote.enabled", process.env, process.cwd()) === true;
   const tunnelId = resolveConfigSetting("remote.tunnelId", process.env, process.cwd());
   const tunnelToken = resolveConfigSetting("remote.tunnelToken", process.env, process.cwd());
   const port = resolveConfigSetting("remote.port", process.env, process.cwd());
-  if (!enabled || !tunnelId || !tunnelToken || !port) return;
+  const plan = planUplinkStart({ enabled, tunnelId, tunnelToken, port }, await detectDevtunnel());
+  if (plan.warning) process.stderr.write(plan.warning);
+  if (!plan.shouldSpawn) return;
   const child = spawn(process.execPath, selfSpawnArgs(["__uplink"]), {
     detached: true,
     stdio: "ignore",
@@ -267,13 +296,17 @@ export async function reconnectSession(id: string): Promise<number> {
     return meta.exitCode ?? 0;
   }
   const config = await loadConfig();
-  process.stdout.write(`climon v${VERSION} attaching to session ${id}\r\n`);
+  process.stdout.write(reconnectBanner(id));
   const result = await connectToSession(meta.socketPath, config.terminal.detachPrefix);
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
     return 0;
   }
   return result.exitCode;
+}
+
+export function reconnectBanner(id: string): string {
+  return `climon v${VERSION} connecting to session ${id}\r\n`;
 }
 
 export async function listSessionsCommand(): Promise<number> {

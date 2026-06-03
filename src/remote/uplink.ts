@@ -12,6 +12,7 @@ import {
 import { listSessions, readSessionMeta } from "../store.js";
 import { acquireSingleton } from "./singleton.js";
 import { encodeControl, encodeData, MuxDecoder } from "./mux.js";
+import { devtunnelEnv } from "./tunnel.js";
 
 export interface UplinkConfig {
   enabled: boolean;
@@ -171,7 +172,7 @@ interface ConnectChild {
 function spawnConnect(tunnelId: string, token: string): ConnectChild {
   const child = spawn("devtunnel", ["connect", tunnelId], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, DEVTUNNEL_ACCESS_TOKEN: token }
+    env: devtunnelEnv({ ...process.env, DEVTUNNEL_ACCESS_TOKEN: token })
   });
   let authRejected = false;
   const scan = (buf: Buffer): void => {

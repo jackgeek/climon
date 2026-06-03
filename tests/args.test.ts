@@ -18,6 +18,11 @@ describe("parseArgs", () => {
     expect(parseArgs(["-h"])).toEqual({ command: "help" });
   });
 
+  test("parses version flags", () => {
+    expect(parseArgs(["--version"])).toEqual({ command: "version" });
+    expect(parseArgs(["-v"])).toEqual({ command: "version" });
+  });
+
   test("parses server with port", () => {
     expect(parseArgs(["server", "--port", "9000"])).toEqual({
       command: "server",

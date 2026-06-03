@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureClimonHome, getRemoteHostPath } from "../src/config.js";
-import { parseTunnelInput, useManualTunnel, deleteTunnel } from "../src/remote/tunnel.js";
+import * as tunnel from "../src/remote/tunnel.js";
+
+const { parseTunnelInput, useManualTunnel, deleteTunnel } = tunnel;
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -58,5 +60,23 @@ describe("useManualTunnel", () => {
     );
     await deleteTunnel({ env, runner: async () => ({ status: 0, stdout: "", stderr: "" }) });
     expect(() => readFileSync(getRemoteHostPath(env), "utf8")).toThrow();
+  });
+});
+
+describe("devtunnelEnv", () => {
+  test("adds the user-local ICU library path when LD_LIBRARY_PATH is missing", () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), "climon-icu-"));
+    try {
+      const icuLib = join(fakeHome, ".local", "icu", "usr", "lib", "x86_64-linux-gnu");
+      mkdirSync(icuLib, { recursive: true });
+
+      expect(typeof tunnel.devtunnelEnv).toBe("function");
+      expect(tunnel.devtunnelEnv({ HOME: fakeHome })).toMatchObject({
+        HOME: fakeHome,
+        LD_LIBRARY_PATH: icuLib
+      });
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 });

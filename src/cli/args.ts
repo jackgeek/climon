@@ -4,6 +4,7 @@ import type { AnsiColor } from "../types.js";
 
 export type ParsedCommand =
   | { command: "help" }
+  | { command: "version" }
   | { command: "server"; port?: number }
   | { command: "session"; id: string }
   | { command: "attach"; id: string }
@@ -26,6 +27,7 @@ Usage:
   climon config <key> [value]   Get/set remote connection config (git-style)
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
+  climon --version             Show the climon version
   climon help                  Show this help
 
 While attached, detach without stopping the command using: Ctrl-\\ then d
@@ -88,6 +90,9 @@ export function parseArgs(argv: string[]): ParsedCommand {
     case "--help":
     case "-h":
       return { command: "help" };
+    case "--version":
+    case "-v":
+      return { command: "version" };
     case "server": {
       let port: number | undefined;
       for (let i = 0; i < rest.length; i += 1) {
