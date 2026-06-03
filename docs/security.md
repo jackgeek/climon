@@ -51,17 +51,35 @@ A devbox only streams session I/O and metadata; it can never name another
 client's sessions or inject server-controlled fields. The ingest connection
 handler enforces this:
 
+A devbox streams session I/O and metadata under a `clientId` namespace; it can
+never inject server-controlled fields or escape that namespace into arbitrary
+local paths. The ingest connection handler enforces this:
+
 - **`toLocalMeta`** overwrites all server-controlled fields and namespaces every
-  session id by the authenticated `clientId`, so a malicious devbox cannot spoof
-  or overwrite another client's sessions, nor inject arbitrary paths.
-- **`isValidRemoteId`** rejects ids that are not well-formed before they are used
-  to construct any local path.
+  session id by the connection's `clientId`, so session ids cannot collide
+  across clients and a devbox cannot inject arbitrary local paths.
+- **`isValidRemoteId`** rejects ids (and the `clientId`) that are not well-formed
+  (`[A-Za-z0-9._-]`, `~` reserved as the namespace separator) before they are
+  used to construct any local path, preventing path traversal.
 - **`sanitizeRemotePatch`** validates incoming metadata patches against the same
   allowlists used for local sessions (status, priority reason, color), dropping
   anything unrecognized.
 - Status, `priorityReason`, and `color` fields are validated against fixed
   allowlists; out-of-range priorities and unknown colors are coerced to safe
   defaults rather than trusted.
+- Inbound control frames are processed **strictly in order** (a per-connection
+  FIFO chain), so the routine duplicate `session-added` frames the devbox emits
+  on every file-watch tick cannot race two concurrent binds onto one socket.
+
+### Limitation: shared-token namespaces are self-asserted
+
+The only credential is the shared dev-tunnel connect token; there is **no
+per-client authentication**. The `clientId` that selects a session namespace is
+self-asserted in the `hello` frame, so any holder of the connect token can claim
+another devbox's `clientId` and overwrite the *dashboard metadata* (status, name,
+color, command label) it advertises. It cannot inject into another client's PTY
+(per-connection sockets) or read its keystrokes. Treat the connect token as a
+shared secret among mutually-trusting devboxes; rotate the tunnel to revoke.
 
 ## Dashboard server: loopback only
 
@@ -101,8 +119,9 @@ never reads a partially-written file.
 |---|---|
 | Stream its own session output to the dashboard | Yes (by design) |
 | Receive keystrokes the user types into its sessions | Yes (by design) |
-| Spoof or overwrite another client's sessions | **No** (`toLocalMeta` namespacing) |
-| Inject arbitrary local paths or server-controlled fields | **No** (`isValidRemoteId` + sanitization) |
+| Inject arbitrary local paths or server-controlled fields | **No** (`isValidRemoteId` + `toLocalMeta` sanitization) |
+| Read another client's keystrokes or inject into its PTY | **No** (per-connection sockets) |
+| Spoof another client's *dashboard metadata* | Yes, if it holds the shared connect token (see limitation above) |
 | Reach the dashboard HTTP server | **No** (loopback only) |
 | Keep connecting after its token is revoked/expired | **No** (auth rejection is terminal) |
 

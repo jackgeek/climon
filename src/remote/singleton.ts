@@ -19,7 +19,7 @@ export async function acquireSingleton(pidFile: string): Promise<boolean> {
   } catch {
     // No (or unreadable) pidfile: we may proceed.
   }
-  await mkdir(dirname(pidFile), { recursive: true });
+  await mkdir(dirname(pidFile), { recursive: true, mode: 0o700 });
   await writeFile(pidFile, `${process.pid}\n`, { mode: 0o600 });
   return true;
 }

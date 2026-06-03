@@ -47,7 +47,7 @@ export function getSocketPath(id: string, env: NodeJS.ProcessEnv = process.env):
 
 export async function ensureClimonHome(env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const dir = getClimonHome(env);
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
   await mkdir(getSessionsDir(env), { recursive: true });
   if (process.platform !== "win32") {
     await mkdir(getSocketDir(env), { recursive: true });
@@ -236,7 +236,7 @@ export function writeConfigSetting(
   cwd: string = process.cwd()
 ): string {
   const dir = resolveWriteDir(scope, env, cwd);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, "config.json");
   const current = readSparseConfig(dir);
   const [section, field] = key.split(".");

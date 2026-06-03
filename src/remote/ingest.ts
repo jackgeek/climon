@@ -123,6 +123,11 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
   const sessions = new Map<string, RemoteSession>();
   const decoder = new MuxDecoder();
   let label: string | undefined;
+  // Control frames are processed strictly in order via this FIFO chain. The
+  // devbox re-sends `session-added` for every session on each fs.watch tick, so
+  // duplicate same-id adds are routine; serializing prevents two concurrent
+  // adds from both passing the existence check and racing to bind the socket.
+  let controlChain: Promise<void> = Promise.resolve();
 
   const send = (buf: Buffer): void => {
     if (!channel.destroyed) channel.write(buf);
@@ -203,7 +208,8 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     }
     for (const msg of messages) {
       if (msg.type === "control") {
-        void handleControl(msg.message);
+        const message = msg.message;
+        controlChain = controlChain.then(() => handleControl(message)).catch(() => {});
       } else {
         const session = sessions.get(msg.sessionId);
         if (session) {
