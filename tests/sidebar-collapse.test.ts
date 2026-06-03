@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  effectiveSidebarCollapsed,
   SIDEBAR_COLLAPSED_STORAGE_KEY,
   readSidebarCollapsed,
   writeSidebarCollapsed
@@ -108,5 +109,17 @@ describe("sidebar collapse persistence", () => {
     expect(warnings).toHaveLength(2);
     expect(warnings[0]?.[0]).toBe("Unable to read sidebar collapse preference.");
     expect(warnings[1]?.[0]).toBe("Unable to write sidebar collapse preference.");
+  });
+});
+
+describe("effectiveSidebarCollapsed", () => {
+  test("honors the persisted collapsed preference on desktop", () => {
+    expect(effectiveSidebarCollapsed(true, false)).toBe(true);
+    expect(effectiveSidebarCollapsed(false, false)).toBe(false);
+  });
+
+  test("forces expanded mode on mobile without changing the persisted preference", () => {
+    expect(effectiveSidebarCollapsed(true, true)).toBe(false);
+    expect(effectiveSidebarCollapsed(false, true)).toBe(false);
   });
 });

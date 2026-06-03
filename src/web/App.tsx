@@ -11,7 +11,7 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 import { KeyBar } from "./components/KeyBar.js";
-import { readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
+import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 
@@ -362,6 +362,7 @@ export function App() {
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
+  const sidebarCompact = effectiveSidebarCollapsed(sidebarCollapsed, isMobile);
 
   return (
     <div className={styles.root}>
@@ -369,7 +370,7 @@ export function App() {
       <div
         className={mergeClasses(
           styles.sidebar,
-          sidebarCollapsed && styles.sidebarCollapsed,
+          sidebarCompact && styles.sidebarCollapsed,
           maximized && styles.hidden
         )}
       >
@@ -377,7 +378,8 @@ export function App() {
           sessions={sessions}
           activeId={activeId}
           serverVersion={serverVersion}
-          collapsed={sidebarCollapsed}
+          collapsed={sidebarCompact}
+          collapsible={!isMobile}
           onCollapsedChange={handleSidebarCollapsedChange}
           onSelect={handleSelect}
           onClose={(id) => requestClose(id)}

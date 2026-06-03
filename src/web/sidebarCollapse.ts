@@ -68,3 +68,7 @@ export function writeSidebarCollapsed(
     console.warn("Unable to write sidebar collapse preference.", error);
   }
 }
+
+export function effectiveSidebarCollapsed(persistedCollapsed: boolean, isMobile: boolean): boolean {
+  return persistedCollapsed && !isMobile;
+}

@@ -2,7 +2,7 @@ import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-
 import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular, Settings16Regular } from "@fluentui/react-icons";
 import { ANSI_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
-import { StatusBadge } from "./StatusBadge.js";
+import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 
 const useStyles = makeStyles({
   root: {
@@ -98,6 +98,16 @@ export function sessionDisplayTitle(session: Pick<SessionMeta, "name" | "display
   return session.name || session.displayCommand;
 }
 
+export function sessionAccessibleLabel(
+  session: Pick<SessionMeta, "name" | "displayCommand" | "status">,
+  compact: boolean
+): string | undefined {
+  if (!compact) {
+    return undefined;
+  }
+  return `${sessionDisplayTitle(session)}, ${STATUS_LABELS[session.status]}`;
+}
+
 export function SessionItem({
   session,
   active,
@@ -115,6 +125,7 @@ export function SessionItem({
       className={mergeClasses(styles.root, compact && styles.compactRoot, active && styles.active)}
       style={session.color ? { borderRight: `4px solid ${ANSI_CSS[session.color]}` } : undefined}
       title={displayTitle}
+      aria-label={sessionAccessibleLabel(session, compact)}
       onClick={() => onSelect(session.id)}
       role="button"
       tabIndex={0}

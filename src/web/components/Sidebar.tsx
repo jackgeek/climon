@@ -95,6 +95,7 @@ interface Props {
   activeId: string | null;
   serverVersion?: string | null;
   collapsed: boolean;
+  collapsible: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
@@ -112,6 +113,7 @@ export function Sidebar({
   activeId,
   serverVersion,
   collapsed,
+  collapsible,
   onCollapsedChange,
   onSelect,
   onClose,
@@ -189,16 +191,18 @@ export function Sidebar({
           ))
         )}
       </div>
-      <div className={mergeClasses(styles.footer, collapsed && styles.collapsedFooter)}>
-        <Button
-          appearance="subtle"
-          size="small"
-          icon={collapsed ? <ChevronDoubleRightRegular /> : <ChevronDoubleLeftRegular />}
-          title={collapsed ? "Expand session list" : "Collapse session list"}
-          aria-label={collapsed ? "Expand session list" : "Collapse session list"}
-          onClick={() => onCollapsedChange(!collapsed)}
-        />
-      </div>
+      {collapsible && (
+        <div className={mergeClasses(styles.footer, collapsed && styles.collapsedFooter)}>
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={collapsed ? <ChevronDoubleRightRegular /> : <ChevronDoubleLeftRegular />}
+            title={collapsed ? "Expand session list" : "Collapse session list"}
+            aria-label={collapsed ? "Expand session list" : "Collapse session list"}
+            onClick={() => onCollapsedChange(!collapsed)}
+          />
+        </div>
+      )}
     </div>
   );
 }
