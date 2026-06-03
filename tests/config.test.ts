@@ -139,6 +139,30 @@ describe("config migration", () => {
     expect(config.session?.color).toBe("auto");
     await rm(home, { recursive: true, force: true });
   });
+
+  test("loadConfig accepts a sparse global config written by climon config", async () => {
+    const home = await makeTestHome("climon-sparse-global-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        remote: {
+          enabled: true,
+          tunnelId: "abc123",
+          tunnelToken: "tok-xyz",
+          port: 3132
+        }
+      })
+    );
+
+    const config = await loadConfig(env);
+
+    expect(config.version).toBe(1);
+    expect(config.server.host).toBe("127.0.0.1");
+    expect(config.remote?.enabled).toBe(true);
+    await rm(home, { recursive: true, force: true });
+  });
 });
 
 describe("detach prefix config", () => {

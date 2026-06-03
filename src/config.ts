@@ -90,39 +90,59 @@ export function defaultConfig(): ClimonConfig {
   };
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<ClimonConfig> {
   await ensureClimonHome(env);
   const configPath = getConfigPath(env);
   try {
     const raw = await readFile(configPath, "utf8");
-    const parsed = JSON.parse(raw) as ClimonConfig;
-    if (parsed.version !== CONFIG_VERSION || !parsed.server?.host) {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isObjectRecord(parsed) || (parsed.version !== undefined && parsed.version !== CONFIG_VERSION)) {
       throw new Error(`Unsupported climon config format in ${configPath}`);
     }
+    const defaults = defaultConfig();
+    const parsedServer = isObjectRecord(parsed.server) ? parsed.server : {};
+    const parsedTerminal = isObjectRecord(parsed.terminal) ? parsed.terminal : {};
+    const parsedAttention = isObjectRecord(parsed.attention) ? parsed.attention : {};
+    const parsedSession = isObjectRecord(parsed.session) ? parsed.session : {};
+    const parsedPriority = typeof parsedSession.priority === "number" ? { priority: parsedSession.priority } : {};
+    const parsedColor = typeof parsedSession.color === "string" ? { color: parsedSession.color } : {};
+    const parsedConfig = {
+      version: CONFIG_VERSION,
+      server: { ...defaults.server, ...parsedServer },
+      terminal: { ...defaults.terminal, ...parsedTerminal },
+      attention: { ...defaults.attention, ...parsedAttention },
+      remote: isObjectRecord(parsed.remote) ? parsed.remote : undefined,
+      session: { ...defaults.session, ...parsedPriority, ...parsedColor }
+    };
+    const parsedConfigObject = parsedConfig as ClimonConfig;
     // Backfill sections added after a config file was first written.
-    if (!parsed.terminal || typeof parsed.terminal.clampBrowserToHost !== "boolean") {
-      parsed.terminal = { ...(parsed.terminal ?? {}), clampBrowserToHost: true };
+    if (!parsedConfigObject.terminal || typeof parsedConfigObject.terminal.clampBrowserToHost !== "boolean") {
+      parsedConfigObject.terminal = { ...(parsedConfigObject.terminal ?? {}), clampBrowserToHost: true };
     }
-    parsed.terminal.detachPrefix = normalizeDetachPrefix(parsed.terminal.detachPrefix);
-    if (typeof parsed.terminal.setTitle !== "boolean") {
-      parsed.terminal.setTitle = true;
+    parsedConfigObject.terminal.detachPrefix = normalizeDetachPrefix(parsedConfigObject.terminal.detachPrefix);
+    if (typeof parsedConfigObject.terminal.setTitle !== "boolean") {
+      parsedConfigObject.terminal.setTitle = true;
     }
     // Backfill the attention section for configs written before it existed.
-    if (!parsed.attention || typeof parsed.attention.idleSeconds !== "number") {
-      parsed.attention = { ...(parsed.attention ?? {}), idleSeconds: 10 };
+    if (!parsedConfigObject.attention || typeof parsedConfigObject.attention.idleSeconds !== "number") {
+      parsedConfigObject.attention = { ...(parsedConfigObject.attention ?? {}), idleSeconds: 10 };
     }
-    if (!parsed.session || typeof parsed.session !== "object") {
-      parsed.session = { color: "auto" };
+    if (!parsedConfigObject.session || typeof parsedConfigObject.session !== "object") {
+      parsedConfigObject.session = { color: "auto" };
     } else {
       try {
-        parsed.session.color = typeof parsed.session.color === "string"
-          ? parseColorMode(parsed.session.color)
+        parsedConfigObject.session.color = typeof parsedConfigObject.session.color === "string"
+          ? parseColorMode(parsedConfigObject.session.color)
           : "auto";
       } catch {
-        parsed.session.color = "auto";
+        parsedConfigObject.session.color = "auto";
       }
     }
-    return parsed;
+    return parsedConfigObject;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;

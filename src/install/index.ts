@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { installBinaries } from "./files.js";
-import { appendPathEntryIfMissing } from "./path.js";
+import { ensurePathEntryFirst } from "./path.js";
 import { killRunningClimonProcesses } from "./processes.js";
 import {
   broadcastEnvironmentChange,
@@ -19,17 +19,33 @@ export type SetupCliRuntime = {
   exit?: (code: number) => void;
 };
 
-export function updateUserPath(installDir: string): boolean {
-  const currentPath = readUserPath();
-  const nextPath = appendPathEntryIfMissing(currentPath, installDir, expandEnvironmentString);
+export type UserPathIO = {
+  readUserPath: () => string;
+  writeUserPath: (value: string) => void;
+  broadcastEnvironmentChange: () => void;
+  expandEnvironmentString: (value: string) => string;
+};
+
+export function updateUserPathWithIO(installDir: string, io: UserPathIO): boolean {
+  const currentPath = io.readUserPath();
+  const nextPath = ensurePathEntryFirst(currentPath, installDir, io.expandEnvironmentString);
 
   if (nextPath === currentPath) {
     return false;
   }
 
-  writeUserPath(nextPath);
-  broadcastEnvironmentChange();
+  io.writeUserPath(nextPath);
+  io.broadcastEnvironmentChange();
   return true;
+}
+
+export function updateUserPath(installDir: string): boolean {
+  return updateUserPathWithIO(installDir, {
+    readUserPath,
+    writeUserPath,
+    broadcastEnvironmentChange,
+    expandEnvironmentString
+  });
 }
 
 function installerSourceDir(): string {
@@ -80,8 +96,8 @@ export async function main(): Promise<void> {
 
   console.log(`Installed climon to ${installDir}`);
   console.log(changedPath
-    ? "Added climon to your user PATH. Open a new terminal to use it."
-    : "climon is already on your user PATH.");
+    ? "Updated your user PATH so climon resolves to this install first. Open a new terminal to use it."
+    : "climon is already first on your user PATH.");
 }
 
 export async function runSetupCli(runtime: SetupCliRuntime = {}): Promise<void> {
