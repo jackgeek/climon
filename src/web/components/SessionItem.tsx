@@ -1,8 +1,9 @@
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular, Settings16Regular } from "@fluentui/react-icons";
-import { ANSI_CSS } from "../colors.js";
+import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
-import { StatusBadge } from "./StatusBadge.js";
+import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
+import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH, SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
 const useStyles = makeStyles({
   root: {
@@ -14,6 +15,14 @@ const useStyles = makeStyles({
     ":hover .climon-close": { display: "inline-flex" },
     ":hover .climon-new": { display: "inline-flex" },
     ":hover .climon-edit": { display: "inline-flex" }
+  },
+  compactRoot: {
+    minHeight: "54px",
+    padding: "8px 0",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxSizing: "border-box"
   },
   active: {
     backgroundColor: tokens.colorNeutralBackground1Selected
@@ -34,6 +43,11 @@ const useStyles = makeStyles({
     marginTop: "6px",
     fontSize: "11px",
     color: tokens.colorNeutralForeground3
+  },
+  compactMeta: {
+    justifyContent: "center",
+    marginTop: 0,
+    gap: 0
   },
   origin: {
     fontSize: "10px",
@@ -73,6 +87,7 @@ const useStyles = makeStyles({
 interface Props {
   session: SessionMeta;
   active: boolean;
+  compact?: boolean;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: (session: SessionMeta) => void;
@@ -80,12 +95,46 @@ interface Props {
   onMaximize: (id: string) => void;
 }
 
-export function SessionItem({ session, active, onSelect, onClose, onNew, onEdit, onMaximize }: Props) {
+export function sessionDisplayTitle(session: Pick<SessionMeta, "name" | "displayCommand">): string {
+  return session.name || session.displayCommand;
+}
+
+export function sessionAccessibleLabel(
+  session: Pick<SessionMeta, "name" | "displayCommand" | "status">,
+  compact: boolean
+): string | undefined {
+  if (!compact) {
+    return undefined;
+  }
+  return `${sessionDisplayTitle(session)}, ${STATUS_LABELS[session.status]}`;
+}
+
+export function SessionItem({
+  session,
+  active,
+  compact = false,
+  onSelect,
+  onClose,
+  onNew,
+  onEdit,
+  onMaximize
+}: Props) {
   const styles = useStyles();
+  const displayTitle = sessionDisplayTitle(session);
   return (
     <div
-      className={mergeClasses(styles.root, active && styles.active)}
-      style={session.color ? { borderRight: `4px solid ${ANSI_CSS[session.color]}` } : undefined}
+      className={mergeClasses(styles.root, compact && styles.compactRoot, active && styles.active)}
+      style={
+        session.color
+          ? {
+              borderRight: `${active ? ACTIVE_SESSION_COLOR_ACCENT_WIDTH : SESSION_COLOR_ACCENT_WIDTH} solid ${
+                active ? ANSI_HIGHLIGHT_CSS[session.color] : ANSI_CSS[session.color]
+              }`
+            }
+          : undefined
+      }
+      title={displayTitle}
+      aria-label={sessionAccessibleLabel(session, compact)}
       onClick={() => onSelect(session.id)}
       role="button"
       tabIndex={0}
@@ -96,7 +145,7 @@ export function SessionItem({ session, active, onSelect, onClose, onNew, onEdit,
         }
       }}
     >
-      {["running", "needs-attention", "disconnected"].includes(session.status) && (
+      {!compact && ["running", "needs-attention", "disconnected"].includes(session.status) && (
         <Button
           className={mergeClasses("climon-new", styles.newBtn)}
           appearance="subtle"
@@ -110,42 +159,48 @@ export function SessionItem({ session, active, onSelect, onClose, onNew, onEdit,
           }}
         />
       )}
-      <Button
-        className={mergeClasses("climon-edit", styles.editBtn)}
-        appearance="subtle"
-        size="small"
-        icon={<Settings16Regular />}
-        title="Edit session"
-        aria-label="Edit session"
-        onClick={(e) => {
-          e.stopPropagation();
-          onEdit(session);
-        }}
-      />
-      <Button
-        className={mergeClasses("climon-close", styles.close)}
-        appearance="subtle"
-        size="small"
-        icon={<Dismiss16Regular />}
-        title="Close session"
-        aria-label="Close session"
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose(session.id);
-        }}
-      />
-      <Text className={styles.cmd} title={session.displayCommand}>
-        {session.name || session.displayCommand}
-      </Text>
-      <div className={styles.meta}>
-        <StatusBadge status={session.status} />
-        {session.origin === "remote" && (
+      {!compact && (
+        <Button
+          className={mergeClasses("climon-edit", styles.editBtn)}
+          appearance="subtle"
+          size="small"
+          icon={<Settings16Regular />}
+          title="Edit session"
+          aria-label="Edit session"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit(session);
+          }}
+        />
+      )}
+      {!compact && (
+        <Button
+          className={mergeClasses("climon-close", styles.close)}
+          appearance="subtle"
+          size="small"
+          icon={<Dismiss16Regular />}
+          title="Close session"
+          aria-label="Close session"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose(session.id);
+          }}
+        />
+      )}
+      {!compact && (
+        <Text className={styles.cmd} title={session.displayCommand}>
+          {displayTitle}
+        </Text>
+      )}
+      <div className={mergeClasses(styles.meta, compact && styles.compactMeta)}>
+        <StatusBadge status={session.status} compact={compact} showTitle={!compact} />
+        {!compact && session.origin === "remote" && (
           <span className={styles.origin} title={session.clientLabel ?? "remote"}>
             {session.clientLabel ?? "remote"}
           </span>
         )}
       </div>
-      {active && (
+      {active && !compact && (
         <Button
           className={styles.maximize}
           appearance="primary"

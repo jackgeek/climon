@@ -3,7 +3,6 @@ import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-
 import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
 import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus } from "./api.js";
-import { ANSI_CSS } from "./colors.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { EditSessionDialog } from "./components/EditSessionDialog.js";
@@ -11,6 +10,8 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 import { KeyBar } from "./components/KeyBar.js";
+import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
+import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 
@@ -40,6 +41,14 @@ const useStyles = makeStyles({
       borderBottom: "none"
     }
   },
+  sidebarCollapsed: {
+    width: "64px",
+    minWidth: "64px",
+    "@media (max-width: 768px)": {
+      width: "64px",
+      minWidth: "64px"
+    }
+  },
   main: {
     flex: "1 1 auto",
     display: "flex",
@@ -64,6 +73,8 @@ const useStyles = makeStyles({
   header: {
     display: "flex",
     alignItems: "center",
+    boxSizing: "border-box",
+    height: DASHBOARD_HEADER_HEIGHT,
     gap: "12px",
     padding: "12px 16px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
@@ -118,6 +129,16 @@ const useStyles = makeStyles({
   }
 });
 
+export function scheduleTerminalRefit(
+  terminal: Pick<TerminalHandle, "refit"> | null,
+  requestFrame: (callback: FrameRequestCallback) => number = requestAnimationFrame
+): void {
+  if (!terminal) {
+    return;
+  }
+  requestFrame(() => terminal.refit());
+}
+
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -130,6 +151,7 @@ export function App() {
   const [closeTarget, setCloseTarget] = useState<SessionMeta | null>(null);
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [keyBarOpen, setKeyBarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches
@@ -345,17 +367,33 @@ export function App() {
     [isMobile]
   );
 
+  const handleSidebarCollapsedChange = useCallback((collapsed: boolean): void => {
+    setSidebarCollapsed(collapsed);
+    writeSidebarCollapsed(collapsed);
+    scheduleTerminalRefit(terminalRef.current);
+  }, []);
+
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
+  const sidebarCompact = effectiveSidebarCollapsed(sidebarCollapsed, isMobile);
 
   return (
     <div className={styles.root}>
       {showSplash && <SplashScreen onDone={dismissSplash} />}
-      <div className={mergeClasses(styles.sidebar, maximized && styles.hidden)}>
+      <div
+        className={mergeClasses(
+          styles.sidebar,
+          sidebarCompact && styles.sidebarCollapsed,
+          maximized && styles.hidden
+        )}
+      >
         <Sidebar
           sessions={sessions}
           activeId={activeId}
           serverVersion={serverVersion}
+          collapsed={sidebarCompact}
+          collapsible={!isMobile}
+          onCollapsedChange={handleSidebarCollapsedChange}
           onSelect={handleSelect}
           onClose={(id) => requestClose(id)}
           onNew={() => {
@@ -388,14 +426,7 @@ export function App() {
           !maximized && styles.mainHiddenMobile
         )}
       >
-        <div
-          className={mergeClasses(styles.header, maximized && styles.hidden)}
-          style={
-            activeSession?.color
-              ? { borderBottom: `3px solid ${ANSI_CSS[activeSession.color]}` }
-              : undefined
-          }
-        >
+        <div className={mergeClasses(styles.header, maximized && styles.hidden)}>
           <Text className={styles.headerText}>
             {activeSession ? (
               activeSession.name || activeSession.displayCommand
@@ -415,6 +446,7 @@ export function App() {
         <TerminalView
           ref={terminalRef}
           session={activeSession}
+          accentColor={activeSession?.color}
           maximized={maximized}
           visible={terminalVisible}
           viewMode={viewMode}

@@ -12,3 +12,14 @@ export const ANSI_CSS: Record<AnsiColor, string> = {
   cyan: "#06989a",
   white: "#d3d7cf"
 };
+
+export const ANSI_HIGHLIGHT_CSS: Record<AnsiColor, string> = {
+  black: "#555753",
+  red: "#ef2929",
+  green: "#8ae234",
+  yellow: "#fce94f",
+  blue: "#729fcf",
+  magenta: "#ad7fa8",
+  cyan: "#34e2e2",
+  white: "#eeeeec"
+};
