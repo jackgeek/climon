@@ -1,11 +1,9 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { connect } from "node:net";
 import { randomBytes } from "node:crypto";
 import {
   ensureClimonHome,
   getClimonHome,
-  getSocketPath,
   loadConfig,
   resolveConfigSetting,
   SESSION_ENV_VAR
@@ -22,6 +20,7 @@ import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, wri
 import { resolveCommand } from "./pty.js";
 import { isProcessAlive, killProcess } from "./process-kill.js";
 import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
+import { formatSessionSocketRef, isResolvedSessionSocketRef, waitForSessionSocket } from "./session-socket.js";
 import type { AnsiColor, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 
@@ -45,46 +44,52 @@ export function resolveLaunchSize(env: NodeJS.ProcessEnv): { cols: number; rows:
   };
 }
 
-async function waitForSocket(socketPath: string, timeoutMs = 10000): Promise<void> {
+async function waitForSessionReady(id: string, timeoutMs = 10000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ok = await new Promise<boolean>((resolve) => {
-      const socket = connect(socketPath);
-      socket.once("connect", () => {
-        socket.end();
-        resolve(true);
-      });
-      socket.once("error", () => resolve(false));
-    });
-    if (ok) {
-      return;
+    const meta = await readSessionMeta(id);
+    if (!meta) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+    if (isResolvedSessionSocketRef(meta.socketPath)) {
+      if (meta.status === "completed" || meta.status === "failed") {
+        return meta.socketPath;
+      }
+      try {
+        await waitForSessionSocket(meta.socketPath, Math.min(1000, Math.max(deadline - Date.now(), 0)));
+        return meta.socketPath;
+      } catch {
+        // The daemon may still be starting; retry until timeout.
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Timed out waiting for session daemon socket at ${socketPath}`);
+  throw new Error("Timed out waiting for session socket to become ready");
 }
 
-async function waitForHeadlessReady(id: string, socketPath: string, timeoutMs = 10000): Promise<void> {
+async function waitForHeadlessReady(id: string, timeoutMs = 10000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ok = await new Promise<boolean>((resolve) => {
-      const socket = connect(socketPath);
-      socket.once("connect", () => {
-        socket.end();
-        resolve(true);
-      });
-      socket.once("error", () => resolve(false));
-    });
-    if (ok) {
+    const meta = await readSessionMeta(id);
+    if (!meta) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+    if (meta.status === "completed" || meta.status === "failed") {
       return;
     }
-    const current = await readSessionMeta(id);
-    if (current?.status === "completed" || current?.status === "failed") {
-      return;
+    if (isResolvedSessionSocketRef(meta.socketPath)) {
+      try {
+        await waitForSessionSocket(meta.socketPath, Math.min(1000, Math.max(deadline - Date.now(), 0)));
+        return;
+      } catch {
+        // The daemon may still be starting; retry until timeout.
+      }
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Timed out waiting for session daemon socket at ${socketPath}`);
+  throw new Error("Timed out waiting for session socket to become ready");
 }
 
 interface UplinkStartConfig {
@@ -226,11 +231,7 @@ export async function startMonitoredCommand(
       priority: defaults.priority,
       color: defaults.color
     });
-    const meta = await readSessionMeta(id);
-    if (!meta) {
-      throw new Error(`Session metadata for '${id}' not found.`);
-    }
-    await waitForHeadlessReady(id, meta.socketPath);
+    await waitForHeadlessReady(id);
     process.stdout.write(`${id}\n`);
     return 0;
   }
@@ -256,7 +257,7 @@ export async function startMonitoredCommand(
     cwd: process.cwd(),
     status: "running",
     priorityReason: "running",
-    socketPath: getSocketPath(id),
+    socketPath: formatSessionSocketRef("127.0.0.1", 0),
     cols,
     rows,
     headless: false,
@@ -271,7 +272,7 @@ export async function startMonitoredCommand(
 
   await ensureUplink();
 
-  await waitForSocket(meta.socketPath);
+  meta.socketPath = await waitForSessionReady(id);
 
   const dashboardUrl = `http://${config.server.host}:${config.server.port}/`;
   const detachKey = describeDetachKey(config.terminal.detachPrefix);

@@ -39,9 +39,9 @@ describe("headless session attention", () => {
     config.attention.idleSeconds = 1;
     await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
 
-    // `sleep` produces no output, so the rendered screen is static from launch.
+    // The long-lived Bun process produces no output, so the rendered screen is static from launch.
     const proc = Bun.spawn(
-      [process.execPath, "src/index.ts", "run", "--headless", "sleep", "30"],
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const id = (await new Response(proc.stdout).text()).trim();

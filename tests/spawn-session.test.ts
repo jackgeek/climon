@@ -23,6 +23,7 @@ describe("spawnHeadlessSession", () => {
       rows: number;
       headless: boolean;
       clientVersion: string;
+      socketPath: string;
     };
     expect(meta.cwd).toBe("/tmp");
     expect(meta.command).toEqual(["sleep", "30"]);
@@ -30,6 +31,7 @@ describe("spawnHeadlessSession", () => {
     expect(meta.rows).toBe(40);
     expect(meta.headless).toBe(true);
     expect(meta.clientVersion).toBe(VERSION);
+    expect(meta.socketPath).toBe("tcp://127.0.0.1:0");
   });
 
   test("persists name, priority, and color when provided", async () => {

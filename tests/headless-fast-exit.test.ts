@@ -27,7 +27,7 @@ afterEach(async () => {
 
 describe("headless run", () => {
   test("prints a session id for fast-exiting commands", async () => {
-    const proc = Bun.spawn([process.execPath, "src/index.ts", "run", "--headless", "echo", "headless-fast-exit"], {
+    const proc = Bun.spawn([process.execPath, "src/index.ts", "run", "--headless", process.execPath, "--version"], {
       cwd: process.cwd(),
       env: { ...process.env, CLIMON_HOME: home },
       stdout: "pipe",

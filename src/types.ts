@@ -93,7 +93,6 @@ export interface SessionMeta {
   status: SessionStatus;
   priorityReason: PriorityReason;
   daemonPid?: number;
-  socketPath: string;
   cols: number;
   rows: number;
   /**
@@ -103,9 +102,12 @@ export interface SessionMeta {
    */
   headless?: boolean;
   /**
-   * The climon client version that created this session. Absent on sessions
-   * persisted before this field existed.
+   * Session daemon connection target. New sessions use a loopback TCP ref
+   * (`tcp://127.0.0.1:<port>`), while older sessions may still carry a legacy
+   * filesystem socket path or named pipe.
    */
+  socketPath: string;
+  /** The climon client version that created this session. */
   clientVersion?: string;
   createdAt: string;
   updatedAt: string;
@@ -135,6 +137,7 @@ export interface SessionMetaPatch {
   completedAt?: string;
   exitCode?: number;
   error?: string;
+  socketPath?: string;
   cols?: number;
   rows?: number;
   name?: string;

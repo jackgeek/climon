@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { ensureClimonHome, getSocketPath } from "../config.js";
+import { ensureClimonHome } from "../config.js";
+import { formatSessionSocketRef } from "../session-socket.js";
 import { spawnDaemon } from "../spawn-daemon.js";
 import { writeSessionMeta } from "../store.js";
 import type { AnsiColor, SessionMeta } from "../types.js";
@@ -45,7 +46,7 @@ export async function spawnHeadlessSession(
     cwd,
     status: "running",
     priorityReason: "running",
-    socketPath: getSocketPath(id, env),
+    socketPath: formatSessionSocketRef("127.0.0.1", 0),
     cols: Math.max(size.cols, 1),
     rows: Math.max(size.rows, 1),
     headless: true,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { connect, type Socket } from "node:net";
+import { type Socket } from "node:net";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
   parseJsonPayload,
   type PtySizePayload
 } from "../src/ipc/frame.js";
+import { connectSessionSocket, isResolvedSessionSocketRef } from "../src/session-socket.js";
 import type { SessionMeta } from "../src/types.js";
 
 // Real Linux tmp dir: unix sockets do not work on /mnt/c DrvFs under WSL.
@@ -32,7 +33,7 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 8000): Promise<
 }
 
 function open(socketPath: string): Socket {
-  return connect(socketPath);
+  return connectSessionSocket(socketPath);
 }
 
 afterEach(async () => {
@@ -42,13 +43,13 @@ afterEach(async () => {
 describe("PTY reverts to host size when the last viewer leaves", () => {
   test("a viewer shrinks the PTY, then disconnects and it restores", async () => {
     const proc = Bun.spawn(
-      [process.execPath, "src/index.ts", "run", "--headless", "sleep", "30"],
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const id = (await new Response(proc.stdout).text()).trim();
     const meta = await waitFor(async () => {
       const m = await readMeta(id).catch(() => undefined);
-      return m?.socketPath ? m : undefined;
+      return m?.socketPath && isResolvedSessionSocketRef(m.socketPath) ? m : undefined;
     });
 
     // Observer stays connected and records every PtySize broadcast.

@@ -53,7 +53,7 @@ describe("isValidRemoteId", () => {
 });
 
 describe("runIngestConnection", () => {
-  test("materializes a remote session as a local unix-socket meta", async () => {
+  test("materializes a remote session as a local loopback TCP meta", async () => {
     // A loopback TCP server stands in for the ingest listener.
     const server: Server = createServer((socket) => {
       void runIngestConnection(socket, { env, maxSessions: 10 });
@@ -76,6 +76,7 @@ describe("runIngestConnection", () => {
     expect(meta?.origin).toBe("remote");
     expect(meta?.clientLabel).toBe("dev1");
     expect(meta?.socketPath).not.toBe("/should/be/ignored.sock");
+    expect(meta?.socketPath).toMatch(/^tcp:\/\/127\.0\.0\.1:\d+$/);
 
     client.destroy();
     let after: SessionMeta | undefined;
