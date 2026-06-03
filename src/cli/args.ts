@@ -10,6 +10,7 @@ export type ParsedCommand =
   | { command: "attach"; id: string }
   | { command: "ls" }
   | { command: "kill"; id: string }
+  | { command: "kill-all" }
   | { command: "run"; argv: string[]; headless: boolean; priority?: number; color?: AnsiColor | null; name?: string }
   | { command: "config"; argv: string[] }
   | { command: "uplink" }
@@ -27,6 +28,7 @@ Usage:
   climon config <key> [value]   Get/set remote connection config (git-style)
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
+  climon kill --all            Terminate all local sessions
   climon --version             Show the climon version
   climon help                  Show this help
 
@@ -126,6 +128,9 @@ export function parseArgs(argv: string[]): ParsedCommand {
       return { command: "ls" };
     case "kill": {
       const id = rest[0];
+      if (id === "--all") {
+        return { command: "kill-all" };
+      }
       if (!id) {
         throw new Error("Provide a session id, e.g. `climon kill <id>`.");
       }
