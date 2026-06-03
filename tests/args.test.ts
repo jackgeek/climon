@@ -9,6 +9,7 @@ describe("helpText", () => {
 
   test("documents bulk kill", () => {
     expect(helpText).toContain("climon kill --all");
+    expect(helpText).toContain("Kill or remove all active sessions");
   });
 });
 

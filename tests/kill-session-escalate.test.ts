@@ -49,6 +49,21 @@ async function seedSession(
   return id;
 }
 
+async function captureStdout(run: () => Promise<number>): Promise<{ code: number; output: string }> {
+  const original = process.stdout.write.bind(process.stdout);
+  let output = "";
+  process.stdout.write = (chunk: string | Uint8Array) => {
+    output += chunk.toString();
+    return true;
+  };
+  try {
+    const code = await run();
+    return { code, output };
+  } finally {
+    process.stdout.write = original;
+  }
+}
+
 describe("killSession force escalation", () => {
   test("escalates to a forced kill when the graceful kill fails but the process is still alive", async () => {
     const id = await seedSession("kss-test", 4321);
@@ -108,8 +123,11 @@ describe("killSession force escalation", () => {
 });
 
 describe("killAllSessions", () => {
-  test("returns success when there are no local sessions", async () => {
-    await seedSession("remote-only");
+  test("returns success when there are no active sessions", async () => {
+    await seedSession("finished", 9999, {
+      status: "completed",
+      priorityReason: "completed"
+    });
 
     const calls: Array<[number, boolean]> = [];
     const code = await killAllSessions(
@@ -122,16 +140,16 @@ describe("killAllSessions", () => {
 
     expect(code).toBe(0);
     expect(calls).toEqual([]);
-    expect(await readSessionMeta("remote-only")).toBeDefined();
+    expect(await readSessionMeta("finished")).toBeDefined();
   });
 
-  test("kills and removes every active local session", async () => {
+  test("kills and removes every active session", async () => {
     await seedSession("one", 1111);
     await seedSession("two", 2222, {
       status: "needs-attention",
       priorityReason: "attention"
     });
-    await seedSession("remote-only");
+    await seedSession("remote-only", undefined, { origin: "remote" });
     const calls: Array<[number, boolean]> = [];
 
     const code = await killAllSessions(
@@ -149,7 +167,46 @@ describe("killAllSessions", () => {
     ]);
     expect(await readSessionMeta("one")).toBeUndefined();
     expect(await readSessionMeta("two")).toBeUndefined();
-    expect(await readSessionMeta("remote-only")).toBeDefined();
+    expect(await readSessionMeta("remote-only")).toBeUndefined();
+  });
+
+  test("reports daemon-backed kills separately from daemon-less removals", async () => {
+    await seedSession("local", 1111);
+    await seedSession("remote-only", undefined, { origin: "remote" });
+
+    const { code, output } = await captureStdout(() =>
+      killAllSessions(
+        () => true,
+        () => false
+      )
+    );
+
+    expect(code).toBe(0);
+    expect(output).toContain("Killed 1 climon session.");
+    expect(output).toContain("Removed 1 daemon-less climon session.");
+  });
+
+  test("preserves active local sessions that do not have a daemon pid yet", async () => {
+    await seedSession("starting-local");
+    await seedSession("starting-headless", undefined, { headless: true });
+
+    const { code, output } = await captureStdout(() =>
+      killAllSessions(
+        () => true,
+        () => false
+      )
+    );
+
+    expect(code).toBe(1);
+    expect(output).toContain(
+      "climon: could not terminate session starting-headless; daemon pid is not available yet."
+    );
+    expect(output).toContain(
+      "climon: could not terminate session starting-local; daemon pid is not available yet."
+    );
+    expect(output).not.toContain("Removed");
+    expect(await readSessionMeta("starting-local")).toBeDefined();
+    expect(await readSessionMeta("starting-headless")).toBeDefined();
   });
 
   test("skips finished local sessions that retained a daemon pid", async () => {

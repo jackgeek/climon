@@ -336,21 +336,26 @@ export async function listSessionsCommand(): Promise<number> {
   return 0;
 }
 
-async function killLocalSessionMeta(
+async function killSessionMeta(
   meta: SessionMeta,
   kill: (pid: number, force: boolean) => boolean,
   isAlive: (pid: number) => boolean
 ): Promise<boolean> {
   const id = meta.id;
-  if (meta.daemonPid) {
-    if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
-      kill(meta.daemonPid, true);
-      if (isAlive(meta.daemonPid)) {
-        process.stdout.write(
-          `climon: could not terminate session ${id}; it may still be running.\n`
-        );
-        return false;
-      }
+  if (meta.daemonPid === undefined) {
+    if (meta.origin !== "remote") {
+      process.stdout.write(
+        `climon: could not terminate session ${id}; daemon pid is not available yet.\n`
+      );
+      return false;
+    }
+  } else if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
+    kill(meta.daemonPid, true);
+    if (isAlive(meta.daemonPid)) {
+      process.stdout.write(
+        `climon: could not terminate session ${id}; it may still be running.\n`
+      );
+      return false;
     }
   }
   await patchSessionMeta(id, { status: "failed", priorityReason: "failed" });
@@ -367,7 +372,7 @@ export async function killSession(
   if (!meta) {
     throw new Error(`No session found with id '${id}'.`);
   }
-  if (!(await killLocalSessionMeta(meta, kill, isAlive))) {
+  if (!(await killSessionMeta(meta, kill, isAlive))) {
     return 1;
   }
   process.stdout.write(`Killed session ${id}.\n`);
@@ -378,29 +383,38 @@ export async function killAllSessions(
   kill: (pid: number, force: boolean) => boolean = killProcess,
   isAlive: (pid: number) => boolean = isProcessAlive
 ): Promise<number> {
-  const localSessions = (await listSessions())
+  const activeSessions = (await listSessions())
     .filter(
       (session) =>
-        (session.status === "running" || session.status === "needs-attention") &&
-        session.daemonPid !== undefined
+        session.status === "running" || session.status === "needs-attention"
     )
     .sort((a, b) => a.id.localeCompare(b.id));
-  if (localSessions.length === 0) {
-    process.stdout.write("No local climon sessions found.\n");
+  if (activeSessions.length === 0) {
+    process.stdout.write("No active climon sessions found.\n");
     return 0;
   }
 
   let killed = 0;
+  let removed = 0;
   let failed = 0;
-  for (const session of localSessions) {
-    if (await killLocalSessionMeta(session, kill, isAlive)) {
-      killed += 1;
+  for (const session of activeSessions) {
+    if (await killSessionMeta(session, kill, isAlive)) {
+      if (session.daemonPid === undefined) {
+        removed += 1;
+      } else {
+        killed += 1;
+      }
     } else {
       failed += 1;
     }
   }
 
-  process.stdout.write(`Killed ${killed} local climon session${killed === 1 ? "" : "s"}.\n`);
+  if (killed > 0) {
+    process.stdout.write(`Killed ${killed} climon session${killed === 1 ? "" : "s"}.\n`);
+  }
+  if (removed > 0) {
+    process.stdout.write(`Removed ${removed} daemon-less climon session${removed === 1 ? "" : "s"}.\n`);
+  }
   return failed === 0 ? 0 : 1;
 }
 
