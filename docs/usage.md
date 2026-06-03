@@ -105,34 +105,39 @@ When a command exits, its session moves up the queue (above plain `running`
 sessions) and retains its final scrollback, so you can review what happened
 without reattaching.
 
-## Connecting a remote client over SSH
+## Connecting a remote client over dev tunnels
 
 You can monitor sessions that run on another machine (a "devbox") from your local
-dashboard. Traffic rides a single hardened SSH connection — see
+dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port — see
 [security.md](./security.md) for the full threat model.
 
 1. On the machine running `climon server`, open the dashboard, click the
-   hamburger menu, and choose **Remote clients…**.
-2. Copy the generated command and run it on the devbox. It records the connection
-   config with `climon config`, generates an ed25519 client key, pins your host
-   key, and prints the devbox's public key.
-3. Paste that public key (and a label, e.g. `devbox-1`) back into the dialog and
-   click **Authorize client**.
-4. Run any command on the devbox with `climon <cmd>`. The session appears on your
-   dashboard tagged with the client label.
+   hamburger menu, and choose **Remotes…**.
+2. If the `devtunnel` CLI is installed on the server machine, let climon create
+   and host the tunnel for you. Otherwise create a dev tunnel manually and paste
+   its id or URL plus connect token into the dialog.
+3. Optionally choose the default color and priority for that devbox's sessions,
+   then copy the generated config script.
+4. Run the script on the devbox. It records `remote.tunnelId`,
+   `remote.tunnelToken`, `remote.port`, and any chosen session defaults with
+   `climon config`.
+5. Run any command on the devbox with `climon <cmd>`. The session appears on your
+   dashboard under the devbox's stable client id.
 
-Revoke a devbox anytime from the same dialog.
+Revoke a devbox by deleting or rotating the dev tunnel (or its connect token).
 
 ### `climon config`
 
 `climon config` works like `git config`. It reads/writes a project-local or
 global `.climon/config.json`:
 
-- `climon config remote.host <host>` — set a value.
-- `climon config remote.host` — print a value (exit 1 if unset).
+- `climon config remote.tunnelId <id>` — set a value.
+- `climon config remote.tunnelId` — print a value (exit 1 if unset).
 - `climon config --list` — print all values.
-- `climon config --unset remote.host` — remove a value.
+- `climon config --unset remote.tunnelId` — remove a value.
 - `--global` (default) writes `~/.climon`; `--local` writes `./.climon`.
 
-When climon runs it discovers config by walking up from the current directory to
-the nearest ancestor `.climon`, falling back to `~/.climon`.
+When climon reads a setting it checks `.climon/config.json` in the current
+directory, then each ancestor, then `~/.climon/config.json`. When writing a
+setting, if no `.climon` directory exists in the current directory or its
+ancestors, climon creates one in `~/`.

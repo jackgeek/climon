@@ -82,7 +82,9 @@ Open http://127.0.0.1:3131 — you should see the session and its output.
 
 ## Remote clients
 
-The remote-client feature uses the system `ssh` client (devbox side) and `sshd`
-(home side). No extra packages are required beyond a standard OpenSSH install.
-The home machine must accept public-key authentication. See
-[security.md](./security.md) for hardening details.
+The remote-client feature uses Microsoft dev tunnels. Install the `devtunnel`
+CLI on the home machine if you want the dashboard to auto-create and host the
+tunnel; install it on each devbox so `climon __uplink` can connect through the
+tunnel. You can also create the tunnel manually and paste its id/URL plus
+connect token into the dashboard's **Remotes…** dialog. See
+[security.md](./security.md) for the threat model.
