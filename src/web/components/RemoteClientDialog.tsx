@@ -27,6 +27,7 @@ import {
   recordManualTunnel,
   type RemoteStatus
 } from "../api.js";
+import { applyRemoteStatusToDraft, type RemoteClientDraftState } from "./remoteClientState.js";
 
 const COLOR_OPTIONS: Array<AnsiColor | "none"> = [
   "none",
@@ -72,20 +73,20 @@ interface Props {
 
 export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const styles = useStyles();
-  const [status, setStatus] = useState<RemoteStatus | null>(null);
-  const [tunnelInput, setTunnelInput] = useState("");
-  const [connectToken, setConnectToken] = useState("");
+  const [draft, setDraft] = useState<RemoteClientDraftState>({
+    status: null,
+    tunnelInput: "",
+    connectToken: ""
+  });
   const [color, setColor] = useState<AnsiColor | "none">("none");
   const [priority, setPriority] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const { status, tunnelInput, connectToken } = draft;
 
   function applyStatus(s: RemoteStatus): void {
-    setStatus(s);
-    if (s.tunnel) setTunnelInput(s.tunnel.id);
-    // The token is only returned from create/record actions; preserve it if present.
-    if (s.connectToken) setConnectToken(s.connectToken);
+    setDraft((prev) => applyRemoteStatusToDraft(prev, s));
   }
 
   async function refresh(): Promise<void> {
@@ -157,8 +158,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     setBusy(true);
     try {
       await deleteRemoteTunnel();
-      setConnectToken("");
-      setTunnelInput("");
+      setDraft((prev) => ({ ...prev, tunnelInput: "", connectToken: "" }));
       await refresh();
     } finally {
       setBusy(false);
@@ -202,7 +202,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                   placeholder="abc123  or  https://abc123-3132.uks1.devtunnels.ms/"
                   autoComplete="off"
                   spellCheck={false}
-                  onChange={(_, d) => setTunnelInput(d.value)}
+                  onChange={(_, d) => setDraft((prev) => ({ ...prev, tunnelInput: d.value }))}
                 />
               </Field>
               <Field label="Connect token" style={{ marginTop: "8px" }}>
@@ -212,7 +212,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                   placeholder="connect-scoped access token"
                   autoComplete="off"
                   spellCheck={false}
-                  onChange={(_, d) => setConnectToken(d.value)}
+                  onChange={(_, d) => setDraft((prev) => ({ ...prev, connectToken: d.value }))}
                 />
               </Field>
               <Button
