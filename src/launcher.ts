@@ -18,7 +18,6 @@ import { spawnDaemon } from "./spawn-daemon.js";
 import { selfSpawnArgs } from "./self-spawn.js";
 import { AUTO_COLOR_ORDER, ANSI_COLORS, DEFAULT_PRIORITY, parseColorMode } from "./session-meta.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
-import { resolveCommand } from "./pty.js";
 import { isProcessAlive, killProcess } from "./process-kill.js";
 import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
 import { formatSessionSocketRef, isResolvedSessionSocketRef, waitForSessionSocket } from "./session-socket.js";
@@ -145,25 +144,6 @@ async function ensureUplink(): Promise<void> {
   child.unref();
 }
 
-/**
- * Runs a command directly with inherited stdio, without starting a monitored
- * session. Used when climon is invoked from inside an existing climon session
- * so the parent session keeps ownership of the PTY.
- */
-function runCommandDirectly(command: string[]): Promise<number> {
-  const { file, args } = resolveCommand(command);
-  return new Promise((resolve) => {
-    const child = spawn(file, args, { stdio: "inherit" });
-    child.once("error", (error) => {
-      process.stderr.write(`climon: failed to run ${file}: ${error.message}\n`);
-      resolve(1);
-    });
-    child.once("exit", (code, signal) => {
-      resolve(code ?? (signal ? 1 : 0));
-    });
-  });
-}
-
 export interface SessionDefaultFlags {
   color?: SessionColorMode | null;
   priority?: number;
@@ -236,7 +216,10 @@ export async function startMonitoredCommand(
     throw new Error("Provide a command to monitor, e.g. `climon copilot`.");
   }
   if (!options.headless && process.env[SESSION_ENV_VAR]) {
-    return runCommandDirectly(command);
+    process.stderr.write(
+      "climon: cannot start a nested session from inside an existing climon session.\n"
+    );
+    return 1;
   }
   await ensureClimonHome();
   const config = await loadConfig();
