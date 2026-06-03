@@ -378,21 +378,20 @@ export async function killAllSessions(
   kill: (pid: number, force: boolean) => boolean = killProcess,
   isAlive: (pid: number) => boolean = isProcessAlive
 ): Promise<number> {
-  const localSessions = (await listSessions())
+  const activeSessions = (await listSessions())
     .filter(
       (session) =>
-        (session.status === "running" || session.status === "needs-attention") &&
-        session.daemonPid !== undefined
+        session.status === "running" || session.status === "needs-attention"
     )
     .sort((a, b) => a.id.localeCompare(b.id));
-  if (localSessions.length === 0) {
-    process.stdout.write("No local climon sessions found.\n");
+  if (activeSessions.length === 0) {
+    process.stdout.write("No active climon sessions found.\n");
     return 0;
   }
 
   let killed = 0;
   let failed = 0;
-  for (const session of localSessions) {
+  for (const session of activeSessions) {
     if (await killLocalSessionMeta(session, kill, isAlive)) {
       killed += 1;
     } else {
@@ -400,7 +399,7 @@ export async function killAllSessions(
     }
   }
 
-  process.stdout.write(`Killed ${killed} local climon session${killed === 1 ? "" : "s"}.\n`);
+  process.stdout.write(`Killed ${killed} climon session${killed === 1 ? "" : "s"}.\n`);
   return failed === 0 ? 0 : 1;
 }
 

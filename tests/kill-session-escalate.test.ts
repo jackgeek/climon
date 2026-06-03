@@ -108,8 +108,11 @@ describe("killSession force escalation", () => {
 });
 
 describe("killAllSessions", () => {
-  test("returns success when there are no local sessions", async () => {
-    await seedSession("remote-only");
+  test("returns success when there are no active sessions", async () => {
+    await seedSession("finished", 9999, {
+      status: "completed",
+      priorityReason: "completed"
+    });
 
     const calls: Array<[number, boolean]> = [];
     const code = await killAllSessions(
@@ -122,16 +125,16 @@ describe("killAllSessions", () => {
 
     expect(code).toBe(0);
     expect(calls).toEqual([]);
-    expect(await readSessionMeta("remote-only")).toBeDefined();
+    expect(await readSessionMeta("finished")).toBeDefined();
   });
 
-  test("kills and removes every active local session", async () => {
+  test("kills and removes every active session", async () => {
     await seedSession("one", 1111);
     await seedSession("two", 2222, {
       status: "needs-attention",
       priorityReason: "attention"
     });
-    await seedSession("remote-only");
+    await seedSession("remote-only", undefined, { origin: "remote" });
     const calls: Array<[number, boolean]> = [];
 
     const code = await killAllSessions(
@@ -149,7 +152,7 @@ describe("killAllSessions", () => {
     ]);
     expect(await readSessionMeta("one")).toBeUndefined();
     expect(await readSessionMeta("two")).toBeUndefined();
-    expect(await readSessionMeta("remote-only")).toBeDefined();
+    expect(await readSessionMeta("remote-only")).toBeUndefined();
   });
 
   test("skips finished local sessions that retained a daemon pid", async () => {
