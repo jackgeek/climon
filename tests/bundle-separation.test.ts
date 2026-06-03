@@ -22,7 +22,7 @@ describe("bundle separation", () => {
     if (out.status !== 0) {
       throw new Error("failed to regenerate embedded assets");
     }
-  });
+  }, 60_000);
 
   test("client bundle (src/index.ts) excludes embedded xterm assets", async () => {
     const text = await bundleText("src/index.ts");
