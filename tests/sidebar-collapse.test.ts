@@ -27,6 +27,22 @@ class ThrowingStorage {
   }
 }
 
+function captureConsoleWarnings(run: () => void): unknown[][] {
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
+  try {
+    run();
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  return warnings;
+}
+
 describe("sidebar collapse persistence", () => {
   test("defaults to expanded when storage is empty or unavailable", () => {
     expect(readSidebarCollapsed(new MemoryStorage())).toBe(false);
@@ -57,8 +73,40 @@ describe("sidebar collapse persistence", () => {
 
   test("storage failures do not throw", () => {
     const storage = new ThrowingStorage();
-    expect(() => readSidebarCollapsed(storage)).not.toThrow();
-    expect(() => writeSidebarCollapsed(true, storage)).not.toThrow();
-    expect(readSidebarCollapsed(storage)).toBe(false);
+    const warnings = captureConsoleWarnings(() => {
+      expect(() => readSidebarCollapsed(storage)).not.toThrow();
+      expect(() => writeSidebarCollapsed(true, storage)).not.toThrow();
+      expect(readSidebarCollapsed(storage)).toBe(false);
+    });
+
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]?.[0]).toBe("Unable to read sidebar collapse preference.");
+    expect(warnings[1]?.[0]).toBe("Unable to write sidebar collapse preference.");
+    expect(warnings[2]?.[0]).toBe("Unable to read sidebar collapse preference.");
+  });
+
+  test("falls back and warns when implicit browser storage lookup throws", () => {
+    let readLookups = 0;
+    const throwingReadResolver = () => {
+      readLookups += 1;
+      throw new Error("localStorage unavailable");
+    };
+
+    let writeLookups = 0;
+    const throwingWriteResolver = () => {
+      writeLookups += 1;
+      throw new Error("localStorage unavailable");
+    };
+
+    const warnings = captureConsoleWarnings(() => {
+      expect(readSidebarCollapsed(undefined, throwingReadResolver)).toBe(false);
+      expect(() => writeSidebarCollapsed(true, undefined, throwingWriteResolver)).not.toThrow();
+    });
+
+    expect(readLookups).toBe(1);
+    expect(writeLookups).toBe(1);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]?.[0]).toBe("Unable to read sidebar collapse preference.");
+    expect(warnings[1]?.[0]).toBe("Unable to write sidebar collapse preference.");
   });
 });

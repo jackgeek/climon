@@ -1,6 +1,7 @@
 export const SIDEBAR_COLLAPSED_STORAGE_KEY = "climon.sidebarCollapsed";
 
 type SidebarCollapseStorage = Pick<Storage, "getItem" | "setItem">;
+type StorageResolver = () => SidebarCollapseStorage | null;
 
 function getBrowserStorage(): SidebarCollapseStorage | null {
   if (typeof window === "undefined") {
@@ -9,15 +10,38 @@ function getBrowserStorage(): SidebarCollapseStorage | null {
   return window.localStorage;
 }
 
+function resolveStorage(
+  storage: SidebarCollapseStorage | null | undefined,
+  resolveBrowserStorage: StorageResolver,
+  warningMessage: string
+): SidebarCollapseStorage | null {
+  if (storage !== undefined) {
+    return storage;
+  }
+
+  try {
+    return resolveBrowserStorage();
+  } catch (error) {
+    console.warn(warningMessage, error);
+    return null;
+  }
+}
+
 export function readSidebarCollapsed(
-  storage: SidebarCollapseStorage | null | undefined = getBrowserStorage()
+  storage?: SidebarCollapseStorage | null,
+  resolveBrowserStorage: StorageResolver = getBrowserStorage
 ): boolean {
-  if (!storage) {
+  const resolvedStorage = resolveStorage(
+    storage,
+    resolveBrowserStorage,
+    "Unable to read sidebar collapse preference."
+  );
+  if (!resolvedStorage) {
     return false;
   }
 
   try {
-    return storage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
+    return resolvedStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
   } catch (error) {
     console.warn("Unable to read sidebar collapse preference.", error);
     return false;
@@ -26,14 +50,20 @@ export function readSidebarCollapsed(
 
 export function writeSidebarCollapsed(
   collapsed: boolean,
-  storage: SidebarCollapseStorage | null | undefined = getBrowserStorage()
+  storage?: SidebarCollapseStorage | null,
+  resolveBrowserStorage: StorageResolver = getBrowserStorage
 ): void {
-  if (!storage) {
+  const resolvedStorage = resolveStorage(
+    storage,
+    resolveBrowserStorage,
+    "Unable to write sidebar collapse preference."
+  );
+  if (!resolvedStorage) {
     return;
   }
 
   try {
-    storage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(collapsed));
+    resolvedStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(collapsed));
   } catch (error) {
     console.warn("Unable to write sidebar collapse preference.", error);
   }
