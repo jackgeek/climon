@@ -269,7 +269,7 @@ export function buildSetupScript(params: SetupScriptParams): string {
     `climon config remote.tunnelToken ${arg(params.connectToken)}`,
     `climon config remote.port ${params.ingestPort}`
   ];
-  if (params.color && params.color !== "none") {
+  if (params.color) {
     lines.push(`climon config session.color ${params.color}`);
   }
   if (typeof params.priority === "number") {
