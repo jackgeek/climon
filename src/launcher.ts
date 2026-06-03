@@ -390,16 +390,26 @@ export async function killAllSessions(
   }
 
   let killed = 0;
+  let removed = 0;
   let failed = 0;
   for (const session of activeSessions) {
     if (await killSessionMeta(session, kill, isAlive)) {
-      killed += 1;
+      if (session.daemonPid === undefined) {
+        removed += 1;
+      } else {
+        killed += 1;
+      }
     } else {
       failed += 1;
     }
   }
 
-  process.stdout.write(`Killed ${killed} climon session${killed === 1 ? "" : "s"}.\n`);
+  if (killed > 0) {
+    process.stdout.write(`Killed ${killed} climon session${killed === 1 ? "" : "s"}.\n`);
+  }
+  if (removed > 0) {
+    process.stdout.write(`Removed ${removed} daemon-less climon session${removed === 1 ? "" : "s"}.\n`);
+  }
   return failed === 0 ? 0 : 1;
 }
 

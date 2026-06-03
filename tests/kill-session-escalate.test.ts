@@ -49,6 +49,21 @@ async function seedSession(
   return id;
 }
 
+async function captureStdout(run: () => Promise<number>): Promise<{ code: number; output: string }> {
+  const original = process.stdout.write.bind(process.stdout);
+  let output = "";
+  process.stdout.write = (chunk: string | Uint8Array) => {
+    output += chunk.toString();
+    return true;
+  };
+  try {
+    const code = await run();
+    return { code, output };
+  } finally {
+    process.stdout.write = original;
+  }
+}
+
 describe("killSession force escalation", () => {
   test("escalates to a forced kill when the graceful kill fails but the process is still alive", async () => {
     const id = await seedSession("kss-test", 4321);
@@ -153,6 +168,22 @@ describe("killAllSessions", () => {
     expect(await readSessionMeta("one")).toBeUndefined();
     expect(await readSessionMeta("two")).toBeUndefined();
     expect(await readSessionMeta("remote-only")).toBeUndefined();
+  });
+
+  test("reports daemon-backed kills separately from daemon-less removals", async () => {
+    await seedSession("local", 1111);
+    await seedSession("remote-only", undefined, { origin: "remote" });
+
+    const { code, output } = await captureStdout(() =>
+      killAllSessions(
+        () => true,
+        () => false
+      )
+    );
+
+    expect(code).toBe(0);
+    expect(output).toContain("Killed 1 climon session.");
+    expect(output).toContain("Removed 1 daemon-less climon session.");
   });
 
   test("skips finished local sessions that retained a daemon pid", async () => {

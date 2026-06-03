@@ -29,7 +29,7 @@ Usage:
   climon config --debug         Show config files and keys in resolution order
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
-  climon kill --all            Terminate all active sessions
+  climon kill --all            Kill or remove all active sessions
   climon --version             Show the climon version
   climon help                  Show this help
 
