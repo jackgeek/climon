@@ -62,38 +62,65 @@ export function getLocalAppData(): string {
   return localAppData;
 }
 
-export function readUserPath(): string {
-  const result = spawnSync("reg.exe", ["query", "HKCU\\Environment", "/v", "Path"], {
+export function encodeUtf16Base64(value: string): string {
+  return Buffer.from(value, "utf16le").toString("base64");
+}
+
+export function decodeUtf16Base64(value: string): string {
+  return Buffer.from(value.trim(), "base64").toString("utf16le");
+}
+
+export function powershellArgsForScript(script: string): string[] {
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-EncodedCommand",
+    encodeUtf16Base64(script)
+  ];
+}
+
+export function readUserPathScript(): string {
+  return [
+    "$value = [Environment]::GetEnvironmentVariable('Path', 'User')",
+    "if ($null -eq $value) { $value = '' }",
+    "[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($value))"
+  ].join("; ");
+}
+
+export function writeUserPathScript(value: string): string {
+  return [
+    `$bytes = [Convert]::FromBase64String('${encodeUtf16Base64(value)}')`,
+    "$value = [Text.Encoding]::Unicode.GetString($bytes)",
+    "[Environment]::SetEnvironmentVariable('Path', $value, 'User')"
+  ].join("; ");
+}
+
+function runPowerShell(script: string, action: string): string {
+  const result = spawnSync("powershell.exe", powershellArgsForScript(script), {
     encoding: "utf8",
     windowsHide: true
   });
 
   if (result.status !== 0) {
-    return "";
+    const message = result.stderr.trim()
+      || result.stdout.trim()
+      || result.error?.message
+      || "powershell.exe failed";
+    throw new Error(`Failed to ${action}: ${message}`);
   }
 
-  const line = result.stdout
-    .split(/\r?\n/)
-    .find((candidate) => /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+/i.test(candidate));
+  return result.stdout.trim();
+}
 
-  if (!line) {
-    return "";
-  }
-
-  return line.replace(/^\s*Path\s+REG_(?:EXPAND_)?SZ\s+/i, "");
+export function readUserPath(): string {
+  const encodedPath = runPowerShell(readUserPathScript(), "read user PATH");
+  return encodedPath.length === 0 ? "" : decodeUtf16Base64(encodedPath);
 }
 
 export function writeUserPath(value: string): void {
-  const result = spawnSync(
-    "reg.exe",
-    ["add", "HKCU\\Environment", "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", value, "/f"],
-    { encoding: "utf8", windowsHide: true }
-  );
-
-  if (result.status !== 0) {
-    const message = result.stderr.trim() || result.stdout.trim() || "reg.exe failed";
-    throw new Error(`Failed to update user PATH: ${message}`);
-  }
+  runPowerShell(writeUserPathScript(value), "update user PATH");
 }
 
 export function broadcastEnvironmentChange(): void {
