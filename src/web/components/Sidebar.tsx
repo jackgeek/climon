@@ -11,8 +11,10 @@ import {
 } from "@fluentui/react-components";
 import { Add20Regular, Navigation20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../../types.js";
+import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { SessionItem } from "./SessionItem.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
+import { clampSizeMenuLabel, toggleViewMode } from "../view-mode.js";
 
 const useStyles = makeStyles({
   root: {
@@ -67,10 +69,25 @@ interface Props {
   onNewFrom: (session: SessionMeta) => void;
   onEdit: (session: SessionMeta) => void;
   onManageRemote: () => void;
+  viewMode: TerminalResizeMode;
+  onViewModeChange: (mode: TerminalResizeMode) => void;
   onMaximize: (id: string) => void;
 }
 
-export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, onNew, onNewFrom, onEdit, onManageRemote, onMaximize }: Props) {
+export function Sidebar({
+  sessions,
+  activeId,
+  serverVersion,
+  onSelect,
+  onClose,
+  onNew,
+  onNewFrom,
+  onEdit,
+  onManageRemote,
+  viewMode,
+  onViewModeChange,
+  onMaximize
+}: Props) {
   const styles = useStyles();
   const animatedList = useAnimatedListReorder(sessions.map((session) => session.id));
   return (
@@ -101,6 +118,10 @@ export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, 
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
+                <MenuItem onClick={() => onViewModeChange(toggleViewMode(viewMode))}>
+                  {viewMode === "clamped" ? "✓ " : ""}
+                  {clampSizeMenuLabel}
+                </MenuItem>
                 <MenuItem onClick={onManageRemote}>Remotes…</MenuItem>
               </MenuList>
             </MenuPopover>

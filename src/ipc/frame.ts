@@ -8,8 +8,12 @@ export enum FrameType {
   Replay = 5,
   PtySize = 6,
   Attention = 7,
-  Title = 8
+  Title = 8,
+  TerminalMode = 9,
+  TerminalWarning = 10
 }
+
+export type TerminalResizeMode = "clamped" | "fill";
 
 export interface ResizePayload {
   cols: number;
@@ -21,6 +25,12 @@ export interface ResizePayload {
    * "viewer" when omitted.
    */
   source?: "host" | "viewer";
+  /**
+   * Browser-selected resize behavior. "clamped" keeps the PTY within the host
+   * terminal's grid; "fill" lets the browser grow the PTY to its fitted grid.
+   * Omitted values preserve the session's current mode.
+   */
+  mode?: TerminalResizeMode;
 }
 
 export interface PtySizePayload {
@@ -40,6 +50,18 @@ export interface ExitPayload {
 export interface TitlePayload {
   /** The session name to show as the terminal title. Empty string clears it. */
   name: string;
+}
+
+export interface TerminalModePayload {
+  mode: TerminalResizeMode;
+}
+
+export interface TerminalWarningPayload {
+  kind: "overgrown";
+  cols: number;
+  rows: number;
+  hostCols: number;
+  hostRows: number;
 }
 
 const HEADER_SIZE = 5; // 4-byte length + 1-byte type

@@ -12,6 +12,7 @@ import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 import { KeyBar } from "./components/KeyBar.js";
 import { SplashScreen } from "./components/SplashScreen.js";
+import type { TerminalResizeMode } from "../ipc/frame.js";
 
 const useStyles = makeStyles({
   root: {
@@ -139,6 +140,7 @@ export function App() {
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [viewMode, setViewMode] = useState<TerminalResizeMode>("clamped");
   const dismissSplash = useCallback(() => setShowSplash(false), []);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
@@ -325,6 +327,11 @@ export function App() {
     }
   }
 
+  const requestViewMode = useCallback((mode: TerminalResizeMode): void => {
+    setViewMode(mode);
+    terminalRef.current?.setViewMode(mode);
+  }, []);
+
   // Selecting a session on desktop moves keyboard focus into the terminal so
   // the user can start typing immediately. On mobile the terminal is offscreen
   // until maximized, so focusing it would be premature.
@@ -366,6 +373,8 @@ export function App() {
           }}
           onEdit={(session) => setEditTarget(session)}
           onManageRemote={() => setRemoteOpen(true)}
+          viewMode={viewMode}
+          onViewModeChange={requestViewMode}
           onMaximize={(id) => {
             setActiveId(id);
             setMaximized(true);
@@ -403,7 +412,14 @@ export function App() {
             </span>
           )}
         </div>
-        <TerminalView ref={terminalRef} session={activeSession} maximized={maximized} visible={terminalVisible} />
+        <TerminalView
+          ref={terminalRef}
+          session={activeSession}
+          maximized={maximized}
+          visible={terminalVisible}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+        />
         {keyBarOpen && maximized && activeSession && isLiveStatus(activeSession.status) && (
           <>
             <div

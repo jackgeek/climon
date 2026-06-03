@@ -3,12 +3,15 @@ import { makeStyles } from "@fluentui/react-components";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { SessionMeta } from "../../types.js";
+import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { attachKey, attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
+import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
 
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
   refit: () => void;
   sendInput: (data: string) => void;
+  setViewMode: (mode: TerminalResizeMode) => void;
   focus: () => void;
 }
 
@@ -25,10 +28,12 @@ interface Props {
   session: SessionMeta | null;
   maximized: boolean;
   visible: boolean;
+  viewMode: TerminalResizeMode;
+  onViewModeChange: (mode: TerminalResizeMode) => void;
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { session, maximized, visible },
+  { session, maximized, visible, viewMode, onViewModeChange },
   ref
 ) {
   const styles = useStyles();
@@ -36,6 +41,18 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const viewModeRef = useRef<TerminalResizeMode>(viewMode);
+  const onViewModeChangeRef = useRef(onViewModeChange);
+  const fontSizeRef = useRef(13);
+  const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
+
+  useEffect(() => {
+    viewModeRef.current = viewMode;
+  }, [viewMode]);
+
+  useEffect(() => {
+    onViewModeChangeRef.current = onViewModeChange;
+  }, [onViewModeChange]);
 
   function sendResize(): void {
     const term = termRef.current;
@@ -43,6 +60,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     if (term && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     }
+  }
+
+  function sendMode(mode: TerminalResizeMode): void {
+    sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
   }
 
   function fitNow(): void {
@@ -79,7 +100,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: "ui-monospace, monospace",
-      fontSize: 13,
+      fontSize: fontSizeRef.current,
       theme: { background: "#0d1117" }
     });
     const fit = new FitAddon();
@@ -91,6 +112,30 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     const onWindowResize = (): void => fitNow();
     window.addEventListener("resize", onWindowResize);
+
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || !event.ctrlKey) {
+        return true;
+      }
+      const delta =
+        event.key === "+" || event.key === "=" || event.code === "NumpadAdd"
+          ? 1
+          : event.key === "-" || event.code === "NumpadSubtract"
+            ? -1
+            : 0;
+      if (delta === 0) {
+        return true;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const next = Math.min(32, Math.max(8, fontSizeRef.current + delta));
+      if (next !== fontSizeRef.current) {
+        fontSizeRef.current = next;
+        term.options.fontSize = next;
+        refit();
+      }
+      return false;
+    });
 
     // Register input handling once and route to the current socket. Registering
     // this per-connection would duplicate every keystroke.
@@ -136,11 +181,20 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       const ws = new WebSocket(attachSocketUrl(session.id));
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
-      ws.onopen = () => fitNow();
+      ws.onopen = () => {
+        flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
+        fitNow();
+      };
       ws.onmessage = (ev) => {
         if (typeof ev.data === "string") {
           try {
-            const msg = JSON.parse(ev.data) as { type: string; exitCode?: number; cols?: number; rows?: number };
+            const msg = JSON.parse(ev.data) as {
+              type: string;
+              exitCode?: number;
+              cols?: number;
+              rows?: number;
+              mode?: TerminalResizeMode;
+            };
             if (msg.type === "exit") {
               term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
             } else if (msg.type === "size" && msg.cols && msg.rows) {
@@ -153,6 +207,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
                   // Ignore invalid sizes.
                 }
               }
+            } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
+              onViewModeChangeRef.current(msg.mode);
             }
           } catch {
             // Ignore malformed control messages.
@@ -187,7 +243,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   // re-measures after the container's size changes.
   useEffect(() => {
     refit();
-  }, [maximized, visible]);
+  }, [maximized, visible, viewMode]);
 
   useImperativeHandle(ref, () => ({
     getDimensions: () => {
@@ -200,6 +256,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "input", data }));
       }
+    },
+    setViewMode: (mode: TerminalResizeMode) => {
+      sendMode(mode);
+      refit();
     },
     focus: () => termRef.current?.focus()
   }));

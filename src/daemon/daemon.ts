@@ -10,7 +10,10 @@ import {
   FrameType,
   parseJsonPayload,
   type ResizePayload,
-  type AttentionPayload
+  type AttentionPayload,
+  type TerminalModePayload,
+  type TerminalResizeMode,
+  type TerminalWarningPayload
 } from "../ipc/frame.js";
 import { spawnPty, resolveCommand, type PtyHandle } from "../pty.js";
 import { ScrollbackBuffer } from "./buffer.js";
@@ -25,13 +28,13 @@ import { cleanupSessionSocket, listenOnSessionSocket } from "../session-socket.j
  * requests and the unclamped case pass through (floored at 1x1).
  */
 export function clampResize(
-  request: { cols: number; rows: number; source?: "host" | "viewer" },
+  request: { cols: number; rows: number; source?: "host" | "viewer"; mode?: TerminalResizeMode },
   host: { cols: number; rows: number },
   clampBrowserToHost: boolean
 ): { cols: number; rows: number } {
   const cols = Math.max(request.cols, 1);
   const rows = Math.max(request.rows, 1);
-  if (clampBrowserToHost && request.source !== "host") {
+  if (clampBrowserToHost && request.source !== "host" && request.mode !== "fill") {
     return {
       cols: Math.min(cols, Math.max(host.cols, 1)),
       rows: Math.min(rows, Math.max(host.rows, 1))
@@ -68,12 +71,14 @@ export async function runSessionDaemon(id: string): Promise<void> {
 
   const scrollback = new ScrollbackBuffer();
   const clients = new Set<Socket>();
+  const hosts = new Set<Socket>();
   // Sockets that have acted as browser viewers (sent a non-host Resize). When
   // the last one disconnects, the PTY reverts to the host terminal's size so a
   // still-attached host terminal is not left rendering into a shrunken grid.
   const viewers = new Set<Socket>();
 
   const clampBrowserToHost = config.terminal.clampBrowserToHost;
+  let terminalMode: TerminalResizeMode = clampBrowserToHost ? "clamped" : "fill";
   const setTitle = config.terminal.setTitle;
   // The name currently reflected as the terminal title. Re-read from meta on
   // change so a dashboard rename propagates to attached terminals.
@@ -89,6 +94,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
   let appliedRows = meta.rows;
 
   let lastAttentionState: boolean | undefined;
+  const warnedHosts = new Set<Socket>();
   let exited = false;
   let exitInfo: { exitCode: number } | undefined;
   let resolveExit: (() => void) | undefined;
@@ -119,6 +125,59 @@ export async function runSessionDaemon(id: string): Promise<void> {
     }
   }
 
+  function broadcastTerminalMode(): void {
+    broadcast(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
+  }
+
+  function writeHostWarning(payload: TerminalWarningPayload): void {
+    const frame = encodeJsonFrame(FrameType.TerminalWarning, payload);
+    for (const host of hosts) {
+      if (!warnedHosts.has(host)) {
+        host.write(frame);
+        warnedHosts.add(host);
+      }
+    }
+  }
+
+  function overgrownWarningPayload(): TerminalWarningPayload | null {
+    const overgrown =
+      terminalMode === "fill" &&
+      hosts.size > 0 &&
+      (appliedCols > Math.max(hostCols, 1) || appliedRows > Math.max(hostRows, 1));
+    if (!overgrown) {
+      return null;
+    }
+    return {
+        kind: "overgrown",
+        cols: appliedCols,
+        rows: appliedRows,
+        hostCols: Math.max(hostCols, 1),
+        hostRows: Math.max(hostRows, 1)
+    };
+  }
+
+  function updateOvergrownWarning(): void {
+    const payload = overgrownWarningPayload();
+    if (payload) {
+      writeHostWarning(payload);
+    } else {
+      warnedHosts.clear();
+    }
+  }
+
+  function applyTerminalMode(mode: TerminalResizeMode): void {
+    const changed = mode !== terminalMode;
+    terminalMode = mode;
+    if (changed) {
+      broadcastTerminalMode();
+    }
+    if (mode === "clamped") {
+      revertToHostSize();
+    } else {
+      updateOvergrownWarning();
+    }
+  }
+
   /**
    * Resolves a resize request to the size actually applied to the PTY. When
    * clamping is enabled, a browser viewer can never grow the PTY beyond the host
@@ -128,10 +187,25 @@ export async function runSessionDaemon(id: string): Promise<void> {
     if (size.source === "host") {
       hostCols = Math.max(size.cols, 1);
       hostRows = Math.max(size.rows, 1);
+      if (terminalMode === "fill" && viewers.size > 0) {
+        updateOvergrownWarning();
+        return;
+      }
     }
 
-    const { cols, rows } = clampResize(size, { cols: hostCols, rows: hostRows }, clampBrowserToHost);
+    if (size.source !== "host" && size.mode && size.mode !== terminalMode) {
+      terminalMode = size.mode;
+      broadcastTerminalMode();
+    }
+
+    const { cols, rows } = clampResize(
+      { ...size, mode: size.source === "host" ? undefined : terminalMode },
+      { cols: hostCols, rows: hostRows },
+      clampBrowserToHost
+    );
     const changed = cols !== appliedCols || rows !== appliedRows;
+    const clampedViewer =
+      size.source !== "host" && (cols !== Math.max(size.cols, 1) || rows !== Math.max(size.rows, 1));
     appliedCols = cols;
     appliedRows = rows;
     pty.resize(cols, rows);
@@ -139,7 +213,10 @@ export async function runSessionDaemon(id: string): Promise<void> {
       headlessTerm.resize(Math.max(cols, 1), Math.max(rows, 1));
       void patchSessionMeta(id, { cols, rows });
       broadcast(encodeJsonFrame(FrameType.PtySize, { cols, rows }));
+    } else if (clampedViewer) {
+      broadcast(encodeJsonFrame(FrameType.PtySize, { cols, rows }));
     }
+    updateOvergrownWarning();
   }
 
   /**
@@ -161,6 +238,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
     headlessTerm.resize(Math.max(target.cols, 1), Math.max(target.rows, 1));
     void patchSessionMeta(id, { cols: target.cols, rows: target.rows });
     broadcast(encodeJsonFrame(FrameType.PtySize, { cols: target.cols, rows: target.rows }));
+    updateOvergrownWarning();
   }
 
   /**
@@ -270,6 +348,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
     clients.add(socket);
     socket.write(encodeFrame(FrameType.Replay, scrollback.snapshot()));
     socket.write(encodeJsonFrame(FrameType.PtySize, { cols: appliedCols, rows: appliedRows }));
+    socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
     if (exited && exitInfo) {
       socket.write(encodeJsonFrame(FrameType.Exit, exitInfo));
       socket.end();
@@ -288,10 +367,17 @@ export async function runSessionDaemon(id: string): Promise<void> {
           pty.write(frame.payload.toString("utf8"));
         } else if (frame.type === FrameType.Resize) {
           const size = parseJsonPayload<ResizePayload>(frame.payload);
-          if (size.source !== "host") {
+          if (size.source === "host") {
+            hosts.add(socket);
+          } else {
             viewers.add(socket);
           }
           applyResize(size);
+        } else if (frame.type === FrameType.TerminalMode) {
+          const mode = parseJsonPayload<TerminalModePayload>(frame.payload).mode;
+          if (mode === "clamped" || mode === "fill") {
+            applyTerminalMode(mode);
+          }
         } else if (frame.type === FrameType.Attention) {
           applyAttention(parseJsonPayload<AttentionPayload>(frame.payload));
         }
@@ -299,9 +385,15 @@ export async function runSessionDaemon(id: string): Promise<void> {
     });
     socket.on("error", () => {
       clients.delete(socket);
+      hosts.delete(socket);
+      warnedHosts.delete(socket);
+      updateOvergrownWarning();
     });
     socket.on("close", () => {
       clients.delete(socket);
+      hosts.delete(socket);
+      warnedHosts.delete(socket);
+      updateOvergrownWarning();
       if (viewers.delete(socket) && viewers.size === 0) {
         revertToHostSize();
       }

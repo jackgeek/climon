@@ -7,12 +7,17 @@ import {
   FrameType,
   parseJsonPayload,
   type ExitPayload,
-  type TitlePayload
+  type TitlePayload,
+  type TerminalWarningPayload
 } from "../ipc/frame.js";
 import { TitleController } from "./title.js";
 import { connectSessionSocket } from "../session-socket.js";
+import { describeDetachKey } from "./detach-key.js";
 
 const DETACH_KEY = 0x64; // 'd'
+const RESTORE_CLAMPED_KEY = 0x63; // 'c'
+
+type InputAction = "none" | "detach" | "restore-clamped";
 
 export interface AttachResult {
   detached: boolean;
@@ -21,10 +26,10 @@ export interface AttachResult {
 
 interface ProcessedInput {
   forward: Buffer;
-  detach: boolean;
+  action: InputAction;
 }
 
-class InputProcessor {
+export class InputProcessor {
   private armed = false;
 
   constructor(private readonly prefix: number) {}
@@ -35,7 +40,10 @@ class InputProcessor {
       if (this.armed) {
         this.armed = false;
         if (byte === DETACH_KEY) {
-          return { forward: Buffer.from(out), detach: true };
+          return { forward: Buffer.from(out), action: "detach" };
+        }
+        if (byte === RESTORE_CLAMPED_KEY) {
+          return { forward: Buffer.from(out), action: "restore-clamped" };
         }
         out.push(this.prefix, byte);
       } else if (byte === this.prefix) {
@@ -44,7 +52,7 @@ class InputProcessor {
         out.push(byte);
       }
     }
-    return { forward: Buffer.from(out), detach: false };
+    return { forward: Buffer.from(out), action: "none" };
   }
 }
 
@@ -71,11 +79,14 @@ export function connectToSession(socketPath: string, detachPrefix: number = 0x1c
     const titleController = new TitleController(process.stdout);
 
     const onStdin = (chunk: Buffer): void => {
-      const { forward, detach } = inputProcessor.process(chunk);
+      const { forward, action } = inputProcessor.process(chunk);
       if (forward.length > 0) {
         socket.write(encodeFrame(FrameType.Input, forward));
       }
-      if (detach) {
+      if (action === "restore-clamped") {
+        socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: "clamped" }));
+      }
+      if (action === "detach") {
         detached = true;
         cleanup();
         socket.end();
@@ -124,6 +135,16 @@ export function connectToSession(socketPath: string, detachPrefix: number = 0x1c
           exitCode = parseJsonPayload<ExitPayload>(frame.payload).exitCode;
         } else if (frame.type === FrameType.Title) {
           titleController.apply(parseJsonPayload<TitlePayload>(frame.payload).name);
+        } else if (frame.type === FrameType.TerminalWarning) {
+          const warning = parseJsonPayload<TerminalWarningPayload>(frame.payload);
+          if (warning.kind === "overgrown") {
+            process.stdout.write(
+              `\r\n\x1b[33m[climon] Browser fill-window terminal is ${warning.cols}x${warning.rows}, ` +
+                `larger than this terminal (${warning.hostCols}x${warning.hostRows}). ` +
+                `The local terminal may not render correctly. Press ${describeDetachKey(detachPrefix)} then c ` +
+                `to restore clamped mode.\x1b[0m\r\n`
+            );
+          }
         }
       }
     });
