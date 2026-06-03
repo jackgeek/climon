@@ -20,6 +20,20 @@ describe("clampResize", () => {
     expect(clampResize({ cols: 200, rows: 50, source: "viewer" }, host, false)).toEqual({ cols: 200, rows: 50 });
   });
 
+  test("passes a fill-mode browser viewport through even when clamping is enabled", () => {
+    expect(clampResize({ cols: 200, rows: 50, source: "viewer", mode: "fill" }, host, true)).toEqual({
+      cols: 200,
+      rows: 50
+    });
+  });
+
+  test("clamps a clamped-mode browser viewport when clamping is enabled", () => {
+    expect(clampResize({ cols: 200, rows: 50, source: "viewer", mode: "clamped" }, host, true)).toEqual({
+      cols: 80,
+      rows: 24
+    });
+  });
+
   test("treats a missing source as a viewer", () => {
     expect(clampResize({ cols: 200, rows: 50 }, host, true)).toEqual({ cols: 80, rows: 24 });
   });

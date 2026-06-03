@@ -46,6 +46,10 @@ climon attach <id>        # reconnect your terminal
 Detaching does **not** stop the command, and restarting `climon server` does not
 affect running sessions.
 
+If the dashboard is in Fill window mode and the browser grows the shared PTY
+beyond your attached local terminal, press **Ctrl-\\** then **c** in the local
+climon client to restore Clamp to remote terminal size mode.
+
 ## Manage sessions
 
 ```bash
@@ -68,6 +72,13 @@ climon kill <id>          # terminate a session and remove its metadata
     continue).
   - For **completed/failed** sessions, the terminal shows the captured final
     output (read-only).
+- **View mode**: open the hamburger menu and toggle **Clamp size**. When checked,
+  the browser and attached climon client stay on the same terminal grid. When
+  unchecked, the browser terminal resizes the PTY to the available browser space.
+  While the browser terminal is focused, **Ctrl-+** and **Ctrl--** change the
+  terminal font size instead of zooming the browser. If an unclamped browser size
+  makes the PTY too large for an attached climon client terminal, that local
+  terminal shows a warning and the restore shortcut.
 - The list updates automatically as sessions change state (via Server-Sent
   Events).
 

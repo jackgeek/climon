@@ -11,7 +11,18 @@ import {
   loadConfig,
   saveConfig
 } from "../config.js";
-import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload, type ExitPayload, type PtySizePayload } from "../ipc/frame.js";
+import {
+  encodeFrame,
+  encodeJsonFrame,
+  FrameDecoder,
+  FrameType,
+  parseJsonPayload,
+  type ExitPayload,
+  type PtySizePayload,
+  type TerminalModePayload,
+  type ResizePayload,
+  type TerminalResizeMode
+} from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { AnsiColor, ClimonConfig, SessionMeta } from "../types.js";
@@ -131,6 +142,21 @@ export function isAllowedSpawnRequest(
 
 export function splitCommand(command: string): string[] {
   return command.trim().split(/\s+/).filter((part) => part.length > 0);
+}
+
+export function browserResizePayload(message: {
+  cols?: number;
+  rows?: number;
+  mode?: TerminalResizeMode;
+}): ResizePayload | null {
+  if (!message.cols || !message.rows) {
+    return null;
+  }
+  const payload: ResizePayload = { cols: message.cols, rows: message.rows, source: "viewer" };
+  if (message.mode === "clamped" || message.mode === "fill") {
+    payload.mode = message.mode;
+  }
+  return payload;
 }
 
 export interface SpawnMetaOptions {
@@ -733,6 +759,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             } else if (frame.type === FrameType.PtySize) {
               const size = parseJsonPayload<PtySizePayload>(frame.payload);
               ws.send(JSON.stringify({ type: "size", cols: size.cols, rows: size.rows }));
+            } else if (frame.type === FrameType.TerminalMode) {
+              const mode = parseJsonPayload<TerminalModePayload>(frame.payload);
+              ws.send(JSON.stringify({ type: "mode", mode: mode.mode }));
             }
           }
         });
@@ -748,11 +777,22 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           return;
         }
         try {
-          const message = JSON.parse(raw) as { type: string; data?: string; cols?: number; rows?: number };
+          const message = JSON.parse(raw) as {
+            type: string;
+            data?: string;
+            cols?: number;
+            rows?: number;
+            mode?: TerminalResizeMode;
+          };
           if (message.type === "input" && typeof message.data === "string") {
             daemon.write(encodeFrame(FrameType.Input, Buffer.from(message.data, "utf8")));
           } else if (message.type === "resize" && message.cols && message.rows) {
-            daemon.write(encodeJsonFrame(FrameType.Resize, { cols: message.cols, rows: message.rows, source: "viewer" }));
+            const payload = browserResizePayload(message);
+            if (payload) {
+              daemon.write(encodeJsonFrame(FrameType.Resize, payload));
+            }
+          } else if (message.type === "mode" && (message.mode === "clamped" || message.mode === "fill")) {
+            daemon.write(encodeJsonFrame(FrameType.TerminalMode, { mode: message.mode }));
           }
         } catch {
           // Ignore malformed messages.
