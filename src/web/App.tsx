@@ -359,12 +359,17 @@ export function App() {
   // until maximized, so focusing it would be premature.
   const handleSelect = useCallback(
     (id: string): void => {
+      const selected = sessions.find((s) => s.id === id);
       setActiveId(id);
+      const attentionMatchedAt = selected?.attentionMatchedAt;
+      if (selected?.status === "needs-attention" && attentionMatchedAt) {
+        requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id, attentionMatchedAt));
+      }
       if (!isMobile) {
         requestAnimationFrame(() => terminalRef.current?.focus());
       }
     },
-    [isMobile]
+    [isMobile, sessions]
   );
 
   const handleSidebarCollapsedChange = useCallback((collapsed: boolean): void => {
@@ -414,8 +419,13 @@ export function App() {
           viewMode={viewMode}
           onViewModeChange={requestViewMode}
           onMaximize={(id) => {
+            const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
             setMaximized(true);
+            const attentionMatchedAt = selected?.attentionMatchedAt;
+            if (selected?.status === "needs-attention" && attentionMatchedAt) {
+              requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id, attentionMatchedAt));
+            }
           }}
         />
       </div>

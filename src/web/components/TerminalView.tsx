@@ -4,7 +4,14 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
-import { attachKey, attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
+import {
+  attachKey,
+  attachSocketUrl,
+  attentionAckMessage,
+  canSendAttentionAck,
+  fetchScrollback,
+  isLiveStatus
+} from "../api.js";
 import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
@@ -14,6 +21,7 @@ export interface TerminalHandle {
   refit: () => void;
   sendInput: (data: string) => void;
   setViewMode: (mode: TerminalResizeMode) => void;
+  acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
   focus: () => void;
 }
 
@@ -44,10 +52,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const attachedSessionIdRef = useRef<string | null>(null);
   const viewModeRef = useRef<TerminalResizeMode>(viewMode);
   const onViewModeChangeRef = useRef(onViewModeChange);
   const fontSizeRef = useRef(13);
   const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
+  const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -67,6 +77,29 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
   function sendMode(mode: TerminalResizeMode): void {
     sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
+  }
+
+  function sendAttentionAck(sessionId: string, attentionMatchedAt: string): void {
+    const ws = wsRef.current;
+    if (ws && canSendAttentionAck(attachedSessionIdRef.current, sessionId, ws.readyState === WebSocket.OPEN)) {
+      ws.send(attentionAckMessage(attentionMatchedAt));
+    } else {
+      queuedAttentionAckRef.current = { sessionId, attentionMatchedAt };
+    }
+  }
+
+  function flushAttentionAck(): void {
+    const ws = wsRef.current;
+    const pending = queuedAttentionAckRef.current;
+    if (
+      !ws ||
+      !pending ||
+      !canSendAttentionAck(attachedSessionIdRef.current, pending.sessionId, ws.readyState === WebSocket.OPEN)
+    ) {
+      return;
+    }
+    queuedAttentionAckRef.current = null;
+    ws.send(attentionAckMessage(pending.attentionMatchedAt));
   }
 
   function fitNow(): void {
@@ -91,6 +124,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         // Ignore: socket may already be closing.
       }
       wsRef.current = null;
+      attachedSessionIdRef.current = null;
     }
   }
 
@@ -184,8 +218,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       const ws = new WebSocket(attachSocketUrl(session.id));
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
+      attachedSessionIdRef.current = session.id;
       ws.onopen = () => {
         flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
+        flushAttentionAck();
         fitNow();
       };
       ws.onmessage = (ev) => {
@@ -237,8 +273,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       cancelled = true;
     };
     // Re-attach only when the session, its live/terminated state, or visibility
-    // changes -- never on running <-> needs-attention idle toggles, which would
-    // reset the terminal and cause a periodic resize flicker.
+    // changes -- never on live-status idle/acknowledgement transitions, which
+    // would reset the terminal and cause a periodic resize flicker.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachKey(session, visible)]);
 
@@ -264,6 +300,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       sendMode(mode);
       refit();
     },
+    acknowledgeAttention: sendAttentionAck,
     focus: () => termRef.current?.focus()
   }));
 

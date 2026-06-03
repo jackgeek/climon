@@ -3,6 +3,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultConfig } from "../src/config.js";
+import { encodeJsonFrame, FrameDecoder, FrameType, type AttentionPayload } from "../src/ipc/frame.js";
+import { connectSessionSocket } from "../src/session-socket.js";
 import type { SessionMeta } from "../src/types.js";
 
 // Use a real Linux-filesystem temp dir for CLIMON_HOME: unix domain sockets do
@@ -22,9 +24,34 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 8000): Promise<
     if (v !== undefined) {
       return v;
     }
+
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error("timed out");
+}
+
+async function acknowledgeAttention(id: string): Promise<void> {
+  const meta = await readMeta(id);
+  await new Promise<void>((resolve, reject) => {
+    const socket = connectSessionSocket(meta.socketPath);
+    const decoder = new FrameDecoder();
+    socket.once("connect", () => {
+      socket.write(encodeJsonFrame(FrameType.Attention, {
+        needsAttention: false,
+        reason: "viewed",
+        attentionMatchedAt: meta.attentionMatchedAt
+      } satisfies AttentionPayload));
+    });
+    socket.on("data", (chunk) => {
+      for (const frame of decoder.push(chunk)) {
+        if (frame.type === FrameType.Replay) {
+          socket.end();
+          resolve();
+        }
+      }
+    });
+    socket.once("error", reject);
+  });
 }
 
 afterEach(async () => {
@@ -52,6 +79,51 @@ describe("headless session attention", () => {
       });
       expect(meta.status).toBe("needs-attention");
       expect(meta.priorityReason).toBe("attention");
+    } finally {
+      const pid = await readMeta(id)
+        .then((m) => m.daemonPid)
+        .catch(() => undefined);
+      if (pid) {
+        try {
+          process.kill(pid);
+        } catch {
+          // already gone
+        }
+      }
+      proc.kill();
+      await proc.exited;
+    }
+  }, 20000);
+
+  test("acknowledging a static needs-attention session keeps it available until the screen changes", async () => {
+    await mkdir(home, { recursive: true });
+    const config = defaultConfig();
+    config.attention.idleSeconds = 1;
+    await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
+
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    try {
+      await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "needs-attention" ? m : undefined;
+      });
+
+      await acknowledgeAttention(id);
+
+      const available = await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "available" ? m : undefined;
+      });
+      expect(available.priorityReason).toBe("running");
+
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const stillAvailable = await readMeta(id);
+      expect(stillAvailable.status).toBe("available");
+      expect(stillAvailable.priorityReason).toBe("running");
     } finally {
       const pid = await readMeta(id)
         .then((m) => m.daemonPid)

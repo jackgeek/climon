@@ -17,6 +17,7 @@ import {
   FrameDecoder,
   FrameType,
   parseJsonPayload,
+  type AttentionPayload,
   type ExitPayload,
   type PtySizePayload,
   type TerminalModePayload,
@@ -158,6 +159,17 @@ export function browserResizePayload(message: {
     payload.mode = message.mode;
   }
   return payload;
+}
+
+export function browserAttentionPayload(message: {
+  needsAttention?: boolean;
+  attentionMatchedAt?: unknown;
+  reason?: unknown;
+}): AttentionPayload | null {
+  if (message.needsAttention !== false || typeof message.attentionMatchedAt !== "string") {
+    return null;
+  }
+  return { needsAttention: false, reason: "viewed", attentionMatchedAt: message.attentionMatchedAt };
 }
 
 export interface SpawnMetaOptions {
@@ -324,7 +336,7 @@ export async function shouldMarkDisconnected(
   session: SessionMeta,
   probe: (socketPath: string) => Promise<boolean>
 ): Promise<boolean> {
-  if (session.status !== "running" && session.status !== "needs-attention") {
+  if (session.status !== "running" && session.status !== "available" && session.status !== "needs-attention") {
     return false;
   }
   if (session.origin === "remote") {
@@ -822,6 +834,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             cols?: number;
             rows?: number;
             mode?: TerminalResizeMode;
+            needsAttention?: boolean;
+            attentionMatchedAt?: string;
           };
           if (message.type === "input" && typeof message.data === "string") {
             daemon.write(encodeFrame(FrameType.Input, Buffer.from(message.data, "utf8")));
@@ -832,6 +846,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             }
           } else if (message.type === "mode" && (message.mode === "clamped" || message.mode === "fill")) {
             daemon.write(encodeJsonFrame(FrameType.TerminalMode, { mode: message.mode }));
+          } else if (message.type === "attention") {
+            const payload = browserAttentionPayload(message);
+            if (payload) {
+              daemon.write(encodeJsonFrame(FrameType.Attention, payload));
+            }
           }
         } catch {
           // Ignore malformed messages.

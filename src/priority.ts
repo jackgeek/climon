@@ -3,10 +3,11 @@ import { DEFAULT_PRIORITY } from "./session-meta.js";
 
 const rank: Record<SessionMeta["status"], number> = {
   "needs-attention": 0,
-  running: 1,
-  completed: 2,
-  failed: 3,
-  disconnected: 4
+  available: 1,
+  running: 2,
+  completed: 3,
+  failed: 4,
+  disconnected: 5
 };
 
 function timestamp(value: string | undefined): number {

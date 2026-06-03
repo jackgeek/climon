@@ -1,4 +1,4 @@
-export type SessionStatus = "running" | "needs-attention" | "completed" | "failed" | "disconnected";
+export type SessionStatus = "running" | "available" | "needs-attention" | "completed" | "failed" | "disconnected";
 
 export type AnsiColor =
   | "black"

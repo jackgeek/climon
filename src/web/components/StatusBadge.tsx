@@ -1,16 +1,24 @@
 import { Badge } from "@fluentui/react-components";
 import type { SessionStatus } from "../../types.js";
 
-const COLOR: Record<SessionStatus, "informative" | "warning" | "success" | "danger" | "subtle"> = {
-  running: "informative",
+type BadgeColor = "brand" | "informative" | "warning" | "success" | "danger" | "subtle";
+
+const COLOR: Record<SessionStatus, BadgeColor> = {
+  running: "brand",
+  available: "success",
   "needs-attention": "warning",
   completed: "success",
   failed: "danger",
   disconnected: "subtle"
 };
 
+export function statusBadgeColor(status: SessionStatus): BadgeColor {
+  return COLOR[status];
+}
+
 export const STATUS_LABELS: Record<SessionStatus, string> = {
   running: "running",
+  available: "available",
   "needs-attention": "needs attention",
   completed: "completed",
   failed: "failed",
@@ -19,6 +27,7 @@ export const STATUS_LABELS: Record<SessionStatus, string> = {
 
 export const STATUS_INITIALS: Record<SessionStatus, string> = {
   running: "R",
+  available: "A",
   "needs-attention": "NA",
   completed: "C",
   failed: "F",
@@ -35,7 +44,7 @@ export function StatusBadge({ status, compact = false, showTitle = true }: Props
   return (
     <Badge
       appearance="filled"
-      color={COLOR[status]}
+      color={statusBadgeColor(status)}
       size="small"
       title={showTitle ? STATUS_LABELS[status] : undefined}
     >

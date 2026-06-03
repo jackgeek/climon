@@ -48,6 +48,16 @@ describe("sortSessionsByPriority", () => {
     expect(sorted).toEqual(["a", "r", "c"]);
   });
 
+  test("available sorts between needs-attention and running", () => {
+    const sessions = [
+      meta({ id: "r", status: "running" }),
+      meta({ id: "v", status: "available" }),
+      meta({ id: "a", status: "needs-attention" })
+    ];
+    const sorted = sortSessionsByPriority(sessions).map((s) => s.id);
+    expect(sorted).toEqual(["a", "v", "r"]);
+  });
+
   test("ties broken by most recent update", () => {
     const sessions = [
       meta({ id: "old", status: "running", updatedAt: "2020-01-01T00:00:00.000Z" }),
@@ -80,9 +90,10 @@ describe("sortSessionsByPriority", () => {
       meta({ id: "fail", status: "failed", priority: 500 }),
       meta({ id: "done", status: "completed", priority: 500 }),
       meta({ id: "run", status: "running", priority: 500 }),
+      meta({ id: "avail", status: "available", priority: 500 }),
       meta({ id: "attn", status: "needs-attention", priority: 500 })
     ];
     const sorted = sortSessionsByPriority(sessions).map((s) => s.id);
-    expect(sorted).toEqual(["attn", "run", "done", "fail", "disc"]);
+    expect(sorted).toEqual(["attn", "avail", "run", "done", "fail", "disc"]);
   });
 });

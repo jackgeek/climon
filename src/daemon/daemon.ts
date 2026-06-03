@@ -61,6 +61,22 @@ export function revertSize(
   return { cols, rows };
 }
 
+export function shouldApplyUserAttentionAcknowledgement(
+  lastAttentionState: boolean | undefined,
+  currentAttentionMatchedAt: string | undefined,
+  acknowledgedAttentionMatchedAt: string | undefined,
+  attentionFingerprint: string | undefined,
+  currentFingerprint: string
+): boolean {
+  return (
+    lastAttentionState === true &&
+    currentAttentionMatchedAt !== undefined &&
+    acknowledgedAttentionMatchedAt === currentAttentionMatchedAt &&
+    attentionFingerprint !== undefined &&
+    currentFingerprint === attentionFingerprint
+  );
+}
+
 export async function runSessionDaemon(id: string): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
@@ -94,6 +110,8 @@ export async function runSessionDaemon(id: string): Promise<void> {
   let appliedRows = meta.rows;
 
   let lastAttentionState: boolean | undefined;
+  let currentAttentionMatchedAt: string | undefined;
+  let currentAttentionFingerprint: string | undefined;
   const warnedHosts = new Set<Socket>();
   let exited = false;
   let exitInfo: { exitCode: number } | undefined;
@@ -247,8 +265,41 @@ export async function runSessionDaemon(id: string): Promise<void> {
    * Transitions are de-duped against the last applied value and ignored after
    * the PTY exits so the completed/failed patch always wins.
    */
-  function applyAttention(payload: AttentionPayload): void {
+  function applyAttention(
+    payload: AttentionPayload,
+    source: "detector" | "user" = "detector",
+    currentFingerprint: string = fingerprint()
+  ): void {
     if (exited) {
+      return;
+    }
+    if (!payload.needsAttention) {
+      if (
+        source === "user" &&
+        !shouldApplyUserAttentionAcknowledgement(
+          lastAttentionState,
+          currentAttentionMatchedAt,
+          payload.attentionMatchedAt,
+          currentAttentionFingerprint,
+          currentFingerprint
+        )
+      ) {
+        return;
+      }
+      lastAttentionState = false;
+      currentAttentionMatchedAt = undefined;
+      currentAttentionFingerprint = undefined;
+      if (source === "user") {
+        idleDetector.acknowledge(currentFingerprint, Date.now());
+      }
+      const now = new Date().toISOString();
+      void patchSessionMeta(id, {
+        status: source === "user" ? "available" : "running",
+        priorityReason: "running",
+        attentionMatchedAt: undefined,
+        attentionReason: undefined,
+        lastActivityAt: now
+      });
       return;
     }
     if (lastAttentionState === payload.needsAttention) {
@@ -256,21 +307,15 @@ export async function runSessionDaemon(id: string): Promise<void> {
     }
     lastAttentionState = payload.needsAttention;
     const now = new Date().toISOString();
-    if (payload.needsAttention) {
-      void patchSessionMeta(id, {
-        status: "needs-attention",
-        priorityReason: "attention",
-        attentionMatchedAt: now,
-        attentionReason: payload.reason,
-        lastActivityAt: now
-      });
-    } else {
-      void patchSessionMeta(id, {
-        status: "running",
-        priorityReason: "running",
-        lastActivityAt: now
-      });
-    }
+    currentAttentionMatchedAt = now;
+    currentAttentionFingerprint = currentFingerprint;
+    void patchSessionMeta(id, {
+      status: "needs-attention",
+      priorityReason: "attention",
+      attentionMatchedAt: now,
+      attentionReason: payload.reason,
+      lastActivityAt: now
+    });
   }
 
   const { file, args } = resolveCommand(meta.command);
@@ -312,9 +357,10 @@ export async function runSessionDaemon(id: string): Promise<void> {
   const idleTimer =
     config.attention.idleSeconds > 0
       ? setInterval(() => {
-          const transition = idleDetector.update(fingerprint(), Date.now());
+          const currentFingerprint = fingerprint();
+          const transition = idleDetector.update(currentFingerprint, Date.now());
           if (transition) {
-            applyAttention(transition);
+            applyAttention(transition, "detector", currentFingerprint);
           }
         }, 1000)
       : undefined;
@@ -379,7 +425,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
             applyTerminalMode(mode);
           }
         } else if (frame.type === FrameType.Attention) {
-          applyAttention(parseJsonPayload<AttentionPayload>(frame.payload));
+          applyAttention(parseJsonPayload<AttentionPayload>(frame.payload), "user");
         }
       }
     });

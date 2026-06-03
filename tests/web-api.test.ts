@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { attachKey, buildSetupScript } from "../src/web/api.js";
+import { browserAttentionPayload } from "../src/server/server.js";
+import {
+  attachKey,
+  attentionAckMessage,
+  buildSetupScript,
+  canSendAttentionAck,
+  isLiveStatus
+} from "../src/web/api.js";
 import type { SessionMeta } from "../src/types.js";
 
 function session(overrides: Partial<SessionMeta>): SessionMeta {
@@ -25,7 +32,9 @@ describe("attachKey", () => {
     // Idle detection flips a live session running <-> needs-attention. Both are
     // "live", so the terminal must keep the same WebSocket (no reset/refit flicker).
     const running = attachKey(session({ status: "running" }), true);
+    const available = attachKey(session({ status: "available" }), true);
     const attention = attachKey(session({ status: "needs-attention" }), true);
+    expect(running).toBe(available);
     expect(running).toBe(attention);
   });
 
@@ -49,6 +58,58 @@ describe("attachKey", () => {
 
   test("returns a stable sentinel when there is no session", () => {
     expect(attachKey(null, true)).toBe(attachKey(null, false));
+  });
+});
+
+describe("isLiveStatus", () => {
+  test("treats running, available, and needs-attention as live statuses", () => {
+    expect(isLiveStatus("running")).toBe(true);
+    expect(isLiveStatus("available")).toBe(true);
+    expect(isLiveStatus("needs-attention")).toBe(true);
+    expect(isLiveStatus("completed")).toBe(false);
+    expect(isLiveStatus("failed")).toBe(false);
+    expect(isLiveStatus("disconnected")).toBe(false);
+  });
+});
+
+describe("browserAttentionPayload", () => {
+  test("accepts an acknowledgement payload", () => {
+    expect(browserAttentionPayload({ needsAttention: false, attentionMatchedAt: "token-1" })).toEqual({
+      needsAttention: false,
+      reason: "viewed",
+      attentionMatchedAt: "token-1"
+    });
+  });
+
+  test("rejects browser attempts to set attention", () => {
+    expect(browserAttentionPayload({ needsAttention: true })).toBeNull();
+  });
+
+  test("rejects messages without an explicit acknowledgement", () => {
+    expect(browserAttentionPayload({})).toBeNull();
+  });
+
+  test("rejects acknowledgement messages without an attention token", () => {
+    expect(browserAttentionPayload({ needsAttention: false })).toBeNull();
+  });
+});
+
+describe("attentionAckMessage", () => {
+  test("serializes a browser attention acknowledgement", () => {
+    expect(JSON.parse(attentionAckMessage("token-1"))).toEqual({
+      type: "attention",
+      needsAttention: false,
+      attentionMatchedAt: "token-1"
+    });
+  });
+});
+
+describe("canSendAttentionAck", () => {
+  test("sends only when the open socket belongs to the target session", () => {
+    expect(canSendAttentionAck("new-session", "new-session", true)).toBe(true);
+    expect(canSendAttentionAck("old-session", "new-session", true)).toBe(false);
+    expect(canSendAttentionAck(null, "new-session", true)).toBe(false);
+    expect(canSendAttentionAck("new-session", "new-session", false)).toBe(false);
   });
 });
 
