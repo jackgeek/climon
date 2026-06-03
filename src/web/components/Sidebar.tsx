@@ -7,9 +7,15 @@ import {
   MenuTrigger,
   Text,
   makeStyles,
+  mergeClasses,
   tokens
 } from "@fluentui/react-components";
-import { Add20Regular, Navigation20Regular } from "@fluentui/react-icons";
+import {
+  Add20Regular,
+  ChevronDoubleLeftRegular,
+  ChevronDoubleRightRegular,
+  Navigation20Regular
+} from "@fluentui/react-icons";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { SessionItem } from "./SessionItem.js";
@@ -23,6 +29,9 @@ const useStyles = makeStyles({
     minHeight: 0,
     height: "100%"
   },
+  collapsedRoot: {
+    width: "64px"
+  },
   header: {
     display: "flex",
     alignItems: "center",
@@ -33,9 +42,16 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     flex: "0 0 auto"
   },
+  collapsedHeader: {
+    justifyContent: "center",
+    padding: "4px 8px"
+  },
   title: {
     fontSize: "16px",
     fontWeight: tokens.fontWeightSemibold
+  },
+  hiddenTitle: {
+    display: "none"
   },
   version: {
     marginLeft: "6px",
@@ -52,10 +68,25 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: "13px"
   },
+  collapsedEmpty: {
+    padding: "12px 4px",
+    textAlign: "center",
+    fontSize: "11px"
+  },
   actions: {
     display: "flex",
     alignItems: "center",
     gap: "4px"
+  },
+  footer: {
+    flex: "0 0 auto",
+    display: "flex",
+    justifyContent: "flex-end",
+    padding: "6px 8px",
+    borderTop: `1px solid ${tokens.colorNeutralStroke1}`
+  },
+  collapsedFooter: {
+    justifyContent: "center"
   }
 });
 
@@ -63,6 +94,8 @@ interface Props {
   sessions: SessionMeta[];
   activeId: string | null;
   serverVersion?: string | null;
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
@@ -78,6 +111,8 @@ export function Sidebar({
   sessions,
   activeId,
   serverVersion,
+  collapsed,
+  onCollapsedChange,
   onSelect,
   onClose,
   onNew,
@@ -91,14 +126,14 @@ export function Sidebar({
   const styles = useStyles();
   const animatedList = useAnimatedListReorder(sessions.map((session) => session.id));
   return (
-    <div className={styles.root}>
-      <div className={styles.header}>
-        <Text className={styles.title}>
+    <div className={mergeClasses(styles.root, collapsed && styles.collapsedRoot)}>
+      <div className={mergeClasses(styles.header, collapsed && styles.collapsedHeader)}>
+        <Text className={mergeClasses(styles.title, collapsed && styles.hiddenTitle)}>
           climon
           {serverVersion && <span className={styles.version}>v{serverVersion}</span>}
         </Text>
         <div className={styles.actions}>
-          {sessions.length === 0 && (
+          {sessions.length === 0 && !collapsed && (
             <Button
               appearance="subtle"
               icon={<Add20Regular />}
@@ -130,7 +165,9 @@ export function Sidebar({
       </div>
       <div className={styles.list}>
         {sessions.length === 0 ? (
-          <div className={styles.empty}>No sessions yet.</div>
+          <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)}>
+            {collapsed ? "No sessions" : "No sessions yet."}
+          </div>
         ) : (
           sessions.map((s) => (
             <div
@@ -141,6 +178,7 @@ export function Sidebar({
               <SessionItem
                 session={s}
                 active={s.id === activeId}
+                compact={collapsed}
                 onSelect={onSelect}
                 onClose={onClose}
                 onNew={onNewFrom}
@@ -150,6 +188,16 @@ export function Sidebar({
             </div>
           ))
         )}
+      </div>
+      <div className={mergeClasses(styles.footer, collapsed && styles.collapsedFooter)}>
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={collapsed ? <ChevronDoubleRightRegular /> : <ChevronDoubleLeftRegular />}
+          title={collapsed ? "Expand session list" : "Collapse session list"}
+          aria-label={collapsed ? "Expand session list" : "Collapse session list"}
+          onClick={() => onCollapsedChange(!collapsed)}
+        />
       </div>
     </div>
   );

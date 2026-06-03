@@ -11,6 +11,7 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 import { KeyBar } from "./components/KeyBar.js";
+import { readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 
@@ -38,6 +39,14 @@ const useStyles = makeStyles({
       maxHeight: "none",
       borderRight: "none",
       borderBottom: "none"
+    }
+  },
+  sidebarCollapsed: {
+    width: "64px",
+    minWidth: "64px",
+    "@media (max-width: 768px)": {
+      width: "64px",
+      minWidth: "64px"
     }
   },
   main: {
@@ -130,6 +139,7 @@ export function App() {
   const [closeTarget, setCloseTarget] = useState<SessionMeta | null>(null);
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [keyBarOpen, setKeyBarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches
@@ -345,17 +355,30 @@ export function App() {
     [isMobile]
   );
 
+  const handleSidebarCollapsedChange = useCallback((collapsed: boolean): void => {
+    setSidebarCollapsed(collapsed);
+    writeSidebarCollapsed(collapsed);
+  }, []);
+
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
 
   return (
     <div className={styles.root}>
       {showSplash && <SplashScreen onDone={dismissSplash} />}
-      <div className={mergeClasses(styles.sidebar, maximized && styles.hidden)}>
+      <div
+        className={mergeClasses(
+          styles.sidebar,
+          sidebarCollapsed && styles.sidebarCollapsed,
+          maximized && styles.hidden
+        )}
+      >
         <Sidebar
           sessions={sessions}
           activeId={activeId}
           serverVersion={serverVersion}
+          collapsed={sidebarCollapsed}
+          onCollapsedChange={handleSidebarCollapsedChange}
           onSelect={handleSelect}
           onClose={(id) => requestClose(id)}
           onNew={() => {
