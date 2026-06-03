@@ -38,8 +38,12 @@ export function getScrollbackPath(id: string, env: NodeJS.ProcessEnv = process.e
   return join(getSessionsDir(env), `${id}.scrollback`);
 }
 
-export function getSocketPath(id: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (process.platform === "win32") {
+export function getSocketPath(
+  id: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string {
+  if (platform === "win32") {
     return `\\\\.\\pipe\\climon-${id}`;
   }
   return join(getSocketDir(env), `${id}.sock`);

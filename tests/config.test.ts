@@ -7,7 +7,8 @@ import {
   defaultConfig,
   getScrollbackPath,
   getSessionMetaPath,
-  getSessionsDir
+  getSessionsDir,
+  getSocketPath
 } from "../src/config.js";
 
 const env = { CLIMON_HOME: "/tmp/climon-test" } as NodeJS.ProcessEnv;
@@ -23,6 +24,14 @@ describe("config paths", () => {
 
   test("scrollback path uses id", () => {
     expect(getScrollbackPath("abc", env)).toBe(join("/tmp/climon-test", "sessions", "abc.scrollback"));
+  });
+
+  test("socket path is a unix socket on posix", () => {
+    expect(getSocketPath("abc", env, "linux")).toBe(join("/tmp/climon-test", "sock", "abc.sock"));
+  });
+
+  test("socket path is a named pipe on win32", () => {
+    expect(getSocketPath("abc", env, "win32")).toBe("\\\\.\\pipe\\climon-abc");
   });
 });
 
