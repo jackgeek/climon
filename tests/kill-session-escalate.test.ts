@@ -24,7 +24,11 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-async function seedSession(id: string, daemonPid?: number): Promise<string> {
+async function seedSession(
+  id: string,
+  daemonPid?: number,
+  overrides: Partial<SessionMeta> = {}
+): Promise<string> {
   const meta: SessionMeta = {
     id,
     command: ["bash"],
@@ -38,7 +42,8 @@ async function seedSession(id: string, daemonPid?: number): Promise<string> {
     rows: 24,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    lastActivityAt: new Date().toISOString()
+    lastActivityAt: new Date().toISOString(),
+    ...overrides
   };
   await writeSessionMeta(meta);
   return id;
@@ -120,9 +125,12 @@ describe("killAllSessions", () => {
     expect(await readSessionMeta("remote-only")).toBeDefined();
   });
 
-  test("kills and removes every local session", async () => {
+  test("kills and removes every active local session", async () => {
     await seedSession("one", 1111);
-    await seedSession("two", 2222);
+    await seedSession("two", 2222, {
+      status: "needs-attention",
+      priorityReason: "attention"
+    });
     await seedSession("remote-only");
     const calls: Array<[number, boolean]> = [];
 
@@ -142,6 +150,26 @@ describe("killAllSessions", () => {
     expect(await readSessionMeta("one")).toBeUndefined();
     expect(await readSessionMeta("two")).toBeUndefined();
     expect(await readSessionMeta("remote-only")).toBeDefined();
+  });
+
+  test("skips finished local sessions that retained a daemon pid", async () => {
+    await seedSession("finished", 9999, {
+      status: "completed",
+      priorityReason: "completed"
+    });
+    const calls: Array<[number, boolean]> = [];
+
+    const code = await killAllSessions(
+      (pid, force) => {
+        calls.push([pid, force]);
+        return true;
+      },
+      () => false
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([]);
+    expect(await readSessionMeta("finished")).toBeDefined();
   });
 
   test("preserves failed local sessions and returns non-zero", async () => {

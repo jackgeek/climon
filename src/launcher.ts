@@ -368,7 +368,11 @@ export async function killAllSessions(
   isAlive: (pid: number) => boolean = isProcessAlive
 ): Promise<number> {
   const localSessions = (await listSessions())
-    .filter((session) => session.daemonPid !== undefined)
+    .filter(
+      (session) =>
+        (session.status === "running" || session.status === "needs-attention") &&
+        session.daemonPid !== undefined
+    )
     .sort((a, b) => a.id.localeCompare(b.id));
   if (localSessions.length === 0) {
     process.stdout.write("No local climon sessions found.\n");

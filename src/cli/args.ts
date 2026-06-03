@@ -28,7 +28,7 @@ Usage:
   climon config <key> [value]   Get/set remote connection config (git-style)
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
-  climon kill --all            Terminate all local sessions
+  climon kill --all            Terminate active local sessions
   climon --version             Show the climon version
   climon help                  Show this help
 
