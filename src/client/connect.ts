@@ -6,8 +6,10 @@ import {
   FrameDecoder,
   FrameType,
   parseJsonPayload,
-  type ExitPayload
+  type ExitPayload,
+  type TitlePayload
 } from "../ipc/frame.js";
+import { TitleController } from "./title.js";
 
 const DETACH_KEY = 0x64; // 'd'
 
@@ -65,6 +67,7 @@ export function connectToSession(socketPath: string, detachPrefix: number = 0x1c
     let settled = false;
     let exitCode = 0;
     let detached = false;
+    const titleController = new TitleController(process.stdout);
 
     const onStdin = (chunk: Buffer): void => {
       const { forward, detach } = inputProcessor.process(chunk);
@@ -91,6 +94,7 @@ export function connectToSession(socketPath: string, detachPrefix: number = 0x1c
         stdin.setRawMode(false);
       }
       stdin.pause();
+      titleController.clear();
     }
 
     function finish(): void {
@@ -117,6 +121,8 @@ export function connectToSession(socketPath: string, detachPrefix: number = 0x1c
           process.stdout.write(frame.payload);
         } else if (frame.type === FrameType.Exit) {
           exitCode = parseJsonPayload<ExitPayload>(frame.payload).exitCode;
+        } else if (frame.type === FrameType.Title) {
+          titleController.apply(parseJsonPayload<TitlePayload>(frame.payload).name);
         }
       }
     });

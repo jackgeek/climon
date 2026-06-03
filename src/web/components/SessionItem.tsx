@@ -35,16 +35,6 @@ const useStyles = makeStyles({
     fontSize: "11px",
     color: tokens.colorNeutralForeground3
   },
-  id: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: "11px",
-    color: tokens.colorNeutralForeground3
-  },
-  version: {
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: "11px",
-    color: tokens.colorNeutralForeground3
-  },
   origin: {
     fontSize: "10px",
     padding: "1px 6px",
@@ -149,12 +139,6 @@ export function SessionItem({ session, active, onSelect, onClose, onNew, onEdit,
       </Text>
       <div className={styles.meta}>
         <StatusBadge status={session.status} />
-        <span className={styles.id}>{session.id}</span>
-        {session.clientVersion && (
-          <span className={styles.version} title="Client version">
-            v{session.clientVersion}
-          </span>
-        )}
         {session.origin === "remote" && (
           <span className={styles.origin} title={session.clientLabel ?? "remote"}>
             {session.clientLabel ?? "remote"}

@@ -77,7 +77,8 @@ export function defaultConfig(): ClimonConfig {
     },
     terminal: {
       clampBrowserToHost: true,
-      detachPrefix: DEFAULT_DETACH_PREFIX
+      detachPrefix: DEFAULT_DETACH_PREFIX,
+      setTitle: true
     },
     attention: {
       idleSeconds: 10
@@ -99,6 +100,9 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
       parsed.terminal = { ...(parsed.terminal ?? {}), clampBrowserToHost: true };
     }
     parsed.terminal.detachPrefix = normalizeDetachPrefix(parsed.terminal.detachPrefix);
+    if (typeof parsed.terminal.setTitle !== "boolean") {
+      parsed.terminal.setTitle = true;
+    }
     // Backfill the attention section for configs written before it existed.
     if (!parsed.attention || typeof parsed.attention.idleSeconds !== "number") {
       parsed.attention = { ...(parsed.attention ?? {}), idleSeconds: 10 };

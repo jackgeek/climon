@@ -62,4 +62,12 @@ describe("frame codec", () => {
       reason: "Screen idle for 10s"
     });
   });
+
+  test("round-trips a Title frame", () => {
+    const frame = encodeJsonFrame(FrameType.Title, { name: "dev server" });
+    const decoded = new FrameDecoder().push(frame);
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0].type).toBe(FrameType.Title);
+    expect(parseJsonPayload<{ name: string }>(decoded[0].payload)).toEqual({ name: "dev server" });
+  });
 });
