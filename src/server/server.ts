@@ -14,14 +14,15 @@ import {
 import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload, type ExitPayload, type PtySizePayload } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
-import type { AnsiColor, ClimonConfig, SessionMeta } from "../types.js";
+import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta } from "../types.js";
 import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
-import { parseColor, parsePriority } from "../session-meta.js";
+import { resolveSessionDefaults } from "../launcher.js";
+import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
 
 interface StartServerOptions {
@@ -136,6 +137,12 @@ export function splitCommand(command: string): string[] {
 export interface SpawnMetaOptions {
   name?: string;
   priority?: number;
+  color?: SessionColorMode | null;
+}
+
+interface ResolvedSpawnMetaOptions {
+  name?: string;
+  priority?: number;
   color?: AnsiColor | null;
 }
 
@@ -167,6 +174,28 @@ function normalizeDimension(value: unknown, fallback: number): string {
   return String(fallback);
 }
 
+function defaultColorFlag(color: SessionColorMode | null | undefined): AnsiColor | "auto" | null | undefined {
+  return color === "none" ? null : color;
+}
+
+export async function resolveParentSpawnColor(
+  color: SessionColorMode | null | undefined,
+  parentColor: AnsiColor | null | undefined,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<AnsiColor | null> {
+  if (color === "auto") {
+    return (await resolveSessionDefaults({ color: "auto" }, env, cwd)).color;
+  }
+  if (color === "none" || color === null) {
+    return null;
+  }
+  if (color !== undefined) {
+    return color;
+  }
+  return parentColor ?? null;
+}
+
 function resolveDevClientEntrypoint(): string | undefined {
   if (!import.meta.url.startsWith("file:")) {
     return undefined;
@@ -190,7 +219,7 @@ function spawnHeadlessSession(
   cwd: string,
   cols: string,
   rows: string,
-  meta: SpawnMetaOptions = {}
+  meta: ResolvedSpawnMetaOptions = {}
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const { file, args } = resolveClientInvocation(
@@ -464,7 +493,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               ? undefined
               : payload.color === null
                 ? null
-                : parseColor(String(payload.color))
+                : parseColorMode(String(payload.color))
           };
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
@@ -477,6 +506,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             return new Response("Parent session not found", { status: 404 });
           }
           try {
+            const color = await resolveParentSpawnColor(metaInput.color, parent.color, parent.cwd);
             const id = await spawnHeadlessSession(
               argv,
               parent.cwd,
@@ -485,7 +515,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               {
                 name: metaInput.name,
                 priority: metaInput.priority ?? parent.priority,
-                color: metaInput.color !== undefined ? metaInput.color : parent.color
+                color
               }
             );
             return Response.json({ id }, { status: 201 });
@@ -509,7 +539,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         const cols = normalizeDimension(payload.cols, 80);
         const rows = normalizeDimension(payload.rows, 24);
         try {
-          const id = await spawnHeadlessSession(argv, cwd, cols, rows, metaInput);
+          const defaults = await resolveSessionDefaults(
+            { color: defaultColorFlag(metaInput.color), priority: metaInput.priority },
+            process.env,
+            cwd
+          );
+          const id = await spawnHeadlessSession(argv, cwd, cols, rows, {
+            name: metaInput.name,
+            priority: defaults.priority,
+            color: defaults.color
+          });
           return Response.json({ id }, { status: 201 });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

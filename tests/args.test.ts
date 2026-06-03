@@ -114,6 +114,11 @@ describe("parseArgs", () => {
       .toEqual({ command: "run", argv: ["bash"], headless: false, priority: 250, color: "blue" });
   });
 
+  test("parses --color auto for monitored sessions", () => {
+    expect(parseArgs(["--color", "Auto", "bash"]))
+      .toEqual({ command: "run", argv: ["bash"], headless: false, color: "auto" });
+  });
+
   test("stops parsing flags at the first non-flag token", () => {
     // The --color here belongs to the monitored command, not climon.
     expect(parseArgs(["npm", "run", "build", "--color"]))

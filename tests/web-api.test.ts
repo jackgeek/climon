@@ -79,9 +79,9 @@ describe("buildSetupScript", () => {
     expect(script).toContain("climon config session.priority 20");
   });
 
-  test("treats the 'none' color as no color setting", () => {
+  test("emits the 'none' color so it overrides the auto default", () => {
     const script = buildSetupScript({ ...BASE, color: "none" });
-    expect(script).not.toContain("session.color");
+    expect(script).toContain("climon config session.color none");
   });
 
   test("returns guidance when the tunnel id is missing", () => {

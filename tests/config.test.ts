@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import {
   defaultConfig,
   getScrollbackPath,
@@ -11,23 +10,30 @@ import {
   getSocketPath
 } from "../src/config.js";
 
-const env = { CLIMON_HOME: "/tmp/climon-test" } as NodeJS.ProcessEnv;
+const CLIMON_TEST_HOME = join(process.cwd(), ".copilot-tmp", "climon-test");
+const env = { CLIMON_HOME: CLIMON_TEST_HOME } as NodeJS.ProcessEnv;
+
+async function makeTestHome(prefix: string): Promise<string> {
+  const base = join(process.cwd(), ".copilot-tmp");
+  await mkdir(base, { recursive: true });
+  return mkdtemp(join(base, prefix));
+}
 
 describe("config paths", () => {
   test("sessions dir is under climon home", () => {
-    expect(getSessionsDir(env)).toBe(join("/tmp/climon-test", "sessions"));
+    expect(getSessionsDir(env)).toBe(join(CLIMON_TEST_HOME, "sessions"));
   });
 
   test("session meta path uses id", () => {
-    expect(getSessionMetaPath("abc", env)).toBe(join("/tmp/climon-test", "sessions", "abc.json"));
+    expect(getSessionMetaPath("abc", env)).toBe(join(CLIMON_TEST_HOME, "sessions", "abc.json"));
   });
 
   test("scrollback path uses id", () => {
-    expect(getScrollbackPath("abc", env)).toBe(join("/tmp/climon-test", "sessions", "abc.scrollback"));
+    expect(getScrollbackPath("abc", env)).toBe(join(CLIMON_TEST_HOME, "sessions", "abc.scrollback"));
   });
 
   test("socket path is a unix socket on posix", () => {
-    expect(getSocketPath("abc", env, "linux")).toBe(join("/tmp/climon-test", "sock", "abc.sock"));
+    expect(getSocketPath("abc", env, "linux")).toBe(join(CLIMON_TEST_HOME, "sock", "abc.sock"));
   });
 
   test("socket path is a named pipe on win32", () => {
@@ -55,11 +61,15 @@ describe("config defaults", () => {
   test("sets the terminal title by default", () => {
     expect(defaultConfig().terminal.setTitle).toBe(true);
   });
+
+  test("default config sets session color to auto", () => {
+    expect(defaultConfig().session?.color).toBe("auto");
+  });
 });
 
 describe("config migration", () => {
   test("backfills a missing attention section", async () => {
-    const home = await mkdtemp(join(tmpdir(), "climon-cfg-"));
+    const home = await makeTestHome("climon-cfg-");
     const migrationEnv = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
     await mkdir(home, { recursive: true });
     await writeFile(
@@ -76,7 +86,7 @@ describe("config migration", () => {
   });
 
   test("backfills a missing terminal.setTitle", async () => {
-    const home = await mkdtemp(join(tmpdir(), "climon-cfg-"));
+    const home = await makeTestHome("climon-cfg-");
     const migrationEnv = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
     await mkdir(home, { recursive: true });
     await writeFile(
@@ -92,6 +102,43 @@ describe("config migration", () => {
     expect(config.terminal.setTitle).toBe(true);
     await rm(home, { recursive: true, force: true });
   });
+
+  test("loadConfig backfills missing session.color to auto", async () => {
+    const home = await makeTestHome("climon-color-auto-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, setTitle: true },
+        attention: { idleSeconds: 10 }
+      })
+    );
+    const config = await loadConfig(env);
+    expect(config.session?.color).toBe("auto");
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("loadConfig backfills invalid session.color to auto", async () => {
+    const home = await makeTestHome("climon-color-invalid-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, setTitle: true },
+        attention: { idleSeconds: 10 },
+        session: { color: "orange" }
+      })
+    );
+    const config = await loadConfig(env);
+    expect(config.session?.color).toBe("auto");
+    await rm(home, { recursive: true, force: true });
+  });
 });
 
 describe("detach prefix config", () => {
@@ -100,7 +147,7 @@ describe("detach prefix config", () => {
   });
 
   test("loadConfig backfills detachPrefix for configs written before it existed", async () => {
-    const home = await mkdtemp(join(tmpdir(), "climon-detach-"));
+    const home = await makeTestHome("climon-detach-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
     await mkdir(join(home), { recursive: true });
     await writeFile(
@@ -118,7 +165,7 @@ describe("detach prefix config", () => {
   });
 
   test("loadConfig clamps an out-of-range detachPrefix back to the default", async () => {
-    const home = await mkdtemp(join(tmpdir(), "climon-detach2-"));
+    const home = await makeTestHome("climon-detach2-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
     await writeFile(
       join(home, "config.json"),

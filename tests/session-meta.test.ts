@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { ANSI_COLORS, parsePriority, parseColor } from "../src/session-meta.js";
+import { AUTO_COLOR_ORDER, ANSI_COLORS, parsePriority, parseColor, parseColorMode } from "../src/session-meta.js";
 
 describe("ANSI_COLORS", () => {
   test("is the 8 standard colors in order", () => {
     expect(ANSI_COLORS).toEqual([
       "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"
+    ]);
+  });
+});
+
+describe("AUTO_COLOR_ORDER", () => {
+  test("uses the required auto-assignment priority order", () => {
+    expect(AUTO_COLOR_ORDER).toEqual([
+      "white", "cyan", "magenta", "blue", "yellow", "green", "red", "black"
     ]);
   });
 });
@@ -38,5 +46,17 @@ describe("parseColor", () => {
 
   test("rejects unknown colors", () => {
     expect(() => parseColor("orange")).toThrow(/must be one of/);
+  });
+});
+
+describe("parseColorMode", () => {
+  test("accepts auto, none, and the 8 color names case-insensitively", () => {
+    expect(parseColorMode("Auto")).toBe("auto");
+    expect(parseColorMode("none")).toBe("none");
+    expect(parseColorMode("CYAN")).toBe("cyan");
+  });
+
+  test("rejects unknown color modes", () => {
+    expect(() => parseColorMode("orange")).toThrow(/must be one of/);
   });
 });

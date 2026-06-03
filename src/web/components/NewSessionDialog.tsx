@@ -40,7 +40,7 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
   const [cwd, setCwd] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [fields, setFields] = useState<MetaFieldsValue>({ name: "", priority: "500", color: "none" });
+  const [fields, setFields] = useState<MetaFieldsValue>({ name: "", priority: "500", color: "auto" });
 
   useEffect(() => {
     if (open) {
@@ -49,7 +49,7 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
       setFields({
         name: "",
         priority: String(parent?.priority ?? 500),
-        color: parent?.color ?? "none"
+        color: parent ? parent.color ?? "none" : "auto"
       });
       setError("");
       setBusy(false);
@@ -82,7 +82,7 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
       parentId: parent?.id,
       name: fields.name.trim() || undefined,
       priority: priorityNum,
-      color: fields.color === "none" ? null : fields.color
+      color: fields.color
     });
     if (!result.ok) {
       setError(result.error || "Failed to create session.");
@@ -146,6 +146,8 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
               onChange={setFields}
               namePlaceholder="Defaults to the command"
               onEnter={() => void submit()}
+              includeAuto
+              compactColors
             />
             <Text className={styles.error} style={{ display: "block", marginTop: "12px" }}>
               {error}
