@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { VERSION } from "../src/version.js";
 
 const home = join(tmpdir(), `climon-health-${process.pid}`);
-const env = { ...process.env, CLIMON_HOME: home, CLIMON_SERVER_BIN: join(process.cwd(), "src", "server.ts") };
+const env = { ...process.env, CLIMON_HOME: home };
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -40,7 +40,7 @@ describe("GET /health", () => {
   test("reports the server version", async () => {
     const port = await freePort();
     const server = Bun.spawn(
-      [process.execPath, "src/index.ts", "server", "--port", String(port)],
+      [process.execPath, "src/server.ts", "server", "--port", String(port)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const base = `http://127.0.0.1:${port}`;
