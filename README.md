@@ -145,7 +145,7 @@ no network-exposed dashboard.
 
 Setup:
 
-1. Start a climon server locally and note its port (e.g. `climon server --port 6666`).
+1. Start a climon server locally and note its port (e.g. `climon server --port 8080`).
 2. Open **Remotes…** from the dashboard's hamburger menu.
    - If the `devtunnel` CLI is installed on the home machine, climon can
      **auto-create** the tunnel for you (it also opens a keep-alive TCP port so
