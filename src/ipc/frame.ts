@@ -7,7 +7,8 @@ export enum FrameType {
   Exit = 4,
   Replay = 5,
   PtySize = 6,
-  Attention = 7
+  Attention = 7,
+  Title = 8
 }
 
 export interface ResizePayload {
@@ -34,6 +35,11 @@ export interface AttentionPayload {
 
 export interface ExitPayload {
   exitCode: number;
+}
+
+export interface TitlePayload {
+  /** The session name to show as the terminal title. Empty string clears it. */
+  name: string;
 }
 
 const HEADER_SIZE = 5; // 4-byte length + 1-byte type
