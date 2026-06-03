@@ -326,6 +326,28 @@ export async function listSessionsCommand(): Promise<number> {
   return 0;
 }
 
+async function killLocalSessionMeta(
+  meta: SessionMeta,
+  kill: (pid: number, force: boolean) => boolean,
+  isAlive: (pid: number) => boolean
+): Promise<boolean> {
+  const id = meta.id;
+  if (meta.daemonPid) {
+    if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
+      kill(meta.daemonPid, true);
+      if (isAlive(meta.daemonPid)) {
+        process.stdout.write(
+          `climon: could not terminate session ${id}; it may still be running.\n`
+        );
+        return false;
+      }
+    }
+  }
+  await patchSessionMeta(id, { status: "failed", priorityReason: "failed" });
+  await removeSessionMeta(id);
+  return true;
+}
+
 export async function killSession(
   id: string,
   kill: (pid: number, force: boolean) => boolean = killProcess,
@@ -335,26 +357,41 @@ export async function killSession(
   if (!meta) {
     throw new Error(`No session found with id '${id}'.`);
   }
-  if (meta.daemonPid) {
-    // Try a graceful stop first. On POSIX a SIGTERM is "issued" successfully even
-    // though the shell exits a moment later, so a successful graceful kill ends
-    // here. If the graceful kill could not be delivered and the process is still
-    // alive — e.g. a windowless console process on Windows, which `taskkill`
-    // cannot stop without `/F` — escalate to a forced kill.
-    if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
-      kill(meta.daemonPid, true);
-      if (isAlive(meta.daemonPid)) {
-        process.stdout.write(
-          `climon: could not terminate session ${id}; it may still be running.\n`
-        );
-        return 1;
-      }
-    }
+  if (!(await killLocalSessionMeta(meta, kill, isAlive))) {
+    return 1;
   }
-  await patchSessionMeta(id, { status: "failed", priorityReason: "failed" });
-  await removeSessionMeta(id);
   process.stdout.write(`Killed session ${id}.\n`);
   return 0;
+}
+
+export async function killAllSessions(
+  kill: (pid: number, force: boolean) => boolean = killProcess,
+  isAlive: (pid: number) => boolean = isProcessAlive
+): Promise<number> {
+  const localSessions = (await listSessions())
+    .filter(
+      (session) =>
+        (session.status === "running" || session.status === "needs-attention") &&
+        session.daemonPid !== undefined
+    )
+    .sort((a, b) => a.id.localeCompare(b.id));
+  if (localSessions.length === 0) {
+    process.stdout.write("No local climon sessions found.\n");
+    return 0;
+  }
+
+  let killed = 0;
+  let failed = 0;
+  for (const session of localSessions) {
+    if (await killLocalSessionMeta(session, kill, isAlive)) {
+      killed += 1;
+    } else {
+      failed += 1;
+    }
+  }
+
+  process.stdout.write(`Killed ${killed} local climon session${killed === 1 ? "" : "s"}.\n`);
+  return failed === 0 ? 0 : 1;
 }
 
 export async function climonHomeExists(): Promise<boolean> {

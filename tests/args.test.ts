@@ -6,6 +6,10 @@ describe("helpText", () => {
   test("includes the climon version", () => {
     expect(helpText).toContain(`v${VERSION}`);
   });
+
+  test("documents bulk kill", () => {
+    expect(helpText).toContain("climon kill --all");
+  });
 });
 
 describe("parseArgs", () => {
@@ -49,6 +53,7 @@ describe("parseArgs", () => {
   test("parses ls and kill", () => {
     expect(parseArgs(["ls"])).toEqual({ command: "ls" });
     expect(parseArgs(["kill", "abc"])).toEqual({ command: "kill", id: "abc" });
+    expect(parseArgs(["kill", "--all"])).toEqual({ command: "kill-all" });
   });
 
   test("treats unknown commands as run", () => {
