@@ -61,6 +61,10 @@ export function revertSize(
   return { cols, rows };
 }
 
+export function shouldApplyUserAttentionAcknowledgement(lastAttentionState: boolean | undefined): boolean {
+  return lastAttentionState === true;
+}
+
 export async function runSessionDaemon(id: string): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
@@ -252,6 +256,9 @@ export async function runSessionDaemon(id: string): Promise<void> {
       return;
     }
     if (!payload.needsAttention) {
+      if (source === "user" && !shouldApplyUserAttentionAcknowledgement(lastAttentionState)) {
+        return;
+      }
       lastAttentionState = false;
       if (source === "user") {
         idleDetector.acknowledge(fingerprint(), Date.now());

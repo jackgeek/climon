@@ -4,7 +4,14 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
-import { attachKey, attachSocketUrl, attentionAckMessage, fetchScrollback, isLiveStatus } from "../api.js";
+import {
+  attachKey,
+  attachSocketUrl,
+  attentionAckMessage,
+  canSendAttentionAck,
+  fetchScrollback,
+  isLiveStatus
+} from "../api.js";
 import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
 
 export interface TerminalHandle {
@@ -12,7 +19,7 @@ export interface TerminalHandle {
   refit: () => void;
   sendInput: (data: string) => void;
   setViewMode: (mode: TerminalResizeMode) => void;
-  acknowledgeAttention: () => void;
+  acknowledgeAttention: (sessionId: string) => void;
   focus: () => void;
 }
 
@@ -42,11 +49,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const attachedSessionIdRef = useRef<string | null>(null);
   const viewModeRef = useRef<TerminalResizeMode>(viewMode);
   const onViewModeChangeRef = useRef(onViewModeChange);
   const fontSizeRef = useRef(13);
   const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
-  const queuedAttentionAckRef = useRef(false);
+  const queuedAttentionAckRef = useRef<string | null>(null);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -68,21 +76,22 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
   }
 
-  function sendAttentionAck(): void {
+  function sendAttentionAck(sessionId: string): void {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && canSendAttentionAck(attachedSessionIdRef.current, sessionId, ws.readyState === WebSocket.OPEN)) {
       ws.send(attentionAckMessage());
     } else {
-      queuedAttentionAckRef.current = true;
+      queuedAttentionAckRef.current = sessionId;
     }
   }
 
   function flushAttentionAck(): void {
     const ws = wsRef.current;
-    if (!queuedAttentionAckRef.current || !ws || ws.readyState !== WebSocket.OPEN) {
+    const sessionId = queuedAttentionAckRef.current;
+    if (!ws || !sessionId || !canSendAttentionAck(attachedSessionIdRef.current, sessionId, ws.readyState === WebSocket.OPEN)) {
       return;
     }
-    queuedAttentionAckRef.current = false;
+    queuedAttentionAckRef.current = null;
     ws.send(attentionAckMessage());
   }
 
@@ -108,6 +117,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         // Ignore: socket may already be closing.
       }
       wsRef.current = null;
+      attachedSessionIdRef.current = null;
     }
   }
 
@@ -201,6 +211,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       const ws = new WebSocket(attachSocketUrl(session.id));
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
+      attachedSessionIdRef.current = session.id;
       ws.onopen = () => {
         flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
         flushAttentionAck();

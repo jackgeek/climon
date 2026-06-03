@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { browserAttentionPayload } from "../src/server/server.js";
-import { attachKey, attentionAckMessage, buildSetupScript, isLiveStatus } from "../src/web/api.js";
+import {
+  attachKey,
+  attentionAckMessage,
+  buildSetupScript,
+  canSendAttentionAck,
+  isLiveStatus
+} from "../src/web/api.js";
 import type { SessionMeta } from "../src/types.js";
 
 function session(overrides: Partial<SessionMeta>): SessionMeta {
@@ -89,6 +95,15 @@ describe("attentionAckMessage", () => {
       type: "attention",
       needsAttention: false
     });
+  });
+});
+
+describe("canSendAttentionAck", () => {
+  test("sends only when the open socket belongs to the target session", () => {
+    expect(canSendAttentionAck("new-session", "new-session", true)).toBe(true);
+    expect(canSendAttentionAck("old-session", "new-session", true)).toBe(false);
+    expect(canSendAttentionAck(null, "new-session", true)).toBe(false);
+    expect(canSendAttentionAck("new-session", "new-session", false)).toBe(false);
   });
 });
 

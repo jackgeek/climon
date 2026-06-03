@@ -153,6 +153,14 @@ export function attentionAckMessage(): string {
   return JSON.stringify({ type: "attention", needsAttention: false });
 }
 
+export function canSendAttentionAck(
+  attachedSessionId: string | null,
+  targetSessionId: string,
+  socketOpen: boolean
+): boolean {
+  return socketOpen && attachedSessionId === targetSessionId;
+}
+
 /**
  * Identifies when the terminal must tear down and re-establish its attachment.
  * Re-attaching is only required when the selected session changes, when it
