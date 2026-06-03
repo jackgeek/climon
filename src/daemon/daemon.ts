@@ -1,8 +1,9 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { rm } from "node:fs/promises";
+import { unwatchFile, watchFile } from "node:fs";
 import { Buffer } from "node:buffer";
 import { Terminal } from "@xterm/headless";
-import { ensureClimonHome, loadConfig, SESSION_ENV_VAR } from "../config.js";
+import { ensureClimonHome, getSessionMetaPath, loadConfig, SESSION_ENV_VAR } from "../config.js";
 import {
   encodeFrame,
   encodeJsonFrame,
@@ -73,6 +74,10 @@ export async function runSessionDaemon(id: string): Promise<void> {
   const viewers = new Set<Socket>();
 
   const clampBrowserToHost = config.terminal.clampBrowserToHost;
+  const setTitle = config.terminal.setTitle;
+  // The name currently reflected as the terminal title. Re-read from meta on
+  // change so a dashboard rename propagates to attached terminals.
+  let currentName = meta.name ?? "";
   // The host terminal owns the maximum PTY size when clamping is enabled. It is
   // seeded from the launch dimensions and refreshed whenever the local terminal
   // reports a resize.
@@ -257,6 +262,10 @@ export async function runSessionDaemon(id: string): Promise<void> {
       return;
     }
 
+    if (setTitle && currentName.length > 0) {
+      socket.write(encodeJsonFrame(FrameType.Title, { name: currentName }));
+    }
+
     const decoder = new FrameDecoder();
     socket.on("data", (chunk) => {
       for (const frame of decoder.push(chunk)) {
@@ -286,6 +295,28 @@ export async function runSessionDaemon(id: string): Promise<void> {
 
   await listen(server, meta.socketPath);
 
+  const metaPath = getSessionMetaPath(id);
+  if (setTitle) {
+    // Poll this session's meta file (robust to atomic write-then-rename, and it
+    // only watches our own file — no fanout across other sessions). A rename
+    // from the dashboard rebroadcasts the new title; the daemon's own frequent
+    // non-name patches are filtered out by the name comparison.
+    watchFile(metaPath, { interval: 1000 }, () => {
+      void readSessionMeta(id)
+        .then((fresh) => {
+          if (!fresh) {
+            return;
+          }
+          const newName = fresh.name ?? "";
+          if (newName !== currentName) {
+            currentName = newName;
+            broadcast(encodeJsonFrame(FrameType.Title, { name: newName }));
+          }
+        })
+        .catch(() => undefined);
+    });
+  }
+
   const shutdown = (): void => {
     if (!exited) {
       pty.kill();
@@ -300,6 +331,9 @@ export async function runSessionDaemon(id: string): Promise<void> {
     });
   }
 
+  if (setTitle) {
+    unwatchFile(metaPath);
+  }
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await cleanupSocket(meta.socketPath);
 }

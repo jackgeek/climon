@@ -63,7 +63,8 @@ export function defaultConfig(): ClimonConfig {
       port: 3131
     },
     terminal: {
-      clampBrowserToHost: true
+      clampBrowserToHost: true,
+      setTitle: true
     },
     attention: {
       idleSeconds: 10
@@ -83,6 +84,9 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     // Backfill sections added after a config file was first written.
     if (!parsed.terminal || typeof parsed.terminal.clampBrowserToHost !== "boolean") {
       parsed.terminal = { ...(parsed.terminal ?? {}), clampBrowserToHost: true };
+    }
+    if (typeof parsed.terminal.setTitle !== "boolean") {
+      parsed.terminal.setTitle = true;
     }
     // Backfill the attention section for configs written before it existed.
     if (!parsed.attention || typeof parsed.attention.idleSeconds !== "number") {
