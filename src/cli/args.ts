@@ -26,6 +26,7 @@ Usage:
   climon server [--port N]      Start the dashboard web server (loopback only)
   climon ls                    List monitored sessions
   climon config <key> [value]   Get/set remote connection config (git-style)
+  climon config --debug         Show config files and keys in resolution order
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
   climon kill --all            Terminate active local sessions

@@ -24,6 +24,12 @@ describe("planUplinkStart", () => {
     });
   });
 
+  test("spawns detached uplink for direct host config without devtunnel", () => {
+    expect(planUplinkStart({ enabled: true, host: "172.30.192.1", port: 3132 }, { available: false })).toEqual({
+      shouldSpawn: true
+    });
+  });
+
   test("does nothing when remote config is incomplete", () => {
     expect(planUplinkStart({ enabled: false }, { available: false })).toEqual({ shouldSpawn: false });
   });

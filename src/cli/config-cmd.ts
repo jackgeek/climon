@@ -1,6 +1,7 @@
 import {
   coerceConfigValue,
   isKnownConfigKey,
+  listConfigDebugEntries,
   knownConfigKeys,
   resolveConfigSetting,
   unsetConfigSetting,
@@ -9,6 +10,7 @@ import {
 } from "../config.js";
 
 export type ConfigAction =
+  | { action: "debug" }
   | { action: "list"; scope: WriteScope }
   | { action: "get"; scope: WriteScope; key: string }
   | { action: "set"; scope: WriteScope; key: string; value: string }
@@ -22,15 +24,23 @@ export function validateKey(key: string): void {
 
 export function parseConfigArgs(argv: string[]): ConfigAction {
   let scope: WriteScope = "auto";
+  let debug = false;
   let list = false;
   let unset = false;
   const positional: string[] = [];
   for (const arg of argv) {
     if (arg === "--global") scope = "global";
     else if (arg === "--local") scope = "local";
+    else if (arg === "--debug") debug = true;
     else if (arg === "--list" || arg === "-l") list = true;
     else if (arg === "--unset") unset = true;
     else positional.push(arg);
+  }
+  if (debug) {
+    if (list || unset || positional.length > 0) {
+      throw new Error("Use `climon config --debug` without other config arguments.");
+    }
+    return { action: "debug" };
   }
   if (list) return { action: "list", scope };
   if (unset) {
@@ -62,6 +72,23 @@ export function runConfigCommand(
   }
   try {
     switch (action.action) {
+      case "debug": {
+        const lines: string[] = [];
+        for (const entry of listConfigDebugEntries(env, cwd)) {
+          lines.push(entry.path);
+          if (!entry.exists) {
+            lines.push("  (missing)");
+          } else if (entry.error) {
+            lines.push(`  (error: ${entry.error})`);
+          } else if (entry.keys.length === 0) {
+            lines.push("  (no keys)");
+          } else {
+            for (const key of entry.keys) lines.push(`  ${key}`);
+          }
+        }
+        process.stdout.write(`${lines.join("\n")}\n`);
+        return 0;
+      }
       case "list": {
         const lines: string[] = [];
         for (const key of knownConfigKeys()) {

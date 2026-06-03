@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseConfigArgs, runConfigCommand } from "../src/cli/config-cmd.js";
 
@@ -8,7 +7,9 @@ let root: string;
 let home: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "climon-cfgcmd-"));
+  const testTmp = join(process.cwd(), ".copilot-tmp");
+  mkdirSync(testTmp, { recursive: true });
+  root = mkdtempSync(join(testTmp, "climon-cfgcmd-"));
   home = join(root, ".climon");
 });
 
@@ -22,7 +23,7 @@ function env(): NodeJS.ProcessEnv {
 
 describe("parseConfigArgs", () => {
   test("rejects unknown keys", () => {
-    expect(() => parseConfigArgs(["remote.host", "x"])).toThrow(/Unknown config key/);
+    expect(() => parseConfigArgs(["remote.nope", "x"])).toThrow(/Unknown config key/);
   });
 
   test("no longer recognizes keygen or known-host", () => {
@@ -38,6 +39,11 @@ describe("parseConfigArgs", () => {
       key: "remote.port",
       value: "6666"
     });
+  });
+
+  test("parses debug as a standalone diagnostic", () => {
+    expect(parseConfigArgs(["--debug"])).toEqual({ action: "debug" });
+    expect(() => parseConfigArgs(["--debug", "remote.port"])).toThrow(/without other config arguments/);
   });
 });
 
@@ -91,5 +97,38 @@ describe("runConfigCommand", () => {
     expect(printed).toContain("remote.port=6666");
     expect(printed).toContain("session.color=green");
     expect(printed).not.toContain("remote.enabled");
+  });
+
+  test("--debug prints candidate config files and keys in resolution order", () => {
+    const repo = join(root, "repo");
+    const nested = join(repo, "src", "app");
+    mkdirSync(join(repo, ".climon"), { recursive: true });
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(repo, ".climon", "config.json"), JSON.stringify({ session: { color: "green" } }));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ remote: { enabled: true, port: 3132 } }));
+
+    const out: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk: string) => {
+      out.push(String(chunk));
+      return true;
+    };
+    try {
+      expect(runConfigCommand(["--debug"], env(), nested)).toBe(0);
+    } finally {
+      process.stdout.write = original;
+    }
+    const printed = out.join("");
+    expect(printed).toContain(join(nested, ".climon", "config.json"));
+    expect(printed).toContain(join(repo, ".climon", "config.json"));
+    expect(printed).toContain(join(home, "config.json"));
+    expect(printed).toContain("  (missing)");
+    expect(printed).toContain("  session.color");
+    expect(printed).toContain("  remote.enabled");
+    expect(printed).toContain("  remote.port");
+    expect(printed.indexOf(join(nested, ".climon", "config.json"))).toBeLessThan(
+      printed.indexOf(join(repo, ".climon", "config.json"))
+    );
   });
 });
