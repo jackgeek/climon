@@ -325,6 +325,19 @@ export function App() {
     }
   }
 
+  // Selecting a session on desktop moves keyboard focus into the terminal so
+  // the user can start typing immediately. On mobile the terminal is offscreen
+  // until maximized, so focusing it would be premature.
+  const handleSelect = useCallback(
+    (id: string): void => {
+      setActiveId(id);
+      if (!isMobile) {
+        requestAnimationFrame(() => terminalRef.current?.focus());
+      }
+    },
+    [isMobile]
+  );
+
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
 
@@ -336,7 +349,7 @@ export function App() {
           sessions={sessions}
           activeId={activeId}
           serverVersion={serverVersion}
-          onSelect={setActiveId}
+          onSelect={handleSelect}
           onClose={(id) => requestClose(id)}
           onNew={() => {
             setDialogParent(null);
