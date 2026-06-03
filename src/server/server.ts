@@ -1,7 +1,7 @@
 import { existsSync, watch } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { spawn } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
 import type { ServerWebSocket } from "bun";
@@ -291,6 +291,41 @@ async function cleanupStaleSessions(): Promise<void> {
   }
 }
 
+export async function stopIngestDaemon(options: {
+  env?: NodeJS.ProcessEnv;
+  killProcess?: (pid: number, force: boolean) => boolean;
+  isProcessAlive?: (pid: number) => boolean;
+  graceMs?: number;
+  pollMs?: number;
+} = {}): Promise<boolean> {
+  const env = options.env ?? process.env;
+  const kill = options.killProcess ?? killProcess;
+  const isAlive = options.isProcessAlive ?? isProcessAlive;
+  const graceMs = options.graceMs ?? KILL_GRACE_MS;
+  const pollMs = options.pollMs ?? 50;
+  let raw: string;
+  try {
+    raw = await readFile(getIngestPidPath(env), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  const pid = Number.parseInt(raw.trim(), 10);
+  if (!Number.isInteger(pid) || pid <= 0 || !isAlive(pid)) return false;
+  if (!kill(pid, false)) return false;
+  const waitForExit = async (): Promise<boolean> => {
+    const deadline = Date.now() + graceMs;
+    for (;;) {
+      if (!isAlive(pid)) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  };
+  if (await waitForExit()) return true;
+  if (!kill(pid, true)) return false;
+  return waitForExit();
+}
+
 /**
  * Spawns the detached singleton ingest daemon if its pidfile is absent or dead.
  * Best-effort: the daemon itself re-checks the singleton, so a redundant spawn
@@ -298,7 +333,6 @@ async function cleanupStaleSessions(): Promise<void> {
  */
 async function ensureIngestDaemon(): Promise<void> {
   const pidPath = getIngestPidPath();
-  const { readFile } = await import("node:fs/promises");
   let alive = false;
   try {
     const pid = Number.parseInt((await readFile(pidPath, "utf8")).trim(), 10);
@@ -739,7 +773,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     const shutdown = (): void => {
       watcher.close();
       server.stop();
-      resolve();
+      void stopIngestDaemon().finally(resolve);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
