@@ -126,6 +126,28 @@ dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port â
 
 Revoke a devbox by deleting or rotating the dev tunnel (or its connect token).
 
+### Creating the dev tunnel manually
+
+Use this path if you do not want the Remotes dialog to create the tunnel for you.
+Run these commands on the **home** machine where the dashboard is listening:
+
+```bash
+devtunnel user login
+
+# Use any valid tunnel id, or omit CLIMON_TUNNEL and copy the generated id.
+devtunnel create CLIMON_TUNNEL
+devtunnel port create CLIMON_TUNNEL -p 8080
+
+# Copy the emitted token into the Remotes dialog.
+devtunnel token CLIMON_TUNNEL --scopes connect
+```
+
+Paste the tunnel id (or the printed `devtunnels.ms` URL) and the connect token
+into **Remotesâ€¦**. climon will host the recorded tunnel if the `devtunnel` CLI is
+available on the home machine; otherwise keep `devtunnel host CLIMON_TUNNEL`
+running yourself. Then copy the generated climon config script from the dialog
+and run it on the devbox.
+
 ### `climon config`
 
 `climon config` works like `git config`. It reads/writes a project-local or

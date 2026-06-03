@@ -150,7 +150,8 @@ Setup:
    - If the `devtunnel` CLI is installed on the home machine, climon can
      **auto-create** the tunnel for you (it also opens a keep-alive TCP port so
      the tunnel stays up and never shows a browser confirmation page).
-   - Otherwise, create the tunnel manually and paste its URL into the dialog.
+   - Otherwise, create the tunnel manually and paste its id/URL plus connect
+     token into the dialog.
 3. Optionally pick a default accent **color** and sort **priority** for that
    devbox's sessions, then **copy the config script**.
 4. Run the copied script in a terminal on the **devbox**. It writes the server
@@ -172,6 +173,33 @@ Notes:
   exists creates one in `~/`.
 
 See [docs/security.md](docs/security.md) for the full threat model.
+
+### Manual dev tunnel creation
+
+The dashboard's **Auto-create tunnel** button is the easiest path. If you want
+to create the tunnel yourself (for example to choose the id or expiry), run these
+commands on the **home** machine where `climon server` is listening:
+
+```bash
+devtunnel user login
+
+# Choose a stable id, or omit CLIMON_TUNNEL and copy the generated id.
+devtunnel create CLIMON_TUNNEL
+devtunnel port create CLIMON_TUNNEL -p 8080
+
+# Copy this token into the Remotes dialog.
+devtunnel token CLIMON_TUNNEL --scopes connect
+```
+
+Paste `CLIMON_TUNNEL` (or a devtunnels.ms URL for that tunnel) and the connect
+token into **Remotes…**. If the `devtunnel` CLI is available on the home machine,
+climon will host the recorded tunnel for you; otherwise keep
+`devtunnel host CLIMON_TUNNEL` running yourself. After that, copy the generated
+climon config script from the dialog and run it on the devbox.
+
+Official reference:
+[Create and host a tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/get-started) and
+[Dev tunnels CLI commands](https://learn.microsoft.com/azure/developer/dev-tunnels/cli-commands).
 
 ## Building standalone binaries
 

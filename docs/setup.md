@@ -88,3 +88,15 @@ tunnel; install it on each devbox so `climon __uplink` can connect through the
 tunnel. You can also create the tunnel manually and paste its id/URL plus
 connect token into the dashboard's **Remotes…** dialog. See
 [security.md](./security.md) for the threat model.
+
+Manual tunnel creation on the home machine:
+
+```bash
+devtunnel user login
+devtunnel create CLIMON_TUNNEL
+devtunnel port create CLIMON_TUNNEL -p 8080
+devtunnel token CLIMON_TUNNEL --scopes connect
+```
+
+Paste the tunnel id and emitted connect token into **Remotes…**, then run the
+dialog's generated config script on the devbox.
