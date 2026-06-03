@@ -336,7 +336,7 @@ export async function listSessionsCommand(): Promise<number> {
   return 0;
 }
 
-async function killLocalSessionMeta(
+async function killSessionMeta(
   meta: SessionMeta,
   kill: (pid: number, force: boolean) => boolean,
   isAlive: (pid: number) => boolean
@@ -367,7 +367,7 @@ export async function killSession(
   if (!meta) {
     throw new Error(`No session found with id '${id}'.`);
   }
-  if (!(await killLocalSessionMeta(meta, kill, isAlive))) {
+  if (!(await killSessionMeta(meta, kill, isAlive))) {
     return 1;
   }
   process.stdout.write(`Killed session ${id}.\n`);
@@ -392,7 +392,7 @@ export async function killAllSessions(
   let killed = 0;
   let failed = 0;
   for (const session of activeSessions) {
-    if (await killLocalSessionMeta(session, kill, isAlive)) {
+    if (await killSessionMeta(session, kill, isAlive)) {
       killed += 1;
     } else {
       failed += 1;
