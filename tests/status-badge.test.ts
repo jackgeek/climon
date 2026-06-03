@@ -55,4 +55,13 @@ describe("StatusBadge rendering", () => {
 
     expect(markup).toContain('title="needs attention"');
   });
+
+  test("can omit the title when a parent row owns the hover label", () => {
+    const markup = renderToStaticMarkup(
+      createElement(StatusBadge, { compact: true, showTitle: false, status: "running" })
+    );
+
+    expect(markup).toContain(">R<");
+    expect(markup).not.toContain('title="running"');
+  });
 });

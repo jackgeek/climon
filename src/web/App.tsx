@@ -3,7 +3,6 @@ import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-
 import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
 import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus } from "./api.js";
-import { ANSI_CSS } from "./colors.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { EditSessionDialog } from "./components/EditSessionDialog.js";
@@ -416,14 +415,7 @@ export function App() {
           !maximized && styles.mainHiddenMobile
         )}
       >
-        <div
-          className={mergeClasses(styles.header, maximized && styles.hidden)}
-          style={
-            activeSession?.color
-              ? { borderBottom: `3px solid ${ANSI_CSS[activeSession.color]}` }
-              : undefined
-          }
-        >
+        <div className={mergeClasses(styles.header, maximized && styles.hidden)}>
           <Text className={styles.headerText}>
             {activeSession ? (
               activeSession.name || activeSession.displayCommand
@@ -443,6 +435,7 @@ export function App() {
         <TerminalView
           ref={terminalRef}
           session={activeSession}
+          accentColor={activeSession?.color}
           maximized={maximized}
           visible={terminalVisible}
           viewMode={viewMode}

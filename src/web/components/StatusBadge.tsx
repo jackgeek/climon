@@ -28,11 +28,17 @@ export const STATUS_INITIALS: Record<SessionStatus, string> = {
 interface Props {
   status: SessionStatus;
   compact?: boolean;
+  showTitle?: boolean;
 }
 
-export function StatusBadge({ status, compact = false }: Props) {
+export function StatusBadge({ status, compact = false, showTitle = true }: Props) {
   return (
-    <Badge appearance="filled" color={COLOR[status]} size="small" title={STATUS_LABELS[status]}>
+    <Badge
+      appearance="filled"
+      color={COLOR[status]}
+      size="small"
+      title={showTitle ? STATUS_LABELS[status] : undefined}
+    >
       {compact ? STATUS_INITIALS[status] : STATUS_LABELS[status]}
     </Badge>
   );

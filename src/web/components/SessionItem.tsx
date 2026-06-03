@@ -3,6 +3,7 @@ import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular, Settings16
 import { ANSI_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
+import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
 const useStyles = makeStyles({
   root: {
@@ -123,7 +124,11 @@ export function SessionItem({
   return (
     <div
       className={mergeClasses(styles.root, compact && styles.compactRoot, active && styles.active)}
-      style={session.color ? { borderRight: `4px solid ${ANSI_CSS[session.color]}` } : undefined}
+      style={
+        session.color
+          ? { borderRight: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_CSS[session.color]}` }
+          : undefined
+      }
       title={displayTitle}
       aria-label={sessionAccessibleLabel(session, compact)}
       onClick={() => onSelect(session.id)}
@@ -184,7 +189,7 @@ export function SessionItem({
         </Text>
       )}
       <div className={mergeClasses(styles.meta, compact && styles.compactMeta)}>
-        <StatusBadge status={session.status} compact={compact} />
+        <StatusBadge status={session.status} compact={compact} showTitle={!compact} />
         {!compact && session.origin === "remote" && (
           <span className={styles.origin} title={session.clientLabel ?? "remote"}>
             {session.clientLabel ?? "remote"}

@@ -6,6 +6,8 @@ import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { attachKey, attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
 import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
+import { ANSI_CSS } from "../colors.js";
+import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
@@ -26,6 +28,7 @@ const useStyles = makeStyles({
 
 interface Props {
   session: SessionMeta | null;
+  accentColor?: SessionMeta["color"];
   maximized: boolean;
   visible: boolean;
   viewMode: TerminalResizeMode;
@@ -33,7 +36,7 @@ interface Props {
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { session, maximized, visible, viewMode, onViewModeChange },
+  { session, accentColor, maximized, visible, viewMode, onViewModeChange },
   ref
 ) {
   const styles = useStyles();
@@ -264,5 +267,15 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     focus: () => termRef.current?.focus()
   }));
 
-  return <div ref={containerRef} className={styles.root} />;
+  return (
+    <div
+      ref={containerRef}
+      className={styles.root}
+      style={
+        accentColor
+          ? { borderTop: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_CSS[accentColor]}` }
+          : undefined
+      }
+    />
+  );
 });
