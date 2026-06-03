@@ -19,15 +19,6 @@ import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 import { parseColor, parsePriority } from "../session-meta.js";
-import {
-  authorizeClient,
-  detectHostKey,
-  hostCandidates,
-  listClients,
-  parsePublicKey,
-  revokeClient,
-  sanitizeLabel
-} from "../remote/enroll.js";
 
 interface StartServerOptions {
   port?: number;
@@ -41,7 +32,6 @@ interface WsData {
 const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
-const REMOTE_CLIENT_PATH = /^\/api\/remote\/clients\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 function isProcessAlive(pid: number): boolean {
@@ -466,88 +456,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
       }
 
-      // ---- Remote client management (loopback only) ----
-
-      if (url.pathname === "/api/remote/setup") {
-        if (!isLocal(request, srv)) {
-          return new Response("Forbidden", { status: 403 });
-        }
-        const hosts = hostCandidates();
-        const hostKey = await detectHostKey();
-        // Return the bare host public key (type + base64); the dashboard pairs it
-        // with the chosen address to form the pinned known_hosts line.
-        return Response.json({
-          user: process.env.USER ?? "",
-          sshPort: 22,
-          hosts,
-          hostKey: hostKey ?? ""
-        });
-      }
-
-      if (url.pathname === "/api/remote/clients" && request.method === "GET") {
-        if (!isLocal(request, srv)) {
-          return new Response("Forbidden", { status: 403 });
-        }
-        return Response.json({ clients: await listClients() });
-      }
-
-      if (url.pathname === "/api/remote/clients" && request.method === "POST") {
-        if (!isLocal(request, srv)) {
-          return new Response("Forbidden", { status: 403 });
-        }
-        if (!isAllowedSpawnRequest(
-          request.headers.get("content-type"),
-          request.headers.get("origin"),
-          request.headers.get("host")
-        )) {
-          return new Response("Forbidden", { status: 403 });
-        }
-        let payload: { label?: unknown; publicKey?: unknown };
-        try {
-          payload = (await request.json()) as typeof payload;
-        } catch {
-          return new Response("Invalid JSON body", { status: 400 });
-        }
-        let label: string;
-        try {
-          label = sanitizeLabel(typeof payload.label === "string" ? payload.label : "");
-        } catch (error) {
-          return new Response(error instanceof Error ? error.message : "Invalid label", { status: 400 });
-        }
-        let key;
-        try {
-          key = parsePublicKey(typeof payload.publicKey === "string" ? payload.publicKey : "");
-        } catch (error) {
-          return new Response(error instanceof Error ? error.message : "Invalid public key", { status: 400 });
-        }
-        await authorizeClient(label, key);
-        return Response.json({ clients: await listClients() }, { status: 201 });
-      }
-
-      const clientMatch = REMOTE_CLIENT_PATH.exec(url.pathname);
-      if (clientMatch && request.method === "DELETE") {
-        if (!isLocal(request, srv)) {
-          return new Response("Forbidden", { status: 403 });
-        }
-        if (!isAllowedSpawnRequest(
-          request.headers.get("content-type") ?? "application/json",
-          request.headers.get("origin"),
-          request.headers.get("host")
-        )) {
-          return new Response("Forbidden", { status: 403 });
-        }
-        let label: string;
-        try {
-          label = sanitizeLabel(decodeURIComponent(clientMatch[1]));
-        } catch {
-          return new Response("Invalid label", { status: 400 });
-        }
-        const removed = await revokeClient(label);
-        if (!removed) {
-          return new Response("Not found", { status: 404 });
-        }
-        return new Response(null, { status: 204 });
-      }
+      // ---- Remotes API added in Phase 5 ----
 
       if (url.pathname === "/api/sessions") {
         return new Response(await sessionsPayload(), { headers: { "content-type": "application/json" } });

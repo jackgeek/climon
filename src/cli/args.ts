@@ -11,8 +11,7 @@ export type ParsedCommand =
   | { command: "kill"; id: string }
   | { command: "run"; argv: string[]; headless: boolean; priority?: number; color?: AnsiColor | null; name?: string }
   | { command: "config"; argv: string[] }
-  | { command: "uplink" }
-  | { command: "ssh-accept"; label: string };
+  | { command: "uplink" };
 
 export const helpText = `climon v${VERSION} — web-based monitor for interactive CLI sessions
 
@@ -148,14 +147,6 @@ export function parseArgs(argv: string[]): ParsedCommand {
       return { command: "config", argv: rest };
     case "__uplink":
       return { command: "uplink" };
-    case "--ssh-accept": {
-      const idx = rest.indexOf("--label");
-      const label = idx >= 0 ? rest[idx + 1] : undefined;
-      if (!label) {
-        throw new Error("Internal: --ssh-accept requires --label <label>.");
-      }
-      return { command: "ssh-accept", label };
-    }
     default: {
       const { flags, rest: runArgv } = parseSessionFlags(argv);
       if (runArgv.length === 0) {
