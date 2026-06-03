@@ -21,6 +21,7 @@ import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { SessionItem } from "./SessionItem.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { clampSizeMenuLabel, toggleViewMode } from "../view-mode.js";
+import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
 
 const useStyles = makeStyles({
   root: {
@@ -37,7 +38,7 @@ const useStyles = makeStyles({
     alignItems: "center",
     justifyContent: "space-between",
     boxSizing: "border-box",
-    height: "55px",
+    height: DASHBOARD_HEADER_HEIGHT,
     padding: "4px 16px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     flex: "0 0 auto"

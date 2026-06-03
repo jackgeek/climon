@@ -11,6 +11,7 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 import { KeyBar } from "./components/KeyBar.js";
+import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
@@ -73,6 +74,8 @@ const useStyles = makeStyles({
   header: {
     display: "flex",
     alignItems: "center",
+    boxSizing: "border-box",
+    height: DASHBOARD_HEADER_HEIGHT,
     gap: "12px",
     padding: "12px 16px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
