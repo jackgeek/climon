@@ -1,68 +1,116 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveSessionDefaults } from "../src/launcher.js";
+import { resolveSessionDefaults, chooseAutoSessionColor } from "../src/launcher.js";
+import type { AnsiColor, SessionMeta } from "../src/types.js";
+
+const homes: string[] = [];
 
 function tmpHome(): string {
-  return mkdtempSync(join(tmpdir(), "climon-defaults-"));
+  const base = join(process.cwd(), ".test-homes");
+  mkdirSync(base, { recursive: true });
+  const home = mkdtempSync(join(base, "climon-defaults-"));
+  homes.push(home);
+  return home;
 }
 
+afterEach(() => {
+  for (const home of homes.splice(0)) {
+    rmSync(home, { recursive: true, force: true });
+  }
+  rmSync(join(process.cwd(), ".test-homes"), { recursive: true, force: true });
+});
+
+function writeSession(home: string, id: string, color?: AnsiColor | null): void {
+  mkdirSync(join(home, ".climon", "sessions"), { recursive: true });
+  const now = new Date().toISOString();
+  const meta: SessionMeta = {
+    id,
+    command: ["bash"],
+    displayCommand: "bash",
+    cwd: home,
+    status: "running",
+    priorityReason: "running",
+    socketPath: "tcp://127.0.0.1:0",
+    cols: 80,
+    rows: 24,
+    createdAt: now,
+    updatedAt: now,
+    lastActivityAt: now,
+    color
+  };
+  writeFileSync(join(home, ".climon", "sessions", `${id}.json`), JSON.stringify(meta));
+}
+
+describe("chooseAutoSessionColor", () => {
+  test("chooses white when no sessions have colors", async () => {
+    const home = tmpHome();
+    await expect(chooseAutoSessionColor({ CLIMON_HOME: join(home, ".climon") })).resolves.toBe("white");
+  });
+
+  test("chooses the first missing color in required order", async () => {
+    const home = tmpHome();
+    writeSession(home, "s-white", "white");
+    writeSession(home, "s-cyan", "cyan");
+    writeSession(home, "s-magenta", "magenta");
+    writeSession(home, "s-blue", "blue");
+    writeSession(home, "s-green", "green");
+    writeSession(home, "s-red", "red");
+    writeSession(home, "s-black", "black");
+    await expect(chooseAutoSessionColor({ CLIMON_HOME: join(home, ".climon") })).resolves.toBe("yellow");
+  });
+
+  test("chooses the least-used color and breaks ties by required order", async () => {
+    const home = tmpHome();
+    for (const color of ["white", "cyan", "magenta", "blue", "yellow", "red", "black"] as const) {
+      writeSession(home, `a-${color}`, color);
+      writeSession(home, `b-${color}`, color);
+    }
+    writeSession(home, "one-green", "green");
+    await expect(chooseAutoSessionColor({ CLIMON_HOME: join(home, ".climon") })).resolves.toBe("green");
+  });
+});
+
 describe("resolveSessionDefaults", () => {
-  test("CLI flags win over config", () => {
+  test("CLI fixed color flags win over config", async () => {
     const home = tmpHome();
     mkdirSync(join(home, ".climon"), { recursive: true });
-    writeFileSync(
-      join(home, ".climon", "config.json"),
-      JSON.stringify({ session: { color: "red", priority: 500 } })
-    );
-    const out = resolveSessionDefaults(
-      { color: "green", priority: 20 },
-      { CLIMON_HOME: join(home, ".climon") },
-      home
-    );
+    writeFileSync(join(home, ".climon", "config.json"), JSON.stringify({ session: { color: "red", priority: 500 } }));
+    const out = await resolveSessionDefaults({ color: "green", priority: 20 }, { CLIMON_HOME: join(home, ".climon") }, home);
     expect(out.color).toBe("green");
     expect(out.priority).toBe(20);
   });
 
-  test("falls back to hierarchical config when flags absent", () => {
+  test("fixed config color wins over auto assignment", async () => {
     const home = tmpHome();
     mkdirSync(join(home, ".climon"), { recursive: true });
-    writeFileSync(
-      join(home, ".climon", "config.json"),
-      JSON.stringify({ session: { color: "red", priority: 500 } })
-    );
-    const out = resolveSessionDefaults({}, { CLIMON_HOME: join(home, ".climon") }, home);
+    writeFileSync(join(home, ".climon", "config.json"), JSON.stringify({ session: { color: "red", priority: 500 } }));
+    const out = await resolveSessionDefaults({}, { CLIMON_HOME: join(home, ".climon") }, home);
     expect(out.color).toBe("red");
     expect(out.priority).toBe(500);
   });
 
-  test("falls back to built-in defaults when neither is set", () => {
-    const home = tmpHome();
-    const out = resolveSessionDefaults({}, { CLIMON_HOME: join(home, ".climon") }, home);
-    expect(out.color).toBeNull();
-    expect(out.priority).toBe(500);
-  });
-
-  test("'none' color in config resolves to null", () => {
+  test("auto config color resolves to a concrete color", async () => {
     const home = tmpHome();
     mkdirSync(join(home, ".climon"), { recursive: true });
-    writeFileSync(
-      join(home, ".climon", "config.json"),
-      JSON.stringify({ session: { color: "none" } })
-    );
-    const out = resolveSessionDefaults({}, { CLIMON_HOME: join(home, ".climon") }, home);
+    writeFileSync(join(home, ".climon", "config.json"), JSON.stringify({ session: { color: "auto" } }));
+    const out = await resolveSessionDefaults({}, { CLIMON_HOME: join(home, ".climon") }, home);
+    expect(out.color).toBe("white");
+  });
+
+  test("'none' color in config resolves to null", async () => {
+    const home = tmpHome();
+    mkdirSync(join(home, ".climon"), { recursive: true });
+    writeFileSync(join(home, ".climon", "config.json"), JSON.stringify({ session: { color: "none" } }));
+    const out = await resolveSessionDefaults({}, { CLIMON_HOME: join(home, ".climon") }, home);
     expect(out.color).toBeNull();
   });
 
-  test("explicit null color flag is respected over config", () => {
+  test("explicit null color flag is respected over config", async () => {
     const home = tmpHome();
     mkdirSync(join(home, ".climon"), { recursive: true });
-    writeFileSync(
-      join(home, ".climon", "config.json"),
-      JSON.stringify({ session: { color: "red" } })
-    );
-    const out = resolveSessionDefaults({ color: null }, { CLIMON_HOME: join(home, ".climon") }, home);
+    writeFileSync(join(home, ".climon", "config.json"), JSON.stringify({ session: { color: "red" } }));
+    const out = await resolveSessionDefaults({ color: null }, { CLIMON_HOME: join(home, ".climon") }, home);
     expect(out.color).toBeNull();
   });
 });
