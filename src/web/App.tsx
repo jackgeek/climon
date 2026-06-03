@@ -129,6 +129,16 @@ const useStyles = makeStyles({
   }
 });
 
+export function scheduleTerminalRefit(
+  terminal: Pick<TerminalHandle, "refit"> | null,
+  requestFrame: (callback: FrameRequestCallback) => number = requestAnimationFrame
+): void {
+  if (!terminal) {
+    return;
+  }
+  requestFrame(() => terminal.refit());
+}
+
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -360,6 +370,7 @@ export function App() {
   const handleSidebarCollapsedChange = useCallback((collapsed: boolean): void => {
     setSidebarCollapsed(collapsed);
     writeSidebarCollapsed(collapsed);
+    scheduleTerminalRefit(terminalRef.current);
   }, []);
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;

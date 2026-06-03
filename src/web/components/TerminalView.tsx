@@ -273,7 +273,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       className={styles.root}
       style={
         accentColor
-          ? { borderTop: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_CSS[accentColor]}` }
+          ? { border: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_CSS[accentColor]}` }
           : undefined
       }
     />
