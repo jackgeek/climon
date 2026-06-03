@@ -121,7 +121,7 @@ describe("SessionItem compact rendering", () => {
       })
     );
 
-    expect(markup).toContain("border-right:4px solid #729fcf");
+    expect(markup).toContain("border-right:8px solid #729fcf");
     expect(markup).not.toContain("#3465a4");
   });
 });

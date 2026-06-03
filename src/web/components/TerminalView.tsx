@@ -7,7 +7,7 @@ import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { attachKey, attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
 import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
-import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
+import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
@@ -242,11 +242,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachKey(session, visible)]);
 
-  // Refit when entering/leaving fullscreen or becoming visible so xterm
-  // re-measures after the container's size changes.
+  // Refit when layout-affecting terminal chrome changes so xterm re-measures
+  // before sending geometry back to the daemon.
   useEffect(() => {
     refit();
-  }, [maximized, visible, viewMode]);
+  }, [accentColor, maximized, visible, viewMode]);
 
   useImperativeHandle(ref, () => ({
     getDimensions: () => {
@@ -273,7 +273,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       className={styles.root}
       style={
         accentColor
-          ? { border: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
+          ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
           : undefined
       }
     />

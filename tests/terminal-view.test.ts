@@ -9,12 +9,14 @@ describe("TerminalView", () => {
       createElement(TerminalView, {
         accentColor: "blue",
         maximized: false,
+        onViewModeChange: () => {},
         session: null,
-        visible: false
+        visible: false,
+        viewMode: "clamped"
       })
     );
 
-    expect(markup).toContain("border:4px solid #729fcf");
+    expect(markup).toContain("border:8px solid #729fcf");
     expect(markup).not.toContain("border-top:");
   });
 });
