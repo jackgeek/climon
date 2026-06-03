@@ -14,6 +14,8 @@ import {
   tokens
 } from "@fluentui/react-components";
 import { createSession } from "../api.js";
+import type { AnsiColor } from "../../types.js";
+import { SessionMetaFields, type MetaFieldsValue } from "./SessionMetaFields.js";
 
 const useStyles = makeStyles({
   error: {
@@ -29,7 +31,7 @@ interface Props {
   getDimensions: () => { cols: number; rows: number } | null;
   onCreated: (id: string) => void;
   /** When set, spawn a new session from this session (cwd is inherited). */
-  parent?: { id: string; cwd: string } | null;
+  parent?: { id: string; cwd: string; priority?: number; color?: AnsiColor | null } | null;
 }
 
 export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated, parent }: Props) {
@@ -38,11 +40,17 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
   const [cwd, setCwd] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [fields, setFields] = useState<MetaFieldsValue>({ name: "", priority: "500", color: "none" });
 
   useEffect(() => {
     if (open) {
       setCommand("");
       setCwd(parent ? parent.cwd : "");
+      setFields({
+        name: "",
+        priority: String(parent?.priority ?? 500),
+        color: parent?.color ?? "none"
+      });
       setError("");
       setBusy(false);
     }
@@ -60,12 +68,21 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
     setBusy(true);
     setError("");
     const dims = getDimensions();
+    const priorityNum = Number(fields.priority);
+    if (!Number.isInteger(priorityNum) || priorityNum < 0 || priorityNum > 1000) {
+      setError("Priority must be an integer between 0 and 1000.");
+      setBusy(false);
+      return;
+    }
     const result = await createSession({
       command: trimmed,
       cwd: parent ? undefined : cwd.trim() || undefined,
       cols: dims?.cols,
       rows: dims?.rows,
-      parentId: parent?.id
+      parentId: parent?.id,
+      name: fields.name.trim() || undefined,
+      priority: priorityNum,
+      color: fields.color === "none" ? null : fields.color
     });
     if (!result.ok) {
       setError(result.error || "Failed to create session.");
@@ -124,6 +141,12 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
                 />
               </Field>
             )}
+            <SessionMetaFields
+              value={fields}
+              onChange={setFields}
+              namePlaceholder="Defaults to the command"
+              onEnter={() => void submit()}
+            />
             <Text className={styles.error} style={{ display: "block", marginTop: "12px" }}>
               {error}
             </Text>

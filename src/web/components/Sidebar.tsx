@@ -62,11 +62,12 @@ interface Props {
   onClose: (id: string) => void;
   onNew: () => void;
   onNewFrom: (session: SessionMeta) => void;
+  onEdit: (session: SessionMeta) => void;
   onManageRemote: () => void;
   onMaximize: (id: string) => void;
 }
 
-export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, onNew, onNewFrom, onManageRemote, onMaximize }: Props) {
+export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, onNew, onNewFrom, onEdit, onManageRemote, onMaximize }: Props) {
   const styles = useStyles();
   return (
     <div className={styles.root}>
@@ -114,6 +115,7 @@ export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, 
               onSelect={onSelect}
               onClose={onClose}
               onNew={onNewFrom}
+              onEdit={onEdit}
               onMaximize={onMaximize}
             />
           ))

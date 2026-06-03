@@ -1,5 +1,6 @@
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
-import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular } from "@fluentui/react-icons";
+import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular, Settings16Regular } from "@fluentui/react-icons";
+import { ANSI_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
 import { StatusBadge } from "./StatusBadge.js";
 
@@ -11,7 +12,8 @@ const useStyles = makeStyles({
     cursor: "pointer",
     ":hover": { backgroundColor: tokens.colorNeutralBackground1Hover },
     ":hover .climon-close": { display: "inline-flex" },
-    ":hover .climon-new": { display: "inline-flex" }
+    ":hover .climon-new": { display: "inline-flex" },
+    ":hover .climon-edit": { display: "inline-flex" }
   },
   active: {
     backgroundColor: tokens.colorNeutralBackground1Selected
@@ -62,6 +64,12 @@ const useStyles = makeStyles({
     right: "36px",
     display: "none"
   },
+  editBtn: {
+    position: "absolute",
+    top: "8px",
+    right: "64px",
+    display: "none"
+  },
   maximize: {
     display: "none",
     marginTop: "8px",
@@ -78,14 +86,16 @@ interface Props {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: (session: SessionMeta) => void;
+  onEdit: (session: SessionMeta) => void;
   onMaximize: (id: string) => void;
 }
 
-export function SessionItem({ session, active, onSelect, onClose, onNew, onMaximize }: Props) {
+export function SessionItem({ session, active, onSelect, onClose, onNew, onEdit, onMaximize }: Props) {
   const styles = useStyles();
   return (
     <div
       className={mergeClasses(styles.root, active && styles.active)}
+      style={session.color ? { borderRight: `4px solid ${ANSI_CSS[session.color]}` } : undefined}
       onClick={() => onSelect(session.id)}
       role="button"
       tabIndex={0}
@@ -111,6 +121,18 @@ export function SessionItem({ session, active, onSelect, onClose, onNew, onMaxim
         />
       )}
       <Button
+        className={mergeClasses("climon-edit", styles.editBtn)}
+        appearance="subtle"
+        size="small"
+        icon={<Settings16Regular />}
+        title="Edit session"
+        aria-label="Edit session"
+        onClick={(e) => {
+          e.stopPropagation();
+          onEdit(session);
+        }}
+      />
+      <Button
         className={mergeClasses("climon-close", styles.close)}
         appearance="subtle"
         size="small"
@@ -123,7 +145,7 @@ export function SessionItem({ session, active, onSelect, onClose, onNew, onMaxim
         }}
       />
       <Text className={styles.cmd} title={session.displayCommand}>
-        {session.displayCommand}
+        {session.name || session.displayCommand}
       </Text>
       <div className={styles.meta}>
         <StatusBadge status={session.status} />

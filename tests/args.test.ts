@@ -102,4 +102,33 @@ describe("parseArgs", () => {
   test("throws when ssh-accept label missing", () => {
     expect(() => parseArgs(["--ssh-accept"])).toThrow();
   });
+
+  test("parses leading session flags before the command", () => {
+    expect(parseArgs(["--priority", "800", "--color", "red", "--name", "dev", "npm", "run", "dev"]))
+      .toEqual({ command: "run", argv: ["npm", "run", "dev"], headless: false, priority: 800, color: "red", name: "dev" });
+  });
+
+  test("supports --flag=value form", () => {
+    expect(parseArgs(["--priority=250", "--color=blue", "bash"]))
+      .toEqual({ command: "run", argv: ["bash"], headless: false, priority: 250, color: "blue" });
+  });
+
+  test("stops parsing flags at the first non-flag token", () => {
+    // The --color here belongs to the monitored command, not climon.
+    expect(parseArgs(["npm", "run", "build", "--color"]))
+      .toEqual({ command: "run", argv: ["npm", "run", "build", "--color"], headless: false });
+  });
+
+  test("works with the explicit run subcommand and --headless", () => {
+    expect(parseArgs(["run", "--headless", "--priority", "10", "sleep", "30"]))
+      .toEqual({ command: "run", argv: ["sleep", "30"], headless: true, priority: 10 });
+  });
+
+  test("rejects an invalid priority", () => {
+    expect(() => parseArgs(["--priority", "2000", "bash"])).toThrow(/0 and 1000/);
+  });
+
+  test("rejects an invalid color", () => {
+    expect(() => parseArgs(["--color", "orange", "bash"])).toThrow(/must be one of/);
+  });
 });

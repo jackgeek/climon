@@ -49,7 +49,12 @@ async function main(): Promise<number> {
     case "kill":
       return killSession(parsed.id);
     case "run":
-      return startMonitoredCommand(parsed.argv, { headless: parsed.headless });
+      return startMonitoredCommand(parsed.argv, {
+        headless: parsed.headless,
+        name: parsed.name,
+        priority: parsed.priority,
+        color: parsed.color
+      });
     case "config":
       return runConfigCommand(parsed.argv);
     case "uplink":

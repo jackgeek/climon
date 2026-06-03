@@ -1,5 +1,15 @@
 export type SessionStatus = "running" | "needs-attention" | "completed" | "failed" | "disconnected";
 
+export type AnsiColor =
+  | "black"
+  | "red"
+  | "green"
+  | "yellow"
+  | "blue"
+  | "magenta"
+  | "cyan"
+  | "white";
+
 export type PriorityReason =
   | "attention"
   | "completed"
@@ -82,6 +92,12 @@ export interface SessionMeta {
   error?: string;
   origin?: "local" | "remote";
   clientLabel?: string;
+  /** Human-friendly label shown in the UI instead of the raw command. */
+  name?: string;
+  /** Sort priority, integer 0–1000. Absent is treated as 500. */
+  priority?: number;
+  /** Accent color for the sidebar item, or null/absent for none. */
+  color?: AnsiColor | null;
 }
 
 export interface SessionMetaPatch {
@@ -96,6 +112,9 @@ export interface SessionMetaPatch {
   error?: string;
   cols?: number;
   rows?: number;
+  name?: string;
+  priority?: number;
+  color?: AnsiColor | null;
 }
 
 export interface SessionListResponse {
