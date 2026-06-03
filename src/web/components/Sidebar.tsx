@@ -12,6 +12,7 @@ import {
 import { Add20Regular, Navigation20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../../types.js";
 import { SessionItem } from "./SessionItem.js";
+import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 
 const useStyles = makeStyles({
   root: {
@@ -40,7 +41,11 @@ const useStyles = makeStyles({
   },
   list: {
     overflowY: "auto",
-    flex: "1 1 auto"
+    flex: "1 1 auto",
+    position: "relative"
+  },
+  listItem: {
+    willChange: "top"
   },
   empty: {
     padding: "16px",
@@ -69,6 +74,7 @@ interface Props {
 
 export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, onNew, onNewFrom, onEdit, onManageRemote, onMaximize }: Props) {
   const styles = useStyles();
+  const animatedList = useAnimatedListReorder(sessions.map((session) => session.id));
   return (
     <div className={styles.root}>
       <div className={styles.header}>
@@ -108,16 +114,22 @@ export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, 
           <div className={styles.empty}>No sessions yet.</div>
         ) : (
           sessions.map((s) => (
-            <SessionItem
+            <div
               key={s.id}
-              session={s}
-              active={s.id === activeId}
-              onSelect={onSelect}
-              onClose={onClose}
-              onNew={onNewFrom}
-              onEdit={onEdit}
-              onMaximize={onMaximize}
-            />
+              ref={animatedList.registerItem(s.id)}
+              className={styles.listItem}
+              style={animatedList.getItemStyle(s.id)}
+            >
+              <SessionItem
+                session={s}
+                active={s.id === activeId}
+                onSelect={onSelect}
+                onClose={onClose}
+                onNew={onNewFrom}
+                onEdit={onEdit}
+                onMaximize={onMaximize}
+              />
+            </div>
           ))
         )}
       </div>
