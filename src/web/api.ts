@@ -149,8 +149,8 @@ export function isLiveStatus(status: SessionMeta["status"]): boolean {
   return status === "running" || status === "available" || status === "needs-attention";
 }
 
-export function attentionAckMessage(): string {
-  return JSON.stringify({ type: "attention", needsAttention: false });
+export function attentionAckMessage(attentionMatchedAt: string): string {
+  return JSON.stringify({ type: "attention", needsAttention: false, attentionMatchedAt });
 }
 
 export function canSendAttentionAck(

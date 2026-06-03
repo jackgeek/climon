@@ -74,9 +74,10 @@ describe("isLiveStatus", () => {
 
 describe("browserAttentionPayload", () => {
   test("accepts an acknowledgement payload", () => {
-    expect(browserAttentionPayload({ needsAttention: false })).toEqual({
+    expect(browserAttentionPayload({ needsAttention: false, attentionMatchedAt: "token-1" })).toEqual({
       needsAttention: false,
-      reason: "viewed"
+      reason: "viewed",
+      attentionMatchedAt: "token-1"
     });
   });
 
@@ -87,13 +88,18 @@ describe("browserAttentionPayload", () => {
   test("rejects messages without an explicit acknowledgement", () => {
     expect(browserAttentionPayload({})).toBeNull();
   });
+
+  test("rejects acknowledgement messages without an attention token", () => {
+    expect(browserAttentionPayload({ needsAttention: false })).toBeNull();
+  });
 });
 
 describe("attentionAckMessage", () => {
   test("serializes a browser attention acknowledgement", () => {
-    expect(JSON.parse(attentionAckMessage())).toEqual({
+    expect(JSON.parse(attentionAckMessage("token-1"))).toEqual({
       type: "attention",
-      needsAttention: false
+      needsAttention: false,
+      attentionMatchedAt: "token-1"
     });
   });
 });

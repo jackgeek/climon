@@ -41,6 +41,7 @@ export interface PtySizePayload {
 export interface AttentionPayload {
   needsAttention: boolean;
   reason?: string;
+  attentionMatchedAt?: string;
 }
 
 export interface ExitPayload {

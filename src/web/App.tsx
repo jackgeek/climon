@@ -339,8 +339,9 @@ export function App() {
     (id: string): void => {
       const selected = sessions.find((s) => s.id === id);
       setActiveId(id);
-      if (selected?.status === "needs-attention") {
-        requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id));
+      const attentionMatchedAt = selected?.attentionMatchedAt;
+      if (selected?.status === "needs-attention" && attentionMatchedAt) {
+        requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id, attentionMatchedAt));
       }
       if (!isMobile) {
         requestAnimationFrame(() => terminalRef.current?.focus());
@@ -383,8 +384,9 @@ export function App() {
             const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
             setMaximized(true);
-            if (selected?.status === "needs-attention") {
-              requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id));
+            const attentionMatchedAt = selected?.attentionMatchedAt;
+            if (selected?.status === "needs-attention" && attentionMatchedAt) {
+              requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id, attentionMatchedAt));
             }
           }}
         />

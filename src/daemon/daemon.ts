@@ -61,8 +61,12 @@ export function revertSize(
   return { cols, rows };
 }
 
-export function shouldApplyUserAttentionAcknowledgement(lastAttentionState: boolean | undefined): boolean {
-  return lastAttentionState === true;
+export function shouldApplyUserAttentionAcknowledgement(
+  lastAttentionState: boolean | undefined,
+  currentAttentionMatchedAt: string | undefined,
+  acknowledgedAttentionMatchedAt: string | undefined
+): boolean {
+  return lastAttentionState === true && currentAttentionMatchedAt !== undefined && acknowledgedAttentionMatchedAt === currentAttentionMatchedAt;
 }
 
 export async function runSessionDaemon(id: string): Promise<void> {
@@ -98,6 +102,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
   let appliedRows = meta.rows;
 
   let lastAttentionState: boolean | undefined;
+  let currentAttentionMatchedAt: string | undefined;
   const warnedHosts = new Set<Socket>();
   let exited = false;
   let exitInfo: { exitCode: number } | undefined;
@@ -256,10 +261,14 @@ export async function runSessionDaemon(id: string): Promise<void> {
       return;
     }
     if (!payload.needsAttention) {
-      if (source === "user" && !shouldApplyUserAttentionAcknowledgement(lastAttentionState)) {
+      if (
+        source === "user" &&
+        !shouldApplyUserAttentionAcknowledgement(lastAttentionState, currentAttentionMatchedAt, payload.attentionMatchedAt)
+      ) {
         return;
       }
       lastAttentionState = false;
+      currentAttentionMatchedAt = undefined;
       if (source === "user") {
         idleDetector.acknowledge(fingerprint(), Date.now());
       }
@@ -278,6 +287,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
     }
     lastAttentionState = payload.needsAttention;
     const now = new Date().toISOString();
+    currentAttentionMatchedAt = now;
     void patchSessionMeta(id, {
       status: "needs-attention",
       priorityReason: "attention",

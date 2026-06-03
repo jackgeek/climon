@@ -19,7 +19,7 @@ export interface TerminalHandle {
   refit: () => void;
   sendInput: (data: string) => void;
   setViewMode: (mode: TerminalResizeMode) => void;
-  acknowledgeAttention: (sessionId: string) => void;
+  acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
   focus: () => void;
 }
 
@@ -54,7 +54,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const onViewModeChangeRef = useRef(onViewModeChange);
   const fontSizeRef = useRef(13);
   const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
-  const queuedAttentionAckRef = useRef<string | null>(null);
+  const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -76,23 +76,27 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
   }
 
-  function sendAttentionAck(sessionId: string): void {
+  function sendAttentionAck(sessionId: string, attentionMatchedAt: string): void {
     const ws = wsRef.current;
     if (ws && canSendAttentionAck(attachedSessionIdRef.current, sessionId, ws.readyState === WebSocket.OPEN)) {
-      ws.send(attentionAckMessage());
+      ws.send(attentionAckMessage(attentionMatchedAt));
     } else {
-      queuedAttentionAckRef.current = sessionId;
+      queuedAttentionAckRef.current = { sessionId, attentionMatchedAt };
     }
   }
 
   function flushAttentionAck(): void {
     const ws = wsRef.current;
-    const sessionId = queuedAttentionAckRef.current;
-    if (!ws || !sessionId || !canSendAttentionAck(attachedSessionIdRef.current, sessionId, ws.readyState === WebSocket.OPEN)) {
+    const pending = queuedAttentionAckRef.current;
+    if (
+      !ws ||
+      !pending ||
+      !canSendAttentionAck(attachedSessionIdRef.current, pending.sessionId, ws.readyState === WebSocket.OPEN)
+    ) {
       return;
     }
     queuedAttentionAckRef.current = null;
-    ws.send(attentionAckMessage());
+    ws.send(attentionAckMessage(pending.attentionMatchedAt));
   }
 
   function fitNow(): void {

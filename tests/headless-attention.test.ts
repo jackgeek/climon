@@ -38,7 +38,8 @@ async function acknowledgeAttention(id: string): Promise<void> {
     socket.once("connect", () => {
       socket.write(encodeJsonFrame(FrameType.Attention, {
         needsAttention: false,
-        reason: "viewed"
+        reason: "viewed",
+        attentionMatchedAt: meta.attentionMatchedAt
       } satisfies AttentionPayload));
     });
     socket.on("data", (chunk) => {

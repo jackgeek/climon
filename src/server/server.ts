@@ -163,12 +163,13 @@ export function browserResizePayload(message: {
 
 export function browserAttentionPayload(message: {
   needsAttention?: boolean;
+  attentionMatchedAt?: unknown;
   reason?: unknown;
 }): AttentionPayload | null {
-  if (message.needsAttention !== false) {
+  if (message.needsAttention !== false || typeof message.attentionMatchedAt !== "string") {
     return null;
   }
-  return { needsAttention: false, reason: "viewed" };
+  return { needsAttention: false, reason: "viewed", attentionMatchedAt: message.attentionMatchedAt };
 }
 
 export interface SpawnMetaOptions {
@@ -834,6 +835,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             rows?: number;
             mode?: TerminalResizeMode;
             needsAttention?: boolean;
+            attentionMatchedAt?: string;
           };
           if (message.type === "input" && typeof message.data === "string") {
             daemon.write(encodeFrame(FrameType.Input, Buffer.from(message.data, "utf8")));
