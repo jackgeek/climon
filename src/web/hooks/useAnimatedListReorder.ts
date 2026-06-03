@@ -34,7 +34,8 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
     for (const id of ids) {
       const element = elementsRef.current[id];
       if (element) {
-        nextTops[id] = element.getBoundingClientRect().top;
+        const cssTop = Number.parseFloat(getComputedStyle(element).top) || 0;
+        nextTops[id] = element.getBoundingClientRect().top - cssTop;
       }
     }
 
