@@ -64,9 +64,17 @@ export function revertSize(
 export function shouldApplyUserAttentionAcknowledgement(
   lastAttentionState: boolean | undefined,
   currentAttentionMatchedAt: string | undefined,
-  acknowledgedAttentionMatchedAt: string | undefined
+  acknowledgedAttentionMatchedAt: string | undefined,
+  attentionFingerprint: string | undefined,
+  currentFingerprint: string
 ): boolean {
-  return lastAttentionState === true && currentAttentionMatchedAt !== undefined && acknowledgedAttentionMatchedAt === currentAttentionMatchedAt;
+  return (
+    lastAttentionState === true &&
+    currentAttentionMatchedAt !== undefined &&
+    acknowledgedAttentionMatchedAt === currentAttentionMatchedAt &&
+    attentionFingerprint !== undefined &&
+    currentFingerprint === attentionFingerprint
+  );
 }
 
 export async function runSessionDaemon(id: string): Promise<void> {
@@ -103,6 +111,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
 
   let lastAttentionState: boolean | undefined;
   let currentAttentionMatchedAt: string | undefined;
+  let currentAttentionFingerprint: string | undefined;
   const warnedHosts = new Set<Socket>();
   let exited = false;
   let exitInfo: { exitCode: number } | undefined;
@@ -256,21 +265,32 @@ export async function runSessionDaemon(id: string): Promise<void> {
    * Transitions are de-duped against the last applied value and ignored after
    * the PTY exits so the completed/failed patch always wins.
    */
-  function applyAttention(payload: AttentionPayload, source: "detector" | "user" = "detector"): void {
+  function applyAttention(
+    payload: AttentionPayload,
+    source: "detector" | "user" = "detector",
+    currentFingerprint: string = fingerprint()
+  ): void {
     if (exited) {
       return;
     }
     if (!payload.needsAttention) {
       if (
         source === "user" &&
-        !shouldApplyUserAttentionAcknowledgement(lastAttentionState, currentAttentionMatchedAt, payload.attentionMatchedAt)
+        !shouldApplyUserAttentionAcknowledgement(
+          lastAttentionState,
+          currentAttentionMatchedAt,
+          payload.attentionMatchedAt,
+          currentAttentionFingerprint,
+          currentFingerprint
+        )
       ) {
         return;
       }
       lastAttentionState = false;
       currentAttentionMatchedAt = undefined;
+      currentAttentionFingerprint = undefined;
       if (source === "user") {
-        idleDetector.acknowledge(fingerprint(), Date.now());
+        idleDetector.acknowledge(currentFingerprint, Date.now());
       }
       const now = new Date().toISOString();
       void patchSessionMeta(id, {
@@ -288,6 +308,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
     lastAttentionState = payload.needsAttention;
     const now = new Date().toISOString();
     currentAttentionMatchedAt = now;
+    currentAttentionFingerprint = currentFingerprint;
     void patchSessionMeta(id, {
       status: "needs-attention",
       priorityReason: "attention",
@@ -336,9 +357,10 @@ export async function runSessionDaemon(id: string): Promise<void> {
   const idleTimer =
     config.attention.idleSeconds > 0
       ? setInterval(() => {
-          const transition = idleDetector.update(fingerprint(), Date.now());
+          const currentFingerprint = fingerprint();
+          const transition = idleDetector.update(currentFingerprint, Date.now());
           if (transition) {
-            applyAttention(transition, "detector");
+            applyAttention(transition, "detector", currentFingerprint);
           }
         }, 1000)
       : undefined;
