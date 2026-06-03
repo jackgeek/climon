@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { CSSProperties, RefCallback } from "react";
 
 const ANIMATION_MS = 180;
+const EMPTY_STYLE: CSSProperties = {};
 
 export interface AnimatedListReorderApi {
   registerItem: (id: string) => RefCallback<HTMLElement>;
@@ -112,7 +113,7 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
       const firstElement = firstId ? elementsRef.current[firstId] : undefined;
       if (firstElement) {
         const onTransitionEnd = (e: TransitionEvent) => {
-          if (e.propertyName === "top") finishAnimation();
+          if (e.target === firstElement && e.propertyName === "top") finishAnimation();
         };
         firstElement.addEventListener("transitionend", onTransitionEnd);
         transitionEndCleanupRef.current = () =>
@@ -159,7 +160,7 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
   const getItemStyle = useCallback(
     (id: string): CSSProperties => {
       if (offsets === null || !(id in offsets)) {
-        return {};
+        return EMPTY_STYLE;
       }
       const offset = offsets[id]!;
       if (offset !== 0) {

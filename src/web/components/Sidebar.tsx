@@ -41,8 +41,7 @@ const useStyles = makeStyles({
   },
   list: {
     overflowY: "auto",
-    flex: "1 1 auto",
-    position: "relative"
+    flex: "1 1 auto"
   },
   empty: {
     padding: "16px",
