@@ -29,9 +29,8 @@ dashboard.
 
 If you run `climon <cmd>` from a shell that is itself running inside a climon
 session, climon does **not** start a second nested session. It detects the
-existing session (via the `CLIMON_SESSION_ID` environment variable), runs the
-command directly with inherited stdio, and exits with the command's exit code —
-so the parent session keeps owning the PTY.
+existing session (via the `CLIMON_SESSION_ID` environment variable), prints an
+error, and exits without running the nested command.
 
 ### Detach and reattach
 

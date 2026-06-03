@@ -19,8 +19,8 @@ function normalizeDetachPrefix(value: unknown): number {
 /**
  * Environment variable set on the command running inside a monitored PTY. Its
  * presence signals that we are already inside a climon session, so a nested
- * `climon <cmd>` invocation should run the command directly instead of starting
- * a new monitored session.
+ * `climon <cmd>` invocation should fail instead of starting a new monitored
+ * session.
  */
 export const SESSION_ENV_VAR = "CLIMON_SESSION_ID";
 
