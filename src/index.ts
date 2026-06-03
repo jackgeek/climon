@@ -7,6 +7,7 @@ import { delegateToServer } from "./cli/server-exec.js";
 import { runUplink } from "./remote/uplink.js";
 import { runSessionDaemon } from "./daemon/daemon.js";
 import {
+  killAllSessions,
   killSession,
   listSessionsCommand,
   reconnectSession,
@@ -52,6 +53,8 @@ async function main(): Promise<number> {
       return listSessionsCommand();
     case "kill":
       return killSession(parsed.id);
+    case "kill-all":
+      return killAllSessions();
     case "run":
       return startMonitoredCommand(parsed.argv, {
         headless: parsed.headless,
