@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionStatus } from "../src/types.js";
-import { STATUS_INITIALS, STATUS_LABELS } from "../src/web/components/StatusBadge.js";
+import { StatusBadge, STATUS_INITIALS, STATUS_LABELS } from "../src/web/components/StatusBadge.js";
 
 const statuses: SessionStatus[] = ["running", "needs-attention", "completed", "failed", "disconnected"];
 
@@ -31,5 +33,26 @@ describe("StatusBadge label maps", () => {
     for (const status of statuses) {
       expect(STATUS_LABELS[status].length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("StatusBadge rendering", () => {
+  test("renders the full label by default", () => {
+    const markup = renderToStaticMarkup(createElement(StatusBadge, { status: "needs-attention" }));
+
+    expect(markup).toContain(">needs attention<");
+  });
+
+  test("renders compact initials when compact is true", () => {
+    const markup = renderToStaticMarkup(createElement(StatusBadge, { compact: true, status: "needs-attention" }));
+
+    expect(markup).toContain(">NA<");
+    expect(markup).not.toContain(">needs attention<");
+  });
+
+  test("sets the title to the full label", () => {
+    const markup = renderToStaticMarkup(createElement(StatusBadge, { compact: true, status: "needs-attention" }));
+
+    expect(markup).toContain('title="needs attention"');
   });
 });
