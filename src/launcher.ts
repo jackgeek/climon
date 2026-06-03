@@ -10,7 +10,7 @@ import {
   getSessionsDir,
   getSocketPath,
   loadConfig,
-  loadRemoteConfig,
+  resolveConfigSetting,
   SESSION_ENV_VAR
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
@@ -95,8 +95,11 @@ function spawnDaemon(id: string, env: NodeJS.ProcessEnv): void {
 }
 
 async function ensureUplink(): Promise<void> {
-  const { remote } = await loadRemoteConfig(process.env, process.cwd());
-  if (!remote?.enabled) return;
+  const enabled = resolveConfigSetting("remote.enabled", process.env, process.cwd()) === true;
+  const tunnelId = resolveConfigSetting("remote.tunnelId", process.env, process.cwd());
+  const tunnelToken = resolveConfigSetting("remote.tunnelToken", process.env, process.cwd());
+  const port = resolveConfigSetting("remote.port", process.env, process.cwd());
+  if (!enabled || !tunnelId || !tunnelToken || !port) return;
   const child = spawn(process.execPath, [process.argv[1] ?? "climon", "__uplink"], {
     detached: true,
     stdio: "ignore"
