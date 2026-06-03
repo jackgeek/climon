@@ -369,7 +369,7 @@ export async function killAllSessions(
 ): Promise<number> {
   const localSessions = (await listSessions())
     .filter((session) => session.daemonPid !== undefined)
-    .sort((a, b) => (a.daemonPid ?? 0) - (b.daemonPid ?? 0));
+    .sort((a, b) => a.id.localeCompare(b.id));
   if (localSessions.length === 0) {
     process.stdout.write("No local climon sessions found.\n");
     return 0;

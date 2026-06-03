@@ -159,9 +159,9 @@ describe("killAllSessions", () => {
 
     expect(code).toBe(1);
     expect(calls).toEqual([
+      [4444, false],
       [3333, false],
-      [3333, true],
-      [4444, false]
+      [3333, true]
     ]);
     expect(await readSessionMeta("stuck")).toBeDefined();
     expect(await readSessionMeta("ok")).toBeUndefined();
