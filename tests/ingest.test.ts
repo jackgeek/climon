@@ -100,11 +100,12 @@ describe("runIngestConnection", () => {
     client.write(encodeControl({ kind: "session-added", meta: sampleMeta("s1") }));
 
     let meta: SessionMeta | undefined;
-    for (let i = 0; i < 50 && !meta; i++) {
+    for (let i = 0; i < 50 && (!meta || meta.socketPath === "tcp://127.0.0.1:0"); i++) {
       await new Promise((r) => setTimeout(r, 20));
       meta = await readSessionMeta("dev1~s1", env);
     }
     expect(meta).toBeDefined();
+    expect(meta?.socketPath).not.toBe("tcp://127.0.0.1:0");
     const socketPath = meta?.socketPath;
 
     client.write(
