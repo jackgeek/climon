@@ -68,7 +68,7 @@ describe("runIngestConnection", () => {
 
     // Wait for the meta to land.
     let meta: SessionMeta | undefined;
-    for (let i = 0; i < 50 && !meta; i++) {
+    for (let i = 0; i < 50 && (!meta || meta.socketPath.endsWith(":0")); i++) {
       await new Promise((r) => setTimeout(r, 20));
       meta = await readSessionMeta("dev1~s1", env);
     }

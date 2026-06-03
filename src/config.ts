@@ -185,6 +185,46 @@ export function resolveConfigSetting(
   return undefined;
 }
 
+export interface ConfigDebugEntry {
+  path: string;
+  exists: boolean;
+  keys: string[];
+  error?: string;
+}
+
+function collectDottedKeys(value: unknown, prefix = ""): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return prefix ? [prefix] : [];
+  }
+  const keys: string[] = [];
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const dotted = prefix ? `${prefix}.${key}` : key;
+    keys.push(...collectDottedKeys(child, dotted));
+  }
+  return keys;
+}
+
+export function listConfigDebugEntries(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): ConfigDebugEntry[] {
+  return candidateConfigDirs(env, cwd).map((dir) => {
+    const path = join(dir, "config.json");
+    if (!existsSync(path)) return { path, exists: false, keys: [] };
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      return { path, exists: true, keys: collectDottedKeys(parsed).sort() };
+    } catch (error) {
+      return {
+        path,
+        exists: true,
+        keys: [],
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  });
+}
+
 export type WriteScope = "auto" | "local" | "global";
 
 /** Chooses the target dir for a write: explicit scope, nearest existing .climon, else ~/.climon. */
@@ -203,6 +243,8 @@ export function resolveWriteDir(
 
 const CONFIG_KEY_TYPES: Record<string, "string" | "number" | "boolean"> = {
   "remote.enabled": "boolean",
+  "remote.host": "string",
+  "remote.ingestHost": "string",
   "remote.tunnelId": "string",
   "remote.tunnelToken": "string",
   "remote.port": "number",

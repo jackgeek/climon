@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   candidateConfigDirs,
@@ -14,7 +13,9 @@ let root: string;
 let home: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "climon-cascade-"));
+  const testTmp = join(process.cwd(), ".copilot-tmp");
+  mkdirSync(testTmp, { recursive: true });
+  root = mkdtempSync(join(testTmp, "climon-cascade-"));
   home = join(root, "home");
   mkdirSync(home, { recursive: true });
 });
