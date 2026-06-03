@@ -1,11 +1,16 @@
 #!/usr/bin/env bun
 import { helpText, parseArgs } from "./cli/args.js";
+import { runIngestDaemon } from "./remote/ingest.js";
 import { startServer } from "./server/server.js";
 
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.command === "server") {
     await startServer({ port: parsed.port });
+    return 0;
+  }
+  if (parsed.command === "ingest") {
+    await runIngestDaemon();
     return 0;
   }
   process.stderr.write("climon-server: expected the `server` command.\n");

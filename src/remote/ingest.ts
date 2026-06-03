@@ -1,11 +1,14 @@
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
-import { mkdir, unlink } from "node:fs/promises";
+import { spawn, type ChildProcess } from "node:child_process";
+import { watch, type FSWatcher } from "node:fs";
+import { mkdir, readFile, unlink } from "node:fs/promises";
 import { Buffer } from "node:buffer";
-import { dirname } from "node:path";
-import { getSocketPath } from "../config.js";
-import { patchSessionMeta, writeSessionMeta } from "../store.js";
+import { dirname, join } from "node:path";
+import { getClimonHome, getRemoteHostPath, getSocketPath } from "../config.js";
+import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
+import { acquireSingleton } from "./singleton.js";
 
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
@@ -222,4 +225,149 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     channel.on("close", () => void teardown());
     channel.on("error", () => void teardown());
   });
+}
+
+
+export interface RemoteHostState {
+  tunnelId: string;
+  connectToken?: string;
+  ingestPort: number;
+  tokenExpiresAt?: string;
+  canHost?: boolean;
+}
+
+export interface HostProcess {
+  stop: () => void;
+}
+
+export interface SupervisorOptions {
+  env?: NodeJS.ProcessEnv;
+  /** Injectable for tests; defaults to spawning the real `devtunnel host`. */
+  spawnHost?: (tunnelId: string) => HostProcess;
+}
+
+/** Reads the desired tunnel-hosting state from ~/.climon/remote-host.json, or undefined. */
+export async function readRemoteHostState(env: NodeJS.ProcessEnv = process.env): Promise<RemoteHostState | undefined> {
+  try {
+    const raw = await readFile(getRemoteHostPath(env), "utf8");
+    const parsed = JSON.parse(raw) as RemoteHostState;
+    if (typeof parsed.tunnelId !== "string" || !Number.isInteger(parsed.ingestPort)) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function defaultSpawnHost(tunnelId: string): HostProcess {
+  const child: ChildProcess = spawn("devtunnel", ["host", tunnelId], {
+    stdio: ["ignore", "inherit", "inherit"]
+  });
+  return {
+    stop: () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    }
+  };
+}
+
+/**
+ * Desired-state supervisor for `devtunnel host`. `reconcile()` compares the
+ * persisted remote-host.json against the running host child and starts/stops/
+ * restarts to match. Idempotent: calling it repeatedly with unchanged state is a
+ * no-op.
+ */
+export class TunnelHostSupervisor {
+  private readonly env: NodeJS.ProcessEnv;
+  private readonly spawnHost: (tunnelId: string) => HostProcess;
+  private current?: { tunnelId: string; proc: HostProcess };
+
+  constructor(options: SupervisorOptions = {}) {
+    this.env = options.env ?? process.env;
+    this.spawnHost = options.spawnHost ?? defaultSpawnHost;
+  }
+
+  async reconcile(): Promise<void> {
+    const desired = await readRemoteHostState(this.env);
+    const desiredId = desired?.tunnelId;
+    if (this.current?.tunnelId === desiredId) return;
+    if (this.current) {
+      this.current.proc.stop();
+      this.current = undefined;
+    }
+    if (desiredId) {
+      this.current = { tunnelId: desiredId, proc: this.spawnHost(desiredId) };
+    }
+  }
+
+  stop(): void {
+    this.current?.proc.stop();
+    this.current = undefined;
+  }
+}
+
+export function getIngestPidPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getClimonHome(env), "ingest.pid");
+}
+
+/** Default loopback port the ingest daemon listens on. */
+export const DEFAULT_INGEST_PORT = 3132;
+
+/** Marks any leftover running remote sessions from a previous daemon as disconnected. */
+async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<void> {
+  for (const meta of await listSessions(env)) {
+    if (meta.origin === "remote" && (meta.status === "running" || meta.status === "needs-attention")) {
+      await patchSessionMeta(meta.id, { status: "disconnected", priorityReason: "disconnected" }, env);
+    }
+  }
+}
+
+/**
+ * Long-lived, detached singleton ingest daemon. Binds the loopback ingest port
+ * first, then supervises `devtunnel host` per remote-host.json (watched + polled),
+ * and materializes inbound mux connections as remote sessions.
+ */
+export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Promise<number> {
+  if (!(await acquireSingleton(getIngestPidPath(env)))) return 0;
+  await reconcileStaleRemoteSessions(env);
+
+  const state = await readRemoteHostState(env);
+  const port = state?.ingestPort ?? DEFAULT_INGEST_PORT;
+
+  const server = createNetServer((socket) => {
+    void runIngestConnection(socket, { env });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+
+  const supervisor = new TunnelHostSupervisor({ env });
+  await supervisor.reconcile();
+
+  let watcher: FSWatcher | undefined;
+  try {
+    watcher = watch(getClimonHome(env), (_event, filename) => {
+      if (!filename || String(filename) === "remote-host.json") void supervisor.reconcile();
+    });
+  } catch {
+    // fs.watch unsupported here; rely on polling.
+  }
+  const poll = setInterval(() => void supervisor.reconcile(), 5000);
+
+  const shutdown = (): void => {
+    clearInterval(poll);
+    watcher?.close();
+    supervisor.stop();
+    server.close();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+
+  // Run forever.
+  await new Promise<void>(() => {});
+  return 0;
 }

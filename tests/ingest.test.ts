@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, connect, type Server } from "node:net";
 import { join } from "node:path";
 import { listSessions, readSessionMeta } from "../src/store.js";
+import { getRemoteHostPath } from "../src/config.js";
 import { encodeControl } from "../src/remote/mux.js";
-import { isValidRemoteId, runIngestConnection } from "../src/remote/ingest.js";
+import { isValidRemoteId, runIngestConnection, TunnelHostSupervisor } from "../src/remote/ingest.js";
 import type { SessionMeta } from "../src/types.js";
 
 let home: string;
@@ -163,5 +164,47 @@ describe("runIngestConnection", () => {
     expect(await listSessions(env)).toHaveLength(0);
     client.destroy();
     server.close();
+  });
+});
+
+
+describe("TunnelHostSupervisor", () => {
+  test("starts hosting when remote-host.json appears, stops when removed", async () => {
+    const spawned: string[] = [];
+    const killed: string[] = [];
+    let activeId: string | undefined;
+    const supervisor = new TunnelHostSupervisor({
+      env,
+      spawnHost: (tunnelId) => {
+        spawned.push(tunnelId);
+        activeId = tunnelId;
+        return {
+          stop: () => {
+            killed.push(tunnelId);
+            activeId = undefined;
+          }
+        };
+      }
+    });
+    await supervisor.reconcile();
+    expect(spawned).toHaveLength(0);
+
+    writeFileSync(getRemoteHostPath(env), JSON.stringify({ tunnelId: "tunA", ingestPort: 3132 }));
+    await supervisor.reconcile();
+    expect(spawned).toEqual(["tunA"]);
+    expect(activeId).toBe("tunA");
+
+    await supervisor.reconcile();
+    expect(spawned).toEqual(["tunA"]);
+
+    writeFileSync(getRemoteHostPath(env), JSON.stringify({ tunnelId: "tunB", ingestPort: 3132 }));
+    await supervisor.reconcile();
+    expect(killed).toEqual(["tunA"]);
+    expect(spawned).toEqual(["tunA", "tunB"]);
+
+    rmSync(getRemoteHostPath(env), { force: true });
+    await supervisor.reconcile();
+    expect(killed).toEqual(["tunA", "tunB"]);
+    supervisor.stop();
   });
 });

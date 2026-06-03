@@ -11,7 +11,8 @@ export type ParsedCommand =
   | { command: "kill"; id: string }
   | { command: "run"; argv: string[]; headless: boolean; priority?: number; color?: AnsiColor | null; name?: string }
   | { command: "config"; argv: string[] }
-  | { command: "uplink" };
+  | { command: "uplink" }
+  | { command: "ingest" };
 
 export const helpText = `climon v${VERSION} — web-based monitor for interactive CLI sessions
 
@@ -147,6 +148,8 @@ export function parseArgs(argv: string[]): ParsedCommand {
       return { command: "config", argv: rest };
     case "__uplink":
       return { command: "uplink" };
+    case "__ingest":
+      return { command: "ingest" };
     default: {
       const { flags, rest: runArgv } = parseSessionFlags(argv);
       if (runArgv.length === 0) {
