@@ -1,6 +1,6 @@
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular, Settings16Regular } from "@fluentui/react-icons";
-import { ANSI_CSS } from "../colors.js";
+import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
@@ -126,7 +126,11 @@ export function SessionItem({
       className={mergeClasses(styles.root, compact && styles.compactRoot, active && styles.active)}
       style={
         session.color
-          ? { borderRight: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_CSS[session.color]}` }
+          ? {
+              borderRight: `${SESSION_COLOR_ACCENT_WIDTH} solid ${
+                active ? ANSI_HIGHLIGHT_CSS[session.color] : ANSI_CSS[session.color]
+              }`
+            }
           : undefined
       }
       title={displayTitle}

@@ -86,4 +86,42 @@ describe("SessionItem compact rendering", () => {
     expect(markup).toContain('title="API server"');
     expect(markup).not.toContain('title="running"');
   });
+
+  test("uses the normal color accent when inactive", () => {
+    const { SessionItem } = require("../src/web/components/SessionItem.js") as typeof import("../src/web/components/SessionItem.js");
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        active: false,
+        compact: true,
+        session: makeSession({ color: "blue", name: "API server" }),
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onSelect: () => {}
+      })
+    );
+
+    expect(markup).toContain("border-right:4px solid #3465a4");
+    expect(markup).not.toContain("#729fcf");
+  });
+
+  test("uses the highlighted color accent when active", () => {
+    const { SessionItem } = require("../src/web/components/SessionItem.js") as typeof import("../src/web/components/SessionItem.js");
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        active: true,
+        compact: true,
+        session: makeSession({ color: "blue", name: "API server" }),
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onSelect: () => {}
+      })
+    );
+
+    expect(markup).toContain("border-right:4px solid #729fcf");
+    expect(markup).not.toContain("#3465a4");
+  });
 });

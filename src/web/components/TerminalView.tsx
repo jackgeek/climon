@@ -6,7 +6,7 @@ import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { attachKey, attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
 import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
-import { ANSI_CSS } from "../colors.js";
+import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
 export interface TerminalHandle {
@@ -273,7 +273,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       className={styles.root}
       style={
         accentColor
-          ? { border: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_CSS[accentColor]}` }
+          ? { border: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
           : undefined
       }
     />

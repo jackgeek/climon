@@ -14,7 +14,7 @@ describe("TerminalView", () => {
       })
     );
 
-    expect(markup).toContain("border:4px solid");
+    expect(markup).toContain("border:4px solid #729fcf");
     expect(markup).not.toContain("border-top:");
   });
 });
