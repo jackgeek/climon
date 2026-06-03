@@ -56,12 +56,12 @@ describe("sortSessionsByPriority", () => {
     expect(sortSessionsByPriority(sessions)[0].id).toBe("new");
   });
 
-  test("lower priority value sorts first regardless of status", () => {
+  test("status sorts before priority so needs-attention stays first", () => {
     const sessions = [
       meta({ id: "highprio-done", status: "completed", priority: 100 }),
       meta({ id: "lowprio-attn", status: "needs-attention", priority: 900 })
     ];
-    expect(sortSessionsByPriority(sessions)[0].id).toBe("highprio-done");
+    expect(sortSessionsByPriority(sessions)[0].id).toBe("lowprio-attn");
   });
 
   test("absent priority is treated as 500", () => {
