@@ -95,7 +95,7 @@ export function SessionItem({ session, active, onSelect, onClose, onNew, onEdit,
   return (
     <div
       className={mergeClasses(styles.root, active && styles.active)}
-      style={session.color ? { borderLeft: `4px solid ${ANSI_CSS[session.color]}` } : undefined}
+      style={session.color ? { borderRight: `4px solid ${ANSI_CSS[session.color]}` } : undefined}
       onClick={() => onSelect(session.id)}
       role="button"
       tabIndex={0}

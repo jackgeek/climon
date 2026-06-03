@@ -56,10 +56,10 @@ describe("sortSessionsByPriority", () => {
     expect(sortSessionsByPriority(sessions)[0].id).toBe("new");
   });
 
-  test("higher priority sorts first regardless of status", () => {
+  test("lower priority value sorts first regardless of status", () => {
     const sessions = [
-      meta({ id: "lowprio-attn", status: "needs-attention", priority: 100 }),
-      meta({ id: "highprio-done", status: "completed", priority: 900 })
+      meta({ id: "highprio-done", status: "completed", priority: 100 }),
+      meta({ id: "lowprio-attn", status: "needs-attention", priority: 900 })
     ];
     expect(sortSessionsByPriority(sessions)[0].id).toBe("highprio-done");
   });
@@ -71,7 +71,7 @@ describe("sortSessionsByPriority", () => {
       meta({ id: "explicit-600", status: "running", priority: 600 })
     ];
     const sorted = sortSessionsByPriority(sessions).map((s) => s.id);
-    expect(sorted).toEqual(["explicit-600", "default", "explicit-400"]);
+    expect(sorted).toEqual(["explicit-400", "default", "explicit-600"]);
   });
 
   test("within equal priority, full status order applies", () => {

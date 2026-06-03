@@ -19,7 +19,7 @@ function priorityOf(session: SessionMeta): number {
 
 export function sortSessionsByPriority(sessions: SessionMeta[]): SessionMeta[] {
   return [...sessions].sort((left, right) => {
-    const priorityDiff = priorityOf(right) - priorityOf(left);
+    const priorityDiff = priorityOf(left) - priorityOf(right);
     if (priorityDiff !== 0) {
       return priorityDiff;
     }

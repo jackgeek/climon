@@ -67,11 +67,11 @@ You can also tag a session at launch with organizing metadata, placed **before**
 the command:
 
 ```bash
-climon --priority 800 --color red --name "dev server" npm run dev
+climon --priority 100 --color red --name "dev server" npm run dev
 ```
 
 - `--priority N` — an integer `0–1000` (default `500`) controlling sort order in
-  the dashboard and `climon ls`; higher sorts to the top.
+  the dashboard and `climon ls`; lower sorts to the top.
 - `--color C` — one of `black`, `red`, `green`, `yellow`, `blue`, `magenta`,
   `cyan`, `white` (or `none`); shown as a colored accent on the session.
 - `--name S` — a friendly label shown instead of the command.
