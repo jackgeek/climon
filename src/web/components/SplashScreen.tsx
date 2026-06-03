@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { makeStyles, mergeClasses } from "@fluentui/react-components";
 
-const HOLD_MS = 4000;
+export const SPLASH_HOLD_MS = 1000;
 const FADE_MS = 600;
 
 const useStyles = makeStyles({
@@ -27,7 +27,7 @@ const useStyles = makeStyles({
 });
 
 /**
- * Full-screen black intro shown on every page load: holds the logo for HOLD_MS,
+ * Full-screen black intro shown on every page load: holds the logo for SPLASH_HOLD_MS,
  * fades to black over FADE_MS, then calls `onDone` so the host can unmount it
  * and reveal the dashboard.
  */
@@ -36,8 +36,8 @@ export function SplashScreen({ onDone }: { onDone: () => void }) {
   const [fading, setFading] = useState(false);
 
   useEffect(() => {
-    const fadeTimer = setTimeout(() => setFading(true), HOLD_MS);
-    const doneTimer = setTimeout(onDone, HOLD_MS + FADE_MS);
+    const fadeTimer = setTimeout(() => setFading(true), SPLASH_HOLD_MS);
+    const doneTimer = setTimeout(onDone, SPLASH_HOLD_MS + FADE_MS);
     return () => {
       clearTimeout(fadeTimer);
       clearTimeout(doneTimer);
