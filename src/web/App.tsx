@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
@@ -11,6 +11,7 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 import { KeyBar } from "./components/KeyBar.js";
+import { SplashScreen } from "./components/SplashScreen.js";
 
 const useStyles = makeStyles({
   root: {
@@ -78,6 +79,15 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: "13px"
   },
+  headerMeta: {
+    flex: "0 0 auto",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: "11px",
+    color: tokens.colorNeutralForeground3
+  },
   empty: {
     color: tokens.colorNeutralForeground3
   },
@@ -128,6 +138,8 @@ export function App() {
   );
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
+  const [showSplash, setShowSplash] = useState(true);
+  const dismissSplash = useCallback(() => setShowSplash(false), []);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
   const swipeStartRef = useRef<{ x: number; y: number; fromRightEdge: boolean } | null>(null);
@@ -313,17 +325,31 @@ export function App() {
     }
   }
 
+  // Selecting a session on desktop moves keyboard focus into the terminal so
+  // the user can start typing immediately. On mobile the terminal is offscreen
+  // until maximized, so focusing it would be premature.
+  const handleSelect = useCallback(
+    (id: string): void => {
+      setActiveId(id);
+      if (!isMobile) {
+        requestAnimationFrame(() => terminalRef.current?.focus());
+      }
+    },
+    [isMobile]
+  );
+
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
 
   return (
     <div className={styles.root}>
+      {showSplash && <SplashScreen onDone={dismissSplash} />}
       <div className={mergeClasses(styles.sidebar, maximized && styles.hidden)}>
         <Sidebar
           sessions={sessions}
           activeId={activeId}
           serverVersion={serverVersion}
-          onSelect={setActiveId}
+          onSelect={handleSelect}
           onClose={(id) => requestClose(id)}
           onNew={() => {
             setDialogParent(null);
@@ -368,6 +394,14 @@ export function App() {
               <span className={styles.empty}>Select a session</span>
             )}
           </Text>
+          {activeSession && (
+            <span className={styles.headerMeta}>
+              <span title="Session id">{activeSession.id}</span>
+              {activeSession.clientVersion && (
+                <span title="Client version">v{activeSession.clientVersion}</span>
+              )}
+            </span>
+          )}
         </div>
         <TerminalView ref={terminalRef} session={activeSession} maximized={maximized} visible={terminalVisible} />
         {keyBarOpen && maximized && activeSession && isLiveStatus(activeSession.status) && (

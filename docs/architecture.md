@@ -30,7 +30,9 @@ Wraps Bun's native pseudo-terminal API (`new Bun.Terminal(...)` +
 Early output and a fast exit are buffered inside `spawnPty` so a listener that
 attaches a moment after spawn never misses data. (This was the root cause of an
 early bug: node-pty under Bun closed the master fd prematurely and lost output —
-replacing it with `Bun.Terminal` fixed it.)
+replacing it with `Bun.Terminal` fixed it.) On Windows, the same
+`Bun.Terminal`/`Bun.spawn({ terminal })` path uses ConPTY (`CreatePseudoConsole`,
+available in Bun >= 1.3.14); `setsid` wrapping is skipped.
 
 ### Session daemon (`src/daemon/daemon.ts`)
 

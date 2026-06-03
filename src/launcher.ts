@@ -1,23 +1,26 @@
 import { spawn } from "node:child_process";
-import { openSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { connect } from "node:net";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
 import {
   ensureClimonHome,
   getClimonHome,
-  getSessionsDir,
   getSocketPath,
   loadConfig,
   resolveConfigSetting,
   SESSION_ENV_VAR
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
+import { describeDetachKey } from "./client/detach-key.js";
+import { queryTerminalTitle } from "./client/query-title.js";
+import { sanitizeTitle } from "./client/title.js";
 import { spawnHeadlessSession, type SessionMetaOptions } from "./client/spawn-session.js";
 import { sortSessionsByPriority } from "./priority.js";
+import { spawnDaemon } from "./spawn-daemon.js";
+import { selfSpawnArgs } from "./self-spawn.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { resolveCommand } from "./pty.js";
+import { isProcessAlive, killProcess } from "./process-kill.js";
 import type { AnsiColor, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 
@@ -83,26 +86,16 @@ async function waitForHeadlessReady(id: string, socketPath: string, timeoutMs = 
   throw new Error(`Timed out waiting for session daemon socket at ${socketPath}`);
 }
 
-function spawnDaemon(id: string, env: NodeJS.ProcessEnv): void {
-  const logPath = join(getSessionsDir(env), `${id}.log`);
-  const logFd = openSync(logPath, "a");
-  const child = spawn(process.execPath, [process.argv[1], "__session", id], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env
-  });
-  child.unref();
-}
-
 async function ensureUplink(): Promise<void> {
   const enabled = resolveConfigSetting("remote.enabled", process.env, process.cwd()) === true;
   const tunnelId = resolveConfigSetting("remote.tunnelId", process.env, process.cwd());
   const tunnelToken = resolveConfigSetting("remote.tunnelToken", process.env, process.cwd());
   const port = resolveConfigSetting("remote.port", process.env, process.cwd());
   if (!enabled || !tunnelId || !tunnelToken || !port) return;
-  const child = spawn(process.execPath, [process.argv[1] ?? "climon", "__uplink"], {
+  const child = spawn(process.execPath, selfSpawnArgs(["__uplink"]), {
     detached: true,
-    stdio: "ignore"
+    stdio: "ignore",
+    windowsHide: true
   });
   child.unref();
 }
@@ -213,6 +206,14 @@ export async function startMonitoredCommand(
     return 0;
   }
 
+  if (options.name === undefined && config.terminal.setTitle) {
+    // No explicit --name: adopt the terminal's current title if we can read it,
+    // otherwise fall back to the command string.
+    const queried = await queryTerminalTitle();
+    const inferred = queried ? sanitizeTitle(queried).trim() : "";
+    options.name = inferred.length > 0 ? inferred : command.join(" ");
+  }
+
   const id = generateSessionId();
   const { cols, rows } = terminalSize();
   const now = new Date().toISOString();
@@ -244,10 +245,11 @@ export async function startMonitoredCommand(
   await waitForSocket(meta.socketPath);
 
   const dashboardUrl = `http://${config.server.host}:${config.server.port}/`;
+  const detachKey = describeDetachKey(config.terminal.detachPrefix);
   process.stdout.write(`climon v${VERSION} monitoring session ${id} — dashboard: ${dashboardUrl}\r\n`);
-  process.stdout.write("Detach with Ctrl-\\ then d.\r\n");
+  process.stdout.write(`Detach with ${detachKey} then d.\r\n`);
 
-  const result = await connectToSession(meta.socketPath);
+  const result = await connectToSession(meta.socketPath, config.terminal.detachPrefix);
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
     return 0;
@@ -264,8 +266,9 @@ export async function reconnectSession(id: string): Promise<number> {
     process.stdout.write(`Session ${id} already ${meta.status} (exit code ${meta.exitCode ?? 0}).\r\n`);
     return meta.exitCode ?? 0;
   }
+  const config = await loadConfig();
   process.stdout.write(`climon v${VERSION} attaching to session ${id}\r\n`);
-  const result = await connectToSession(meta.socketPath);
+  const result = await connectToSession(meta.socketPath, config.terminal.detachPrefix);
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
     return 0;
@@ -289,16 +292,29 @@ export async function listSessionsCommand(): Promise<number> {
   return 0;
 }
 
-export async function killSession(id: string): Promise<number> {
+export async function killSession(
+  id: string,
+  kill: (pid: number, force: boolean) => boolean = killProcess,
+  isAlive: (pid: number) => boolean = isProcessAlive
+): Promise<number> {
   const meta = await readSessionMeta(id);
   if (!meta) {
     throw new Error(`No session found with id '${id}'.`);
   }
   if (meta.daemonPid) {
-    try {
-      process.kill(meta.daemonPid, "SIGTERM");
-    } catch {
-      // Already gone.
+    // Try a graceful stop first. On POSIX a SIGTERM is "issued" successfully even
+    // though the shell exits a moment later, so a successful graceful kill ends
+    // here. If the graceful kill could not be delivered and the process is still
+    // alive — e.g. a windowless console process on Windows, which `taskkill`
+    // cannot stop without `/F` — escalate to a forced kill.
+    if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
+      kill(meta.daemonPid, true);
+      if (isAlive(meta.daemonPid)) {
+        process.stdout.write(
+          `climon: could not terminate session ${id}; it may still be running.\n`
+        );
+        return 1;
+      }
     }
   }
   await patchSessionMeta(id, { status: "failed", priorityReason: "failed" });

@@ -9,6 +9,7 @@ export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
   refit: () => void;
   sendInput: (data: string) => void;
+  focus: () => void;
 }
 
 const useStyles = makeStyles({
@@ -199,7 +200,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "input", data }));
       }
-    }
+    },
+    focus: () => termRef.current?.focus()
   }));
 
   return <div ref={containerRef} className={styles.root} />;

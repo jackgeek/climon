@@ -8,8 +8,8 @@ interact with each one from the browser.
 ## Highlights
 
 - **No external dependencies.** Uses Bun's built-in PTY (`Bun.Terminal`) and
-  HTTP/WebSocket server. Runs on Linux and macOS natively; on
-  Windows, run it under WSL (the PTY layer is POSIX-only).
+  HTTP/WebSocket server. Runs natively on Linux, macOS, and Windows — on
+  Windows the PTY layer uses ConPTY via Bun's native terminal.
 - **Sessions survive server restarts.** Each command runs under its own detached
   per-session daemon that owns the PTY. Restarting `climon server` never kills a
   session.
@@ -32,7 +32,8 @@ interact with each one from the browser.
 
 ## Requirements
 
-- [Bun](https://bun.sh) >= 1.3.0 (native PTY support is required).
+- [Bun](https://bun.sh) >= 1.3.0 on Linux/macOS, or >= 1.3.14 on Windows
+  (native ConPTY support is required).
 
 ## Quick start
 
@@ -76,7 +77,11 @@ climon --priority 100 --color red --name "dev server" npm run dev
   the dashboard and `climon ls`; lower sorts to the top.
 - `--color C` — one of `black`, `red`, `green`, `yellow`, `blue`, `magenta`,
   `cyan`, `white` (or `none`); shown as a colored accent on the session.
-- `--name S` — a friendly label shown instead of the command.
+- `--name S` — a friendly label shown instead of the command. It is also used as
+  the local terminal's title, and updates live if you rename the session from the
+  dashboard. When omitted, climon adopts the terminal's current title (falling
+  back to the command). Disable all title behavior by setting
+  `terminal.setTitle` to `false` in `~/.climon/config.json`.
 
 All three can also be set or changed from the dashboard by clicking the **cog**
 button on a session. Sessions spawned from another session (the **[+]** button)
@@ -210,19 +215,20 @@ bun install                  # ensure dependencies are present
 bun run compile              # builds for all platforms
 ```
 
-This outputs binaries to `dist/`:
+This outputs per-platform zip archives to `dist/`:
 
-| File | Platform |
-|------|----------|
-| `climon-linux-x64` / `climon-server-linux-x64` | Linux x86_64 |
-| `climon-linux-arm64` / `climon-server-linux-arm64` | Linux aarch64 |
-| `climon-darwin-x64` / `climon-server-darwin-x64` | macOS Intel |
-| `climon-darwin-arm64` / `climon-server-darwin-arm64` | macOS Apple Silicon |
+| File | Platform | Contents |
+| --- | --- | --- |
+| `climon-linux-x64.zip` | Linux x86_64 | `climon`, `climon-server` |
+| `climon-linux-arm64.zip` | Linux aarch64 | `climon`, `climon-server` |
+| `climon-darwin-x64.zip` | macOS Intel | `climon`, `climon-server` |
+| `climon-darwin-arm64.zip` | macOS Apple Silicon | `climon`, `climon-server` |
+| `climon-windows-x64.zip` | Windows x86_64 | `climon.exe`, `climon-server.exe` |
 
-Each binary is fully standalone — copy it to the target machine and run it
-directly. No Bun installation or `node_modules` needed. Install both the `climon`
-(client) and `climon-server` binaries side by side so `climon server` can find and
-launch the dashboard.
+Each binary is fully standalone — no Bun installation or `node_modules` needed.
+Unzip the archive for your platform and place both binaries side by side (the
+`climon` client locates `climon-server` as a sibling). On Linux and macOS the
+extracted binaries keep their executable bit; on Windows use `climon.exe`.
 
 ## Releasing
 

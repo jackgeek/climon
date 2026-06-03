@@ -6,6 +6,15 @@ import type { ClimonConfig } from "./types.js";
 
 const CONFIG_VERSION = 1;
 
+export const DEFAULT_DETACH_PREFIX = 0x1c; // Ctrl-\
+
+/** Returns `value` if it is an integer in [0, 255], otherwise the default. */
+function normalizeDetachPrefix(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255
+    ? value
+    : DEFAULT_DETACH_PREFIX;
+}
+
 /**
  * Environment variable set on the command running inside a monitored PTY. Its
  * presence signals that we are already inside a climon session, so a nested
@@ -38,8 +47,12 @@ export function getScrollbackPath(id: string, env: NodeJS.ProcessEnv = process.e
   return join(getSessionsDir(env), `${id}.scrollback`);
 }
 
-export function getSocketPath(id: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (process.platform === "win32") {
+export function getSocketPath(
+  id: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string {
+  if (platform === "win32") {
     return `\\\\.\\pipe\\climon-${id}`;
   }
   return join(getSocketDir(env), `${id}.sock`);
@@ -63,7 +76,9 @@ export function defaultConfig(): ClimonConfig {
       port: 3131
     },
     terminal: {
-      clampBrowserToHost: true
+      clampBrowserToHost: true,
+      detachPrefix: DEFAULT_DETACH_PREFIX,
+      setTitle: true
     },
     attention: {
       idleSeconds: 10
@@ -83,6 +98,10 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     // Backfill sections added after a config file was first written.
     if (!parsed.terminal || typeof parsed.terminal.clampBrowserToHost !== "boolean") {
       parsed.terminal = { ...(parsed.terminal ?? {}), clampBrowserToHost: true };
+    }
+    parsed.terminal.detachPrefix = normalizeDetachPrefix(parsed.terminal.detachPrefix);
+    if (typeof parsed.terminal.setTitle !== "boolean") {
+      parsed.terminal.setTitle = true;
     }
     // Backfill the attention section for configs written before it existed.
     if (!parsed.attention || typeof parsed.attention.idleSeconds !== "number") {
