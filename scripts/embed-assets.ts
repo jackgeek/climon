@@ -27,6 +27,13 @@ lines.push(`export const WEB_APP_JS = Buffer.from("${Buffer.from(appJs, "utf8").
 const xtermCss = readFileSync(Bun.resolveSync("@xterm/xterm/css/xterm.css", projectRoot));
 lines.push(`export const XTERM_CSS = Buffer.from("${xtermCss.toString("base64")}", "base64");`);
 
+// Project-owned images: the splash logo and the favicon.
+const logoJpg = readFileSync(resolve(projectRoot, "src/web/assets/logo.jpg"));
+lines.push(`export const LOGO_JPG = Buffer.from("${logoJpg.toString("base64")}", "base64");`);
+
+const faviconPng = readFileSync(resolve(projectRoot, "src/web/assets/favicon.png"));
+lines.push(`export const FAVICON_PNG = Buffer.from("${faviconPng.toString("base64")}", "base64");`);
+
 lines.push(``);
 
 const outPath = resolve(projectRoot, "src/server/embedded-assets.ts");

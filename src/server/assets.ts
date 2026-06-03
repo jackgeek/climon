@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { buildWebBundle } from "./web-build.js";
 
 interface StaticAsset {
@@ -8,6 +9,13 @@ interface StaticAsset {
 
 const assetSpecifiers: Record<string, { specifier: string; contentType: string; embeddedKey?: string }> = {
   "/assets/xterm.css": { specifier: "@xterm/xterm/css/xterm.css", contentType: "text/css; charset=utf-8", embeddedKey: "XTERM_CSS" }
+};
+
+// Project-owned binary assets served from `src/web/assets` in source mode and
+// from base64-embedded buffers in the compiled binary (see embed-assets.ts).
+const fileAssetSpecifiers: Record<string, { relPath: string; contentType: string; embeddedKey: string }> = {
+  "/assets/logo.jpg": { relPath: "../web/assets/logo.jpg", contentType: "image/jpeg", embeddedKey: "LOGO_JPG" },
+  "/favicon.png": { relPath: "../web/assets/favicon.png", contentType: "image/png", embeddedKey: "FAVICON_PNG" }
 };
 
 // Embedded assets are compiled into the standalone binary via
@@ -66,6 +74,27 @@ export async function getStaticAsset(pathname: string): Promise<StaticAsset | un
     return getAppBundle();
   }
 
+  const fileEntry = fileAssetSpecifiers[pathname];
+  if (fileEntry) {
+    const cached = assetCache.get(pathname);
+    if (cached) {
+      return cached;
+    }
+    try {
+      let body: Buffer;
+      if (embedded && embedded[fileEntry.embeddedKey]) {
+        body = embedded[fileEntry.embeddedKey];
+      } else {
+        body = readFileSync(resolve(import.meta.dir, fileEntry.relPath)) as Buffer;
+      }
+      const asset: StaticAsset = { contentType: fileEntry.contentType, body };
+      assetCache.set(pathname, asset);
+      return asset;
+    } catch {
+      return undefined;
+    }
+  }
+
   const entry = assetSpecifiers[pathname];
   if (!entry) {
     return undefined;
@@ -97,6 +126,7 @@ export function renderDashboard(): string {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>climon</title>
+<link rel="icon" type="image/png" href="/favicon.png" />
 <link rel="stylesheet" href="/assets/xterm.css" />
 <style>
   html, body, #root { height: 100%; }
