@@ -42,6 +42,10 @@ describe("config defaults", () => {
   test("clamps browser to host terminal size by default", () => {
     expect(defaultConfig().terminal.clampBrowserToHost).toBe(true);
   });
+
+  test("sets the terminal title by default", () => {
+    expect(defaultConfig().terminal.setTitle).toBe(true);
+  });
 });
 
 describe("config migration", () => {
@@ -59,6 +63,24 @@ describe("config migration", () => {
     );
     const config = await loadConfig(migrationEnv);
     expect(config.attention.idleSeconds).toBe(10);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("backfills a missing terminal.setTitle", async () => {
+    const home = await mkdtemp(join(tmpdir(), "climon-cfg-"));
+    const migrationEnv = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true },
+        attention: { idleSeconds: 10 }
+      })
+    );
+    const config = await loadConfig(migrationEnv);
+    expect(config.terminal.setTitle).toBe(true);
     await rm(home, { recursive: true, force: true });
   });
 });
