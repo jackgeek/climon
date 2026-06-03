@@ -2,6 +2,7 @@ import { chmodSync, constants, existsSync, mkdirSync, readFileSync, writeFileSyn
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { parseColorMode } from "./session-meta.js";
 import type { ClimonConfig } from "./types.js";
 
 const CONFIG_VERSION = 1;
@@ -82,6 +83,9 @@ export function defaultConfig(): ClimonConfig {
     },
     attention: {
       idleSeconds: 10
+    },
+    session: {
+      color: "auto"
     }
   };
 }
@@ -106,6 +110,17 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     // Backfill the attention section for configs written before it existed.
     if (!parsed.attention || typeof parsed.attention.idleSeconds !== "number") {
       parsed.attention = { ...(parsed.attention ?? {}), idleSeconds: 10 };
+    }
+    if (!parsed.session || typeof parsed.session !== "object") {
+      parsed.session = { color: "auto" };
+    } else {
+      try {
+        parsed.session.color = typeof parsed.session.color === "string"
+          ? parseColorMode(parsed.session.color)
+          : "auto";
+      } catch {
+        parsed.session.color = "auto";
+      }
     }
     return parsed;
   } catch (error) {
@@ -284,6 +299,9 @@ export function coerceConfigValue(key: string, value: string): string | number |
       throw new Error(`Value for '${key}' must be a positive integer.`);
     }
     return n;
+  }
+  if (key === "session.color") {
+    return parseColorMode(value);
   }
   return value;
 }

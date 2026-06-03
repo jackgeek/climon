@@ -64,6 +64,25 @@ describe("runConfigCommand", () => {
     expect(raw.session.color).toBe("green");
   });
 
+  test("sets and lists session.color auto", () => {
+    expect(runConfigCommand(["session.color", "auto"], env(), root)).toBe(0);
+    const raw = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+    expect(raw.session.color).toBe("auto");
+
+    const out: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk: string) => {
+      out.push(String(chunk));
+      return true;
+    };
+    try {
+      expect(runConfigCommand(["--list"], env(), root)).toBe(0);
+    } finally {
+      process.stdout.write = original;
+    }
+    expect(out.join("")).toContain("session.color=auto");
+  });
+
   test("rejects bad priority range", () => {
     expect(runConfigCommand(["session.priority", "9999"], env(), root)).toBe(2);
   });

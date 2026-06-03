@@ -144,6 +144,14 @@ describe("coerceConfigValue", () => {
     expect(() => coerceConfigValue("remote.port", "0")).toThrow();
   });
 
+  test("accepts auto as a session color config value", () => {
+    expect(coerceConfigValue("session.color", "auto")).toBe("auto");
+  });
+
+  test("rejects invalid session color config values", () => {
+    expect(() => coerceConfigValue("session.color", "orange")).toThrow(/Color must be one of/);
+  });
+
   test("returns string values unchanged", () => {
     expect(coerceConfigValue("remote.tunnelId", "abc-123")).toBe("abc-123");
   });

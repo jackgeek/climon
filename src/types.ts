@@ -10,6 +10,8 @@ export type AnsiColor =
   | "cyan"
   | "white";
 
+export type SessionColorMode = AnsiColor | "none" | "auto";
+
 export type PriorityReason =
   | "attention"
   | "completed"
@@ -60,8 +62,8 @@ export interface RemoteConfig {
 }
 
 export interface SessionDefaultsConfig {
-  /** Default sidebar accent color for new sessions, or "none". */
-  color?: AnsiColor | "none";
+  /** Default sidebar accent color mode for new sessions. */
+  color?: SessionColorMode;
   /** Default sort priority (0-1000) for new sessions. */
   priority?: number;
 }

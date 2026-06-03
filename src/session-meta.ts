@@ -1,7 +1,11 @@
-import type { AnsiColor } from "./types.js";
+import type { AnsiColor, SessionColorMode } from "./types.js";
 
 export const ANSI_COLORS: readonly AnsiColor[] = [
   "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"
+] as const;
+
+export const AUTO_COLOR_ORDER: readonly AnsiColor[] = [
+  "white", "cyan", "magenta", "blue", "yellow", "green", "red", "black"
 ] as const;
 
 /** Effective priority used for sorting when the field is absent. */
@@ -35,4 +39,19 @@ export function parseColor(value: string): AnsiColor | null {
     return normalized as AnsiColor;
   }
   throw new Error(`Color must be one of: none, ${ANSI_COLORS.join(", ")} (got "${value}").`);
+}
+
+/**
+ * Parses a color mode for session creation/defaults. "auto" defers concrete
+ * color selection until the session is created.
+ */
+export function parseColorMode(value: string): SessionColorMode {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "auto" || normalized === "none") {
+    return normalized;
+  }
+  if ((ANSI_COLORS as readonly string[]).includes(normalized)) {
+    return normalized as AnsiColor;
+  }
+  throw new Error(`Color must be one of: auto, none, ${ANSI_COLORS.join(", ")} (got "${value}").`);
 }
