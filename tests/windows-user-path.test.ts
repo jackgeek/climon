@@ -27,21 +27,23 @@ describe("Windows user PATH PowerShell helpers", () => {
     ]);
   });
 
-  test("reads user PATH via .NET and emits UTF-16 base64 instead of localized text", () => {
+  test("reads raw user PATH from the registry without expanding environment names", () => {
     const script = readUserPathScript();
 
-    expect(script).toContain("[Environment]::GetEnvironmentVariable('Path', 'User')");
+    expect(script).toContain("[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')");
+    expect(script).toContain("GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)");
     expect(script).toContain("[Convert]::ToBase64String");
     expect(script).toContain("[Text.Encoding]::Unicode.GetBytes");
   });
 
-  test("writes user PATH via .NET using a UTF-16 base64 payload", () => {
+  test("writes user PATH as REG_EXPAND_SZ using a UTF-16 base64 payload", () => {
     const value = "C:\\Tools;C:\\Users\\Zoë\\bin;C:\\工具";
     const script = writeUserPathScript(value);
 
+    expect(script).toContain("[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')");
     expect(script).toContain(`[Convert]::FromBase64String('${encodeUtf16Base64(value)}')`);
     expect(script).toContain("[Text.Encoding]::Unicode.GetString");
-    expect(script).toContain("[Environment]::SetEnvironmentVariable('Path', $value, 'User')");
+    expect(script).toContain("SetValue('Path', $value, [Microsoft.Win32.RegistryValueKind]::ExpandString)");
     expect(script).not.toContain(value);
   });
 });

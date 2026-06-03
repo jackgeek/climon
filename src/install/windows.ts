@@ -83,7 +83,8 @@ export function powershellArgsForScript(script: string): string[] {
 
 export function readUserPathScript(): string {
   return [
-    "$value = [Environment]::GetEnvironmentVariable('Path', 'User')",
+    "$key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')",
+    "$value = if ($null -eq $key) { '' } else { $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }",
     "if ($null -eq $value) { $value = '' }",
     "[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($value))"
   ].join("; ");
@@ -91,9 +92,10 @@ export function readUserPathScript(): string {
 
 export function writeUserPathScript(value: string): string {
   return [
+    "$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')",
     `$bytes = [Convert]::FromBase64String('${encodeUtf16Base64(value)}')`,
     "$value = [Text.Encoding]::Unicode.GetString($bytes)",
-    "[Environment]::SetEnvironmentVariable('Path', $value, 'User')"
+    "$key.SetValue('Path', $value, [Microsoft.Win32.RegistryValueKind]::ExpandString)"
   ].join("; ");
 }
 
