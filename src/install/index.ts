@@ -89,13 +89,18 @@ export async function runSetupCli(runtime: SetupCliRuntime = {}): Promise<void> 
   const writeError = runtime.writeError ?? ((message) => console.error(message));
   const waitBeforeExit = runtime.pauseForExit ?? pauseForExit;
   const exit = runtime.exit ?? ((code) => process.exit(code));
+  let exitCode: number | undefined;
 
   try {
     await runMain();
   } catch (err) {
     writeError(`Setup failed: ${err instanceof Error ? err.message : String(err)}`);
-    await waitBeforeExit();
-    exit(1);
+    exitCode = 1;
+  }
+
+  await waitBeforeExit();
+  if (exitCode !== undefined) {
+    exit(exitCode);
   }
 }
 
