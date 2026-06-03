@@ -1,8 +1,8 @@
-import { constants, existsSync, readFileSync } from "node:fs";
+import { chmodSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { ClimonConfig, RemoteConfig } from "./types.js";
+import type { ClimonConfig } from "./types.js";
 
 const CONFIG_VERSION = 1;
 
@@ -114,52 +114,167 @@ export async function assertConfigReadable(env: NodeJS.ProcessEnv = process.env)
   await access(getConfigPath(env), constants.R_OK);
 }
 
-/**
- * Walks up from `startDir` (inclusive) looking for a directory that contains a
- * `.climon/config.json`. Returns the `.climon` directory path, or undefined.
- */
-export function findAncestorClimonDir(startDir: string): string | undefined {
-  let dir = resolve(startDir);
+/** Ordered candidate `.climon` dirs for per-setting resolution: cwd, ancestors, then the global home. */
+export function candidateConfigDirs(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): string[] {
+  const dirs: string[] = [];
+  let dir = resolve(cwd);
   for (;;) {
-    if (existsSync(join(dir, ".climon", "config.json"))) {
-      return join(dir, ".climon");
-    }
+    dirs.push(join(dir, ".climon"));
     const parent = dirname(dir);
-    if (parent === dir) {
-      return undefined;
-    }
+    if (parent === dir) break;
     dir = parent;
+  }
+  const home = getClimonHome(env);
+  if (!dirs.includes(home)) dirs.push(home);
+  return dirs;
+}
+
+function readSparseConfig(dir: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, "config.json"), "utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
   }
 }
 
+/** Reads a dotted key (e.g. "session.color") from a parsed config object, or undefined. */
+function readDottedKey(obj: Record<string, unknown>, key: string): unknown {
+  const [section, field] = key.split(".");
+  const sub = obj[section];
+  if (!sub || typeof sub !== "object") return undefined;
+  return (sub as Record<string, unknown>)[field];
+}
+
 /**
- * Resolves which directory provides the `remote` (uplink) configuration.
- * Order: CLIMON_HOME → nearest ancestor `.climon` → `~/.climon`.
+ * Resolves a single dotted config key by walking candidate dirs in order; the
+ * first dir whose config.json defines the key wins. Returns undefined if unset
+ * everywhere. Tolerates sparse/partial files.
  */
-export function resolveRemoteConfigDir(
+export function resolveConfigSetting(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): unknown {
+  for (const dir of candidateConfigDirs(env, cwd)) {
+    const value = readDottedKey(readSparseConfig(dir), key);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+export type WriteScope = "auto" | "local" | "global";
+
+/** Chooses the target dir for a write: explicit scope, nearest existing .climon, else ~/.climon. */
+export function resolveWriteDir(
+  scope: WriteScope,
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): string {
-  if (env.CLIMON_HOME) {
-    return getClimonHome(env);
+  if (scope === "local") return join(resolve(cwd), ".climon");
+  if (scope === "global") return getClimonHome(env);
+  for (const dir of candidateConfigDirs(env, cwd)) {
+    if (existsSync(join(dir, "config.json"))) return dir;
   }
-  return findAncestorClimonDir(cwd) ?? getClimonHome(env);
+  return getClimonHome(env);
 }
 
-/**
- * Loads the resolved `.climon` directory and its `remote` section (if any).
- * The directory is always returned so callers can resolve keyFile/known_hosts
- * paths relative to it.
- */
-export function loadRemoteConfig(
+const CONFIG_KEY_TYPES: Record<string, "string" | "number" | "boolean"> = {
+  "remote.enabled": "boolean",
+  "remote.tunnelId": "string",
+  "remote.tunnelToken": "string",
+  "remote.port": "number",
+  "remote.clientId": "string",
+  "session.color": "string",
+  "session.priority": "number"
+};
+
+export function isKnownConfigKey(key: string): boolean {
+  return key in CONFIG_KEY_TYPES;
+}
+
+export function knownConfigKeys(): string[] {
+  return Object.keys(CONFIG_KEY_TYPES);
+}
+
+/** Coerces a string CLI value to the typed value for a known key. Throws on bad input. */
+export function coerceConfigValue(key: string, value: string): string | number | boolean {
+  const type = CONFIG_KEY_TYPES[key];
+  if (type === "boolean") {
+    if (value === "true") return true;
+    if (value === "false") return false;
+    throw new Error(`Value for '${key}' must be 'true' or 'false'.`);
+  }
+  if (type === "number") {
+    const n = Number(value);
+    if (!Number.isInteger(n)) {
+      throw new Error(`Value for '${key}' must be an integer.`);
+    }
+    if (key === "session.priority") {
+      if (n < 0 || n > 1000) {
+        throw new Error("Value for 'session.priority' must be between 0 and 1000.");
+      }
+      return n;
+    }
+    if (n <= 0) {
+      throw new Error(`Value for '${key}' must be a positive integer.`);
+    }
+    return n;
+  }
+  return value;
+}
+
+/** Sets a dotted key, coercing booleans/numbers, writing a sparse file (0600). */
+export function writeConfigSetting(
+  key: string,
+  value: string,
+  scope: WriteScope = "auto",
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
-): { dir: string; remote?: RemoteConfig } {
-  const dir = resolveRemoteConfigDir(env, cwd);
+): string {
+  const dir = resolveWriteDir(scope, env, cwd);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "config.json");
+  const current = readSparseConfig(dir);
+  const [section, field] = key.split(".");
+  const sub = (current[section] && typeof current[section] === "object"
+    ? (current[section] as Record<string, unknown>)
+    : {}) as Record<string, unknown>;
+  sub[field] = coerceConfigValue(key, value);
+  current[section] = sub;
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
   try {
-    const parsed = JSON.parse(readFileSync(join(dir, "config.json"), "utf8")) as ClimonConfig;
-    return { dir, remote: parsed.remote };
+    chmodSync(path, 0o600);
   } catch {
-    return { dir };
+    // Non-POSIX filesystems.
   }
+  return dir;
+}
+
+/** Removes a dotted key from a specific scope's sparse file (no-op if absent). */
+export function unsetConfigSetting(
+  key: string,
+  scope: WriteScope = "auto",
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): void {
+  const dir = resolveWriteDir(scope, env, cwd);
+  if (!existsSync(join(dir, "config.json"))) return;
+  const current = readSparseConfig(dir);
+  const [section, field] = key.split(".");
+  const sub = current[section];
+  if (sub && typeof sub === "object") {
+    delete (sub as Record<string, unknown>)[field];
+    if (Object.keys(sub as Record<string, unknown>).length === 0) delete current[section];
+  }
+  const path = join(dir, "config.json");
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Absolute path to the home machine's tunnel-hosting desired-state file. */
+export function getRemoteHostPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getClimonHome(env), "remote-host.json");
 }
