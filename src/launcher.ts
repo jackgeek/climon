@@ -220,8 +220,9 @@ export async function listSessionsCommand(): Promise<number> {
   }
   for (const session of sessions) {
     const flag = session.status === "needs-attention" ? "!" : " ";
+    const label = session.name ? `${session.name} (${session.displayCommand})` : session.displayCommand;
     process.stdout.write(
-      `${flag} ${session.id.padEnd(16)} ${session.status.padEnd(16)} ${session.displayCommand}\n`
+      `${flag} ${session.id.padEnd(16)} ${session.status.padEnd(16)} ${label}\n`
     );
   }
   return 0;
