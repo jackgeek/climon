@@ -17,6 +17,7 @@ import { spawnDaemon } from "./spawn-daemon.js";
 import { selfSpawnArgs } from "./self-spawn.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { resolveCommand } from "./pty.js";
+import { isProcessAlive, killProcess } from "./process-kill.js";
 import type { SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 
@@ -223,10 +224,12 @@ export async function killSession(id: string): Promise<number> {
     throw new Error(`No session found with id '${id}'.`);
   }
   if (meta.daemonPid) {
-    try {
-      process.kill(meta.daemonPid, "SIGTERM");
-    } catch {
-      // Already gone.
+    const issued = killProcess(meta.daemonPid, false);
+    if (!issued && isProcessAlive(meta.daemonPid)) {
+      process.stdout.write(
+        `climon: could not terminate session ${id}; it may still be running.\n`
+      );
+      return 1;
     }
   }
   await patchSessionMeta(id, { status: "failed", priorityReason: "failed" });
