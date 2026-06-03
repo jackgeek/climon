@@ -38,6 +38,14 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
       }
     }
 
+    // Prune stale ref callbacks for ids no longer in the ids array
+    const activeIds = new Set(ids);
+    for (const id of Object.keys(refCallbacksRef.current)) {
+      if (!activeIds.has(id)) {
+        delete refCallbacksRef.current[id];
+      }
+    }
+
     if (!initializedRef.current || prefersReducedMotion()) {
       initializedRef.current = true;
       previousTopsRef.current = nextTops;
@@ -104,7 +112,6 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
         } else {
           delete elementsRef.current[id];
           delete previousTopsRef.current[id];
-          delete refCallbacksRef.current[id];
         }
       };
     }
