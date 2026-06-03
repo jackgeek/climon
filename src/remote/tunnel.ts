@@ -3,7 +3,7 @@ import { rm, writeFile, chmod, rename } from "node:fs/promises";
 import { getRemoteHostPath } from "../config.js";
 import type { RemoteHostState } from "./ingest.js";
 
-const TUNNEL_ID = /^[A-Za-z0-9._-]{1,80}$/;
+const TUNNEL_ID = /^[a-z0-9][a-z0-9-]{1,47}[a-z0-9]$/;
 
 export interface RunResult {
   status: number;
@@ -28,7 +28,7 @@ const defaultRunner: Runner = (cmd, args) =>
 export function parseTunnelInput(input: string): string | undefined {
   const trimmed = input.trim();
   if (!trimmed) return undefined;
-  const urlMatch = trimmed.match(/^https?:\/\/([A-Za-z0-9]+)-\d+\.[^/]*devtunnels\.ms/i);
+  const urlMatch = trimmed.match(/^https?:\/\/([a-z0-9][a-z0-9-]{1,47}[a-z0-9])-\d+\.[^/]*devtunnels\.ms/i);
   const candidate = urlMatch ? urlMatch[1] : trimmed;
   return TUNNEL_ID.test(candidate) ? candidate : undefined;
 }

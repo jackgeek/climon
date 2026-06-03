@@ -25,6 +25,14 @@ describe("parseTunnelInput", () => {
   test("passes a bare id through", () => {
     expect(parseTunnelInput("abc123")).toBe("abc123");
   });
+  test("matches the devtunnel service tunnel id rules", () => {
+    expect(parseTunnelInput("climon-tunnel")).toBe("climon-tunnel");
+    expect(parseTunnelInput("https://climon-tunnel-8080.usw2.devtunnels.ms/")).toBe("climon-tunnel");
+    expect(parseTunnelInput("CLIMON_TUNNEL")).toBeUndefined();
+    expect(parseTunnelInput("UpperCase")).toBeUndefined();
+    expect(parseTunnelInput("-starts-with-hyphen")).toBeUndefined();
+    expect(parseTunnelInput("ends-with-hyphen-")).toBeUndefined();
+  });
   test("rejects junk", () => {
     expect(parseTunnelInput("")).toBeUndefined();
     expect(parseTunnelInput("has spaces")).toBeUndefined();

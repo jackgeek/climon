@@ -183,18 +183,18 @@ commands on the **home** machine where `climon server` is listening:
 ```bash
 devtunnel user login
 
-# Choose a stable id, or omit CLIMON_TUNNEL and copy the generated id.
-devtunnel create CLIMON_TUNNEL
-devtunnel port create CLIMON_TUNNEL -p 8080
+# Choose a stable lowercase id; or omit the id argument and copy the generated id.
+devtunnel create climon-tunnel
+devtunnel port create climon-tunnel -p 8080
 
 # Copy this token into the Remotes dialog.
-devtunnel token CLIMON_TUNNEL --scopes connect
+devtunnel token climon-tunnel --scopes connect
 ```
 
-Paste `CLIMON_TUNNEL` (or a devtunnels.ms URL for that tunnel) and the connect
+Paste `climon-tunnel` (or a devtunnels.ms URL for that tunnel) and the connect
 token into **Remotes…**. If the `devtunnel` CLI is available on the home machine,
 climon will host the recorded tunnel for you; otherwise keep
-`devtunnel host CLIMON_TUNNEL` running yourself. After that, copy the generated
+`devtunnel host climon-tunnel` running yourself. After that, copy the generated
 climon config script from the dialog and run it on the devbox.
 
 Official reference:

@@ -93,9 +93,9 @@ Manual tunnel creation on the home machine:
 
 ```bash
 devtunnel user login
-devtunnel create CLIMON_TUNNEL
-devtunnel port create CLIMON_TUNNEL -p 8080
-devtunnel token CLIMON_TUNNEL --scopes connect
+devtunnel create climon-tunnel
+devtunnel port create climon-tunnel -p 8080
+devtunnel token climon-tunnel --scopes connect
 ```
 
 Paste the tunnel id and emitted connect token into **Remotes…**, then run the

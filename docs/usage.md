@@ -134,17 +134,17 @@ Run these commands on the **home** machine where the dashboard is listening:
 ```bash
 devtunnel user login
 
-# Use any valid tunnel id, or omit CLIMON_TUNNEL and copy the generated id.
-devtunnel create CLIMON_TUNNEL
-devtunnel port create CLIMON_TUNNEL -p 8080
+# Use any valid lowercase tunnel id, or omit the id argument and copy the generated id.
+devtunnel create climon-tunnel
+devtunnel port create climon-tunnel -p 8080
 
 # Copy the emitted token into the Remotes dialog.
-devtunnel token CLIMON_TUNNEL --scopes connect
+devtunnel token climon-tunnel --scopes connect
 ```
 
 Paste the tunnel id (or the printed `devtunnels.ms` URL) and the connect token
 into **Remotes…**. climon will host the recorded tunnel if the `devtunnel` CLI is
-available on the home machine; otherwise keep `devtunnel host CLIMON_TUNNEL`
+available on the home machine; otherwise keep `devtunnel host climon-tunnel`
 running yourself. Then copy the generated climon config script from the dialog
 and run it on the devbox.
 
