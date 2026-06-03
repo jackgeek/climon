@@ -14,6 +14,8 @@ import {
   SESSION_ENV_VAR
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
+import { queryTerminalTitle } from "./client/query-title.js";
+import { sanitizeTitle } from "./client/title.js";
 import { spawnHeadlessSession, type SessionMetaOptions } from "./client/spawn-session.js";
 import { sortSessionsByPriority } from "./priority.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
@@ -150,6 +152,14 @@ export async function startMonitoredCommand(
     await waitForHeadlessReady(id, meta.socketPath);
     process.stdout.write(`${id}\n`);
     return 0;
+  }
+
+  if (options.name === undefined && config.terminal.setTitle) {
+    // No explicit --name: adopt the terminal's current title if we can read it,
+    // otherwise fall back to the command string.
+    const queried = await queryTerminalTitle();
+    const inferred = queried ? sanitizeTitle(queried).trim() : "";
+    options.name = inferred.length > 0 ? inferred : command.join(" ");
   }
 
   const id = generateSessionId();
