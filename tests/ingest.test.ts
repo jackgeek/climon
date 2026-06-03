@@ -78,8 +78,11 @@ describe("runIngestConnection", () => {
     expect(meta?.socketPath).not.toBe("/should/be/ignored.sock");
 
     client.destroy();
-    await new Promise((r) => setTimeout(r, 50));
-    const after = await readSessionMeta("dev1~s1", env);
+    let after: SessionMeta | undefined;
+    for (let i = 0; i < 50 && after?.status !== "disconnected"; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      after = await readSessionMeta("dev1~s1", env);
+    }
     expect(after?.status).toBe("disconnected");
     server.close();
   });
