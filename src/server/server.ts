@@ -137,13 +137,13 @@ export function splitCommand(command: string): string[] {
 export interface SpawnMetaOptions {
   name?: string;
   priority?: number;
-  color?: AnsiColor | null;
+  color?: SessionColorMode | null;
 }
 
-interface CreateMetaOptions {
+interface ResolvedSpawnMetaOptions {
   name?: string;
   priority?: number;
-  color?: SessionColorMode | null;
+  color?: AnsiColor | null;
 }
 
 /**
@@ -152,7 +152,7 @@ interface CreateMetaOptions {
  * command. `color: null` is emitted as `--color none` so an inherited color can
  * be explicitly cleared.
  */
-export function buildRunArgs(command: string[], meta: { priority?: number; color?: SessionColorMode | null; name?: string }): string[] {
+export function buildRunArgs(command: string[], meta: SpawnMetaOptions): string[] {
   const flags: string[] = [];
   if (typeof meta.priority === "number") {
     flags.push("--priority", String(meta.priority));
@@ -219,7 +219,7 @@ function spawnHeadlessSession(
   cwd: string,
   cols: string,
   rows: string,
-  meta: SpawnMetaOptions = {}
+  meta: ResolvedSpawnMetaOptions = {}
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const { file, args } = resolveClientInvocation(
@@ -482,7 +482,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           return new Response("Missing command", { status: 400 });
         }
 
-        let metaInput: CreateMetaOptions;
+        let metaInput: SpawnMetaOptions;
         try {
           metaInput = {
             name: typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : undefined,

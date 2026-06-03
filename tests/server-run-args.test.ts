@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { buildRunArgs, resolveParentSpawnColor } from "../src/server/server.js";
 import type { SpawnMetaOptions } from "../src/server/server.js";
 
-// @ts-expect-error spawn metadata must be resolved before spawning
 const unresolvedSpawnMeta: SpawnMetaOptions = { color: "auto" };
 void unresolvedSpawnMeta;
 
