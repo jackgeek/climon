@@ -186,6 +186,29 @@ describe("killAllSessions", () => {
     expect(output).toContain("Removed 1 daemon-less climon session.");
   });
 
+  test("preserves active local sessions that do not have a daemon pid yet", async () => {
+    await seedSession("starting-local");
+    await seedSession("starting-headless", undefined, { headless: true });
+
+    const { code, output } = await captureStdout(() =>
+      killAllSessions(
+        () => true,
+        () => false
+      )
+    );
+
+    expect(code).toBe(1);
+    expect(output).toContain(
+      "climon: could not terminate session starting-headless; daemon pid is not available yet."
+    );
+    expect(output).toContain(
+      "climon: could not terminate session starting-local; daemon pid is not available yet."
+    );
+    expect(output).not.toContain("Removed");
+    expect(await readSessionMeta("starting-local")).toBeDefined();
+    expect(await readSessionMeta("starting-headless")).toBeDefined();
+  });
+
   test("skips finished local sessions that retained a daemon pid", async () => {
     await seedSession("finished", 9999, {
       status: "completed",

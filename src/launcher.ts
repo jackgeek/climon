@@ -342,15 +342,20 @@ async function killSessionMeta(
   isAlive: (pid: number) => boolean
 ): Promise<boolean> {
   const id = meta.id;
-  if (meta.daemonPid) {
-    if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
-      kill(meta.daemonPid, true);
-      if (isAlive(meta.daemonPid)) {
-        process.stdout.write(
-          `climon: could not terminate session ${id}; it may still be running.\n`
-        );
-        return false;
-      }
+  if (meta.daemonPid === undefined) {
+    if (meta.origin !== "remote") {
+      process.stdout.write(
+        `climon: could not terminate session ${id}; daemon pid is not available yet.\n`
+      );
+      return false;
+    }
+  } else if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
+    kill(meta.daemonPid, true);
+    if (isAlive(meta.daemonPid)) {
+      process.stdout.write(
+        `climon: could not terminate session ${id}; it may still be running.\n`
+      );
+      return false;
     }
   }
   await patchSessionMeta(id, { status: "failed", priorityReason: "failed" });
