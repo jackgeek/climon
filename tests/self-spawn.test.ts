@@ -17,6 +17,13 @@ describe("selfSpawnArgs", () => {
     ]);
   });
 
+  test("compiled mode omits user command argv[1]", () => {
+    expect(selfSpawnArgs(["__session", "id1"], "powershell")).toEqual([
+      "__session",
+      "id1"
+    ]);
+  });
+
   test("missing argv[1] behaves like compiled mode (no leading undefined)", () => {
     expect(selfSpawnArgs(["__uplink"], undefined)).toEqual(["__uplink"]);
   });
