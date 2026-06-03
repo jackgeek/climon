@@ -30,15 +30,6 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
   const key = ids.join("\u001f");
 
   useLayoutEffect(() => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
-    if (timeoutRef.current !== null) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-
     const nextTops: Record<string, number> = {};
     for (const id of ids) {
       const element = elementsRef.current[id];
@@ -113,6 +104,7 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
         } else {
           delete elementsRef.current[id];
           delete previousTopsRef.current[id];
+          delete refCallbacksRef.current[id];
         }
       };
     }
