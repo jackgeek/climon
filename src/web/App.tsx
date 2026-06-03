@@ -5,6 +5,7 @@ import type { SessionMeta } from "../types.js";
 import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
+import { EditSessionDialog } from "./components/EditSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
@@ -110,7 +111,10 @@ export function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [dialogParent, setDialogParent] = useState<{ id: string; cwd: string } | null>(null);
+  const [editTarget, setEditTarget] = useState<SessionMeta | null>(null);
+  const [dialogParent, setDialogParent] = useState<
+    { id: string; cwd: string; priority?: number; color?: SessionMeta["color"] } | null
+  >(null);
   const [closeTarget, setCloseTarget] = useState<SessionMeta | null>(null);
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
@@ -325,9 +329,15 @@ export function App() {
             setDialogOpen(true);
           }}
           onNewFrom={(session) => {
-            setDialogParent({ id: session.id, cwd: session.cwd });
+            setDialogParent({
+              id: session.id,
+              cwd: session.cwd,
+              priority: session.priority,
+              color: session.color
+            });
             setDialogOpen(true);
           }}
+          onEdit={(session) => setEditTarget(session)}
           onManageRemote={() => setRemoteOpen(true)}
           onMaximize={(id) => {
             setActiveId(id);
@@ -345,7 +355,7 @@ export function App() {
         <div className={mergeClasses(styles.header, maximized && styles.hidden)}>
           <Text className={styles.headerText}>
             {activeSession ? (
-              activeSession.displayCommand
+              activeSession.name || activeSession.displayCommand
             ) : (
               <span className={styles.empty}>Select a session</span>
             )}
@@ -388,6 +398,7 @@ export function App() {
         onCreated={handleCreated}
         parent={dialogParent}
       />
+      <EditSessionDialog session={editTarget} onClose={() => setEditTarget(null)} />
       <CloseSessionDialog
         session={closeTarget}
         onCancel={() => setCloseTarget(null)}
