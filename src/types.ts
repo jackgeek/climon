@@ -31,6 +31,13 @@ export interface TerminalConfig {
    * content instead of the browser's larger viewport mangling the terminal.
    */
   clampBrowserToHost: boolean;
+  /**
+   * Byte value of the detach key prefix for the local attach client (default
+   * 0x1c = Ctrl-\). Press this prefix then `d` to detach without stopping the
+   * command. Configurable because Ctrl-\ does not emit 0x1c under every Windows
+   * terminal. Must be an integer in [0, 255].
+   */
+  detachPrefix: number;
 }
 
 export interface RemoteConfig {

@@ -6,6 +6,15 @@ import type { ClimonConfig, RemoteConfig } from "./types.js";
 
 const CONFIG_VERSION = 1;
 
+export const DEFAULT_DETACH_PREFIX = 0x1c; // Ctrl-\
+
+/** Returns `value` if it is an integer in [0, 255], otherwise the default. */
+function normalizeDetachPrefix(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255
+    ? value
+    : DEFAULT_DETACH_PREFIX;
+}
+
 /**
  * Environment variable set on the command running inside a monitored PTY. Its
  * presence signals that we are already inside a climon session, so a nested
@@ -67,7 +76,8 @@ export function defaultConfig(): ClimonConfig {
       port: 3131
     },
     terminal: {
-      clampBrowserToHost: true
+      clampBrowserToHost: true,
+      detachPrefix: DEFAULT_DETACH_PREFIX
     },
     attention: {
       idleSeconds: 10
@@ -88,6 +98,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     if (!parsed.terminal || typeof parsed.terminal.clampBrowserToHost !== "boolean") {
       parsed.terminal = { ...(parsed.terminal ?? {}), clampBrowserToHost: true };
     }
+    parsed.terminal.detachPrefix = normalizeDetachPrefix(parsed.terminal.detachPrefix);
     // Backfill the attention section for configs written before it existed.
     if (!parsed.attention || typeof parsed.attention.idleSeconds !== "number") {
       parsed.attention = { ...(parsed.attention ?? {}), idleSeconds: 10 };
