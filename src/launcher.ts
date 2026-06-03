@@ -11,6 +11,7 @@ import {
   SESSION_ENV_VAR
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
+import { describeDetachKey } from "./client/detach-key.js";
 import { spawnHeadlessSession, type SessionMetaOptions } from "./client/spawn-session.js";
 import { sortSessionsByPriority } from "./priority.js";
 import { spawnDaemon } from "./spawn-daemon.js";
@@ -173,10 +174,11 @@ export async function startMonitoredCommand(
   await waitForSocket(meta.socketPath);
 
   const dashboardUrl = `http://${config.server.host}:${config.server.port}/`;
+  const detachKey = describeDetachKey(config.terminal.detachPrefix);
   process.stdout.write(`climon v${VERSION} monitoring session ${id} — dashboard: ${dashboardUrl}\r\n`);
-  process.stdout.write("Detach with Ctrl-\\ then d.\r\n");
+  process.stdout.write(`Detach with ${detachKey} then d.\r\n`);
 
-  const result = await connectToSession(meta.socketPath);
+  const result = await connectToSession(meta.socketPath, config.terminal.detachPrefix);
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
     return 0;
@@ -193,8 +195,9 @@ export async function reconnectSession(id: string): Promise<number> {
     process.stdout.write(`Session ${id} already ${meta.status} (exit code ${meta.exitCode ?? 0}).\r\n`);
     return meta.exitCode ?? 0;
   }
+  const config = await loadConfig();
   process.stdout.write(`climon v${VERSION} attaching to session ${id}\r\n`);
-  const result = await connectToSession(meta.socketPath);
+  const result = await connectToSession(meta.socketPath, config.terminal.detachPrefix);
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
     return 0;
