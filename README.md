@@ -23,9 +23,11 @@ interact with each one from the browser.
   dashboard.
 - **Completion pops.** Finished sessions move up the queue and keep their final
   scrollback so you can review the output.
-- **Remote clients over hardened SSH.** Monitor sessions running on another
-  machine from your local dashboard. Traffic rides a single OpenSSH connection
-  (no tunneled ports, host-key pinning, forced-command containment). See
+- **Remote clients over dev tunnels.** Monitor sessions running on another
+  machine (a "devbox") from your local dashboard. Traffic rides a Microsoft
+  [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/) to a
+  loopback-only ingest port — set up entirely from the dashboard's **Remotes…**
+  menu. See [Remote clients (dev tunnels)](#remote-clients-dev-tunnels) and
   [docs/security.md](docs/security.md).
 
 ## Requirements
@@ -133,6 +135,43 @@ Detach without stopping the command using: `Ctrl-\` then `d`.
 Terminate a monitored session and its underlying process. Use this to clean up
 sessions you no longer need — finished builds, abandoned REPLs, or any process
 you want to stop.
+
+## Remote clients (dev tunnels)
+
+Surface sessions running on a remote **devbox** in your local dashboard. The
+transport is a Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/)
+that exposes a loopback-only ingest port on the home machine; there is no SSH and
+no network-exposed dashboard.
+
+Setup:
+
+1. Start a climon server locally and note its port (e.g. `climon server --port 6666`).
+2. Open **Remotes…** from the dashboard's hamburger menu.
+   - If the `devtunnel` CLI is installed on the home machine, climon can
+     **auto-create** the tunnel for you (it also opens a keep-alive TCP port so
+     the tunnel stays up and never shows a browser confirmation page).
+   - Otherwise, create the tunnel manually and paste its URL into the dialog.
+3. Optionally pick a default accent **color** and sort **priority** for that
+   devbox's sessions, then **copy the config script**.
+4. Run the copied script in a terminal on the **devbox**. It writes the server
+   address/port (and optional color/priority) into the devbox's climon config.
+5. Start sessions on the devbox as usual — they appear on the home dashboard.
+
+Notes:
+
+- The `devtunnel` CLI is required on **both** the home machine (to host the
+  tunnel) and the devbox (to connect through it).
+- **Restarting the webserver preserves sessions.** Local sessions are
+  reconstructed from `~/.climon/sessions`, and the ingest daemon re-materializes
+  remote sessions as devboxes reconnect, so a restart does not lose state.
+- Configuration is read hierarchically: climon looks for the setting in
+  `.climon/config.json` in the current directory, then walks up each parent
+  directory, then falls back to `~/.climon/config.json`. This lets you set a
+  per-repo default (e.g. always green, priority 20) and a different global
+  default (e.g. red, priority 500). Writing a setting when no `.climon` directory
+  exists creates one in `~/`.
+
+See [docs/security.md](docs/security.md) for the full threat model.
 
 ## Building standalone binaries
 

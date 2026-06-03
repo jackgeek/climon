@@ -14,57 +14,63 @@ networks. We assume:
 - The dashboard HTTP server must never be reachable by anyone but the local user.
 - A compromised or malicious devbox must not be able to escalate beyond
   streaming its own session I/O.
-- Input arriving over the wire (public keys, mux frames, labels) is untrusted.
+- Input arriving over the wire (mux frames, session metadata, labels) is
+  untrusted.
 
-## Transport: hardened SSH only
+## Transport: connect-scoped dev tunnels
 
-All remote traffic rides a single OpenSSH connection initiated by the devbox.
-There are **no tunneled ports** — every session multiplexes over the one SSH
-stdio channel, so nothing new is exposed to the network.
+Remote traffic rides a Microsoft **dev tunnel** rather than SSH. The home
+machine runs a loopback-only ingest listener (`__ingest`); a dev tunnel exposes
+that single port to the devbox. The access boundary is the **connect-scoped dev
+tunnel token**, not an SSH key:
 
-The devbox connects with these mandatory flags (see `buildSshArgs`):
+- The home `__ingest` daemon binds `127.0.0.1` only. It is never bound to a
+  public interface directly — the tunnel host process is the only thing that
+  fronts it.
+- Anyone who possesses both the **tunnel id** and a valid **connect token** can
+  reach the ingest port. Connect tokens are scoped to the tunnel and temporary;
+  the dialog surfaces expiry and the devbox uplink stops retrying once the host
+  rejects its token (auth failure is terminal, not retried as a transient
+  network error).
+- When climon auto-creates the tunnel, it also opens a keep-alive TCP port so
+  the tunnel stays up and never presents an interactive confirmation page to a
+  browser.
 
-- `StrictHostKeyChecking=yes` with a pinned, project-local `UserKnownHostsFile`
-  — the home host key is recorded during enrollment, so an active MITM cannot
-  substitute its own key. Host verification is **never** disabled or set to
-  `accept-new`.
-- `IdentitiesOnly=yes` + an explicit `IdentityFile` — only the dedicated
-  ed25519 client key is offered, never the user's other agent keys.
-- `BatchMode=yes` / `PasswordAuthentication=no` — public-key auth only; no
-  interactive or password fallback.
-- `ServerAliveInterval`/`ServerAliveCountMax` — dead connections are detected
-  and the uplink reconnects with exponential backoff.
+## Secrets at rest
 
-Keys are ed25519. The client private key lives in the project `.climon`
-directory with `0600` permissions and never leaves the devbox.
+- `remote.tunnelToken` — the devbox's connect token, stored in the devbox's
+  hierarchical climon config (`config.json`). It is written `0600` inside a
+  `0700` `.climon` directory.
+- `~/.climon/remote-host.json` — the home machine's tunnel-host state. Written
+  atomically (temp file + `rename`, so the ingest watcher never observes a torn
+  or empty file) with `0600` permissions inside a `0700` directory.
 
-## Containment: forced command + restrictions
+## Containment: server-side sanitization
 
-The home machine authorizes each devbox with an `authorized_keys` entry that
-**forces** the accept handler and strips all other capabilities:
+A devbox only streams session I/O and metadata; it can never name another
+client's sessions or inject server-controlled fields. The ingest connection
+handler enforces this:
 
-```
-restrict,command="climon-server --ssh-accept --label devbox-1" ssh-ed25519 AAAA... 
-```
-
-- `command="…"` — the key can only ever run the accept handler. The
-  client-supplied command is ignored by sshd. The per-client label is carried in
-  this forced command (sshd does not expose the key comment to the handler), and
-  is strictly validated (`/^[A-Za-z0-9._-]{1,64}$/`) before being written,
-  because it is interpolated into the command string.
-- `restrict` — disables port forwarding, agent forwarding, X11, PTY allocation,
-  and `~/.ssh/rc`. A compromised devbox therefore cannot open tunnels, forward
-  ports back, or get a shell. It can only speak the mux protocol to the handler.
+- **`toLocalMeta`** overwrites all server-controlled fields and namespaces every
+  session id by the authenticated `clientId`, so a malicious devbox cannot spoof
+  or overwrite another client's sessions, nor inject arbitrary paths.
+- **`isValidRemoteId`** rejects ids that are not well-formed before they are used
+  to construct any local path.
+- **`sanitizeRemotePatch`** validates incoming metadata patches against the same
+  allowlists used for local sessions (status, priority reason, color), dropping
+  anything unrecognized.
+- Status, `priorityReason`, and `color` fields are validated against fixed
+  allowlists; out-of-range priorities and unknown colors are coerced to safe
+  defaults rather than trusted.
 
 ## Dashboard server: loopback only
 
-The dashboard HTTP/WebSocket server binds to `127.0.0.1` exclusively. The former
-`--lan` mode and shared bearer token were **removed** — there is no network-
-exposed listener and no long-lived secret to leak. Remote visibility is achieved
-solely by the home user running the dashboard locally; devboxes never connect to
-the HTTP server, only to sshd.
+The dashboard HTTP/WebSocket server binds to `127.0.0.1` exclusively. There is
+no network-exposed listener and no long-lived shared secret. Remote visibility
+is achieved solely by the home user running the dashboard locally; devboxes
+connect to the tunnelled ingest port, never to the HTTP server.
 
-Privileged endpoints (session spawn, remote-client management) require, in
+Privileged endpoints (session spawn, the Remotes management API) require, in
 addition to a loopback source IP:
 
 - a JSON `content-type` (forcing a CORS preflight that the server never grants),
@@ -76,22 +82,18 @@ running on the same machine (`isAllowedSpawnRequest`).
 
 ## Untrusted-input handling
 
-- **Public keys** (`parsePublicKey`): type allowlist
-  (`ssh-ed25519`, `ssh-rsa`, `ecdsa-sha2-nistp256/384/521`), strict base64
-  validation, embedded-newline rejection. The raw key **comment is discarded**
-  and the `authorized_keys` line is reconstructed from validated parts, so a
-  malicious comment cannot inject options or extra keys.
-- **Labels** (`sanitizeLabel`): `/^[A-Za-z0-9._-]{1,64}$/`, rejected otherwise.
+- **Session metadata** (`toLocalMeta` / `sanitizeRemotePatch`): server-controlled
+  fields overwritten, ids namespaced and validated, enum fields allowlisted.
 - **Mux frames**: every frame is length-prefixed and capped
   (`MAX_MUX_PAYLOAD = 8 MiB`); an oversize or malformed frame tears the
   connection down rather than allocating unbounded memory.
 
 ## Integrity of managed files
 
-`authorized_keys` and `known_hosts` are edited only within a delimited
-`# climon-managed BEGIN/END` block, leaving hand-maintained entries untouched.
-Writes are atomic (temp file + `rename`) with `0700` directories and `0600`
-files, so a crash mid-write cannot corrupt or truncate the key file.
+The tunnel-host state file (`remote-host.json`) and the devbox config are written
+atomically (temp file + `rename`) with `0700` directories and `0600` files, so a
+crash mid-write cannot corrupt or truncate them, and the ingest daemon's watcher
+never reads a partially-written file.
 
 ## What a compromised devbox can and cannot do
 
@@ -99,13 +101,13 @@ files, so a crash mid-write cannot corrupt or truncate the key file.
 |---|---|
 | Stream its own session output to the dashboard | Yes (by design) |
 | Receive keystrokes the user types into its sessions | Yes (by design) |
-| Open a shell / run arbitrary commands on home | **No** (`command=` + `restrict`) |
-| Forward ports or tunnel into the home network | **No** (`restrict`) |
+| Spoof or overwrite another client's sessions | **No** (`toLocalMeta` namespacing) |
+| Inject arbitrary local paths or server-controlled fields | **No** (`isValidRemoteId` + sanitization) |
 | Reach the dashboard HTTP server | **No** (loopback only) |
-| Impersonate the home host to a third devbox | **No** (host-key pinning) |
+| Keep connecting after its token is revoked/expired | **No** (auth rejection is terminal) |
 
 ## Revocation
 
-Revoking a client removes its managed `authorized_keys` entry (atomic rewrite),
-immediately ending its ability to connect. Existing connections drop on the next
-reconnect attempt.
+Revoking a client is done by deleting or rotating the dev tunnel (or its connect
+token) from the home machine. Once the host rejects the devbox's token, the
+uplink stops retrying, immediately ending its ability to connect.
