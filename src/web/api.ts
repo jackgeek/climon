@@ -1,5 +1,4 @@
-import type { SessionMeta } from "../types.js";
-import type { AnsiColor } from "../types.js";
+import type { AnsiColor, SessionColorMode, SessionMeta } from "../types.js";
 
 /**
  * The dashboard is loopback-only and unauthenticated at the HTTP layer, so API
@@ -19,7 +18,7 @@ export interface CreateSessionBody {
   parentId?: string;
   name?: string;
   priority?: number;
-  color?: AnsiColor | null;
+  color?: SessionColorMode | null;
 }
 
 export async function fetchSessions(): Promise<SessionMeta[]> {

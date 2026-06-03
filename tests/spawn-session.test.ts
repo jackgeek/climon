@@ -52,4 +52,11 @@ describe("spawnHeadlessSession", () => {
     expect(meta.priority).toBe(900);
     expect(meta.color).toBe("magenta");
   });
+
+  test("persists null color when provided", async () => {
+    const id = await spawnHeadlessSession(["sleep", "30"], "/tmp", { cols: 80, rows: 24 }, { color: null }, env);
+    const metaPath = join(home, "sessions", `${id}.json`);
+    const meta = JSON.parse(await readFile(metaPath, "utf8")) as { color?: string | null };
+    expect(meta.color).toBeUndefined();
+  });
 });

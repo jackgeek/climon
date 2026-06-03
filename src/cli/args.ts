@@ -1,6 +1,6 @@
 import { VERSION } from "../version.js";
-import { parseColor, parsePriority } from "../session-meta.js";
-import type { AnsiColor } from "../types.js";
+import { parseColorMode, parsePriority } from "../session-meta.js";
+import type { SessionColorMode } from "../types.js";
 
 export type ParsedCommand =
   | { command: "help" }
@@ -11,7 +11,7 @@ export type ParsedCommand =
   | { command: "ls" }
   | { command: "kill"; id: string }
   | { command: "kill-all" }
-  | { command: "run"; argv: string[]; headless: boolean; priority?: number; color?: AnsiColor | null; name?: string }
+  | { command: "run"; argv: string[]; headless: boolean; priority?: number; color?: SessionColorMode | null; name?: string }
   | { command: "config"; argv: string[] }
   | { command: "uplink" }
   | { command: "ingest" };
@@ -21,8 +21,8 @@ export const helpText = `climon v${VERSION} — web-based monitor for interactiv
 Usage:
   climon [--priority N] [--color C] [--name S] <command> [args...]
                                Run a command in a monitored PTY session
-                               (priority 0-1000; color: none|black|red|green|
-                               yellow|blue|magenta|cyan|white)
+                               (priority 0-1000; color: auto|none|black|red|
+                               green|yellow|blue|magenta|cyan|white)
   climon server [--port N]      Start the dashboard web server (loopback only)
   climon ls                    List monitored sessions
   climon config <key> [value]   Get/set remote connection config (git-style)
@@ -38,7 +38,7 @@ While attached, detach without stopping the command using: Ctrl-\\ then d
 
 interface SessionFlags {
   priority?: number;
-  color?: AnsiColor | null;
+  color?: SessionColorMode | null;
   name?: string;
 }
 
@@ -70,7 +70,8 @@ function parseSessionFlags(tokens: string[]): { flags: SessionFlags; rest: strin
     if (key === "--priority") {
       flags.priority = parsePriority(takeValue());
     } else if (key === "--color") {
-      flags.color = parseColor(takeValue());
+      const mode = parseColorMode(takeValue());
+      flags.color = mode === "none" ? null : mode;
     } else if (key === "--name") {
       flags.name = takeValue();
     } else {

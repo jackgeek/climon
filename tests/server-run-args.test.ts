@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { buildRunArgs } from "../src/server/server.js";
+import { buildRunArgs, resolveParentSpawnColor } from "../src/server/server.js";
+import type { SpawnMetaOptions } from "../src/server/server.js";
+
+// @ts-expect-error spawn metadata must be resolved before spawning
+const unresolvedSpawnMeta: SpawnMetaOptions = { color: "auto" };
+void unresolvedSpawnMeta;
 
 describe("buildRunArgs", () => {
   test("adds no metadata flags when none provided", () => {
@@ -18,5 +23,15 @@ describe("buildRunArgs", () => {
     expect(buildRunArgs(["bash"], { color: null })).toEqual([
       "run", "--headless", "--color", "none", "bash"
     ]);
+  });
+
+  test("emits --color auto for auto color mode", () => {
+    expect(buildRunArgs(["bash"], { color: "auto" })).toEqual([
+      "run", "--headless", "--color", "auto", "bash"
+    ]);
+  });
+
+  test("resolves absent parent color inheritance to none", async () => {
+    await expect(resolveParentSpawnColor(undefined, undefined, process.cwd())).resolves.toBeNull();
   });
 });

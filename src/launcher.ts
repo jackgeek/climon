@@ -12,7 +12,7 @@ import { connectToSession } from "./client/connect.js";
 import { describeDetachKey } from "./client/detach-key.js";
 import { queryTerminalTitle } from "./client/query-title.js";
 import { sanitizeTitle } from "./client/title.js";
-import { spawnHeadlessSession, type SessionMetaOptions } from "./client/spawn-session.js";
+import { spawnHeadlessSession } from "./client/spawn-session.js";
 import { sortSessionsByPriority } from "./priority.js";
 import { spawnDaemon } from "./spawn-daemon.js";
 import { selfSpawnArgs } from "./self-spawn.js";
@@ -22,7 +22,7 @@ import { resolveCommand } from "./pty.js";
 import { isProcessAlive, killProcess } from "./process-kill.js";
 import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
 import { formatSessionSocketRef, isResolvedSessionSocketRef, waitForSessionSocket } from "./session-socket.js";
-import type { AnsiColor, SessionMeta } from "./types.js";
+import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 
 function generateSessionId(): string {
@@ -165,7 +165,7 @@ function runCommandDirectly(command: string[]): Promise<number> {
 }
 
 export interface SessionDefaultFlags {
-  color?: AnsiColor | "auto" | null;
+  color?: SessionColorMode | null;
   priority?: number;
 }
 
@@ -209,7 +209,7 @@ export async function resolveSessionDefaults(
 ): Promise<ResolvedSessionDefaults> {
   let color: AnsiColor | null;
   if (flags.color !== undefined) {
-    color = flags.color === "auto" ? await chooseAutoSessionColor(env) : flags.color;
+    color = flags.color === "auto" ? await chooseAutoSessionColor(env) : flags.color === "none" ? null : flags.color;
   } else {
     const raw = resolveConfigSetting("session.color", env, cwd);
     const mode = typeof raw === "string" ? parseColorMode(raw) : "auto";
@@ -230,7 +230,7 @@ export async function resolveSessionDefaults(
 
 export async function startMonitoredCommand(
   command: string[],
-  options: { headless?: boolean } & SessionMetaOptions = {}
+  options: { headless?: boolean; name?: string } & SessionDefaultFlags = {}
 ): Promise<number> {
   if (command.length === 0) {
     throw new Error("Provide a command to monitor, e.g. `climon copilot`.");
