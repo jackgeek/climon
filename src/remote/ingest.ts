@@ -29,7 +29,14 @@ function boundedString(value: unknown, fallback = ""): string {
   return value.length > MAX_STR ? value.slice(0, MAX_STR) : value;
 }
 
-const SESSION_STATUSES = new Set<SessionStatus>(["running", "needs-attention", "completed", "failed", "disconnected"]);
+const SESSION_STATUSES = new Set<SessionStatus>([
+  "running",
+  "available",
+  "needs-attention",
+  "completed",
+  "failed",
+  "disconnected"
+]);
 const PRIORITY_REASONS = new Set<PriorityReason>([
   "attention",
   "completed",
@@ -336,7 +343,10 @@ function asNumber(v: unknown): number | undefined {
 /** Marks any leftover running remote sessions from a previous daemon as disconnected. */
 async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<void> {
   for (const meta of await listSessions(env)) {
-    if (meta.origin === "remote" && (meta.status === "running" || meta.status === "needs-attention")) {
+    if (
+      meta.origin === "remote" &&
+      (meta.status === "running" || meta.status === "available" || meta.status === "needs-attention")
+    ) {
       await patchSessionMeta(meta.id, { status: "disconnected", priorityReason: "disconnected" }, env);
     }
   }

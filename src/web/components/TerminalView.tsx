@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
-import { attachKey, attachSocketUrl, fetchScrollback, isLiveStatus } from "../api.js";
+import { attachKey, attachSocketUrl, attentionAckMessage, fetchScrollback, isLiveStatus } from "../api.js";
 import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
 
 export interface TerminalHandle {
@@ -12,6 +12,7 @@ export interface TerminalHandle {
   refit: () => void;
   sendInput: (data: string) => void;
   setViewMode: (mode: TerminalResizeMode) => void;
+  acknowledgeAttention: () => void;
   focus: () => void;
 }
 
@@ -45,6 +46,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const onViewModeChangeRef = useRef(onViewModeChange);
   const fontSizeRef = useRef(13);
   const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
+  const queuedAttentionAckRef = useRef(false);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -64,6 +66,24 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
   function sendMode(mode: TerminalResizeMode): void {
     sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
+  }
+
+  function sendAttentionAck(): void {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(attentionAckMessage());
+    } else {
+      queuedAttentionAckRef.current = true;
+    }
+  }
+
+  function flushAttentionAck(): void {
+    const ws = wsRef.current;
+    if (!queuedAttentionAckRef.current || !ws || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    queuedAttentionAckRef.current = false;
+    ws.send(attentionAckMessage());
   }
 
   function fitNow(): void {
@@ -183,6 +203,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       wsRef.current = ws;
       ws.onopen = () => {
         flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
+        flushAttentionAck();
         fitNow();
       };
       ws.onmessage = (ev) => {
@@ -234,8 +255,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       cancelled = true;
     };
     // Re-attach only when the session, its live/terminated state, or visibility
-    // changes -- never on running <-> needs-attention idle toggles, which would
-    // reset the terminal and cause a periodic resize flicker.
+    // changes -- never on live-status idle/acknowledgement transitions, which
+    // would reset the terminal and cause a periodic resize flicker.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachKey(session, visible)]);
 
@@ -261,6 +282,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       sendMode(mode);
       refit();
     },
+    acknowledgeAttention: sendAttentionAck,
     focus: () => termRef.current?.focus()
   }));
 

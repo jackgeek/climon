@@ -247,8 +247,23 @@ export async function runSessionDaemon(id: string): Promise<void> {
    * Transitions are de-duped against the last applied value and ignored after
    * the PTY exits so the completed/failed patch always wins.
    */
-  function applyAttention(payload: AttentionPayload): void {
+  function applyAttention(payload: AttentionPayload, source: "detector" | "user" = "detector"): void {
     if (exited) {
+      return;
+    }
+    if (!payload.needsAttention) {
+      lastAttentionState = false;
+      if (source === "user") {
+        idleDetector.acknowledge(fingerprint(), Date.now());
+      }
+      const now = new Date().toISOString();
+      void patchSessionMeta(id, {
+        status: source === "user" ? "available" : "running",
+        priorityReason: "running",
+        attentionMatchedAt: undefined,
+        attentionReason: undefined,
+        lastActivityAt: now
+      });
       return;
     }
     if (lastAttentionState === payload.needsAttention) {
@@ -256,21 +271,13 @@ export async function runSessionDaemon(id: string): Promise<void> {
     }
     lastAttentionState = payload.needsAttention;
     const now = new Date().toISOString();
-    if (payload.needsAttention) {
-      void patchSessionMeta(id, {
-        status: "needs-attention",
-        priorityReason: "attention",
-        attentionMatchedAt: now,
-        attentionReason: payload.reason,
-        lastActivityAt: now
-      });
-    } else {
-      void patchSessionMeta(id, {
-        status: "running",
-        priorityReason: "running",
-        lastActivityAt: now
-      });
-    }
+    void patchSessionMeta(id, {
+      status: "needs-attention",
+      priorityReason: "attention",
+      attentionMatchedAt: now,
+      attentionReason: payload.reason,
+      lastActivityAt: now
+    });
   }
 
   const { file, args } = resolveCommand(meta.command);
@@ -314,7 +321,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
       ? setInterval(() => {
           const transition = idleDetector.update(fingerprint(), Date.now());
           if (transition) {
-            applyAttention(transition);
+            applyAttention(transition, "detector");
           }
         }, 1000)
       : undefined;
@@ -379,7 +386,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
             applyTerminalMode(mode);
           }
         } else if (frame.type === FrameType.Attention) {
-          applyAttention(parseJsonPayload<AttentionPayload>(frame.payload));
+          applyAttention(parseJsonPayload<AttentionPayload>(frame.payload), "user");
         }
       }
     });

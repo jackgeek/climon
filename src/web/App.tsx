@@ -337,12 +337,16 @@ export function App() {
   // until maximized, so focusing it would be premature.
   const handleSelect = useCallback(
     (id: string): void => {
+      const selected = sessions.find((s) => s.id === id);
       setActiveId(id);
+      if (selected?.status === "needs-attention") {
+        requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention());
+      }
       if (!isMobile) {
         requestAnimationFrame(() => terminalRef.current?.focus());
       }
     },
-    [isMobile]
+    [isMobile, sessions]
   );
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
@@ -376,8 +380,12 @@ export function App() {
           viewMode={viewMode}
           onViewModeChange={requestViewMode}
           onMaximize={(id) => {
+            const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
             setMaximized(true);
+            if (selected?.status === "needs-attention") {
+              requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention());
+            }
           }}
         />
       </div>

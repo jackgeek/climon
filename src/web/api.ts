@@ -146,7 +146,11 @@ export function attachSocketUrl(id: string): string {
 }
 
 export function isLiveStatus(status: SessionMeta["status"]): boolean {
-  return status === "running" || status === "needs-attention";
+  return status === "running" || status === "available" || status === "needs-attention";
+}
+
+export function attentionAckMessage(): string {
+  return JSON.stringify({ type: "attention", needsAttention: false });
 }
 
 /**
@@ -154,7 +158,7 @@ export function isLiveStatus(status: SessionMeta["status"]): boolean {
  * Re-attaching is only required when the selected session changes, when it
  * crosses the live/terminated boundary (WebSocket vs. captured scrollback), or
  * when the terminal's visibility changes. It must NOT change on transitions
- * between two live states (running <-> needs-attention from idle detection),
+ * between live states (running <-> available <-> needs-attention),
  * which would otherwise reset the terminal and trigger a host-size revert/regrow
  * flicker on every idle toggle.
  */

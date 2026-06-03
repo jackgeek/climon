@@ -13,6 +13,7 @@ export interface IdleTransition {
 export class ScreenIdleDetector {
   private readonly idleMs: number;
   private lastFingerprint: string | undefined;
+  private acknowledgedFingerprint: string | undefined;
   private lastChangeAt = 0;
   private flagged = false;
 
@@ -32,12 +33,18 @@ export class ScreenIdleDetector {
     }
 
     if (fingerprint !== this.lastFingerprint) {
+      const wasAcknowledged = this.acknowledgedFingerprint !== undefined;
       this.lastFingerprint = fingerprint;
       this.lastChangeAt = now;
-      if (this.flagged) {
+      this.acknowledgedFingerprint = undefined;
+      if (this.flagged || wasAcknowledged) {
         this.flagged = false;
         return { needsAttention: false };
       }
+      return undefined;
+    }
+
+    if (fingerprint === this.acknowledgedFingerprint) {
       return undefined;
     }
 
@@ -47,5 +54,12 @@ export class ScreenIdleDetector {
     }
 
     return undefined;
+  }
+
+  acknowledge(fingerprint: string, now: number): void {
+    this.lastFingerprint = fingerprint;
+    this.lastChangeAt = now;
+    this.flagged = false;
+    this.acknowledgedFingerprint = fingerprint;
   }
 }

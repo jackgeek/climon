@@ -96,7 +96,7 @@ export function SessionItem({ session, active, onSelect, onClose, onNew, onEdit,
         }
       }}
     >
-      {["running", "needs-attention", "disconnected"].includes(session.status) && (
+      {["running", "available", "needs-attention", "disconnected"].includes(session.status) && (
         <Button
           className={mergeClasses("climon-new", styles.newBtn)}
           appearance="subtle"
