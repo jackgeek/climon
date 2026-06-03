@@ -10,6 +10,7 @@ const HEADER_SIZE = 5; // 4-byte length + 1-byte type
 export const MAX_MUX_PAYLOAD = 8 * 1024 * 1024;
 
 export type ControlMessage =
+  | { kind: "hello"; clientId: string }
   | { kind: "session-added"; meta: SessionMeta }
   | { kind: "session-updated"; id: string; patch: SessionMetaPatch }
   | { kind: "session-removed"; id: string }

@@ -92,16 +92,6 @@ describe("parseArgs", () => {
     expect(parseArgs(["__uplink"])).toEqual({ command: "uplink" });
   });
 
-  test("parses ssh-accept with label", () => {
-    expect(parseArgs(["--ssh-accept", "--label", "devbox-1"])).toEqual({
-      command: "ssh-accept",
-      label: "devbox-1"
-    });
-  });
-
-  test("throws when ssh-accept label missing", () => {
-    expect(() => parseArgs(["--ssh-accept"])).toThrow();
-  });
 
   test("parses leading session flags before the command", () => {
     expect(parseArgs(["--priority", "800", "--color", "red", "--name", "dev", "npm", "run", "dev"]))

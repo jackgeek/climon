@@ -59,4 +59,12 @@ describe("mux round-trip", () => {
       { type: "control", message: { kind: "detach", id: "s1" } }
     ]);
   });
+
+  test("encodes and decodes a hello control frame", () => {
+    const decoder = new MuxDecoder();
+    const frame = encodeControl({ kind: "hello", clientId: "devbox-abc" });
+    const msgs = decoder.push(frame);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toEqual({ type: "control", message: { kind: "hello", clientId: "devbox-abc" } });
+  });
 });

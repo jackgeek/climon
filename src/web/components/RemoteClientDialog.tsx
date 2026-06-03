@@ -7,52 +7,62 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  Dropdown,
   Field,
   Input,
-  Switch,
+  Option,
+  Spinner,
   Text,
-  Textarea,
   makeStyles,
   tokens
 } from "@fluentui/react-components";
+import type { AnsiColor } from "../../types.js";
+import { ANSI_CSS } from "../colors.js";
 import {
-  addRemoteClient,
-  buildSetupCommand,
+  buildSetupScript,
   copyToClipboard,
-  deleteRemoteClient,
-  fetchRemoteClients,
-  fetchRemoteSetup,
-  type IpFamily,
-  type RemoteClient,
-  type RemoteSetup
+  createRemoteTunnel,
+  deleteRemoteTunnel,
+  fetchRemoteStatus,
+  recordManualTunnel,
+  type RemoteStatus
 } from "../api.js";
 
+const COLOR_OPTIONS: Array<AnsiColor | "none"> = [
+  "none",
+  "black",
+  "red",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "cyan",
+  "white"
+];
+
 const useStyles = makeStyles({
-  command: {
+  script: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: "12px",
     whiteSpace: "pre-wrap",
     wordBreak: "break-all",
     backgroundColor: tokens.colorNeutralBackground3,
     padding: "8px",
-    borderRadius: tokens.borderRadiusMedium
-  },
-  section: { marginTop: "16px" },
-  familyRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
+    borderRadius: tokens.borderRadiusMedium,
     marginTop: "8px"
   },
-  clientRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "8px",
-    padding: "6px 0",
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`
+  section: { marginTop: "16px" },
+  row: { display: "flex", gap: "12px", marginTop: "8px" },
+  swatch: {
+    width: "12px",
+    height: "12px",
+    borderRadius: "2px",
+    display: "inline-block",
+    marginRight: "6px",
+    verticalAlign: "middle"
   },
-  error: { color: tokens.colorPaletteRedForeground1, fontSize: "12px", minHeight: "16px" }
+  error: { color: tokens.colorPaletteRedForeground1, fontSize: "12px", minHeight: "16px", display: "block" },
+  hint: { color: tokens.colorNeutralForeground3, fontSize: "12px", display: "block", marginTop: "4px" }
 });
 
 interface Props {
@@ -62,124 +72,222 @@ interface Props {
 
 export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const styles = useStyles();
-  const [setup, setSetup] = useState<RemoteSetup | null>(null);
-  const [family, setFamily] = useState<IpFamily>("ipv6");
-  const [clients, setClients] = useState<RemoteClient[]>([]);
-  const [label, setLabel] = useState("");
-  const [publicKey, setPublicKey] = useState("");
+  const [status, setStatus] = useState<RemoteStatus | null>(null);
+  const [tunnelInput, setTunnelInput] = useState("");
+  const [connectToken, setConnectToken] = useState("");
+  const [color, setColor] = useState<AnsiColor | "none">("none");
+  const [priority, setPriority] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const command = setup ? buildSetupCommand(setup, family) : "";
+  function applyStatus(s: RemoteStatus): void {
+    setStatus(s);
+    if (s.tunnel) setTunnelInput(s.tunnel.id);
+    // The token is only returned from create/record actions; preserve it if present.
+    if (s.connectToken) setConnectToken(s.connectToken);
+  }
 
   async function refresh(): Promise<void> {
     try {
-      const [s, list] = await Promise.all([fetchRemoteSetup(), fetchRemoteClients()]);
-      setSetup(s);
-      setClients(list);
+      applyStatus(await fetchRemoteStatus());
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load remote setup.");
+      setError(e instanceof Error ? e.message : "Failed to load remote status.");
     }
   }
 
   useEffect(() => {
     if (open) {
-      setLabel("");
-      setPublicKey("");
       setError("");
       setCopied(false);
+      setBusy(false);
       void refresh();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  async function enroll(): Promise<void> {
-    const result = await addRemoteClient(label.trim(), publicKey.trim());
-    if (!result.ok) {
-      setError(result.error ?? "Failed to authorize client.");
-      return;
-    }
-    setLabel("");
-    setPublicKey("");
+  const parsedPriority = priority.trim() === "" ? undefined : Number(priority);
+  const priorityValid =
+    parsedPriority === undefined ||
+    (Number.isInteger(parsedPriority) && parsedPriority >= 0 && parsedPriority <= 1000);
+
+  const script = buildSetupScript({
+    tunnelId: status?.tunnel?.id ?? "",
+    connectToken,
+    ingestPort: status?.ingestPort ?? 3132,
+    color,
+    priority: priorityValid ? parsedPriority : undefined
+  });
+
+  async function autoCreate(): Promise<void> {
+    setBusy(true);
     setError("");
-    await refresh();
+    setCopied(false);
+    try {
+      applyStatus(await createRemoteTunnel());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create tunnel.");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function revoke(target: string): Promise<void> {
-    await deleteRemoteClient(target);
-    await refresh();
+  async function recordManual(): Promise<void> {
+    if (!tunnelInput.trim()) {
+      setError("Enter a dev tunnel id or URL.");
+      return;
+    }
+    if (!connectToken.trim()) {
+      setError("Enter the tunnel connect token.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setCopied(false);
+    try {
+      applyStatus(await recordManualTunnel(tunnelInput.trim(), connectToken.trim()));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to record tunnel.");
+    } finally {
+      setBusy(false);
+    }
   }
+
+  async function teardown(): Promise<void> {
+    setBusy(true);
+    try {
+      await deleteRemoteTunnel();
+      setConnectToken("");
+      setTunnelInput("");
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasTunnel = Boolean(status?.tunnel?.id);
 
   return (
     <Dialog open={open} onOpenChange={(_, data) => onOpenChange(data.open)}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Remote Clients</DialogTitle>
+          <DialogTitle>Remotes</DialogTitle>
           <DialogContent>
-            <Text>Run this on the devbox you want to connect, then paste the printed public key below:</Text>
-            <div className={styles.familyRow}>
-              <Switch
-                checked={family === "ipv6"}
-                onChange={(_, d) => {
-                  setFamily(d.checked ? "ipv6" : "ipv4");
-                  setCopied(false);
-                }}
-              />
-              <Text>Use {family === "ipv6" ? "IPv6" : "IPv4"} address</Text>
-            </div>
-            <div className={styles.command} style={{ marginTop: "8px" }}>{command}</div>
-            <Button
-              appearance="primary"
-              style={{ marginTop: "8px" }}
-              onClick={async () => setCopied(await copyToClipboard(command))}
-            >
-              {copied ? "Copied!" : "Copy command"}
-            </Button>
+            <Text>
+              Expose this dashboard to a devbox over a Microsoft dev tunnel. Forward
+              the ingest port ({status?.ingestPort ?? 3132}) and connect your devbox
+              with the generated script.
+            </Text>
+
+            {status?.devtunnelAvailable ? (
+              <div className={styles.section}>
+                <Button appearance="primary" disabled={busy} onClick={() => void autoCreate()}>
+                  {busy ? <Spinner size="tiny" /> : hasTunnel ? "Recreate tunnel automatically" : "Create tunnel automatically"}
+                </Button>
+                <Text className={styles.hint}>
+                  Uses the devtunnel CLI on this machine to create and host a tunnel.
+                </Text>
+              </div>
+            ) : (
+              <Text className={styles.hint}>
+                The devtunnel CLI was not found on this machine. Create a tunnel
+                manually and paste its id/URL and connect token below.
+              </Text>
+            )}
 
             <div className={styles.section}>
-              <Field label="Client label">
+              <Field label="Dev tunnel id or URL">
                 <Input
-                  value={label}
-                  placeholder="e.g. devbox-1"
+                  value={tunnelInput}
+                  placeholder="abc123  or  https://abc123-3132.uks1.devtunnels.ms/"
                   autoComplete="off"
                   spellCheck={false}
-                  onChange={(_, d) => setLabel(d.value)}
+                  onChange={(_, d) => setTunnelInput(d.value)}
                 />
               </Field>
-              <Field label="Client public key" style={{ marginTop: "8px" }}>
-                <Textarea
-                  value={publicKey}
-                  placeholder="ssh-ed25519 AAAA..."
+              <Field label="Connect token" style={{ marginTop: "8px" }}>
+                <Input
+                  value={connectToken}
+                  type="password"
+                  placeholder="connect-scoped access token"
+                  autoComplete="off"
                   spellCheck={false}
-                  onChange={(_, d) => setPublicKey(d.value)}
+                  onChange={(_, d) => setConnectToken(d.value)}
                 />
               </Field>
-              <Text className={styles.error} style={{ display: "block", marginTop: "8px" }}>{error}</Text>
-              <Button appearance="primary" onClick={() => void enroll()} style={{ marginTop: "4px" }}>
-                Authorize client
+              <Button
+                appearance="secondary"
+                style={{ marginTop: "8px" }}
+                disabled={busy}
+                onClick={() => void recordManual()}
+              >
+                Use this tunnel
               </Button>
             </div>
 
-            <div className={styles.section}>
-              <Text weight="semibold">Authorized clients</Text>
-              {clients.length === 0 ? (
-                <Text style={{ display: "block", color: tokens.colorNeutralForeground3, marginTop: "4px" }}>
-                  None yet.
-                </Text>
-              ) : (
-                clients.map((c) => (
-                  <div key={c.label} className={styles.clientRow}>
-                    <Text style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: "12px" }}>
-                      {c.label} · {c.keyType} · {c.fingerprint}
-                    </Text>
-                    <Button appearance="subtle" size="small" onClick={() => void revoke(c.label)}>
-                      Revoke
-                    </Button>
-                  </div>
-                ))
-              )}
+            <div className={styles.row}>
+              <Field label="Default color">
+                <Dropdown
+                  value={color}
+                  selectedOptions={[color]}
+                  onOptionSelect={(_, d) => setColor((d.optionValue as AnsiColor | "none") ?? "none")}
+                >
+                  {COLOR_OPTIONS.map((c) => (
+                    <Option key={c} value={c} text={c}>
+                      {c !== "none" && <span className={styles.swatch} style={{ backgroundColor: ANSI_CSS[c] }} />}
+                      {c}
+                    </Option>
+                  ))}
+                </Dropdown>
+              </Field>
+              <Field
+                label="Default priority (0–1000)"
+                validationState={priorityValid ? "none" : "error"}
+                validationMessage={priorityValid ? undefined : "Enter an integer 0–1000."}
+              >
+                <Input
+                  value={priority}
+                  placeholder="500"
+                  inputMode="numeric"
+                  onChange={(_, d) => setPriority(d.value)}
+                />
+              </Field>
             </div>
+
+            <Text className={styles.error}>{error}</Text>
+            {status && hasTunnel && status.tunnel?.tokenExpiresAt && (
+              <Text className={styles.hint}>
+                Token expires {new Date(status.tunnel.tokenExpiresAt).toLocaleString()}.
+                Recreate the tunnel to refresh it.
+              </Text>
+            )}
+            {status && hasTunnel && !connectToken && (
+              <Text className={styles.hint}>
+                The connect token is only shown once when the tunnel is created or
+                recorded. Recreate the tunnel or paste the token above to regenerate
+                the script.
+              </Text>
+            )}
+
+            <Text weight="semibold" style={{ display: "block", marginTop: "16px" }}>
+              Run this on the devbox:
+            </Text>
+            <div className={styles.script}>{script}</div>
+            <Button
+              appearance="primary"
+              style={{ marginTop: "8px" }}
+              disabled={!hasTunnel || !connectToken}
+              onClick={async () => setCopied(await copyToClipboard(script))}
+            >
+              {copied ? "Copied!" : "Copy script"}
+            </Button>
           </DialogContent>
           <DialogActions>
+            {hasTunnel && (
+              <Button appearance="subtle" disabled={busy} onClick={() => void teardown()}>
+                Remove tunnel
+              </Button>
+            )}
             <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
           </DialogActions>
         </DialogBody>

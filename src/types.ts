@@ -49,11 +49,21 @@ export interface TerminalConfig {
 
 export interface RemoteConfig {
   enabled?: boolean;
-  host?: string;
+  /** Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect`. */
+  tunnelId?: string;
+  /** `connect`-scoped dev tunnel access token, supplied via DEVTUNNEL_ACCESS_TOKEN. */
+  tunnelToken?: string;
+  /** Local port the devbox forwards and the ingest daemon listens on. */
   port?: number;
-  user?: string;
-  hostKey?: string;
-  keyFile?: string;
+  /** Stable, non-secret client namespace; auto-generated once on the devbox. */
+  clientId?: string;
+}
+
+export interface SessionDefaultsConfig {
+  /** Default sidebar accent color for new sessions, or "none". */
+  color?: AnsiColor | "none";
+  /** Default sort priority (0-1000) for new sessions. */
+  priority?: number;
 }
 
 export interface AttentionConfig {
@@ -72,6 +82,7 @@ export interface ClimonConfig {
   terminal: TerminalConfig;
   attention: AttentionConfig;
   remote?: RemoteConfig;
+  session?: SessionDefaultsConfig;
 }
 
 export interface SessionMeta {

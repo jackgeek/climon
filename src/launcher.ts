@@ -7,7 +7,7 @@ import {
   getClimonHome,
   getSocketPath,
   loadConfig,
-  loadRemoteConfig,
+  resolveConfigSetting,
   SESSION_ENV_VAR
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
@@ -21,7 +21,7 @@ import { selfSpawnArgs } from "./self-spawn.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { resolveCommand } from "./pty.js";
 import { isProcessAlive, killProcess } from "./process-kill.js";
-import type { SessionMeta } from "./types.js";
+import type { AnsiColor, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 
 function generateSessionId(): string {
@@ -87,8 +87,11 @@ async function waitForHeadlessReady(id: string, socketPath: string, timeoutMs = 
 }
 
 async function ensureUplink(): Promise<void> {
-  const { remote } = await loadRemoteConfig(process.env, process.cwd());
-  if (!remote?.enabled) return;
+  const enabled = resolveConfigSetting("remote.enabled", process.env, process.cwd()) === true;
+  const tunnelId = resolveConfigSetting("remote.tunnelId", process.env, process.cwd());
+  const tunnelToken = resolveConfigSetting("remote.tunnelToken", process.env, process.cwd());
+  const port = resolveConfigSetting("remote.port", process.env, process.cwd());
+  if (!enabled || !tunnelId || !tunnelToken || !port) return;
   const child = spawn(process.execPath, selfSpawnArgs(["__uplink"]), {
     detached: true,
     stdio: "ignore",
@@ -116,6 +119,59 @@ function runCommandDirectly(command: string[]): Promise<number> {
   });
 }
 
+const ANSI_COLORS: ReadonlySet<string> = new Set([
+  "black",
+  "red",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "cyan",
+  "white"
+]);
+
+export interface SessionDefaultFlags {
+  color?: AnsiColor | null;
+  priority?: number;
+}
+
+export interface ResolvedSessionDefaults {
+  color: AnsiColor | null;
+  priority: number;
+}
+
+/**
+ * Resolves a session's accent color and sort priority. Explicit CLI flags take
+ * precedence; otherwise the hierarchical config (`session.color` /
+ * `session.priority`, repo-then-global) is consulted; otherwise the built-in
+ * defaults (color none, priority 500) apply. A `session.color` of "none"
+ * resolves to null.
+ */
+export function resolveSessionDefaults(
+  flags: SessionDefaultFlags,
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): ResolvedSessionDefaults {
+  let color: AnsiColor | null;
+  if (flags.color !== undefined) {
+    color = flags.color;
+  } else {
+    const raw = resolveConfigSetting("session.color", env, cwd);
+    color = typeof raw === "string" && ANSI_COLORS.has(raw) ? (raw as AnsiColor) : null;
+  }
+
+  let priority: number;
+  if (typeof flags.priority === "number") {
+    priority = flags.priority;
+  } else {
+    const raw = resolveConfigSetting("session.priority", env, cwd);
+    const n = typeof raw === "number" ? raw : Number(raw);
+    priority = Number.isInteger(n) && n >= 0 && n <= 1000 ? n : 500;
+  }
+
+  return { color, priority };
+}
+
 export async function startMonitoredCommand(
   command: string[],
   options: { headless?: boolean } & SessionMetaOptions = {}
@@ -128,13 +184,18 @@ export async function startMonitoredCommand(
   }
   await ensureClimonHome();
   const config = await loadConfig();
+  const defaults = resolveSessionDefaults(
+    { color: options.color, priority: options.priority },
+    process.env,
+    process.cwd()
+  );
 
   if (options.headless) {
     const size = resolveLaunchSize(process.env);
     const id = await spawnHeadlessSession(command, process.cwd(), size, {
       name: options.name,
-      priority: options.priority,
-      color: options.color
+      priority: defaults.priority,
+      color: defaults.color
     });
     const meta = await readSessionMeta(id);
     if (!meta) {
@@ -161,8 +222,8 @@ export async function startMonitoredCommand(
     command,
     displayCommand: command.join(" "),
     name: options.name,
-    priority: options.priority,
-    color: options.color ?? undefined,
+    priority: defaults.priority,
+    color: defaults.color ?? undefined,
     cwd: process.cwd(),
     status: "running",
     priorityReason: "running",

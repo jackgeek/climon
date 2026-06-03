@@ -14,21 +14,14 @@ import {
 import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, parseJsonPayload, type ExitPayload, type PtySizePayload } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
-import type { AnsiColor, ClimonConfig } from "../types.js";
+import type { AnsiColor, ClimonConfig, SessionMeta } from "../types.js";
+import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
+import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 import { parseColor, parsePriority } from "../session-meta.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
-import {
-  authorizeClient,
-  detectHostKey,
-  hostCandidates,
-  listClients,
-  parsePublicKey,
-  revokeClient,
-  sanitizeLabel
-} from "../remote/enroll.js";
 
 interface StartServerOptions {
   port?: number;
@@ -42,7 +35,6 @@ interface WsData {
 const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
-const REMOTE_CLIENT_PATH = /^\/api\/remote\/clients\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 export type KillMode = "none" | "graceful" | "force";
@@ -266,21 +258,59 @@ function probeSocket(socketPath: string, timeoutMs = 2000): Promise<boolean> {
   });
 }
 
+/**
+ * Decides whether a session should be marked disconnected on dashboard startup.
+ * Local sessions require a live daemonPid AND a responsive socket. Remote
+ * sessions have no per-session daemonPid (their socket is owned by the ingest
+ * daemon), so they are judged purely by probing the socket directly.
+ */
+export async function shouldMarkDisconnected(
+  session: SessionMeta,
+  probe: (socketPath: string) => Promise<boolean>
+): Promise<boolean> {
+  if (session.status !== "running" && session.status !== "needs-attention") {
+    return false;
+  }
+  if (session.origin === "remote") {
+    return !(await probe(session.socketPath));
+  }
+  const pidAlive = session.daemonPid ? isProcessAlive(session.daemonPid) : false;
+  const socketOk = pidAlive ? await probe(session.socketPath) : false;
+  return !socketOk;
+}
+
 async function cleanupStaleSessions(): Promise<void> {
   const sessions = await listSessions();
   for (const session of sessions) {
-    if (session.status !== "running" && session.status !== "needs-attention") {
-      continue;
-    }
-    const pidAlive = session.daemonPid ? isProcessAlive(session.daemonPid) : false;
-    const socketOk = pidAlive ? await probeSocket(session.socketPath) : false;
-    if (!socketOk) {
+    if (await shouldMarkDisconnected(session, probeSocket)) {
       await patchSessionMeta(session.id, {
         status: "disconnected",
         priorityReason: "disconnected",
       });
     }
   }
+}
+
+/**
+ * Spawns the detached singleton ingest daemon if its pidfile is absent or dead.
+ * Best-effort: the daemon itself re-checks the singleton, so a redundant spawn
+ * is harmless.
+ */
+async function ensureIngestDaemon(): Promise<void> {
+  const pidPath = getIngestPidPath();
+  const { readFile } = await import("node:fs/promises");
+  let alive = false;
+  try {
+    const pid = Number.parseInt((await readFile(pidPath, "utf8")).trim(), 10);
+    alive = Number.isInteger(pid) && pid > 0 && isProcessAlive(pid);
+  } catch {
+    alive = false;
+  }
+  if (alive) return;
+  const { resolveServerInvocation } = await import("../cli/server-exec.js");
+  const inv = resolveServerInvocation([], process.env, process.execPath);
+  const child = spawn(inv.file, [...inv.args, "__ingest"], { detached: true, stdio: "ignore" });
+  child.unref();
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
@@ -294,6 +324,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   // Clean up stale sessions whose daemons are no longer responsive.
   await cleanupStaleSessions();
+  await ensureIngestDaemon();
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
@@ -451,35 +482,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
       }
 
-      // ---- Remote client management (loopback only) ----
+      // ---- Remotes API (loopback only) ----
 
-      if (url.pathname === "/api/remote/setup") {
-        if (!isLocal(request, srv)) {
-          return new Response("Forbidden", { status: 403 });
-        }
-        const hosts = hostCandidates();
-        const hostKey = await detectHostKey();
-        // Return the bare host public key (type + base64); the dashboard pairs it
-        // with the chosen address to form the pinned known_hosts line.
+      if (url.pathname === "/api/remote/status" && request.method === "GET") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        const detect = await detectDevtunnel();
+        const state = await readRemoteHostState();
         return Response.json({
-          user: process.env.USER ?? "",
-          sshPort: 22,
-          hosts,
-          hostKey: hostKey ?? ""
+          devtunnelAvailable: detect.available,
+          version: detect.version,
+          ingestPort: state?.ingestPort ?? DEFAULT_INGEST_PORT,
+          tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
+          canHost: state?.canHost ?? detect.available
         });
       }
 
-      if (url.pathname === "/api/remote/clients" && request.method === "GET") {
-        if (!isLocal(request, srv)) {
-          return new Response("Forbidden", { status: 403 });
-        }
-        return Response.json({ clients: await listClients() });
-      }
-
-      if (url.pathname === "/api/remote/clients" && request.method === "POST") {
-        if (!isLocal(request, srv)) {
-          return new Response("Forbidden", { status: 403 });
-        }
+      if (url.pathname === "/api/remote/tunnel" && request.method === "POST") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
         if (!isAllowedSpawnRequest(
           request.headers.get("content-type"),
           request.headers.get("origin"),
@@ -487,33 +506,49 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let payload: { label?: unknown; publicKey?: unknown };
+        let body: { mode?: unknown; tunnelInput?: unknown; connectToken?: unknown };
         try {
-          payload = (await request.json()) as typeof payload;
+          body = (await request.json()) as typeof body;
         } catch {
           return new Response("Invalid JSON body", { status: 400 });
         }
-        let label: string;
+        const detect = await detectDevtunnel();
+        const ingestPort = (await readRemoteHostState())?.ingestPort ?? DEFAULT_INGEST_PORT;
         try {
-          label = sanitizeLabel(typeof payload.label === "string" ? payload.label : "");
+          if (body.mode === "auto") {
+            if (!detect.available) {
+              return new Response("devtunnel CLI not available on this machine.", { status: 400 });
+            }
+            await createTunnel(ingestPort);
+          } else {
+            const tunnelId = parseTunnelInput(typeof body.tunnelInput === "string" ? body.tunnelInput : "");
+            const token = typeof body.connectToken === "string" ? body.connectToken : "";
+            if (!tunnelId) return new Response("Invalid tunnel id or URL.", { status: 400 });
+            await useManualTunnel(
+              { tunnelId, connectToken: token, ingestPort },
+              { devtunnelAvailable: detect.available }
+            );
+          }
         } catch (error) {
-          return new Response(error instanceof Error ? error.message : "Invalid label", { status: 400 });
+          return new Response(error instanceof Error ? error.message : "Tunnel error", { status: 500 });
         }
-        let key;
-        try {
-          key = parsePublicKey(typeof payload.publicKey === "string" ? payload.publicKey : "");
-        } catch (error) {
-          return new Response(error instanceof Error ? error.message : "Invalid public key", { status: 400 });
-        }
-        await authorizeClient(label, key);
-        return Response.json({ clients: await listClients() }, { status: 201 });
+        await ensureIngestDaemon();
+        const state = await readRemoteHostState();
+        return Response.json({
+          devtunnelAvailable: detect.available,
+          version: detect.version,
+          ingestPort: state?.ingestPort ?? DEFAULT_INGEST_PORT,
+          tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
+          // Returned ONLY from this mutating endpoint (loopback-only) so the
+          // dialog can fold the secret into the generated script. The GET status
+          // endpoint never returns the token.
+          connectToken: state?.connectToken,
+          canHost: state?.canHost ?? detect.available
+        });
       }
 
-      const clientMatch = REMOTE_CLIENT_PATH.exec(url.pathname);
-      if (clientMatch && request.method === "DELETE") {
-        if (!isLocal(request, srv)) {
-          return new Response("Forbidden", { status: 403 });
-        }
+      if (url.pathname === "/api/remote/tunnel" && request.method === "DELETE") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
         if (!isAllowedSpawnRequest(
           request.headers.get("content-type") ?? "application/json",
           request.headers.get("origin"),
@@ -521,16 +556,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let label: string;
-        try {
-          label = sanitizeLabel(decodeURIComponent(clientMatch[1]));
-        } catch {
-          return new Response("Invalid label", { status: 400 });
-        }
-        const removed = await revokeClient(label);
-        if (!removed) {
-          return new Response("Not found", { status: 404 });
-        }
+        await deleteTunnel();
         return new Response(null, { status: 204 });
       }
 

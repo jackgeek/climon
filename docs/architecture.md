@@ -164,19 +164,23 @@ Because only cell contents are fingerprinted (not the cursor position), a
 blinking cursor is treated as static. Detection runs only while a local client is
 attached, and setting `attention.idleSeconds` to `0` or less disables it.
 
-## Remote clients (SSH uplink)
+## Remote clients (dev-tunnel uplink)
 
-A devbox runs a singleton **uplink** agent (`climon __uplink`) that holds one
-hardened SSH connection to the home machine. sshd runs a forced **accept
-handler** (`climon-server --ssh-accept --label <label>`) for that key. Session
-I/O is multiplexed over the single SSH stdio channel using a small framed
-protocol (`src/remote/mux.ts`): control messages advertise session add/update/
-remove and attach/detach; data messages carry opaque daemon frames.
+A devbox runs a singleton **uplink** agent (`climon __uplink`) that connects to
+the home machine through a Microsoft dev tunnel. The home machine runs a
+loopback-only **ingest** daemon (`climon-server __ingest`) and either hosts the
+tunnel automatically via the `devtunnel` CLI or records a manually-created
+tunnel in `~/.climon/remote-host.json`.
 
-The accept handler materializes each remote session as a **local** unix socket
-plus a `~/.climon/sessions/<label>~<id>.json` metadata file (`origin: "remote"`).
-The existing dashboard plumbing (fs.watch → SSE, browser WS ⇄ unix socket bridge)
-then works unchanged — it cannot tell local and remote sessions apart except for
-the origin tag. Attach is on demand: a browser connecting to the local socket
-triggers an `attach` control to the devbox, which connects to the real daemon
-socket (replaying scrollback) and bridges bytes back.
+Session I/O is multiplexed over the dev-tunnel TCP stream using a small framed
+protocol (`src/remote/mux.ts`): a `hello` frame advertises the devbox's stable
+client id, control messages advertise session add/update/remove and
+attach/detach, and data messages carry opaque daemon frames.
+
+The ingest handler materializes each remote session as a **local** unix socket
+plus a `~/.climon/sessions/<clientId>~<id>.json` metadata file
+(`origin: "remote"`). The existing dashboard plumbing (fs.watch → SSE, browser
+WS ⇄ unix socket bridge) then works unchanged — it cannot tell local and remote
+sessions apart except for the origin tag. Attach is on demand: a browser
+connecting to the local socket triggers an `attach` control to the devbox, which
+connects to the real daemon socket (replaying scrollback) and bridges bytes back.
