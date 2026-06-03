@@ -1,13 +1,10 @@
 import { spawn } from "node:child_process";
-import { openSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { connect } from "node:net";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
 import {
   ensureClimonHome,
   getClimonHome,
-  getSessionsDir,
   getSocketPath,
   loadConfig,
   loadRemoteConfig,
@@ -16,6 +13,8 @@ import {
 import { connectToSession } from "./client/connect.js";
 import { spawnHeadlessSession, type SessionMetaOptions } from "./client/spawn-session.js";
 import { sortSessionsByPriority } from "./priority.js";
+import { spawnDaemon } from "./spawn-daemon.js";
+import { selfSpawnArgs } from "./self-spawn.js";
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { resolveCommand } from "./pty.js";
 import type { SessionMeta } from "./types.js";
@@ -83,23 +82,13 @@ async function waitForHeadlessReady(id: string, socketPath: string, timeoutMs = 
   throw new Error(`Timed out waiting for session daemon socket at ${socketPath}`);
 }
 
-function spawnDaemon(id: string, env: NodeJS.ProcessEnv): void {
-  const logPath = join(getSessionsDir(env), `${id}.log`);
-  const logFd = openSync(logPath, "a");
-  const child = spawn(process.execPath, [process.argv[1], "__session", id], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env
-  });
-  child.unref();
-}
-
 async function ensureUplink(): Promise<void> {
   const { remote } = await loadRemoteConfig(process.env, process.cwd());
   if (!remote?.enabled) return;
-  const child = spawn(process.execPath, [process.argv[1] ?? "climon", "__uplink"], {
+  const child = spawn(process.execPath, selfSpawnArgs(["__uplink"]), {
     detached: true,
-    stdio: "ignore"
+    stdio: "ignore",
+    windowsHide: true
   });
   child.unref();
 }

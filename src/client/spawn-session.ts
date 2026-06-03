@@ -1,25 +1,12 @@
-import { openSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { join } from "node:path";
-import { ensureClimonHome, getSessionsDir, getSocketPath } from "../config.js";
+import { ensureClimonHome, getSocketPath } from "../config.js";
+import { spawnDaemon } from "../spawn-daemon.js";
 import { writeSessionMeta } from "../store.js";
 import type { AnsiColor, SessionMeta } from "../types.js";
 import { VERSION } from "../version.js";
 
 function generateSessionId(): string {
   return `${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
-}
-
-function spawnDaemon(id: string, env: NodeJS.ProcessEnv): void {
-  const logPath = join(getSessionsDir(env), `${id}.log`);
-  const logFd = openSync(logPath, "a");
-  const child = spawn(process.execPath, [process.argv[1], "__session", id], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env
-  });
-  child.unref();
 }
 
 /**
