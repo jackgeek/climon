@@ -25,7 +25,7 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "12px 16px",
+    padding: "4px 16px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     flex: "0 0 auto"
   },
