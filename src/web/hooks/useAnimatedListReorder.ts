@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, RefCallback } from "react";
 
 const ANIMATION_MS = 180;
@@ -6,13 +6,6 @@ const ANIMATION_MS = 180;
 export interface AnimatedListReorderApi {
   registerItem: (id: string) => RefCallback<HTMLElement>;
   getItemStyle: (id: string) => CSSProperties;
-}
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
 }
 
 // null = idle; non-null Record = animating (non-zero value = phase 1 snap, zero value = phase 2 ease)
@@ -24,9 +17,24 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
   const initializedRef = useRef(false);
   const frameRef = useRef<number | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const transitionEndCleanupRef = useRef<(() => void) | null>(null);
   // Cached stable ref callbacks per id so React never sees a new function object on re-render.
   const refCallbacksRef = useRef<Record<string, RefCallback<HTMLElement>>>({});
   const [offsets, setOffsets] = useState<OffsetState>(null);
+
+  const [reducedMotion, setReducedMotion] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const handleChange = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
+    mql.addEventListener("change", handleChange);
+    return () => mql.removeEventListener("change", handleChange);
+  }, []);
+
   const key = ids.join("\u001f");
 
   useLayoutEffect(() => {
@@ -47,7 +55,7 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
       }
     }
 
-    if (!initializedRef.current || prefersReducedMotion()) {
+    if (!initializedRef.current || reducedMotion) {
       initializedRef.current = true;
       previousTopsRef.current = nextTops;
       setOffsets(null);
@@ -86,11 +94,36 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
       }
       setOffsets(zeroOffsets);
 
-      // After the animation completes, return items to the idle (no-style) state.
+      // Shared cleanup: cancel the sibling mechanism and return to idle.
+      const finishAnimation = () => {
+        if (transitionEndCleanupRef.current) {
+          transitionEndCleanupRef.current();
+          transitionEndCleanupRef.current = null;
+        }
+        if (timeoutRef.current !== null) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+        setOffsets(null);
+      };
+
+      // Listen on the first animated element for transitionend.
+      const firstId = Object.keys(nextOffsets)[0];
+      const firstElement = firstId ? elementsRef.current[firstId] : undefined;
+      if (firstElement) {
+        const onTransitionEnd = (e: TransitionEvent) => {
+          if (e.propertyName === "top") finishAnimation();
+        };
+        firstElement.addEventListener("transitionend", onTransitionEnd);
+        transitionEndCleanupRef.current = () =>
+          firstElement.removeEventListener("transitionend", onTransitionEnd);
+      }
+
+      // Fallback timeout in case transitionend never fires.
       timeoutRef.current = setTimeout(() => {
         timeoutRef.current = null;
-        setOffsets(null);
-      }, ANIMATION_MS);
+        finishAnimation();
+      }, ANIMATION_MS + 50);
     });
 
     return () => {
@@ -98,12 +131,16 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
         cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
       }
+      if (transitionEndCleanupRef.current !== null) {
+        transitionEndCleanupRef.current();
+        transitionEndCleanupRef.current = null;
+      }
       if (timeoutRef.current !== null) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
       }
     };
-  }, [key]);
+  }, [key, reducedMotion]);
 
   const registerItem = useCallback((id: string): RefCallback<HTMLElement> => {
     if (!(id in refCallbacksRef.current)) {
@@ -126,9 +163,9 @@ export function useAnimatedListReorder(ids: string[]): AnimatedListReorderApi {
       }
       const offset = offsets[id]!;
       if (offset !== 0) {
-        return { position: "relative", top: offset, transition: "top 0ms" };
+        return { position: "relative", top: offset, transition: "top 0ms", willChange: "top" };
       }
-      return { position: "relative", top: 0, transition: `top ${ANIMATION_MS}ms ease` };
+      return { position: "relative", top: 0, transition: `top ${ANIMATION_MS}ms ease`, willChange: "top" };
     },
     [offsets]
   );

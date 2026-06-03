@@ -44,9 +44,6 @@ const useStyles = makeStyles({
     flex: "1 1 auto",
     position: "relative"
   },
-  listItem: {
-    willChange: "top"
-  },
   empty: {
     padding: "16px",
     color: tokens.colorNeutralForeground3,
@@ -117,7 +114,6 @@ export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, 
             <div
               key={s.id}
               ref={animatedList.registerItem(s.id)}
-              className={styles.listItem}
               style={animatedList.getItemStyle(s.id)}
             >
               <SessionItem
