@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { attachKey, buildSetupCommand } from "../src/web/api.js";
+import { attachKey, buildSetupScript } from "../src/web/api.js";
 import type { SessionMeta } from "../src/types.js";
 
 function session(overrides: Partial<SessionMeta>): SessionMeta {
@@ -52,40 +52,46 @@ describe("attachKey", () => {
   });
 });
 
-const SETUP = {
-  user: "alice",
-  sshPort: 22,
-  hosts: ["10.0.0.5", "2001:db8::5", "home.example"],
-  hostKey: "ssh-ed25519 AAAAC3Nz..."
-};
+describe("buildSetupScript", () => {
+  const BASE = {
+    tunnelId: "abc123",
+    connectToken: "tok-xyz",
+    ingestPort: 3132
+  };
 
-describe("buildSetupCommand", () => {
-  test("defaults to the IPv6 address", () => {
-    const cmd = buildSetupCommand(SETUP);
-    expect(cmd).toContain("climon config remote.enabled true");
-    expect(cmd).toContain("climon config remote.host 2001:db8::5");
-    expect(cmd).toContain("climon config remote.user alice");
-    expect(cmd).toContain("climon config remote.port 22");
-    // The pinned known_hosts line is anchored to the SAME host we connect to.
-    expect(cmd).toContain("climon config known-host '2001:db8::5 ssh-ed25519 AAAAC3Nz...'");
-    // No host-verification bypass leaks into the generated command.
-    expect(cmd).not.toContain("StrictHostKeyChecking=no");
+  test("emits the four required remote settings", () => {
+    const script = buildSetupScript(BASE);
+    expect(script).toContain("climon config remote.enabled true");
+    expect(script).toContain("climon config remote.tunnelId abc123");
+    expect(script).toContain("climon config remote.tunnelToken tok-xyz");
+    expect(script).toContain("climon config remote.port 3132");
   });
 
-  test("selects the IPv4 address when asked", () => {
-    const cmd = buildSetupCommand(SETUP, "ipv4");
-    expect(cmd).toContain("climon config remote.host 10.0.0.5");
-    expect(cmd).toContain("climon config known-host '10.0.0.5 ssh-ed25519 AAAAC3Nz...'");
-    expect(cmd).not.toContain("2001:db8::5");
+  test("omits color and priority when not chosen", () => {
+    const script = buildSetupScript(BASE);
+    expect(script).not.toContain("session.color");
+    expect(script).not.toContain("session.priority");
   });
 
-  test("returns IPv6-specific guidance when no IPv6 address exists", () => {
-    const cmd = buildSetupCommand({ user: "alice", sshPort: 22, hosts: ["10.0.0.5"], hostKey: "" }, "ipv6");
-    expect(cmd).toContain("# No reachable IPv6");
+  test("includes color and priority when chosen", () => {
+    const script = buildSetupScript({ ...BASE, color: "green", priority: 20 });
+    expect(script).toContain("climon config session.color green");
+    expect(script).toContain("climon config session.priority 20");
   });
 
-  test("returns IPv4-specific guidance when no IPv4 address exists", () => {
-    const cmd = buildSetupCommand({ user: "alice", sshPort: 22, hosts: ["2001:db8::5"], hostKey: "" }, "ipv4");
-    expect(cmd).toContain("# No reachable IPv4");
+  test("treats the 'none' color as no color setting", () => {
+    const script = buildSetupScript({ ...BASE, color: "none" });
+    expect(script).not.toContain("session.color");
+  });
+
+  test("returns guidance when the tunnel id is missing", () => {
+    const script = buildSetupScript({ ...BASE, tunnelId: "" });
+    expect(script).toContain("# Create or paste a dev tunnel");
+    expect(script).not.toContain("remote.enabled true");
+  });
+
+  test("quotes the token so shell metacharacters are safe", () => {
+    const script = buildSetupScript({ ...BASE, connectToken: "a b$c" });
+    expect(script).toContain("climon config remote.tunnelToken 'a b$c'");
   });
 });

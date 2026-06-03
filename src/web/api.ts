@@ -169,55 +169,61 @@ export function attachKey(
   return `${session.id}|${isLiveStatus(session.status) ? "live" : "term"}|${visible ? "1" : "0"}`;
 }
 
-export interface RemoteSetup {
-  user: string;
-  sshPort: number;
-  hosts: string[];
-  hostKey: string;
+export interface RemoteTunnelInfo {
+  id: string;
+  tokenExpiresAt?: string;
 }
 
-export interface RemoteClient {
-  label: string;
-  keyType: string;
-  fingerprint: string;
+export interface RemoteStatus {
+  devtunnelAvailable: boolean;
+  version?: string;
+  ingestPort: number;
+  tunnel?: RemoteTunnelInfo;
+  /** Present only in the response to a create/record action, never in GET status. */
+  connectToken?: string;
+  canHost: boolean;
 }
 
-export async function fetchRemoteSetup(): Promise<RemoteSetup> {
-  const res = await fetch(withQuery("/api/remote/setup"));
+export async function fetchRemoteStatus(): Promise<RemoteStatus> {
+  const res = await fetch(withQuery("/api/remote/status"));
   if (!res.ok) {
-    throw new Error(`Failed to load setup (${res.status})`);
+    throw new Error(`Failed to load remote status (${res.status})`);
   }
-  return (await res.json()) as RemoteSetup;
+  return (await res.json()) as RemoteStatus;
 }
 
-export async function fetchRemoteClients(): Promise<RemoteClient[]> {
-  const res = await fetch(withQuery("/api/remote/clients"));
+/** Auto-creates a dev tunnel on the home machine (requires the devtunnel CLI). */
+export async function createRemoteTunnel(): Promise<RemoteStatus> {
+  const res = await fetch(withQuery("/api/remote/tunnel"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "auto" })
+  });
   if (!res.ok) {
-    throw new Error(`Failed to load clients (${res.status})`);
+    throw new Error((await res.text()) || `Failed to create tunnel (${res.status})`);
   }
-  const data = (await res.json()) as { clients?: RemoteClient[] };
-  return data.clients ?? [];
+  return (await res.json()) as RemoteStatus;
 }
 
-export async function addRemoteClient(label: string, publicKey: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const res = await fetch(withQuery("/api/remote/clients"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ label, publicKey })
-    });
-    if (!res.ok) {
-      return { ok: false, error: (await res.text()) || `Failed (${res.status})` };
-    }
-    return { ok: true };
-  } catch {
-    return { ok: false, error: "Network error." };
+/** Records a manually-created tunnel (id or devtunnels.ms URL) plus its connect token. */
+export async function recordManualTunnel(
+  tunnelInput: string,
+  connectToken: string
+): Promise<RemoteStatus> {
+  const res = await fetch(withQuery("/api/remote/tunnel"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "manual", tunnelInput, connectToken })
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || `Failed to record tunnel (${res.status})`);
   }
+  return (await res.json()) as RemoteStatus;
 }
 
-export async function deleteRemoteClient(label: string): Promise<void> {
+export async function deleteRemoteTunnel(): Promise<void> {
   try {
-    await fetch(withQuery(`/api/remote/clients/${encodeURIComponent(label)}`), {
+    await fetch(withQuery("/api/remote/tunnel"), {
       method: "DELETE",
       headers: { "content-type": "application/json" }
     });
@@ -226,43 +232,51 @@ export async function deleteRemoteClient(label: string): Promise<void> {
   }
 }
 
-export type IpFamily = "ipv4" | "ipv6";
+export interface SetupScriptParams {
+  tunnelId: string;
+  connectToken: string;
+  ingestPort: number;
+  color?: AnsiColor | "none";
+  priority?: number;
+}
 
-/** Classifies a host string by IP family; non-IP values (e.g. a hostname) are "hostname". */
-function hostFamily(host: string): IpFamily | "hostname" {
-  if (host.includes(":")) return "ipv6";
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return "ipv4";
-  return "hostname";
+/** A single-quoted shell literal (handles embedded single quotes safely). */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/** True when a value contains characters that need shell quoting. */
+function needsQuote(value: string): boolean {
+  return !/^[A-Za-z0-9._\-:/]+$/.test(value);
+}
+
+function arg(value: string): string {
+  return needsQuote(value) ? shellQuote(value) : value;
 }
 
 /**
- * Builds the one-line bash command a user pastes on a devbox. It generates a
- * client keypair (if missing), pins the home host key into the project
- * known_hosts, and records the connection config via `climon config`. The user
- * still pastes the printed public key back into the dashboard to authorize it —
- * no secret ever leaves the devbox.
- *
- * `family` selects which advertised address to connect to (IPv6 by default).
- * The pinned known_hosts line is anchored to the same address so host-key
- * verification (StrictHostKeyChecking=yes) stays consistent.
+ * Assembles the `climon config …` script a user runs on their devbox. Mirrors
+ * the previous setup command but targets the dev-tunnel config keys. The script
+ * is newline-joined so each setting is independently visible/copyable. Returns
+ * guidance text (commented) when no tunnel id is available yet.
  */
-export function buildSetupCommand(setup: RemoteSetup, family: IpFamily = "ipv6"): string {
-  const host = setup.hosts.find((h) => hostFamily(h) === family);
-  if (!host) {
-    const label = family === "ipv6" ? "IPv6" : "IPv4";
-    return `# No reachable ${label} address detected on the server. Set one manually with: climon config remote.host <ip-address>`;
+export function buildSetupScript(params: SetupScriptParams): string {
+  if (!params.tunnelId) {
+    return "# Create or paste a dev tunnel above to generate the devbox config script.";
   }
   const lines = [
     "climon config remote.enabled true",
-    `climon config remote.host ${host}`,
-    `climon config remote.user ${setup.user}`,
-    `climon config remote.port ${setup.sshPort}`
+    `climon config remote.tunnelId ${arg(params.tunnelId)}`,
+    `climon config remote.tunnelToken ${arg(params.connectToken)}`,
+    `climon config remote.port ${params.ingestPort}`
   ];
-  if (setup.hostKey) {
-    lines.push(`climon config known-host '${host} ${setup.hostKey.replace(/'/g, "")}'`);
+  if (params.color && params.color !== "none") {
+    lines.push(`climon config session.color ${params.color}`);
   }
-  lines.push("climon config keygen");
-  return lines.join(" && ");
+  if (typeof params.priority === "number") {
+    lines.push(`climon config session.priority ${params.priority}`);
+  }
+  return lines.join("\n");
 }
 
 export async function copyToClipboard(text: string): Promise<boolean> {

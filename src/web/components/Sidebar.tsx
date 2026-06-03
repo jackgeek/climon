@@ -97,7 +97,7 @@ export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, 
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
-                <MenuItem onClick={onManageRemote}>Remote clients… (Beta)</MenuItem>
+                <MenuItem onClick={onManageRemote}>Remotes…</MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>
