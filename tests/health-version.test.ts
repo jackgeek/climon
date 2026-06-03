@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { VERSION } from "../src/version.js";
 
 const home = join(tmpdir(), `climon-health-${process.pid}`);
-const env = { ...process.env, CLIMON_HOME: home };
+const env = { ...process.env, CLIMON_HOME: home, CLIMON_SERVER_BIN: join(process.cwd(), "src", "server.ts") };
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
