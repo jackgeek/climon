@@ -12,6 +12,7 @@ import {
 import { Add20Regular, Navigation20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../../types.js";
 import { SessionItem } from "./SessionItem.js";
+import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 
 const useStyles = makeStyles({
   root: {
@@ -24,7 +25,9 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "12px 16px",
+    boxSizing: "border-box",
+    height: "55px",
+    padding: "4px 16px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
     flex: "0 0 auto"
   },
@@ -69,6 +72,7 @@ interface Props {
 
 export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, onNew, onNewFrom, onEdit, onManageRemote, onMaximize }: Props) {
   const styles = useStyles();
+  const animatedList = useAnimatedListReorder(sessions.map((session) => session.id));
   return (
     <div className={styles.root}>
       <div className={styles.header}>
@@ -108,16 +112,21 @@ export function Sidebar({ sessions, activeId, serverVersion, onSelect, onClose, 
           <div className={styles.empty}>No sessions yet.</div>
         ) : (
           sessions.map((s) => (
-            <SessionItem
+            <div
               key={s.id}
-              session={s}
-              active={s.id === activeId}
-              onSelect={onSelect}
-              onClose={onClose}
-              onNew={onNewFrom}
-              onEdit={onEdit}
-              onMaximize={onMaximize}
-            />
+              ref={animatedList.registerItem(s.id)}
+              style={animatedList.getItemStyle(s.id)}
+            >
+              <SessionItem
+                session={s}
+                active={s.id === activeId}
+                onSelect={onSelect}
+                onClose={onClose}
+                onNew={onNewFrom}
+                onEdit={onEdit}
+                onMaximize={onMaximize}
+              />
+            </div>
           ))
         )}
       </div>

@@ -19,13 +19,13 @@ function priorityOf(session: SessionMeta): number {
 
 export function sortSessionsByPriority(sessions: SessionMeta[]): SessionMeta[] {
   return [...sessions].sort((left, right) => {
-    const priorityDiff = priorityOf(left) - priorityOf(right);
-    if (priorityDiff !== 0) {
-      return priorityDiff;
-    }
     const rankDiff = rank[left.status] - rank[right.status];
     if (rankDiff !== 0) {
       return rankDiff;
+    }
+    const priorityDiff = priorityOf(left) - priorityOf(right);
+    if (priorityDiff !== 0) {
+      return priorityDiff;
     }
     return timestamp(right.updatedAt) - timestamp(left.updatedAt);
   });
