@@ -16,7 +16,7 @@ export function statusBadgeColor(status: SessionStatus): BadgeColor {
   return COLOR[status];
 }
 
-const LABEL: Record<SessionStatus, string> = {
+export const STATUS_LABELS: Record<SessionStatus, string> = {
   running: "running",
   available: "available",
   "needs-attention": "needs attention",
@@ -25,10 +25,30 @@ const LABEL: Record<SessionStatus, string> = {
   disconnected: "disconnected"
 };
 
-export function StatusBadge({ status }: { status: SessionStatus }) {
+export const STATUS_INITIALS: Record<SessionStatus, string> = {
+  running: "R",
+  available: "A",
+  "needs-attention": "NA",
+  completed: "C",
+  failed: "F",
+  disconnected: "D"
+};
+
+interface Props {
+  status: SessionStatus;
+  compact?: boolean;
+  showTitle?: boolean;
+}
+
+export function StatusBadge({ status, compact = false, showTitle = true }: Props) {
   return (
-    <Badge appearance="filled" color={statusBadgeColor(status)} size="small">
-      {LABEL[status]}
+    <Badge
+      appearance="filled"
+      color={statusBadgeColor(status)}
+      size="small"
+      title={showTitle ? STATUS_LABELS[status] : undefined}
+    >
+      {compact ? STATUS_INITIALS[status] : STATUS_LABELS[status]}
     </Badge>
   );
 }

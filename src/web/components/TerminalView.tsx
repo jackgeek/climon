@@ -13,6 +13,8 @@ import {
   isLiveStatus
 } from "../api.js";
 import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
+import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
+import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
@@ -34,6 +36,7 @@ const useStyles = makeStyles({
 
 interface Props {
   session: SessionMeta | null;
+  accentColor?: SessionMeta["color"];
   maximized: boolean;
   visible: boolean;
   viewMode: TerminalResizeMode;
@@ -41,7 +44,7 @@ interface Props {
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { session, maximized, visible, viewMode, onViewModeChange },
+  { session, accentColor, maximized, visible, viewMode, onViewModeChange },
   ref
 ) {
   const styles = useStyles();
@@ -275,11 +278,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachKey(session, visible)]);
 
-  // Refit when entering/leaving fullscreen or becoming visible so xterm
-  // re-measures after the container's size changes.
+  // Refit when layout-affecting terminal chrome changes so xterm re-measures
+  // before sending geometry back to the daemon.
   useEffect(() => {
     refit();
-  }, [maximized, visible, viewMode]);
+  }, [accentColor, maximized, visible, viewMode]);
 
   useImperativeHandle(ref, () => ({
     getDimensions: () => {
@@ -301,5 +304,15 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     focus: () => termRef.current?.focus()
   }));
 
-  return <div ref={containerRef} className={styles.root} />;
+  return (
+    <div
+      ref={containerRef}
+      className={styles.root}
+      style={
+        accentColor
+          ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
+          : undefined
+      }
+    />
+  );
 });
