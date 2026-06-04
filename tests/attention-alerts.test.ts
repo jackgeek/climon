@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SessionMeta } from "../src/types.js";
 import {
   buildAttentionNotification,
+  browserNotificationPermissionMessage,
   createAttentionAlertManager,
   createBrowserNotificationAdapter,
   formatAttentionTitle,
@@ -161,6 +162,20 @@ describe("attention notification content", () => {
       expect(notificationsEnabledFromState("default", true)).toBe(false);
       expect(notificationsEnabledFromState("denied", true)).toBe(false);
       expect(notificationsEnabledFromState("granted", false)).toBe(false);
+    });
+
+    describe("browserNotificationPermissionMessage", () => {
+      test("explains when the browser blocked the notification permission prompt", () => {
+        expect(browserNotificationPermissionMessage("denied")).toBe(
+          "Notifications are blocked in your browser. Enable them for this site in Edge site settings, then try again."
+        );
+      });
+
+      test("explains when the dashboard origin cannot request notifications", () => {
+        expect(browserNotificationPermissionMessage("insecure-context")).toBe(
+          "This dashboard is not on a secure origin, so the browser will not show a notification permission prompt. Open climon from localhost or HTTPS and try again."
+        );
+      });
     });
   });
 

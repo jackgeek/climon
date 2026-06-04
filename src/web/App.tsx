@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
+import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Text,
+  makeStyles,
+  mergeClasses,
+  tokens
+} from "@fluentui/react-components";
 import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
 import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus } from "./api.js";
@@ -14,6 +26,7 @@ import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import {
+  browserNotificationPermissionMessage,
   notificationsEnabledFromState,
   readBrowserNotificationsEnabled,
   requestBrowserNotificationPermission,
@@ -219,6 +232,7 @@ export function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [viewMode, setViewMode] = useState<TerminalResizeMode>("clamped");
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
+  const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const dismissSplash = useCallback(() => setShowSplash(false), []);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
@@ -447,6 +461,11 @@ export function App() {
       const enabled = notificationsEnabledFromState(permission, true);
       writeBrowserNotificationsEnabled(enabled);
       setNotificationsEnabled(enabled);
+      setNotificationMessage(browserNotificationPermissionMessage(permission));
+    }).catch(() => {
+      writeBrowserNotificationsEnabled(false);
+      setNotificationsEnabled(false);
+      setNotificationMessage(browserNotificationPermissionMessage("request-failed"));
     });
   }, [notificationsEnabled]);
 
@@ -457,6 +476,19 @@ export function App() {
   return (
     <div className={styles.root}>
       {showSplash && <SplashScreen onDone={dismissSplash} />}
+      <Dialog open={notificationMessage !== null} onOpenChange={(_, data) => !data.open && setNotificationMessage(null)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Notifications are not enabled</DialogTitle>
+            <DialogContent>{notificationMessage}</DialogContent>
+            <DialogActions>
+              <Button appearance="primary" onClick={() => setNotificationMessage(null)}>
+                OK
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
       <div
         className={mergeClasses(
           styles.sidebar,

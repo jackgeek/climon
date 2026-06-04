@@ -40,6 +40,7 @@ const NOTIFICATIONS_ENABLED_STORAGE_KEY = "climon.notificationsEnabled";
 type AudioContextConstructor = typeof AudioContext;
 type BrowserNotificationApi = Pick<typeof Notification, "permission" | "requestPermission">;
 type NotificationStorage = Pick<Storage, "getItem" | "setItem">;
+export type BrowserNotificationPermissionResult = NotificationPermission | "unsupported" | "insecure-context";
 
 interface WindowWithWebkitAudioContext extends Window {
   AudioContext?: AudioContextConstructor;
@@ -78,11 +79,11 @@ export function buildAttentionNotification(session: SessionMeta): AttentionAlert
   };
 }
 
-export function notificationsEnabledFromState(permission: NotificationPermission | "unsupported", enabled: boolean): boolean {
+export function notificationsEnabledFromState(permission: BrowserNotificationPermissionResult, enabled: boolean): boolean {
   return permission === "granted" && enabled;
 }
 
-function browserNotificationPermission(notificationApi?: BrowserNotificationApi): NotificationPermission | "unsupported" {
+function browserNotificationPermission(notificationApi?: BrowserNotificationApi): BrowserNotificationPermissionResult {
   const api = notificationApi ?? (typeof Notification === "undefined" ? undefined : Notification);
   return api?.permission ?? "unsupported";
 }
@@ -136,7 +137,10 @@ export function writeBrowserNotificationsEnabled(enabled: boolean, storage?: Not
 
 export async function requestBrowserNotificationPermission(
   notificationApi?: BrowserNotificationApi
-): Promise<NotificationPermission | "unsupported"> {
+): Promise<BrowserNotificationPermissionResult> {
+  if (typeof globalThis.isSecureContext === "boolean" && !globalThis.isSecureContext) {
+    return "insecure-context";
+  }
   const api = notificationApi ?? (typeof Notification === "undefined" ? undefined : Notification);
   if (!api) {
     return "unsupported";
@@ -145,6 +149,25 @@ export async function requestBrowserNotificationPermission(
     return api.permission;
   }
   return api.requestPermission();
+}
+
+export function browserNotificationPermissionMessage(
+  permission: BrowserNotificationPermissionResult | "request-failed"
+): string | null {
+  switch (permission) {
+    case "denied":
+      return "Notifications are blocked in your browser. Enable them for this site in Edge site settings, then try again.";
+    case "default":
+      return "The browser did not grant notification permission. If no prompt appeared, check Edge notification settings for this site and try again.";
+    case "unsupported":
+      return "This browser does not support dashboard notifications.";
+    case "insecure-context":
+      return "This dashboard is not on a secure origin, so the browser will not show a notification permission prompt. Open climon from localhost or HTTPS and try again.";
+    case "request-failed":
+      return "The browser failed to request notification permission. Check Edge notification settings for this site and try again.";
+    case "granted":
+      return null;
+  }
 }
 
 function isAttentionSession(session: SessionMeta): boolean {
