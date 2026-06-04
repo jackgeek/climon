@@ -18,6 +18,8 @@ export interface ConfigSetting {
   validate?: (value: unknown) => void;
 }
 
+const TERMINAL_HELP_WIDTH = 88;
+
 export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "version",
@@ -288,12 +290,24 @@ function formatDefaultValue(setting: ConfigSetting): string {
   return setting.defaultValue !== undefined ? String(setting.defaultValue) : "unset";
 }
 
-function wrapText(text: string, indent: string, maxWidth = 88): string[] {
+function wrapText(text: string, indent: string, maxWidth = TERMINAL_HELP_WIDTH): string[] {
   const words = text.split(/\s+/);
   const lines: string[] = [];
   let line = indent;
+  const contentWidth = maxWidth - indent.length;
 
   for (const word of words) {
+    if (word.length > contentWidth) {
+      if (line !== indent) {
+        lines.push(line);
+        line = indent;
+      }
+      for (let index = 0; index < word.length; index += contentWidth) {
+        lines.push(`${indent}${word.slice(index, index + contentWidth)}`);
+      }
+      continue;
+    }
+
     const separator = line === indent ? "" : " ";
     if (line.length + separator.length + word.length > maxWidth && line !== indent) {
       lines.push(line);

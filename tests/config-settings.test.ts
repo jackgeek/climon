@@ -6,6 +6,7 @@ import {
   buildDefaultConfigFromSettings,
   coerceConfigValueFromSettings,
   findConfigSetting,
+  renderConfigSettingsHelp,
   renderConfigSettingsTable
 } from "../src/config-settings.js";
 
@@ -113,5 +114,25 @@ describe("config settings registry", () => {
     expect(table).toContain("| `remote.tunnelToken` | string | unset | client | Stores the dev tunnel connect token");
     expect(table).toContain("sensitive");
     expect(table).toContain("internal");
+  });
+
+  test("wraps long purpose tokens in terminal help", () => {
+    CONFIG_SETTINGS.push({
+      path: "test.longToken",
+      type: "string",
+      purpose: `Prefix ${"x".repeat(120)} suffix`,
+      scope: ["client"]
+    });
+    try {
+      const help = renderConfigSettingsHelp();
+      const overwideLines = help
+        .split("\n")
+        .filter((line) => line.trim().startsWith("x"))
+        .filter((line) => line.length > 88);
+
+      expect(overwideLines).toEqual([]);
+    } finally {
+      CONFIG_SETTINGS.pop();
+    }
   });
 });
