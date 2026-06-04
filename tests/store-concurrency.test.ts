@@ -189,6 +189,26 @@ describe("patchSessionMeta concurrency", () => {
     35_000
   );
 
+  test(
+    "patchSessionMeta recovers a stale lock with malformed owner metadata",
+    async () => {
+      const id = "stale-malformed-owner";
+      await writeSessionMeta(baseMeta(id), env);
+      const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+      await mkdir(lockPath);
+      await writeFile(join(lockPath, "owner.json"), "{not-json");
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lockPath, old, old);
+
+      await patchSessionMeta(id, { daemonPid: 5678 }, env);
+
+      const meta = await readSessionMeta(id, env);
+      expect(meta?.daemonPid).toBe(5678);
+      expect(existsSync(lockPath)).toBe(false);
+    },
+    35_000
+  );
+
   test("fresh live locks are preserved when acquisition times out", async () => {
     const id = "fresh-live-owner";
     await writeSessionMeta(baseMeta(id), env);
