@@ -51,6 +51,10 @@ export interface TerminalConfig {
 
 export interface RemoteConfig {
   enabled?: boolean;
+  /** Direct remote uplink host for same-machine or LAN setups. */
+  host?: string;
+  /** Host address where the dashboard-side ingest daemon should listen. */
+  ingestHost?: string;
   /** Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect`. */
   tunnelId?: string;
   /** `connect`-scoped dev tunnel access token, supplied via DEVTUNNEL_ACCESS_TOKEN. */
