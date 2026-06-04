@@ -244,7 +244,7 @@ describe("runConfigCommand", () => {
     expect(stderrOutput).toContain("config.json.bak");
   });
 
-  test("prints registry-driven config help", () => {
+  test("prints registry-driven config help in terminal-friendly plain text", () => {
     const out: string[] = [];
     const original = process.stdout.write.bind(process.stdout);
     process.stdout.write = (chunk: string) => {
@@ -261,10 +261,15 @@ describe("runConfigCommand", () => {
     expect(printed).toContain("climon config <key>");
     expect(printed).toContain("config.jsonc");
     expect(printed).toContain("Legacy config.json files");
-    expect(printed).toContain("| `session.color` | string | `auto` |");
-    expect(printed).toContain("client, daemon, server");
-    expect(printed).toContain("sensitive");
-    expect(printed).toContain("internal");
+    expect(printed).not.toContain("| Path | Type | Default | Scope | Description |");
+    expect(printed).not.toContain("|------|------|---------|-------|-------------|");
+    expect(printed).toContain("  session.color");
+    expect(printed).toContain("    Type: string; Default: auto; Scope: client, daemon, server");
+    expect(printed).toContain("    Specifies the default accent color");
+    expect(printed).toContain("  remote.tunnelToken");
+    expect(printed).toContain("    Type: string; Default: unset; Scope: client; sensitive");
+    expect(printed).toContain("  version");
+    expect(printed).toContain("    Type: number; Default: 1; Scope: client, daemon, server; internal");
   });
 
   test("prints config help with short help flag", () => {

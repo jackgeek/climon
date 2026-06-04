@@ -8,7 +8,7 @@ import {
   writeConfigSetting,
   type WriteScope
 } from "../config.js";
-import { renderConfigSettingsTable } from "../config-settings.js";
+import { renderConfigSettingsHelp } from "../config-settings.js";
 
 export type ConfigAction =
   | { action: "help" }
@@ -52,7 +52,7 @@ Configuration files and cascade:
 
 Settings:
 
-${renderConfigSettingsTable()}
+${renderConfigSettingsHelp()}
 `;
 }
 

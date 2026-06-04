@@ -283,3 +283,50 @@ export function renderConfigSettingsTable(): string {
 
   return lines.join("\n");
 }
+
+function formatDefaultValue(setting: ConfigSetting): string {
+  return setting.defaultValue !== undefined ? String(setting.defaultValue) : "unset";
+}
+
+function wrapText(text: string, indent: string, maxWidth = 88): string[] {
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let line = indent;
+
+  for (const word of words) {
+    const separator = line === indent ? "" : " ";
+    if (line.length + separator.length + word.length > maxWidth && line !== indent) {
+      lines.push(line);
+      line = `${indent}${word}`;
+    } else {
+      line = `${line}${separator}${word}`;
+    }
+  }
+
+  if (line !== indent) lines.push(line);
+  return lines;
+}
+
+/**
+ * Renders config settings for terminal help output.
+ */
+export function renderConfigSettingsHelp(): string {
+  const lines: string[] = [];
+
+  for (const setting of CONFIG_SETTINGS) {
+    const metadata = [
+      `Type: ${setting.type}`,
+      `Default: ${formatDefaultValue(setting)}`,
+      `Scope: ${setting.scope.join(", ")}`
+    ];
+    if (setting.sensitive) metadata.push("sensitive");
+    if (setting.internal) metadata.push("internal");
+
+    lines.push(`  ${setting.path}`);
+    lines.push(`    ${metadata.join("; ")}`);
+    lines.push(...wrapText(setting.purpose, "    "));
+    lines.push("");
+  }
+
+  return lines.join("\n").trimEnd();
+}
