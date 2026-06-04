@@ -18,6 +18,7 @@ import {
 } from "@fluentui/react-icons";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
+import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { clampSizeMenuLabel, toggleViewMode } from "../view-mode.js";
@@ -92,6 +93,18 @@ const useStyles = makeStyles({
 });
 
 export const remotesMenuLabel = "Remotes (experimental)…";
+export const tunnelLinkMenuLabel = "Tunnel Link";
+export const closeTunnelLinkMenuLabel = "Close Tunnel Link";
+
+export function shouldShowTunnelLink(status: Pick<DashboardTunnelStatus, "devtunnelAvailable"> | null): boolean {
+  return status?.devtunnelAvailable === true;
+}
+
+export function shouldShowCloseTunnelLink(
+  status: Pick<DashboardTunnelStatus, "devtunnelAvailable" | "running"> | null
+): boolean {
+  return status?.devtunnelAvailable === true && status.running === true;
+}
 
 interface Props {
   sessions: SessionMeta[];
@@ -106,6 +119,9 @@ interface Props {
   onNewFrom: (session: SessionMeta) => void;
   onEdit: (session: SessionMeta) => void;
   onManageRemote: () => void;
+  tunnelLinkStatus: DashboardTunnelStatus | null;
+  onTunnelLink: () => void;
+  onCloseTunnelLink: () => void;
   viewMode: TerminalResizeMode;
   onViewModeChange: (mode: TerminalResizeMode) => void;
   onMaximize: (id: string) => void;
@@ -124,6 +140,9 @@ export function Sidebar({
   onNewFrom,
   onEdit,
   onManageRemote,
+  tunnelLinkStatus,
+  onTunnelLink,
+  onCloseTunnelLink,
   viewMode,
   onViewModeChange,
   onMaximize
@@ -162,6 +181,12 @@ export function Sidebar({
                   {viewMode === "clamped" ? "✓ " : ""}
                   {clampSizeMenuLabel}
                 </MenuItem>
+                {shouldShowTunnelLink(tunnelLinkStatus) && (
+                  <MenuItem onClick={onTunnelLink}>{tunnelLinkMenuLabel}</MenuItem>
+                )}
+                {shouldShowCloseTunnelLink(tunnelLinkStatus) && (
+                  <MenuItem onClick={onCloseTunnelLink}>{closeTunnelLinkMenuLabel}</MenuItem>
+                )}
                 <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>
               </MenuList>
             </MenuPopover>

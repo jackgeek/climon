@@ -32,6 +32,7 @@ import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManua
 import { connectSessionSocket } from "../session-socket.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
+import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 import { resolveSessionDefaults } from "../launcher.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
@@ -423,6 +424,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   if (options.port !== undefined) {
     config.server.port = options.port;
   }
+  const dashboardTunnel = createDashboardTunnelManager({ port: config.server.port });
   config.server.host = "127.0.0.1";
   await saveConfig(config);
 
@@ -610,6 +612,45 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
           canHost: state?.canHost ?? detect.available
         });
+      }
+
+      if (url.pathname === "/api/dashboard-tunnel/status" && request.method === "GET") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        return Response.json(await dashboardTunnel.status());
+      }
+
+      if (url.pathname === "/api/dashboard-tunnel" && request.method === "POST") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        try {
+          return Response.json(await dashboardTunnel.ensure());
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Tunnel Link error";
+          return new Response(message, { status: message === dashboardTunnelAuthMessage ? 401 : 500 });
+        }
+      }
+
+      if (url.pathname === "/api/dashboard-tunnel" && request.method === "DELETE") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type") ?? "application/json",
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        try {
+          await dashboardTunnel.close();
+          return new Response(null, { status: 204 });
+        } catch (error) {
+          return new Response(error instanceof Error ? error.message : "Tunnel Link error", { status: 500 });
+        }
       }
 
       if (url.pathname === "/api/remote/tunnel" && request.method === "POST") {
