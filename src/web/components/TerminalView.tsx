@@ -16,6 +16,44 @@ import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from ".
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
+interface Disposable {
+  dispose: () => void;
+}
+
+interface ParserTerminal {
+  parser: {
+    registerCsiHandler: (
+      id: { prefix?: string; final: string },
+      callback: (params: (number | number[])[]) => boolean
+    ) => Disposable;
+  };
+}
+
+const ALTERNATE_SCREEN_MODES = new Set([47, 1047, 1049]);
+
+export const terminalOptions = {
+  allowProposedApi: true,
+  cursorBlink: true,
+  fontFamily: "ui-monospace, monospace",
+  fontSize: 13,
+  scrollback: 10_000,
+  theme: { background: "#0d1117" }
+} as const;
+
+export function disableAlternateScreenBuffer(term: ParserTerminal): Disposable[] {
+  const handleAlternateScreen = (params: (number | number[])[]): boolean =>
+    params.some((param) =>
+      Array.isArray(param)
+        ? param.some((value) => ALTERNATE_SCREEN_MODES.has(value))
+        : ALTERNATE_SCREEN_MODES.has(param)
+    );
+
+  return [
+    term.parser.registerCsiHandler({ prefix: "?", final: "h" }, handleAlternateScreen),
+    term.parser.registerCsiHandler({ prefix: "?", final: "l" }, handleAlternateScreen)
+  ];
+}
+
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
   refit: () => void;
@@ -135,11 +173,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       return;
     }
     const term = new Terminal({
-      cursorBlink: true,
-      fontFamily: "ui-monospace, monospace",
-      fontSize: fontSizeRef.current,
-      theme: { background: "#0d1117" }
+      ...terminalOptions,
+      fontSize: fontSizeRef.current
     });
+    const alternateScreenDisposables = disableAlternateScreenBuffer(term);
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
@@ -185,6 +222,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     return () => {
       window.removeEventListener("resize", onWindowResize);
+      for (const disposable of alternateScreenDisposables) {
+        disposable.dispose();
+      }
       dataDisposable.dispose();
       closeWs();
       term.dispose();
