@@ -151,7 +151,9 @@ export function scheduleTerminalRefit(
   if (!terminal) {
     return;
   }
-  requestFrame(() => terminal.refit());
+  requestFrame(() => {
+    requestFrame(() => terminal.refit());
+  });
 }
 
 interface MainHeaderProps {

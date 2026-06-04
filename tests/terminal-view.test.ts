@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import xterm from "@xterm/headless";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { disableAlternateScreenBuffer, TerminalView, terminalOptions } from "../src/web/components/TerminalView.js";
+import {
+  applyAuthoritativeTerminalSize,
+  applyTerminalFontSize,
+  disableAlternateScreenBuffer,
+  focusTerminalPane,
+  TerminalView,
+  terminalOptions
+} from "../src/web/components/TerminalView.js";
 
 const { Terminal } = xterm;
 
@@ -29,6 +36,49 @@ describe("TerminalView", () => {
 
   test("keeps enough terminal scrollback for long-running command output", () => {
     expect(terminalOptions.scrollback).toBeGreaterThanOrEqual(10_000);
+  });
+
+  test("focuses xterm when the terminal pane is clicked", () => {
+    let calls = 0;
+
+    focusTerminalPane({ focus: () => calls++ });
+
+    expect(calls).toBe(1);
+  });
+
+  test("does not refit after an authoritative daemon size changes the browser terminal grid", () => {
+    const resizedTo: Array<{ cols: number; rows: number }> = [];
+
+    applyAuthoritativeTerminalSize(
+      {
+        cols: 80,
+        rows: 24,
+        resize: (cols: number, rows: number) => resizedTo.push({ cols, rows })
+      },
+      120,
+      40
+    );
+
+    expect(resizedTo).toEqual([{ cols: 120, rows: 40 }]);
+  });
+
+  test("redraws terminal history when the font size changes", () => {
+    const refreshed: Array<{ start: number; end: number }> = [];
+    let cleared = 0;
+    let refits = 0;
+    const term = {
+      options: { fontSize: 13 },
+      rows: 24,
+      clearTextureAtlas: () => cleared++,
+      refresh: (start: number, end: number) => refreshed.push({ start, end })
+    };
+
+    applyTerminalFontSize(term, 14, () => refits++);
+
+    expect(term.options.fontSize).toBe(14);
+    expect(cleared).toBe(1);
+    expect(refreshed).toEqual([{ start: 0, end: 23 }]);
+    expect(refits).toBe(1);
   });
 
   test("keeps browser history scrollable when a command uses the alternate screen", async () => {
