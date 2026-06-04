@@ -46,6 +46,19 @@ describe("parseConfigArgs", () => {
     expect(parseConfigArgs(["--debug"])).toEqual({ action: "debug" });
     expect(() => parseConfigArgs(["--debug", "remote.port"])).toThrow(/without other config arguments/);
   });
+
+  test("rejects help combined with scope flags", () => {
+    expect(() => parseConfigArgs(["--local", "--help"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--global", "--help"])).toThrow(/without other config arguments/);
+  });
+
+  test("rejects help combined with positional arguments", () => {
+    expect(() => parseConfigArgs(["--help", "remote.port"])).toThrow(/without other config/);
+  });
+
+  test("rejects help combined with unset", () => {
+    expect(() => parseConfigArgs(["--help", "--unset", "remote.port"])).toThrow(/without other config/);
+  });
 });
 
 describe("runConfigCommand", () => {
@@ -272,5 +285,15 @@ describe("runConfigCommand", () => {
   test("rejects internal registry keys for get and set", () => {
     expect(runConfigCommand(["version"], env(), root)).toBe(2);
     expect(runConfigCommand(["remote.clientId", "client-1"], env(), root)).toBe(2);
+  });
+
+  test("rejects help with scope flags", () => {
+    expect(runConfigCommand(["--global", "--help"], env(), root)).toBe(2);
+    expect(runConfigCommand(["--local", "--help"], env(), root)).toBe(2);
+  });
+
+  test("rejects help with other operations", () => {
+    expect(runConfigCommand(["--help", "--unset", "remote.port"], env(), root)).toBe(2);
+    expect(runConfigCommand(["--help", "remote.port"], env(), root)).toBe(2);
   });
 });

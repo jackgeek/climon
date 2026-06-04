@@ -73,7 +73,7 @@ export function parseConfigArgs(argv: string[]): ConfigAction {
     else positional.push(arg);
   }
   if (help) {
-    if (debug || list || unset || positional.length > 0) {
+    if (scope !== "auto" || debug || list || unset || positional.length > 0) {
       throw new Error("Use `climon config --help` without other config arguments.");
     }
     return { action: "help" };
