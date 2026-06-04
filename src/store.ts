@@ -194,6 +194,20 @@ function isSamePatchLockSnapshot(
 }
 
 async function releasePatchLock(lockPath: string, instance: PatchLockInstance): Promise<void> {
+  let currentIdentity: PatchLockIdentity;
+  try {
+    currentIdentity = await getPatchLockIdentity(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const currentOwner = await readPatchLockOwner(lockPath);
+  if (!isSamePatchLockIdentity(currentIdentity, instance.identity) || !isSamePatchLockOwner(currentOwner, instance.owner)) {
+    return;
+  }
+
   const releasePath = `${lockPath}.release-${process.pid}-${Date.now()}-${tempCounter++}`;
   try {
     await rename(lockPath, releasePath);
@@ -203,9 +217,17 @@ async function releasePatchLock(lockPath: string, instance: PatchLockInstance): 
       return;
     }
     if (code === "EACCES" || code === "EPERM") {
-      const currentIdentity = await getPatchLockIdentity(lockPath);
-      const currentOwner = await readPatchLockOwner(lockPath);
-      if (isSamePatchLockIdentity(currentIdentity, instance.identity) && isSamePatchLockOwner(currentOwner, instance.owner)) {
+      let retryIdentity: PatchLockIdentity;
+      try {
+        retryIdentity = await getPatchLockIdentity(lockPath);
+      } catch (retryError) {
+        if ((retryError as NodeJS.ErrnoException).code === "ENOENT") {
+          return;
+        }
+        throw retryError;
+      }
+      const retryOwner = await readPatchLockOwner(lockPath);
+      if (isSamePatchLockIdentity(retryIdentity, instance.identity) && isSamePatchLockOwner(retryOwner, instance.owner)) {
         await rm(lockPath, { recursive: true, force: true });
       }
       return;

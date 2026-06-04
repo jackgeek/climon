@@ -280,7 +280,7 @@ describe("patchSessionMeta concurrency", () => {
     expect(existsSync(recoveryLockPath)).toBe(false);
   });
 
-  test("release mismatch leaves a newly acquired live lock at the original path", async () => {
+  test("release mismatch with a different owner token leaves the replacement live lock at the original path", async () => {
     const id = "release-mismatch-new-live-lock";
     await writeSessionMeta(baseMeta(id), env);
     const lockPath = `${getSessionMetaPath(id, env)}.lock`;
@@ -296,26 +296,15 @@ describe("patchSessionMeta concurrency", () => {
       })
     );
 
-    let liveIdentity: { dev: number; ino: number } | undefined;
-    const resetHooks = setPatchLockTestHooksForTest({
-      afterReleaseRename: async () => {
-        await mkdir(lockPath);
-        const liveStat = await stat(lockPath);
-        liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
-      }
-    });
-    try {
-      await release();
-    } finally {
-      resetHooks();
-    }
+    const liveStat = await stat(lockPath);
+    const liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
 
-    expect(liveIdentity).toBeDefined();
-    if (!liveIdentity) {
-      throw new Error("test hook did not create a replacement lock");
-    }
+    await release();
+
     const finalStat = await stat(lockPath);
     expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("replacement-owner");
   });
 
   test("stale quarantine mismatch leaves a newly acquired live lock at the original path", async () => {
@@ -367,28 +356,7 @@ describe("patchSessionMeta concurrency", () => {
     expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
   });
 
-  test("release mismatch with a different owner token frees the original lock path", async () => {
-    const id = "release-owner-token";
-    await writeSessionMeta(baseMeta(id), env);
-    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
-
-    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5 });
-    await rm(lockPath, { recursive: true, force: true });
-    await mkdir(lockPath);
-    await writeFile(
-      join(lockPath, "owner.json"),
-      JSON.stringify({
-        ...(await lockOwner(process.pid)),
-        token: "replacement-owner"
-      })
-    );
-
-    await release();
-
-    expect(existsSync(lockPath)).toBe(false);
-  });
-
-  test("release ownership change during release frees the original lock path", async () => {
+  test("release identity mismatch with the same owner token leaves the replacement live lock at the original path", async () => {
     const id = "release-owner-token-race";
     await writeSessionMeta(baseMeta(id), env);
     const lockPath = `${getSessionMetaPath(id, env)}.lock`;
@@ -404,9 +372,58 @@ describe("patchSessionMeta concurrency", () => {
         token: owner.token
       })
     );
+    const liveStat = await stat(lockPath);
+    const liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
 
     await release();
 
-    expect(existsSync(lockPath)).toBe(false);
+    const finalStat = await stat(lockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe(owner.token);
+  });
+
+  test("release ownership change after rename leaves a newly acquired live lock at the original path", async () => {
+    const id = "release-owner-token-post-rename-race";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5 });
+    let liveIdentity: { dev: number; ino: number } | undefined;
+    const resetHooks = setPatchLockTestHooksForTest({
+      afterReleaseRename: async ({ releasePath }) => {
+        await writeFile(
+          join(releasePath, "owner.json"),
+          JSON.stringify({
+            ...(await lockOwner(process.pid)),
+            token: "changed-after-release-rename"
+          })
+        );
+        await mkdir(lockPath);
+        await writeFile(
+          join(lockPath, "owner.json"),
+          JSON.stringify({
+            ...(await lockOwner(process.pid)),
+            token: "replacement-owner"
+          })
+        );
+        const liveStat = await stat(lockPath);
+        liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
+      }
+    });
+    try {
+      await release();
+    } finally {
+      resetHooks();
+    }
+
+    expect(liveIdentity).toBeDefined();
+    if (!liveIdentity) {
+      throw new Error("test hook did not create a replacement lock");
+    }
+    const finalStat = await stat(lockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("replacement-owner");
   });
 });
