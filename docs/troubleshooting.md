@@ -44,6 +44,25 @@ LAN access is off by default. Start the server with `--lan` and append the
 printed `?token=<token>` to the URL. Without `--lan`, only `127.0.0.1`/`::1` are
 allowed.
 
+## Remote dev tunnel sessions do not appear
+
+Run the diagnostics script on each side and compare where the chain breaks. The
+scripts are read-only and redact tunnel tokens.
+
+On the home server:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\diagnostics\Collect-ClimonHomeDiagnostics.ps1
+```
+
+On the devbox:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\diagnostics\Collect-ClimonDevboxDiagnostics.ps1
+```
+
+Add `-Json` to either command if you want structured output to share or diff.
+
 ## Windows: interactive sessions don't work
 
 Bun's PTY (`Bun.Terminal`) is POSIX-only. On Windows, run climon inside **WSL**
