@@ -13,6 +13,7 @@ import { KeyBar } from "./components/KeyBar.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
+import { useAttentionAlerts } from "./attentionAlerts.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 
 const useStyles = makeStyles({
@@ -167,6 +168,8 @@ export function App() {
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
   const swipeStartRef = useRef<{ x: number; y: number; fromRightEdge: boolean } | null>(null);
+
+  useAttentionAlerts(sessions);
 
   // Subscribe to live session updates and load the initial list.
   useEffect(() => {
