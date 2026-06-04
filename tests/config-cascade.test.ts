@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   candidateConfigDirs,
   coerceConfigValue,
+  listExistingConfigFiles,
   resolveConfigSetting,
   unsetConfigSetting,
   writeConfigSetting
@@ -109,6 +110,36 @@ describe("config cascade", () => {
     const cfg = await loadConfig(env());
     expect(cfg.version).toBe(1);
     expect(cfg.server.host).toBe("127.0.0.1");
+  });
+});
+
+describe("listExistingConfigFiles", () => {
+  test("lists canonical and legacy config files from cwd ancestors then home", () => {
+    const repo = join(root, "work", "repo");
+    const nested = join(repo, "src", "app");
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(join(repo, ".climon"), { recursive: true });
+    mkdirSync(join(root, "work", ".climon"), { recursive: true });
+    mkdirSync(join(home, ".climon"), { recursive: true });
+
+    writeFileSync(join(repo, ".climon", "config.jsonc"), "{}");
+    writeFileSync(join(repo, ".climon", "config.json"), "{}");
+    writeFileSync(join(root, "work", ".climon", "config.json"), "{}");
+    writeFileSync(join(home, ".climon", "config.jsonc"), "{}");
+
+    expect(listExistingConfigFiles(env(), nested)).toEqual([
+      join(repo, ".climon", "config.jsonc"),
+      join(repo, ".climon", "config.json"),
+      join(root, "work", ".climon", "config.json"),
+      join(home, ".climon", "config.jsonc")
+    ]);
+  });
+
+  test("returns an empty array when no cascade config files exist", () => {
+    const repo = join(root, "repo");
+    mkdirSync(repo, { recursive: true });
+
+    expect(listExistingConfigFiles(env(), repo)).toEqual([]);
   });
 });
 

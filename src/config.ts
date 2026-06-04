@@ -239,6 +239,20 @@ export function candidateConfigDirs(
   return dirs;
 }
 
+export function listExistingConfigFiles(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): string[] {
+  const files: string[] = [];
+  for (const dir of candidateConfigDirs(env, cwd)) {
+    const canonical = getConfigPathForDir(dir);
+    if (existsSync(canonical)) files.push(canonical);
+    const legacy = getLegacyConfigPathForDir(dir);
+    if (existsSync(legacy)) files.push(legacy);
+  }
+  return files;
+}
+
 function readSparseConfig(dir: string): Record<string, unknown> {
   try {
     const configPath = existingConfigPathForDir(dir);
