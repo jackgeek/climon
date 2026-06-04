@@ -39,6 +39,15 @@ interface ResizableTerminal {
   resize: (cols: number, rows: number) => void;
 }
 
+interface FontResizableTerminal {
+  options: {
+    fontSize?: number;
+  };
+  rows: number;
+  clearTextureAtlas: () => void;
+  refresh: (start: number, end: number) => void;
+}
+
 const ALTERNATE_SCREEN_MODES = new Set([47, 1047, 1049]);
 
 export const terminalOptions = {
@@ -81,6 +90,13 @@ export function applyAuthoritativeTerminalSize(
   } catch {
     // Ignore invalid sizes.
   }
+}
+
+export function applyTerminalFontSize(term: FontResizableTerminal, fontSize: number, refit: () => void): void {
+  term.options.fontSize = fontSize;
+  term.clearTextureAtlas();
+  term.refresh(0, Math.max(term.rows - 1, 0));
+  refit();
 }
 
 export interface TerminalHandle {
@@ -236,8 +252,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       const next = Math.min(32, Math.max(8, fontSizeRef.current + delta));
       if (next !== fontSizeRef.current) {
         fontSizeRef.current = next;
-        term.options.fontSize = next;
-        refit();
+        applyTerminalFontSize(term, next, refit);
       }
       return false;
     });

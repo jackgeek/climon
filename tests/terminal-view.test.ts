@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   applyAuthoritativeTerminalSize,
+  applyTerminalFontSize,
   disableAlternateScreenBuffer,
   focusTerminalPane,
   TerminalView,
@@ -59,6 +60,25 @@ describe("TerminalView", () => {
     );
 
     expect(resizedTo).toEqual([{ cols: 120, rows: 40 }]);
+  });
+
+  test("redraws terminal history when the font size changes", () => {
+    const refreshed: Array<{ start: number; end: number }> = [];
+    let cleared = 0;
+    let refits = 0;
+    const term = {
+      options: { fontSize: 13 },
+      rows: 24,
+      clearTextureAtlas: () => cleared++,
+      refresh: (start: number, end: number) => refreshed.push({ start, end })
+    };
+
+    applyTerminalFontSize(term, 14, () => refits++);
+
+    expect(term.options.fontSize).toBe(14);
+    expect(cleared).toBe(1);
+    expect(refreshed).toEqual([{ start: 0, end: 23 }]);
+    expect(refits).toBe(1);
   });
 
   test("keeps browser history scrollable when a command uses the alternate screen", async () => {
