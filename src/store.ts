@@ -70,7 +70,9 @@ type PatchLockInstance = {
 
 type PatchLockSnapshot = {
   identity: PatchLockIdentity;
+  mtimeMs: number;
   owner: Partial<PatchLockOwner> | undefined;
+  ownerRaw: string | undefined;
 };
 
 type PatchLockTestHooks = {
@@ -188,9 +190,24 @@ async function getPatchLockIdentity(lockPath: string): Promise<PatchLockIdentity
 
 async function getPatchLockSnapshot(lockPath: string): Promise<PatchLockSnapshot | undefined> {
   try {
-    const identity = await getPatchLockIdentity(lockPath);
-    const owner = await readPatchLockOwner(lockPath);
-    return { identity, owner };
+    const lockStat = await stat(lockPath);
+    let ownerRaw: string | undefined;
+    let owner: Partial<PatchLockOwner> | undefined;
+    try {
+      ownerRaw = await readFile(join(lockPath, PATCH_LOCK_OWNER_FILE), "utf8");
+      try {
+        owner = JSON.parse(ownerRaw) as Partial<PatchLockOwner>;
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) {
+          throw error;
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    return { identity: { dev: lockStat.dev, ino: lockStat.ino }, mtimeMs: lockStat.mtimeMs, owner, ownerRaw };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -227,6 +244,7 @@ function isSamePatchLockReclaimSnapshot(
     actual !== undefined &&
     expected !== undefined &&
     isSamePatchLockIdentity(actual.identity, expected.identity) &&
+    actual.ownerRaw === expected.ownerRaw &&
     isSamePatchLockSnapshot(actual.owner, expected.owner)
   );
 }
@@ -294,37 +312,22 @@ async function isSamePidScope(owner: { hostname?: unknown; platform?: unknown; p
   return owner.pidNamespace === undefined;
 }
 
-async function isPatchLockStale(lockPath: string, staleMs: number): Promise<boolean> {
+async function isPatchLockSnapshotStale(snapshot: PatchLockSnapshot, staleMs: number): Promise<boolean> {
   const now = Date.now();
-  let lockStat;
-  try {
-    lockStat = await stat(lockPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
+  const owner = snapshot.owner;
+  const pid = typeof owner?.pid === "number" ? owner.pid : NaN;
+  const createdAtMs = typeof owner?.createdAt === "string" ? Date.parse(owner.createdAt) : NaN;
+  if (owner && Number.isInteger(pid) && pid > 0 && (await isSamePidScope(owner))) {
+    if (!isProcessAlive(pid)) {
+      return true;
     }
-    throw error;
-  }
-
-  try {
-    const raw = await readFile(join(lockPath, PATCH_LOCK_OWNER_FILE), "utf8");
-    const owner = JSON.parse(raw) as Partial<PatchLockOwner>;
-    const pid = typeof owner.pid === "number" ? owner.pid : NaN;
-    const createdAtMs = typeof owner.createdAt === "string" ? Date.parse(owner.createdAt) : NaN;
-    if (Number.isInteger(pid) && pid > 0 && (await isSamePidScope(owner))) {
-      if (!isProcessAlive(pid)) {
-        return true;
-      }
-      const currentStartTime = await getProcessStartTime(pid);
-      if (owner.processStartTime && currentStartTime && owner.processStartTime !== currentStartTime) {
-        return true;
-      }
-      return false;
+    const currentStartTime = await getProcessStartTime(pid);
+    if (owner.processStartTime && currentStartTime && owner.processStartTime !== currentStartTime) {
+      return true;
     }
-    return (Number.isFinite(createdAtMs) ? now - createdAtMs : now - lockStat.mtimeMs) > staleMs;
-  } catch {
-    return now - lockStat.mtimeMs > staleMs;
+    return false;
   }
+  return (Number.isFinite(createdAtMs) ? now - createdAtMs : now - snapshot.mtimeMs) > staleMs;
 }
 
 async function claimPatchLockForReclaim(lockPath: string): Promise<PatchLockOwner | undefined> {
@@ -361,12 +364,16 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
   if (!staleSnapshot) {
     return false;
   }
-  if (!(await isPatchLockStale(lockPath, staleMs))) {
+  if (!(await isPatchLockSnapshotStale(staleSnapshot, staleMs))) {
     return false;
   }
   await patchLockTestHooks.beforeQuarantineRename?.({ lockPath });
   const preRenameSnapshot = await getPatchLockSnapshot(lockPath);
-  if (!isSamePatchLockReclaimSnapshot(preRenameSnapshot, staleSnapshot) || !(await isPatchLockStale(lockPath, staleMs))) {
+  if (
+    !preRenameSnapshot ||
+    !isSamePatchLockReclaimSnapshot(preRenameSnapshot, staleSnapshot) ||
+    !(await isPatchLockSnapshotStale(preRenameSnapshot, staleMs))
+  ) {
     return false;
   }
   const reclaimClaim = await claimPatchLockForReclaim(lockPath);
@@ -380,7 +387,7 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
     const claimedSnapshot = await getPatchLockSnapshot(lockPath);
     if (
       !isSamePatchLockReclaimSnapshot(claimedSnapshot, preRenameSnapshot) ||
-      !(await isPatchLockStale(lockPath, staleMs)) ||
+      !(await isPatchLockSnapshotStale(preRenameSnapshot, staleMs)) ||
       !(await isSamePatchLockReclaimClaim(lockPath, reclaimClaim))
     ) {
       return false;
@@ -415,7 +422,7 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
   const quarantineSnapshot = await getPatchLockSnapshot(quarantinePath);
   if (
     !isSamePatchLockReclaimSnapshot(quarantineSnapshot, preRenameSnapshot) ||
-    !(await isPatchLockStale(quarantinePath, staleMs))
+    !(await isPatchLockSnapshotStale(preRenameSnapshot, staleMs))
   ) {
     return false;
   }

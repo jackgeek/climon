@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { mkdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, rm, stat, utimes, writeFile } from "node:fs/promises";
 import {
   acquireSessionMetaPatchLockForTest,
   patchSessionMeta,
@@ -169,6 +169,25 @@ describe("patchSessionMeta concurrency", () => {
     expect(meta?.daemonPid).toBe(1234);
     expect(existsSync(lockPath)).toBe(false);
   });
+
+  test(
+    "patchSessionMeta recovers a stale lock with missing owner metadata",
+    async () => {
+      const id = "stale-missing-owner";
+      await writeSessionMeta(baseMeta(id), env);
+      const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+      await mkdir(lockPath);
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lockPath, old, old);
+
+      await patchSessionMeta(id, { daemonPid: 2345 }, env);
+
+      const meta = await readSessionMeta(id, env);
+      expect(meta?.daemonPid).toBe(2345);
+      expect(existsSync(lockPath)).toBe(false);
+    },
+    35_000
+  );
 
   test("fresh live locks are preserved when acquisition times out", async () => {
     const id = "fresh-live-owner";
