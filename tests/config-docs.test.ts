@@ -97,4 +97,15 @@ describe("generated config docs", () => {
     expect(setup).not.toContain('"lan"');
     expect(setup).not.toContain('"token"');
   });
+
+  test("troubleshooting docs do not contain stale LAN/token references", () => {
+    const troubleshooting = readFileSync("docs/troubleshooting.md", "utf8");
+    
+    // Should not document removed --lan flag
+    expect(troubleshooting).not.toContain("climon server --lan");
+    
+    // Should not document removed ?token= query parameter behavior
+    expect(troubleshooting).not.toContain("?token=");
+    expect(troubleshooting).not.toContain("?token=<token>");
+  });
 });
