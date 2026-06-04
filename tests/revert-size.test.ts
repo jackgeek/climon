@@ -43,6 +43,43 @@ afterEach(async () => {
 });
 
 describe("PTY reverts to host size when the last viewer leaves", () => {
+  test("sends size and mode before replay when a viewer attaches", async () => {
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "console.log('ready'); setTimeout(()=>{},30000)"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    const meta = await waitFor(async () => {
+      const m = await readMeta(id).catch(() => undefined);
+      return m?.socketPath && isResolvedSessionSocketRef(m.socketPath) ? m : undefined;
+    });
+
+    const viewer = open(meta.socketPath);
+    const decoder = new FrameDecoder();
+    const frameTypes: FrameType[] = [];
+    viewer.on("data", (chunk) => {
+      for (const frame of decoder.push(chunk)) {
+        frameTypes.push(frame.type);
+      }
+    });
+    await new Promise((r) => viewer.once("connect", r));
+
+    await waitFor(async () => (frameTypes.length >= 3 ? true : undefined));
+
+    viewer.end();
+    const pid = (await readMeta(id)).daemonPid;
+    if (pid) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // already gone
+      }
+    }
+    proc.kill();
+    await proc.exited;
+    expect(frameTypes.slice(0, 3)).toEqual([FrameType.PtySize, FrameType.TerminalMode, FrameType.Replay]);
+  }, 30000);
+
   test("a viewer shrinks the PTY, then disconnects and it restores", async () => {
     const proc = Bun.spawn(
       [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],

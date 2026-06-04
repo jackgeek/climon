@@ -392,9 +392,9 @@ export async function runSessionDaemon(id: string): Promise<void> {
 
   const server: Server = createServer((socket) => {
     clients.add(socket);
-    socket.write(encodeFrame(FrameType.Replay, scrollback.snapshot()));
     socket.write(encodeJsonFrame(FrameType.PtySize, { cols: appliedCols, rows: appliedRows }));
     socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
+    socket.write(encodeFrame(FrameType.Replay, scrollback.snapshot()));
     if (exited && exitInfo) {
       socket.write(encodeJsonFrame(FrameType.Exit, exitInfo));
       socket.end();
