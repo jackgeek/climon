@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { mkdir, readlink, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import {
   acquireSessionMetaPatchLockForTest,
   patchSessionMeta,
@@ -259,5 +259,66 @@ describe("patchSessionMeta concurrency", () => {
 
     expect(existsSync(lockPath)).toBe(false);
     expect(existsSync(`${lockPath}.reclaim`)).toBe(true);
+  });
+
+  test("stale recovery locks are reclaimed before stale main lock recovery", async () => {
+    const id = "stale-recovery-lock";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const recoveryLockPath = `${lockPath}.reclaim`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+    await mkdir(recoveryLockPath);
+    await writeFile(join(recoveryLockPath, "owner.json"), JSON.stringify(await lockOwner(999999998)));
+
+    await patchSessionMeta(id, { daemonPid: 5678 }, env);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.daemonPid).toBe(5678);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(recoveryLockPath)).toBe(false);
+  });
+
+  test("release preserves a replaced live lock with a different owner token", async () => {
+    const id = "release-owner-token";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5 });
+    await rm(lockPath, { recursive: true, force: true });
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(process.pid)),
+        token: "replacement-owner"
+      })
+    );
+
+    await release();
+
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  test("release does not strand a replacement lock when ownership changes mid-release", async () => {
+    const id = "release-owner-token-race";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5 });
+    const owner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    await rm(lockPath, { recursive: true, force: true });
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(process.pid)),
+        token: owner.token
+      })
+    );
+
+    await release();
+
+    expect(existsSync(lockPath)).toBe(true);
   });
 });

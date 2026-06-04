@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
@@ -51,8 +52,19 @@ type PatchLockOwner = {
   createdAt: string;
   hostname: string;
   platform: NodeJS.Platform;
+  token: string;
   pidNamespace?: string;
   processStartTime?: string;
+};
+
+type PatchLockIdentity = {
+  dev: number;
+  ino: number;
+};
+
+type PatchLockInstance = {
+  identity: PatchLockIdentity;
+  owner: PatchLockOwner;
 };
 
 let currentPidNamespace: Promise<string | undefined> | undefined;
@@ -98,6 +110,7 @@ async function getCurrentPatchLockOwner(): Promise<PatchLockOwner> {
     createdAt: new Date().toISOString(),
     hostname: hostname(),
     platform: process.platform,
+    token: randomUUID(),
     ...(pidNamespace ? { pidNamespace } : {}),
     ...(processStartTime ? { processStartTime } : {})
   };
@@ -115,8 +128,84 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function writePatchLockOwner(lockPath: string): Promise<void> {
-  await writeFile(join(lockPath, PATCH_LOCK_OWNER_FILE), `${JSON.stringify(await getCurrentPatchLockOwner())}\n`);
+async function writePatchLockOwner(lockPath: string, owner: PatchLockOwner): Promise<void> {
+  await writeFile(join(lockPath, PATCH_LOCK_OWNER_FILE), `${JSON.stringify(owner)}\n`);
+}
+
+async function readPatchLockOwner(lockPath: string): Promise<Partial<PatchLockOwner> | undefined> {
+  try {
+    return JSON.parse(await readFile(join(lockPath, PATCH_LOCK_OWNER_FILE), "utf8")) as Partial<PatchLockOwner>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    if (error instanceof SyntaxError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function isSamePatchLockOwner(actual: Partial<PatchLockOwner> | undefined, expected: PatchLockOwner): boolean {
+  return actual?.token === expected.token;
+}
+
+function isSamePatchLockIdentity(actual: PatchLockIdentity, expected: PatchLockIdentity): boolean {
+  return actual.dev === expected.dev && actual.ino === expected.ino;
+}
+
+async function getPatchLockIdentity(lockPath: string): Promise<PatchLockIdentity> {
+  const lockStat = await stat(lockPath);
+  return { dev: lockStat.dev, ino: lockStat.ino };
+}
+
+function isSamePatchLockSnapshot(
+  actual: Partial<PatchLockOwner> | undefined,
+  expected: Partial<PatchLockOwner> | undefined
+): boolean {
+  if (!actual || !expected) {
+    return actual === expected;
+  }
+  if (typeof actual.token === "string" || typeof expected.token === "string") {
+    return actual.token === expected.token;
+  }
+  return (
+    actual.pid === expected.pid &&
+    actual.createdAt === expected.createdAt &&
+    actual.hostname === expected.hostname &&
+    actual.platform === expected.platform &&
+    actual.pidNamespace === expected.pidNamespace &&
+    actual.processStartTime === expected.processStartTime
+  );
+}
+
+async function releasePatchLock(lockPath: string, instance: PatchLockInstance): Promise<void> {
+  const releasePath = `${lockPath}.release-${process.pid}-${Date.now()}-${tempCounter++}`;
+  try {
+    await rename(lockPath, releasePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return;
+    }
+    if (code === "EACCES" || code === "EPERM") {
+      const currentIdentity = await getPatchLockIdentity(lockPath);
+      const currentOwner = await readPatchLockOwner(lockPath);
+      if (isSamePatchLockIdentity(currentIdentity, instance.identity) && isSamePatchLockOwner(currentOwner, instance.owner)) {
+        await rm(lockPath, { recursive: true, force: true });
+      }
+      return;
+    }
+    throw error;
+  }
+
+  const releaseIdentity = await getPatchLockIdentity(releasePath);
+  const releaseOwner = await readPatchLockOwner(releasePath);
+  if (!isSamePatchLockIdentity(releaseIdentity, instance.identity) || !isSamePatchLockOwner(releaseOwner, instance.owner)) {
+    await rename(releasePath, lockPath);
+    return;
+  }
+  await rm(releasePath, { recursive: true, force: true });
 }
 
 async function isSamePidScope(owner: { hostname?: unknown; platform?: unknown; pidNamespace?: unknown }): Promise<boolean> {
@@ -163,11 +252,52 @@ async function isPatchLockStale(lockPath: string, staleMs: number): Promise<bool
   }
 }
 
-async function recoverStalePatchLock(lockPath: string, staleMs: number): Promise<boolean> {
+async function quarantineStalePatchLock(lockPath: string, staleMs: number): Promise<boolean> {
+  let staleIdentity: PatchLockIdentity;
+  try {
+    staleIdentity = await getPatchLockIdentity(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  const staleOwner = await readPatchLockOwner(lockPath);
   if (!(await isPatchLockStale(lockPath, staleMs))) {
     return false;
   }
-  await rm(lockPath, { recursive: true, force: true });
+  let quarantinePath = "";
+  try {
+    while (true) {
+      quarantinePath = `${lockPath}.stale-${process.pid}-${Date.now()}-${tempCounter++}`;
+      try {
+        await rename(lockPath, quarantinePath);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST") {
+          continue;
+        }
+        throw error;
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  const quarantineIdentity = await getPatchLockIdentity(quarantinePath);
+  const quarantinedOwner = await readPatchLockOwner(quarantinePath);
+  if (
+    !isSamePatchLockIdentity(quarantineIdentity, staleIdentity) ||
+    !isSamePatchLockSnapshot(quarantinedOwner, staleOwner) ||
+    !(await isPatchLockStale(quarantinePath, staleMs))
+  ) {
+    await rename(quarantinePath, lockPath);
+    return false;
+  }
+  await rm(quarantinePath, { recursive: true, force: true });
   return true;
 }
 
@@ -175,22 +305,22 @@ async function acquirePatchLockRecoveryLock(lockPath: string, staleMs: number): 
   const recoveryLockPath = `${lockPath}${PATCH_LOCK_RECOVERY_SUFFIX}`;
   try {
     await mkdir(recoveryLockPath);
+    const owner = await getCurrentPatchLockOwner();
     try {
-      await writePatchLockOwner(recoveryLockPath);
+      await writePatchLockOwner(recoveryLockPath, owner);
     } catch (error) {
       await rm(recoveryLockPath, { recursive: true, force: true });
       throw error;
     }
+    const identity = await getPatchLockIdentity(recoveryLockPath);
     return async () => {
-      await rm(recoveryLockPath, { recursive: true, force: true });
+      await releasePatchLock(recoveryLockPath, { identity, owner });
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error;
     }
-    if (await isPatchLockStale(recoveryLockPath, staleMs)) {
-      await rm(recoveryLockPath, { recursive: true, force: true });
-    }
+    await quarantineStalePatchLock(recoveryLockPath, staleMs);
     return undefined;
   }
 }
@@ -205,8 +335,7 @@ async function isPatchLockRecoveryActive(lockPath: string, staleMs: number): Pro
     }
     throw error;
   }
-  if (await isPatchLockStale(recoveryLockPath, staleMs)) {
-    await rm(recoveryLockPath, { recursive: true, force: true });
+  if (await quarantineStalePatchLock(recoveryLockPath, staleMs)) {
     return false;
   }
   return true;
@@ -218,7 +347,7 @@ async function recoverStalePatchLockIfRecoveryOwner(lockPath: string, staleMs: n
     return false;
   }
   try {
-    return await recoverStalePatchLock(lockPath, staleMs);
+    return await quarantineStalePatchLock(lockPath, staleMs);
   } finally {
     await releaseRecoveryLock();
   }
@@ -245,14 +374,16 @@ async function acquirePatchLock(
         await sleep(retryMs);
         continue;
       }
+      const owner = await getCurrentPatchLockOwner();
       try {
-        await writePatchLockOwner(lockPath);
+        await writePatchLockOwner(lockPath, owner);
       } catch (error) {
         await rm(lockPath, { recursive: true, force: true });
         throw error;
       }
+      const identity = await getPatchLockIdentity(lockPath);
       return async () => {
-        await rm(lockPath, { recursive: true, force: true });
+        await releasePatchLock(lockPath, { identity, owner });
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
