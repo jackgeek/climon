@@ -170,6 +170,42 @@ describe("PATCH /api/sessions/:id status", () => {
     });
   }, 30000);
 
+  test("pauses an available session", async () => {
+    await withServer(async (base, env) => {
+      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-available", "available"), env);
+
+      const res = await patchStatus(base, "sess-available", "paused");
+
+      expect(res.status).toBe(200);
+      const persisted = await readSessionMeta("sess-available", env);
+      expect(persisted?.status).toBe("paused");
+    });
+  }, 30000);
+
+  test("pauses a needs-attention session", async () => {
+    await withServer(async (base, env) => {
+      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-attention", "needs-attention"), env);
+
+      const res = await patchStatus(base, "sess-attention", "paused");
+
+      expect(res.status).toBe(200);
+      const persisted = await readSessionMeta("sess-attention", env);
+      expect(persisted?.status).toBe("paused");
+    });
+  }, 30000);
+
+  test("keeps a paused session paused when pausing again", async () => {
+    await withServer(async (base, env) => {
+      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-paused-again", "paused"), env);
+
+      const res = await patchStatus(base, "sess-paused-again", "paused");
+
+      expect(res.status).toBe(200);
+      const persisted = await readSessionMeta("sess-paused-again", env);
+      expect(persisted?.status).toBe("paused");
+    });
+  }, 30000);
+
   test("resumes a paused session", async () => {
     await withServer(async (base, env) => {
       await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-paused", "paused"), env);
@@ -179,6 +215,30 @@ describe("PATCH /api/sessions/:id status", () => {
       expect(res.status).toBe(200);
       const persisted = await readSessionMeta("sess-paused", env);
       expect(persisted?.status).toBe("running");
+    });
+  }, 30000);
+
+  test("rejects pausing a failed session and leaves it failed", async () => {
+    await withServer(async (base, env) => {
+      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-failed", "failed"), env);
+
+      const res = await patchStatus(base, "sess-failed", "paused");
+
+      expect(res.status).toBe(400);
+      const persisted = await readSessionMeta("sess-failed", env);
+      expect(persisted?.status).toBe("failed");
+    });
+  }, 30000);
+
+  test("rejects resuming a disconnected session and leaves it disconnected", async () => {
+    await withServer(async (base, env) => {
+      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-disconnected", "disconnected"), env);
+
+      const res = await patchStatus(base, "sess-disconnected", "running");
+
+      expect(res.status).toBe(400);
+      const persisted = await readSessionMeta("sess-disconnected", env);
+      expect(persisted?.status).toBe("disconnected");
     });
   }, 30000);
 

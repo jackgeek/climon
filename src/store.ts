@@ -67,8 +67,14 @@ type PatchLockInstance = {
   owner: PatchLockOwner;
 };
 
+type PatchLockSnapshot = {
+  identity: PatchLockIdentity;
+  owner: Partial<PatchLockOwner> | undefined;
+};
+
 type PatchLockTestHooks = {
   afterReleaseRename?: (paths: { lockPath: string; releasePath: string }) => Promise<void> | void;
+  beforeQuarantineRename?: (paths: { lockPath: string }) => Promise<void> | void;
   afterQuarantineRename?: (paths: { lockPath: string; quarantinePath: string }) => Promise<void> | void;
 };
 
@@ -173,6 +179,19 @@ async function getPatchLockIdentity(lockPath: string): Promise<PatchLockIdentity
   return { dev: lockStat.dev, ino: lockStat.ino };
 }
 
+async function getPatchLockSnapshot(lockPath: string): Promise<PatchLockSnapshot | undefined> {
+  try {
+    const identity = await getPatchLockIdentity(lockPath);
+    const owner = await readPatchLockOwner(lockPath);
+    return { identity, owner };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function isSamePatchLockSnapshot(
   actual: Partial<PatchLockOwner> | undefined,
   expected: Partial<PatchLockOwner> | undefined
@@ -190,6 +209,18 @@ function isSamePatchLockSnapshot(
     actual.platform === expected.platform &&
     actual.pidNamespace === expected.pidNamespace &&
     actual.processStartTime === expected.processStartTime
+  );
+}
+
+function isSamePatchLockReclaimSnapshot(
+  actual: PatchLockSnapshot | undefined,
+  expected: PatchLockSnapshot | undefined
+): boolean {
+  return (
+    actual !== undefined &&
+    expected !== undefined &&
+    isSamePatchLockIdentity(actual.identity, expected.identity) &&
+    isSamePatchLockSnapshot(actual.owner, expected.owner)
   );
 }
 
@@ -290,17 +321,16 @@ async function isPatchLockStale(lockPath: string, staleMs: number): Promise<bool
 }
 
 async function quarantineStalePatchLock(lockPath: string, staleMs: number): Promise<boolean> {
-  let staleIdentity: PatchLockIdentity;
-  try {
-    staleIdentity = await getPatchLockIdentity(lockPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
-    }
-    throw error;
+  const staleSnapshot = await getPatchLockSnapshot(lockPath);
+  if (!staleSnapshot) {
+    return false;
   }
-  const staleOwner = await readPatchLockOwner(lockPath);
   if (!(await isPatchLockStale(lockPath, staleMs))) {
+    return false;
+  }
+  await patchLockTestHooks.beforeQuarantineRename?.({ lockPath });
+  const preRenameSnapshot = await getPatchLockSnapshot(lockPath);
+  if (!isSamePatchLockReclaimSnapshot(preRenameSnapshot, staleSnapshot) || !(await isPatchLockStale(lockPath, staleMs))) {
     return false;
   }
   let quarantinePath = "";
@@ -326,11 +356,9 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
   }
   await patchLockTestHooks.afterQuarantineRename?.({ lockPath, quarantinePath });
 
-  const quarantineIdentity = await getPatchLockIdentity(quarantinePath);
-  const quarantinedOwner = await readPatchLockOwner(quarantinePath);
+  const quarantineSnapshot = await getPatchLockSnapshot(quarantinePath);
   if (
-    !isSamePatchLockIdentity(quarantineIdentity, staleIdentity) ||
-    !isSamePatchLockSnapshot(quarantinedOwner, staleOwner) ||
+    !isSamePatchLockReclaimSnapshot(quarantineSnapshot, preRenameSnapshot) ||
     !(await isPatchLockStale(quarantinePath, staleMs))
   ) {
     return false;
