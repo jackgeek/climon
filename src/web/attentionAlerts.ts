@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import type { SessionMeta } from "../types.js";
 
 export interface AttentionAlert {
@@ -15,6 +15,7 @@ export interface TitleAdapter {
 
 export interface SoundAdapter {
   play: () => void | Promise<void>;
+  dispose?: () => void | Promise<void>;
 }
 
 export interface NotificationAdapter {
@@ -120,15 +121,17 @@ export function createAttentionAlertManager(options: AttentionAlertManagerOption
 
   function dispose(): void {
     title.set(baseTitle);
+    if (sound.dispose) {
+      safeCall(() => sound.dispose!());
+    }
   }
 
   return { update, dispose };
 }
 
 export function useAttentionAlerts(sessions: SessionMeta[], options?: AttentionAlertManagerOptions): void {
-  const optionsRef = useRef(options);
-  optionsRef.current = options;
-  const manager = useMemo(() => createAttentionAlertManager(optionsRef.current), []);
+  // Options are intentionally captured at mount; live adapter swapping is not supported.
+  const manager = useMemo(() => createAttentionAlertManager(options), []);
 
   useEffect(() => {
     manager.update(sessions);
@@ -195,6 +198,13 @@ function createWebAudioSoundAdapter(): SoundAdapter {
       gain.connect(ctx.destination);
       oscillator.start();
       oscillator.stop(ctx.currentTime + 0.2);
+    },
+    dispose: async () => {
+      if (audioContext) {
+        const ctx = audioContext;
+        audioContext = null;
+        await ctx.close();
+      }
     }
   };
 }

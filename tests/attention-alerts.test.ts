@@ -197,6 +197,47 @@ describe("createAttentionAlertManager", () => {
     ]);
   });
 
+  test("dispose restores title and calls sound.dispose when provided", () => {
+    let currentTitle = "climon";
+    let disposeCount = 0;
+    const manager = createAttentionAlertManager({
+      title: { get: () => currentTitle, set: (t) => { currentTitle = t; } },
+      sound: {
+        play: () => { soundCalls.push("play"); },
+        dispose: () => { disposeCount++; }
+      },
+      notifications: { notify: () => {} }
+    });
+    const soundCalls: string[] = [];
+    manager.update([session({ status: "needs-attention", attentionMatchedAt: "t1", name: "API" })]);
+    expect(currentTitle).toBe("climon (!1)");
+    manager.dispose();
+    expect(currentTitle).toBe("climon");
+    expect(disposeCount).toBe(1);
+  });
+
+  test("dispose restores title even when sound.dispose throws", () => {
+    let currentTitle = "climon";
+    const manager = createAttentionAlertManager({
+      title: { get: () => currentTitle, set: (t) => { currentTitle = t; } },
+      sound: {
+        play: () => {},
+        dispose: () => { throw new Error("audio close failed"); }
+      },
+      notifications: { notify: () => {} }
+    });
+    manager.update([session({ status: "needs-attention", attentionMatchedAt: "t1", name: "API" })]);
+    expect(() => manager.dispose()).not.toThrow();
+    expect(currentTitle).toBe("climon");
+  });
+
+  test("dispose works without sound.dispose (plain SoundAdapter)", () => {
+    const h = createHarness();
+    h.manager.update([session({ status: "needs-attention", attentionMatchedAt: "t1", name: "API" })]);
+    expect(() => h.manager.dispose()).not.toThrow();
+    expect(h.title()).toBe("climon");
+  });
+
   test("adapter errors do not prevent title updates", () => {
     let currentTitle = "climon";
     let soundCallCount = 0;
