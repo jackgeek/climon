@@ -11,6 +11,10 @@ describe("helpText", () => {
     expect(helpText).toContain("climon kill --all");
     expect(helpText).toContain("Kill or remove all active sessions");
   });
+
+  test("helpText points config users at config help", () => {
+    expect(helpText).toContain("climon config --help");
+  });
 });
 
 describe("parseArgs", () => {

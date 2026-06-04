@@ -230,4 +230,47 @@ describe("runConfigCommand", () => {
     const stderrOutput = stderr.join("");
     expect(stderrOutput).toContain("config.json.bak");
   });
+
+  test("prints registry-driven config help", () => {
+    const out: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk: string) => {
+      out.push(String(chunk));
+      return true;
+    };
+    try {
+      expect(runConfigCommand(["--help"], env(), root)).toBe(0);
+    } finally {
+      process.stdout.write = original;
+    }
+    const printed = out.join("");
+    expect(printed).toContain("Usage:");
+    expect(printed).toContain("climon config <key>");
+    expect(printed).toContain("config.jsonc");
+    expect(printed).toContain("Legacy config.json files");
+    expect(printed).toContain("| `session.color` | string | `auto` |");
+    expect(printed).toContain("client, daemon, server");
+    expect(printed).toContain("sensitive");
+    expect(printed).toContain("internal");
+  });
+
+  test("prints config help with short help flag", () => {
+    const out: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk: string) => {
+      out.push(String(chunk));
+      return true;
+    };
+    try {
+      expect(runConfigCommand(["-h"], env(), root)).toBe(0);
+    } finally {
+      process.stdout.write = original;
+    }
+    expect(out.join("")).toContain("climon config — inspect and update climon configuration");
+  });
+
+  test("rejects internal registry keys for get and set", () => {
+    expect(runConfigCommand(["version"], env(), root)).toBe(2);
+    expect(runConfigCommand(["remote.clientId", "client-1"], env(), root)).toBe(2);
+  });
 });
