@@ -44,6 +44,25 @@ The dashboard server binds to loopback (`127.0.0.1`/`::1`) only. For remote
 monitoring, use the dev tunnels integration (`climon tunnel`) or the direct
 Windows/WSL bridge. See `docs/usage.md` for details on remote session access.
 
+## Remote dev tunnel sessions do not appear
+
+Run the diagnostics script on each side and compare where the chain breaks. The
+scripts are read-only and redact tunnel tokens.
+
+On the home server:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\diagnostics\Collect-ClimonHomeDiagnostics.ps1
+```
+
+On the devbox:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\diagnostics\Collect-ClimonDevboxDiagnostics.ps1
+```
+
+Add `-Json` to either command if you want structured output to share or diff.
+
 ## Windows: interactive sessions don't work
 
 Bun's PTY (`Bun.Terminal`) is POSIX-only. On Windows, run climon inside **WSL**

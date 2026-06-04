@@ -79,6 +79,10 @@ climon kill <id>          # terminate a session and remove its metadata
   terminal shows a warning and the restore shortcut.
 - The list updates automatically as sessions change state (via Server-Sent
   Events).
+- When one or more sessions need attention, the browser tab title shows the
+  count as `climon (!N)`. For newly attentive sessions after the dashboard loads,
+  the page also attempts to play a short alert sound and show a browser
+  notification while the dashboard remains open.
 
 ## Creating sessions from the dashboard
 
@@ -103,6 +107,11 @@ remains — climon flags the session as `needs-attention` and bumps it to the to
 of the dashboard. As soon as the screen changes again the session reverts to
 `running`. Open it and type the response in the web terminal to unblock the
 command.
+
+Browser notifications use the message title `climon needs attention` and name
+the specific session in the body. Sound and browser notifications depend on the
+browser allowing notification permission and audio playback; the tab title count
+still updates when those browser features are blocked.
 
 Tune the idle window in `~/.climon/config.jsonc` under `attention.idleSeconds`;
 set it to `0` (or less) to disable static-screen detection. Detection runs only

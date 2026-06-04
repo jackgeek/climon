@@ -13,6 +13,8 @@ import { KeyBar } from "./components/KeyBar.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
+import { useAttentionAlerts } from "./attentionAlerts.js";
+import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 
 const useStyles = makeStyles({
@@ -91,6 +93,19 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: "13px"
   },
+  headerTitleContent: {
+    minWidth: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "8px",
+    maxWidth: "100%"
+  },
+  headerSessionName: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap"
+  },
   headerMeta: {
     flex: "0 0 auto",
     display: "flex",
@@ -136,7 +151,39 @@ export function scheduleTerminalRefit(
   if (!terminal) {
     return;
   }
-  requestFrame(() => terminal.refit());
+  requestFrame(() => {
+    requestFrame(() => terminal.refit());
+  });
+}
+
+interface MainHeaderProps {
+  activeSession: SessionMeta | null;
+  hidden: boolean;
+}
+
+export function MainHeader({ activeSession, hidden }: MainHeaderProps) {
+  const styles = useStyles();
+
+  return (
+    <div className={mergeClasses(styles.header, hidden && styles.hidden)}>
+      <Text className={styles.headerText}>
+        {activeSession ? (
+          <span className={styles.headerTitleContent}>
+            <span className={styles.headerSessionName}>{activeSession.name || activeSession.displayCommand}</span>
+            <StatusBadge status={activeSession.status} />
+          </span>
+        ) : (
+          <span className={styles.empty}>Select a session</span>
+        )}
+      </Text>
+      {activeSession && (
+        <span className={styles.headerMeta}>
+          <span title="Session id">{activeSession.id}</span>
+          {activeSession.clientVersion && <span title="Client version">v{activeSession.clientVersion}</span>}
+        </span>
+      )}
+    </div>
+  );
 }
 
 export function App() {
@@ -167,6 +214,8 @@ export function App() {
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
   const swipeStartRef = useRef<{ x: number; y: number; fromRightEdge: boolean } | null>(null);
+
+  useAttentionAlerts(sessions);
 
   // Subscribe to live session updates and load the initial list.
   useEffect(() => {
@@ -436,23 +485,7 @@ export function App() {
           !maximized && styles.mainHiddenMobile
         )}
       >
-        <div className={mergeClasses(styles.header, maximized && styles.hidden)}>
-          <Text className={styles.headerText}>
-            {activeSession ? (
-              activeSession.name || activeSession.displayCommand
-            ) : (
-              <span className={styles.empty}>Select a session</span>
-            )}
-          </Text>
-          {activeSession && (
-            <span className={styles.headerMeta}>
-              <span title="Session id">{activeSession.id}</span>
-              {activeSession.clientVersion && (
-                <span title="Client version">v{activeSession.clientVersion}</span>
-              )}
-            </span>
-          )}
-        </div>
+        <MainHeader activeSession={activeSession} hidden={maximized} />
         <TerminalView
           ref={terminalRef}
           session={activeSession}
