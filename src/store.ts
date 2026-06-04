@@ -67,6 +67,20 @@ type PatchLockInstance = {
   owner: PatchLockOwner;
 };
 
+type PatchLockTestHooks = {
+  afterReleaseRename?: (paths: { lockPath: string; releasePath: string }) => Promise<void> | void;
+  afterQuarantineRename?: (paths: { lockPath: string; quarantinePath: string }) => Promise<void> | void;
+};
+
+let patchLockTestHooks: PatchLockTestHooks = {};
+
+export function setPatchLockTestHooksForTest(hooks: PatchLockTestHooks): () => void {
+  patchLockTestHooks = hooks;
+  return () => {
+    patchLockTestHooks = {};
+  };
+}
+
 let currentPidNamespace: Promise<string | undefined> | undefined;
 
 function sleep(ms: number): Promise<void> {
@@ -199,10 +213,11 @@ async function releasePatchLock(lockPath: string, instance: PatchLockInstance): 
     throw error;
   }
 
+  await patchLockTestHooks.afterReleaseRename?.({ lockPath, releasePath });
+
   const releaseIdentity = await getPatchLockIdentity(releasePath);
   const releaseOwner = await readPatchLockOwner(releasePath);
   if (!isSamePatchLockIdentity(releaseIdentity, instance.identity) || !isSamePatchLockOwner(releaseOwner, instance.owner)) {
-    await rename(releasePath, lockPath);
     return;
   }
   await rm(releasePath, { recursive: true, force: true });
@@ -287,6 +302,8 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
     }
     throw error;
   }
+  await patchLockTestHooks.afterQuarantineRename?.({ lockPath, quarantinePath });
+
   const quarantineIdentity = await getPatchLockIdentity(quarantinePath);
   const quarantinedOwner = await readPatchLockOwner(quarantinePath);
   if (
@@ -294,7 +311,6 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
     !isSamePatchLockSnapshot(quarantinedOwner, staleOwner) ||
     !(await isPatchLockStale(quarantinePath, staleMs))
   ) {
-    await rename(quarantinePath, lockPath);
     return false;
   }
   await rm(quarantinePath, { recursive: true, force: true });
