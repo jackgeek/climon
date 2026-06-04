@@ -24,7 +24,7 @@ function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
 }
 
 describe("scheduleTerminalRefit", () => {
-  test("refits the terminal on the next animation frame", () => {
+  test("refits the terminal after layout settles across two animation frames", () => {
     let calls = 0;
     const scheduled: Array<(time: number) => void> = [];
 
@@ -39,11 +39,20 @@ describe("scheduleTerminalRefit", () => {
     expect(calls).toBe(0);
     expect(scheduled).toHaveLength(1);
 
-    const callback = scheduled[0];
-    if (!callback) {
-      throw new Error("Expected terminal refit to be scheduled.");
+    const firstFrame = scheduled[0];
+    if (!firstFrame) {
+      throw new Error("Expected first terminal refit frame to be scheduled.");
     }
-    callback(0);
+    firstFrame(0);
+
+    expect(calls).toBe(0);
+    expect(scheduled).toHaveLength(2);
+
+    const secondFrame = scheduled[1];
+    if (!secondFrame) {
+      throw new Error("Expected second terminal refit frame to be scheduled.");
+    }
+    secondFrame(16);
 
     expect(calls).toBe(1);
   });

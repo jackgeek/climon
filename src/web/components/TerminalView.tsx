@@ -29,6 +29,16 @@ interface ParserTerminal {
   };
 }
 
+interface FocusableTerminal {
+  focus: () => void;
+}
+
+interface ResizableTerminal {
+  cols: number;
+  rows: number;
+  resize: (cols: number, rows: number) => void;
+}
+
 const ALTERNATE_SCREEN_MODES = new Set([47, 1047, 1049]);
 
 export const terminalOptions = {
@@ -52,6 +62,25 @@ export function disableAlternateScreenBuffer(term: ParserTerminal): Disposable[]
     term.parser.registerCsiHandler({ prefix: "?", final: "h" }, handleAlternateScreen),
     term.parser.registerCsiHandler({ prefix: "?", final: "l" }, handleAlternateScreen)
   ];
+}
+
+export function focusTerminalPane(term: FocusableTerminal | null): void {
+  term?.focus();
+}
+
+export function applyAuthoritativeTerminalSize(
+  term: ResizableTerminal,
+  cols: number,
+  rows: number
+): void {
+  if (term.cols === cols && term.rows === rows) {
+    return;
+  }
+  try {
+    term.resize(cols, rows);
+  } catch {
+    // Ignore invalid sizes.
+  }
 }
 
 export interface TerminalHandle {
@@ -150,8 +179,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }
 
   function refit(): void {
-    // Refit on the next frame so layout changes are applied before measuring.
-    requestAnimationFrame(fitNow);
+    // Refit after layout has settled so xterm measures the final pane size.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(fitNow);
+    });
   }
 
   function closeWs(): void {
@@ -279,13 +310,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             } else if (msg.type === "size" && msg.cols && msg.rows) {
               // Authoritative PTY size from the daemon: match it so both the host
               // terminal and this viewer render the same grid.
-              if (term.cols !== msg.cols || term.rows !== msg.rows) {
-                try {
-                  term.resize(msg.cols, msg.rows);
-                } catch {
-                  // Ignore invalid sizes.
-                }
-              }
+              applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
             } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
               onViewModeChangeRef.current(msg.mode);
             }
@@ -353,6 +378,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
           ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
           : undefined
       }
+      onClick={() => focusTerminalPane(termRef.current)}
     />
   );
 });
