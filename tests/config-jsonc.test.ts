@@ -168,4 +168,16 @@ describe("config JSONC helpers", () => {
     // version, server, session are known (in that registry order), aaa and zzz are unknown (alphabetical)
     expect(keys).toEqual(["version", "server", "session", "aaa", "zzz"]);
   });
+
+  test("omits object keys with undefined values to prevent invalid JSONC", () => {
+    const rendered = renderJsoncConfig({ version: 1, remote: undefined });
+    
+    expect(rendered).not.toContain("undefined");
+    expect(rendered).not.toContain('"remote"');
+    
+    // Verify it can be parsed back successfully
+    const parsed = parseJsoncConfig(rendered, "/test/round-trip.jsonc");
+    expect(parsed.version).toBe(1);
+    expect("remote" in parsed).toBe(false);
+  });
 });

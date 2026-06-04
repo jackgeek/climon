@@ -1,5 +1,5 @@
 import { chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseColorMode } from "./session-meta.js";
@@ -188,12 +188,32 @@ export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = 
   await ensureClimonHome(env);
   const home = getClimonHome(env);
   const canonicalPath = getConfigPathForDir(home);
+  const legacyPath = getLegacyConfigPathForDir(home);
+  const backupPath = getLegacyBackupPathForDir(home);
+  
+  // Check if migration is needed
+  const hasLegacy = existsSync(legacyPath);
+  const hasCanonical = existsSync(canonicalPath);
+  
+  // Write the canonical config.jsonc
   const rendered = renderJsoncConfig(config as unknown as Record<string, unknown>);
   await writeFile(canonicalPath, rendered, { mode: 0o600 });
   try {
     await chmod(canonicalPath, 0o600);
   } catch {
     // Windows and some filesystems do not support POSIX permissions.
+  }
+  
+  // Migrate legacy config.json to backup if it exists
+  if (hasLegacy && !hasCanonical) {
+    try {
+      await rename(legacyPath, backupPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Wrote ${canonicalPath} but failed to back up legacy ${legacyPath} to ${backupPath}: ${message}`
+      );
+    }
   }
 }
 

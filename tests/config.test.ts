@@ -282,4 +282,78 @@ describe("config jsonc paths and migration", () => {
     
     await rm(home, { recursive: true, force: true });
   });
+
+  test("saveConfig preserves round-trip stability with legacy config", async () => {
+    const home = await makeTestHome("climon-roundtrip-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    
+    // Write legacy config.json with no remote section
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        attention: { idleSeconds: 10 },
+        session: { color: "auto" }
+      })
+    );
+    
+    // Load config (may produce remote: undefined)
+    const config = await loadConfig(env);
+    
+    // Save it back
+    const { saveConfig } = await import("../src/config.js");
+    await saveConfig(config, env);
+    
+    // Read config.jsonc and verify it doesn't contain "undefined"
+    const configJsoncPath = join(home, "config.jsonc");
+    expect(existsSync(configJsoncPath)).toBe(true);
+    const raw = await readFile(configJsoncPath, "utf8");
+    expect(raw).not.toContain("undefined");
+    
+    // Verify it can be parsed and loaded again
+    const reloaded = await loadConfig(env);
+    expect(reloaded.version).toBe(1);
+    expect(reloaded.server.host).toBe("127.0.0.1");
+    
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("saveConfig migrates legacy config.json to backup", async () => {
+    const home = await makeTestHome("climon-migrate-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    
+    // Create legacy config.json
+    const legacyPath = join(home, "config.json");
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        attention: { idleSeconds: 10 },
+        session: { color: "auto" }
+      })
+    );
+    
+    // Call saveConfig with default config
+    const { saveConfig } = await import("../src/config.js");
+    await saveConfig(defaultConfig(), env);
+    
+    // Assert config.jsonc exists
+    const canonicalPath = join(home, "config.jsonc");
+    expect(existsSync(canonicalPath)).toBe(true);
+    
+    // Assert config.json.bak exists
+    const backupPath = join(home, "config.json.bak");
+    expect(existsSync(backupPath)).toBe(true);
+    
+    // Assert config.json no longer exists
+    expect(existsSync(legacyPath)).toBe(false);
+    
+    await rm(home, { recursive: true, force: true });
+  });
 });

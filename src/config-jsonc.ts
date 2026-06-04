@@ -131,8 +131,8 @@ function renderObject(
   const lines: string[] = [];
   lines.push("{");
 
-  // Separate keys into known and unknown
-  const allKeys = Object.keys(obj);
+  // Separate keys into known and unknown, filtering out undefined values
+  const allKeys = Object.keys(obj).filter(key => obj[key] !== undefined);
   const knownKeys: string[] = [];
   const unknownKeys: string[] = [];
 
