@@ -41,6 +41,7 @@ import { isProcessAlive, killProcess } from "../process-kill.js";
 
 interface StartServerOptions {
   port?: number;
+  enableRemotes?: boolean;
 }
 
 interface WsData {
@@ -489,7 +490,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       const url = new URL(request.url);
 
       if (url.pathname === "/health") {
-        return Response.json({ ok: true, version: VERSION });
+        return Response.json({ ok: true, version: VERSION, remotesEnabled: options.enableRemotes === true });
       }
 
       const asset = await getStaticAsset(url.pathname);

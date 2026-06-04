@@ -240,6 +240,7 @@ export function App() {
     typeof document === "undefined" || document.visibilityState !== "hidden"
   );
   const [serverVersion, setServerVersion] = useState<string | null>(null);
+  const [remotesEnabled, setRemotesEnabled] = useState(false);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
   const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);
@@ -277,7 +278,10 @@ export function App() {
 
   // Load the running server's version for the sidebar heading.
   useEffect(() => {
-    void fetchHealth().then(({ version }) => setServerVersion(version));
+    void fetchHealth().then(({ version, remotesEnabled: enabled }) => {
+      setServerVersion(version);
+      setRemotesEnabled(enabled);
+    });
   }, []);
 
   const refreshTunnelLinkStatus = useCallback(async (): Promise<void> => {
@@ -576,6 +580,7 @@ export function App() {
           tunnelLinkStatus={tunnelLinkStatus}
           onTunnelLink={() => void handleTunnelLink()}
           onCloseTunnelLink={() => void handleCloseTunnelLink()}
+          showRemotesMenu={remotesEnabled}
           viewMode={viewMode}
           onViewModeChange={requestViewMode}
           onMaximize={(id) => {
