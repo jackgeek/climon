@@ -4,12 +4,14 @@ import { DEFAULT_PRIORITY } from "./session-meta.js";
 export const CONFIG_VERSION = 1;
 export const DEFAULT_DETACH_PREFIX = 0x1c; // Ctrl-\
 
+export type ConfigProcessScope = "client" | "daemon" | "server" | "browser";
+
 export interface ConfigSetting {
   path: string;
   type: "number" | "string" | "boolean";
   defaultValue?: unknown;
   purpose: string;
-  scope: string;
+  scope: ConfigProcessScope[];
   sensitive?: boolean;
   internal?: boolean;
   acceptInput?: boolean;
@@ -22,7 +24,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     type: "number",
     defaultValue: CONFIG_VERSION,
     purpose: "Schema version for the persisted config.json format. Always 1 for the current release.",
-    scope: "client, daemon, server",
+    scope: ["client", "daemon", "server"],
     internal: true
   },
   {
@@ -30,28 +32,28 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     type: "string",
     defaultValue: "127.0.0.1",
     purpose: "IP address the dashboard server binds to. Defaults to loopback for local-only access.",
-    scope: "server"
+    scope: ["server"]
   },
   {
     path: "server.port",
     type: "number",
     defaultValue: 3131,
     purpose: "TCP port the dashboard server listens on. Change if 3131 conflicts with another service.",
-    scope: "server"
+    scope: ["server"]
   },
   {
     path: "terminal.clampBrowserToHost",
     type: "boolean",
     defaultValue: true,
     purpose: "When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling.",
-    scope: "daemon"
+    scope: ["daemon"]
   },
   {
     path: "terminal.detachPrefix",
     type: "number",
     defaultValue: DEFAULT_DETACH_PREFIX,
     purpose: "Byte value of the detach key prefix (default 0x1c = Ctrl-\\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255].",
-    scope: "client",
+    scope: ["client"],
     validate: (value: unknown) => {
       if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 255) {
         throw new Error("terminal.detachPrefix must be an integer between 0 and 255");
@@ -63,48 +65,48 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     type: "boolean",
     defaultValue: true,
     purpose: "When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.",
-    scope: "client"
+    scope: ["client"]
   },
   {
     path: "attention.idleSeconds",
     type: "number",
     defaultValue: 10,
     purpose: "Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.",
-    scope: "daemon"
+    scope: ["daemon"]
   },
   {
     path: "remote.enabled",
     type: "boolean",
     purpose: "Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection.",
-    scope: "client",
+    scope: ["client"],
     acceptInput: true
   },
   {
     path: "remote.host",
     type: "string",
     purpose: "Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set.",
-    scope: "client",
+    scope: ["client"],
     acceptInput: true
   },
   {
     path: "remote.ingestHost",
     type: "string",
     purpose: "Host address where the dashboard-side ingest daemon should listen for incoming remote session connections.",
-    scope: "client",
+    scope: ["client"],
     acceptInput: true
   },
   {
     path: "remote.tunnelId",
     type: "string",
     purpose: "Dev tunnel id (e.g. \"happy-tree-abc123\") used by `devtunnel connect` to forward local climon traffic to a remote dashboard.",
-    scope: "client",
+    scope: ["client"],
     acceptInput: true
   },
   {
     path: "remote.tunnelToken",
     type: "string",
     purpose: "Stores the dev tunnel connect token scoped to this tunnel. Supplied via DEVTUNNEL_ACCESS_TOKEN environment variable.",
-    scope: "client",
+    scope: ["client"],
     sensitive: true,
     acceptInput: true
   },
@@ -112,7 +114,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "remote.port",
     type: "number",
     purpose: "Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set.",
-    scope: "client",
+    scope: ["client"],
     acceptInput: true,
     validate: (value: unknown) => {
       if (typeof value !== "number" || !Number.isInteger(value) || value <= 0 || value > 65535) {
@@ -124,7 +126,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "remote.clientId",
     type: "string",
     purpose: "Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client.",
-    scope: "client",
+    scope: ["client"],
     internal: true
   },
   {
@@ -132,7 +134,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     type: "string",
     defaultValue: "auto",
     purpose: "Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment.",
-    scope: "client, daemon, server",
+    scope: ["client", "daemon", "server"],
     acceptInput: true,
     validate: (value: unknown) => {
       if (typeof value !== "string") {
@@ -149,7 +151,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     type: "number",
     defaultValue: DEFAULT_PRIORITY,
     purpose: "Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group.",
-    scope: "client, daemon, server",
+    scope: ["client", "daemon", "server"],
     acceptInput: true,
     validate: (value: unknown) => {
       if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) {
@@ -265,7 +267,7 @@ export function renderConfigSettingsTable(): string {
     const path = `\`${setting.path}\``;
     const type = setting.type;
     const defaultVal = setting.defaultValue !== undefined ? `\`${String(setting.defaultValue)}\`` : "unset";
-    const scope = setting.scope;
+    const scope = setting.scope.join(", ");
     let purpose = setting.purpose;
 
     // Add markers for sensitive and internal settings

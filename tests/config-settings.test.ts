@@ -34,8 +34,13 @@ describe("config settings registry", () => {
 
     for (const setting of CONFIG_SETTINGS) {
       expect(setting.purpose.length).toBeGreaterThan(20);
+      expect(Array.isArray(setting.scope)).toBe(true);
       expect(setting.scope.length).toBeGreaterThan(0);
     }
+  });
+
+  test("session.color scope is an array with correct process scopes", () => {
+    expect(findConfigSetting("session.color")?.scope).toEqual(["client", "daemon", "server"]);
   });
 
   test("builds the default config from registry defaults", () => {
