@@ -15,7 +15,7 @@ If the web terminal renders as a blank or black box:
 2. Check the browser console for asset errors — `/assets/xterm.js`,
    `/assets/xterm.css`, `/assets/addon-fit.js` must load. If they 404, run
    `bun install` so the `@xterm/*` packages are present.
-3. Make sure you can reach the server (correct host/port; on LAN add `?token=`).
+3. Make sure you can reach the server (correct host/port).
 
 ## A session is stuck on `running` and shows no output
 
@@ -40,9 +40,9 @@ machine restarts.
 
 ## Can't connect from another machine
 
-LAN access is off by default. Start the server with `--lan` and append the
-printed `?token=<token>` to the URL. Without `--lan`, only `127.0.0.1`/`::1` are
-allowed.
+The dashboard server binds to loopback (`127.0.0.1`/`::1`) only. For remote
+monitoring, use the dev tunnels integration (`climon tunnel`) or the direct
+Windows/WSL bridge. See `docs/usage.md` for details on remote session access.
 
 ## Remote dev tunnel sessions do not appear
 
@@ -74,9 +74,3 @@ Session metadata and sockets live under `$CLIMON_HOME` (default `~/.climon`). If
 you have orphaned entries from killed processes, you can remove
 `~/.climon/sessions/*` and `~/.climon/sock/*`. Use `climon kill <id>` to stop a
 session and clear its metadata properly.
-
-## Resetting the access token
-
-Delete `~/.climon/config.json` (a new one with a fresh token is generated on next
-start), or rotate it programmatically via the `rotateToken` helper in
-`src/config.ts`.

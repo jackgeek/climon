@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import {
   defaultConfig,
+  getConfigPath,
   getScrollbackPath,
   getSessionMetaPath,
   getSessionsDir,
@@ -202,6 +204,156 @@ describe("detach prefix config", () => {
     );
     const config = await loadConfig(env);
     expect(config.terminal.detachPrefix).toBe(0x1c);
+    await rm(home, { recursive: true, force: true });
+  });
+});
+
+describe("config jsonc paths and migration", () => {
+  test("getConfigPath points at config.jsonc", () => {
+    const env = { CLIMON_HOME: "/tmp/test-home" } as NodeJS.ProcessEnv;
+    expect(getConfigPath(env)).toBe("/tmp/test-home/config.jsonc");
+  });
+
+  test("loadConfig creates config.jsonc with generated comments", async () => {
+    const home = await makeTestHome("climon-jsonc-create-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    const config = await loadConfig(env);
+    
+    // Check config structure includes registry defaults
+    expect(config.session?.color).toBe("auto");
+    expect(config.session?.priority).toBe(500);
+    
+    // Check that config.jsonc exists with comments
+    const configPath = join(home, "config.jsonc");
+    expect(existsSync(configPath)).toBe(true);
+    
+    const raw = await readFile(configPath, "utf8");
+    expect(raw).toContain("// Schema version for the persisted config.json format");
+    expect(raw).toContain('"version": 1');
+    expect(raw).toContain('"color": "auto"');
+    
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("loadConfig reads config.jsonc with comments", async () => {
+    const home = await makeTestHome("climon-jsonc-read-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.jsonc"),
+      `{
+  // Custom server port
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9999
+  },
+  /* Session preferences */
+  "session": {
+    "color": "blue"
+  }
+}`
+    );
+    const config = await loadConfig(env);
+    expect(config.server.port).toBe(9999);
+    expect(config.session?.color).toBe("blue");
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("loadConfig reads legacy config.json when config.jsonc is absent", async () => {
+    const home = await makeTestHome("climon-jsonc-fallback-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 7777 },
+        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        attention: { idleSeconds: 10 },
+        session: { color: "green" }
+      })
+    );
+    const config = await loadConfig(env);
+    expect(config.server.port).toBe(7777);
+    expect(config.session?.color).toBe("green");
+    
+    // Should still be reading from config.json, not creating config.jsonc
+    expect(existsSync(join(home, "config.json"))).toBe(true);
+    
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("saveConfig preserves round-trip stability with legacy config", async () => {
+    const home = await makeTestHome("climon-roundtrip-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    
+    // Write legacy config.json with no remote section
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        attention: { idleSeconds: 10 },
+        session: { color: "auto" }
+      })
+    );
+    
+    // Load config (may produce remote: undefined)
+    const config = await loadConfig(env);
+    
+    // Save it back
+    const { saveConfig } = await import("../src/config.js");
+    await saveConfig(config, env);
+    
+    // Read config.jsonc and verify it doesn't contain "undefined"
+    const configJsoncPath = join(home, "config.jsonc");
+    expect(existsSync(configJsoncPath)).toBe(true);
+    const raw = await readFile(configJsoncPath, "utf8");
+    expect(raw).not.toContain("undefined");
+    
+    // Verify it can be parsed and loaded again
+    const reloaded = await loadConfig(env);
+    expect(reloaded.version).toBe(1);
+    expect(reloaded.server.host).toBe("127.0.0.1");
+    
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("saveConfig migrates legacy config.json to backup", async () => {
+    const home = await makeTestHome("climon-migrate-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    
+    // Create legacy config.json
+    const legacyPath = join(home, "config.json");
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        attention: { idleSeconds: 10 },
+        session: { color: "auto" }
+      })
+    );
+    
+    // Call saveConfig with default config
+    const { saveConfig } = await import("../src/config.js");
+    await saveConfig(defaultConfig(), env);
+    
+    // Assert config.jsonc exists
+    const canonicalPath = join(home, "config.jsonc");
+    expect(existsSync(canonicalPath)).toBe(true);
+    
+    // Assert config.json.bak exists
+    const backupPath = join(home, "config.json.bak");
+    expect(existsSync(backupPath)).toBe(true);
+    
+    // Assert config.json no longer exists
+    expect(existsSync(legacyPath)).toBe(false);
+    
     await rm(home, { recursive: true, force: true });
   });
 });

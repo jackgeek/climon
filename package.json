@@ -20,7 +20,8 @@
     "release": "bun scripts/release.ts",
     "dev": "bun src/index.ts",
     "server": "bun src/server.ts server",
-    "start": "bun src/index.ts"
+    "start": "bun src/index.ts",
+    "docs:config": "bun scripts/generate-config-docs.ts"
   },
   "engines": {
     "bun": ">=1.1.0"

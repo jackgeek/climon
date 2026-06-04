@@ -25,7 +25,8 @@ Usage:
                                green|yellow|blue|magenta|cyan|white)
   climon server [--port N]      Start the dashboard web server (loopback only)
   climon ls                    List monitored sessions
-  climon config <key> [value]   Get/set remote connection config (git-style)
+  climon config <key> [value]   Get/set configuration (git-style)
+  climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files and keys in resolution order
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
