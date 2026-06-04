@@ -26,13 +26,12 @@ export function parseJsoncConfig(raw: string, path: string): Record<string, unkn
 }
 
 /**
- * Strips // and /* *\/ comments from a JSON string while preserving strings.
+ * Strips JSONC line and block comments while preserving string contents.
  */
 function stripComments(raw: string): string {
   let result = "";
   let i = 0;
   let inString = false;
-  let stringDelimiter = "";
 
   while (i < raw.length) {
     const char = raw[i];
@@ -41,13 +40,14 @@ function stripComments(raw: string): string {
     // Handle string state
     if (inString) {
       result += char;
-      if (char === "\\" && nextChar) {
+      if (char === "\\") {
         // Escaped character in string
-        result += nextChar;
-        i += 2;
-        continue;
-      }
-      if (char === stringDelimiter) {
+        if (nextChar) {
+          result += nextChar;
+          i += 2;
+          continue;
+        }
+      } else if (char === '"') {
         inString = false;
       }
       i++;
@@ -55,9 +55,8 @@ function stripComments(raw: string): string {
     }
 
     // Check for string start
-    if (char === '"' || char === "'") {
+    if (char === '"') {
       inString = true;
-      stringDelimiter = char;
       result += char;
       i++;
       continue;
