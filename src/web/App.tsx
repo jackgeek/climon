@@ -14,12 +14,23 @@ import {
 } from "@fluentui/react-components";
 import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
-import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus } from "./api.js";
+import {
+  eventsUrl,
+  fetchSessions,
+  deleteSession,
+  fetchHealth,
+  isLiveStatus,
+  closeDashboardTunnel,
+  ensureDashboardTunnel,
+  fetchDashboardTunnelStatus,
+  type DashboardTunnelStatus
+} from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { EditSessionDialog } from "./components/EditSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
+import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
 import { KeyBar } from "./components/KeyBar.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
@@ -230,6 +241,10 @@ export function App() {
   );
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
+  const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
+  const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);
+  const [tunnelLinkError, setTunnelLinkError] = useState("");
+  const [tunnelLinkCopied, setTunnelLinkCopied] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [viewMode, setViewMode] = useState<TerminalResizeMode>("clamped");
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
@@ -264,6 +279,18 @@ export function App() {
   useEffect(() => {
     void fetchHealth().then(({ version }) => setServerVersion(version));
   }, []);
+
+  const refreshTunnelLinkStatus = useCallback(async (): Promise<void> => {
+    try {
+      setTunnelLinkStatus(await fetchDashboardTunnelStatus());
+    } catch {
+      setTunnelLinkStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshTunnelLinkStatus();
+  }, [refreshTunnelLinkStatus]);
 
   // Reconcile the active selection whenever the list changes.
   useEffect(() => {
@@ -470,6 +497,29 @@ export function App() {
     });
   }, [notificationsEnabled]);
 
+  const handleTunnelLink = useCallback(async (): Promise<void> => {
+    setTunnelLinkOpen(true);
+    setTunnelLinkError("");
+    setTunnelLinkCopied(false);
+    try {
+      setTunnelLinkStatus(await ensureDashboardTunnel());
+    } catch (e) {
+      setTunnelLinkError(e instanceof Error ? e.message : "Failed to start Tunnel Link.");
+      await refreshTunnelLinkStatus();
+    }
+  }, [refreshTunnelLinkStatus]);
+
+  const handleCloseTunnelLink = useCallback(async (): Promise<void> => {
+    setTunnelLinkError("");
+    try {
+      await closeDashboardTunnel();
+    } catch (e) {
+      setTunnelLinkError(e instanceof Error ? e.message : "Failed to close Tunnel Link.");
+    } finally {
+      await refreshTunnelLinkStatus();
+    }
+  }, [refreshTunnelLinkStatus]);
+
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
   const sidebarCompact = effectiveSidebarCollapsed(sidebarCollapsed, isMobile);
@@ -523,6 +573,9 @@ export function App() {
           onManageRemote={() => setRemoteOpen(true)}
           notificationsEnabled={notificationsEnabled}
           onToggleNotifications={handleToggleNotifications}
+          tunnelLinkStatus={tunnelLinkStatus}
+          onTunnelLink={() => void handleTunnelLink()}
+          onCloseTunnelLink={() => void handleCloseTunnelLink()}
           viewMode={viewMode}
           onViewModeChange={requestViewMode}
           onMaximize={(id) => {
@@ -601,6 +654,14 @@ export function App() {
         onKill={() => void handleForceKill()}
       />
       <RemoteClientDialog open={remoteOpen} onOpenChange={setRemoteOpen} />
+      <TunnelLinkDialog
+        open={tunnelLinkOpen}
+        status={tunnelLinkStatus}
+        error={tunnelLinkError}
+        copied={tunnelLinkCopied}
+        onCopy={setTunnelLinkCopied}
+        onClose={() => setTunnelLinkOpen(false)}
+      />
     </div>
   );
 }

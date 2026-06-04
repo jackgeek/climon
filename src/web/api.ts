@@ -149,6 +149,44 @@ export function isLiveStatus(status: SessionMeta["status"]): boolean {
   return status === "running" || status === "available" || status === "needs-attention";
 }
 
+export interface DashboardTunnelStatus {
+  devtunnelAvailable: boolean;
+  authenticated: boolean;
+  running: boolean;
+  url?: string;
+  version?: string;
+}
+
+export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatus> {
+  const res = await fetch(withQuery("/api/dashboard-tunnel/status"));
+  if (!res.ok) {
+    throw new Error(`Failed to load Tunnel Link status (${res.status})`);
+  }
+  return (await res.json()) as DashboardTunnelStatus;
+}
+
+export async function ensureDashboardTunnel(): Promise<DashboardTunnelStatus> {
+  const res = await fetch(withQuery("/api/dashboard-tunnel"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}"
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || `Failed to start Tunnel Link (${res.status})`);
+  }
+  return (await res.json()) as DashboardTunnelStatus;
+}
+
+export async function closeDashboardTunnel(): Promise<void> {
+  const res = await fetch(withQuery("/api/dashboard-tunnel"), {
+    method: "DELETE",
+    headers: { "content-type": "application/json" }
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || `Failed to close Tunnel Link (${res.status})`);
+  }
+}
+
 export function attentionAckMessage(attentionMatchedAt: string): string {
   return JSON.stringify({ type: "attention", needsAttention: false, attentionMatchedAt });
 }
