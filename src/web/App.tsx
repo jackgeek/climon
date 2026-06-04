@@ -13,7 +13,13 @@ import { KeyBar } from "./components/KeyBar.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
-import { useAttentionAlerts } from "./attentionAlerts.js";
+import {
+  notificationsEnabledFromState,
+  readBrowserNotificationsEnabled,
+  requestBrowserNotificationPermission,
+  useAttentionAlerts,
+  writeBrowserNotificationsEnabled
+} from "./attentionAlerts.js";
 import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 
@@ -212,6 +218,7 @@ export function App() {
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [viewMode, setViewMode] = useState<TerminalResizeMode>("clamped");
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const dismissSplash = useCallback(() => setShowSplash(false), []);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
@@ -429,6 +436,20 @@ export function App() {
     scheduleTerminalRefit(terminalRef.current);
   }, []);
 
+  const handleToggleNotifications = useCallback((): void => {
+    if (notificationsEnabled) {
+      writeBrowserNotificationsEnabled(false);
+      setNotificationsEnabled(false);
+      return;
+    }
+
+    void requestBrowserNotificationPermission().then((permission) => {
+      const enabled = notificationsEnabledFromState(permission, true);
+      writeBrowserNotificationsEnabled(enabled);
+      setNotificationsEnabled(enabled);
+    });
+  }, [notificationsEnabled]);
+
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
   const sidebarCompact = effectiveSidebarCollapsed(sidebarCollapsed, isMobile);
@@ -467,6 +488,8 @@ export function App() {
           }}
           onEdit={(session) => setEditTarget(session)}
           onManageRemote={() => setRemoteOpen(true)}
+          notificationsEnabled={notificationsEnabled}
+          onToggleNotifications={handleToggleNotifications}
           viewMode={viewMode}
           onViewModeChange={requestViewMode}
           onMaximize={(id) => {

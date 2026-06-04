@@ -3,7 +3,10 @@ import type { SessionMeta } from "../src/types.js";
 import {
   buildAttentionNotification,
   createAttentionAlertManager,
+  createBrowserNotificationAdapter,
   formatAttentionTitle,
+  notificationsEnabledFromState,
+  requestBrowserNotificationPermission,
   sessionAttentionLabel
 } from "../src/web/attentionAlerts.js";
 
@@ -77,6 +80,88 @@ describe("attention notification content", () => {
     );
     expect(sessionAttentionLabel(session({ name: "", displayCommand: "bun test" }))).toBe("bun test");
     expect(sessionAttentionLabel(session({ displayCommand: "", command: ["bun", "test"] }))).toBe("bun test");
+  });
+
+  describe("requestBrowserNotificationPermission", () => {
+    test("requests permission when browser notification permission is still default", async () => {
+      let requested = 0;
+      const permission = await requestBrowserNotificationPermission({
+        get permission() {
+          return "default" as NotificationPermission;
+        },
+        requestPermission: async () => {
+          requested++;
+          return "granted";
+        }
+      });
+
+      expect(permission).toBe("granted");
+      expect(requested).toBe(1);
+    });
+
+    test("returns the existing permission without prompting again", async () => {
+      let requested = 0;
+      const permission = await requestBrowserNotificationPermission({
+        get permission() {
+          return "granted" as NotificationPermission;
+        },
+        requestPermission: async () => {
+          requested++;
+          return "denied";
+        }
+      });
+
+      expect(permission).toBe("granted");
+      expect(requested).toBe(0);
+    });
+  });
+
+  describe("createBrowserNotificationAdapter", () => {
+    test("does not request permission when notifying without explicit user action", async () => {
+      const originalNotification = globalThis.Notification;
+      let requested = 0;
+      let created = 0;
+      class FakeNotification {
+        static permission: NotificationPermission = "default";
+        static requestPermission = async (): Promise<NotificationPermission> => {
+          requested++;
+          return "granted";
+        };
+        constructor() {
+          created++;
+        }
+      }
+      Object.defineProperty(globalThis, "Notification", {
+        configurable: true,
+        value: FakeNotification
+      });
+
+      try {
+        await createBrowserNotificationAdapter().notify({
+          title: "climon needs attention",
+          body: "Session needs attention",
+          sessionId: "sess-1",
+          key: "sess-1:attention"
+        });
+      } finally {
+        Object.defineProperty(globalThis, "Notification", {
+          configurable: true,
+          value: originalNotification
+        });
+      }
+
+      expect(requested).toBe(0);
+      expect(created).toBe(0);
+    });
+  });
+
+  describe("notificationsEnabledFromState", () => {
+    test("requires granted browser permission and enabled climon preference", () => {
+      expect(notificationsEnabledFromState("granted", true)).toBe(true);
+      expect(notificationsEnabledFromState("default", true)).toBe(false);
+      expect(notificationsEnabledFromState("denied", true)).toBe(false);
+      expect(notificationsEnabledFromState("granted", false)).toBe(false);
+    });
   });
 
   test("builds notification title and body without a reason", () => {

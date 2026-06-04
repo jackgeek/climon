@@ -25,6 +25,7 @@ import { clampSizeMenuLabel, toggleViewMode } from "../view-mode.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
 import {
   getStableSessionItemRef,
+  notificationsMenuLabel,
   remotesMenuLabel,
   scrollActiveSessionIntoView,
   type StableSessionItemRefRegistry
@@ -118,6 +119,8 @@ interface Props {
   onNewFrom: (session: SessionMeta) => void;
   onEdit: (session: SessionMeta) => void;
   onManageRemote: () => void;
+  notificationsEnabled: boolean;
+  onToggleNotifications: () => void;
   viewMode: TerminalResizeMode;
   onViewModeChange: (mode: TerminalResizeMode) => void;
   onMaximize: (id: string) => void;
@@ -136,6 +139,8 @@ export function Sidebar({
   onNewFrom,
   onEdit,
   onManageRemote,
+  notificationsEnabled,
+  onToggleNotifications,
   viewMode,
   onViewModeChange,
   onMaximize
@@ -180,6 +185,7 @@ export function Sidebar({
                   {viewMode === "clamped" ? "✓ " : ""}
                   {clampSizeMenuLabel}
                 </MenuItem>
+                <MenuItem onClick={onToggleNotifications}>{notificationsMenuLabel(notificationsEnabled)}</MenuItem>
                 <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>
               </MenuList>
             </MenuPopover>

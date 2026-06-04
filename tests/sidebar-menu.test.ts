@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   getStableSessionItemRef,
+  notificationsMenuLabel,
   remotesMenuLabel,
   scrollActiveSessionIntoView,
   type StableSessionItemRefRegistry
@@ -10,6 +11,11 @@ import {
 describe("Sidebar menu", () => {
   test("labels remotes as experimental", () => {
     expect(remotesMenuLabel).toBe("Remotes (experimental)…");
+  });
+
+  test("labels the notification permission action", () => {
+    expect(notificationsMenuLabel(false)).toBe("Enable notifications");
+    expect(notificationsMenuLabel(true)).toBe("Disable notifications");
   });
 
   test("keeps the session list as the scrollable sidebar region", () => {

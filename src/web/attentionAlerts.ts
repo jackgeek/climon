@@ -35,8 +35,11 @@ export interface AttentionAlertManager {
 
 const DEFAULT_TITLE = "climon";
 const NOTIFICATION_TITLE = "climon needs attention";
+const NOTIFICATIONS_ENABLED_STORAGE_KEY = "climon.notificationsEnabled";
 
 type AudioContextConstructor = typeof AudioContext;
+type BrowserNotificationApi = Pick<typeof Notification, "permission" | "requestPermission">;
+type NotificationStorage = Pick<Storage, "getItem" | "setItem">;
 
 interface WindowWithWebkitAudioContext extends Window {
   AudioContext?: AudioContextConstructor;
@@ -73,6 +76,75 @@ export function buildAttentionNotification(session: SessionMeta): AttentionAlert
     sessionId: session.id,
     key: attentionStateKey(session)
   };
+}
+
+export function notificationsEnabledFromState(permission: NotificationPermission | "unsupported", enabled: boolean): boolean {
+  return permission === "granted" && enabled;
+}
+
+function browserNotificationPermission(notificationApi?: BrowserNotificationApi): NotificationPermission | "unsupported" {
+  const api = notificationApi ?? (typeof Notification === "undefined" ? undefined : Notification);
+  return api?.permission ?? "unsupported";
+}
+
+function browserStorage(storage?: NotificationStorage | null): NotificationStorage | null {
+  if (storage !== undefined) {
+    return storage;
+  }
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage;
+  } catch (error) {
+    console.warn("Unable to access notification preference storage.", error);
+    return null;
+  }
+}
+
+export function readBrowserNotificationsEnabled(
+  storage?: NotificationStorage | null,
+  notificationApi?: BrowserNotificationApi
+): boolean {
+  const permission = browserNotificationPermission(notificationApi);
+  const resolvedStorage = browserStorage(storage);
+  let preference = permission === "granted";
+  if (resolvedStorage) {
+    try {
+      const stored = resolvedStorage.getItem(NOTIFICATIONS_ENABLED_STORAGE_KEY);
+      if (stored !== null) {
+        preference = stored === "true";
+      }
+    } catch (error) {
+      console.warn("Unable to read notification preference.", error);
+    }
+  }
+  return notificationsEnabledFromState(permission, preference);
+}
+
+export function writeBrowserNotificationsEnabled(enabled: boolean, storage?: NotificationStorage | null): void {
+  const resolvedStorage = browserStorage(storage);
+  if (!resolvedStorage) {
+    return;
+  }
+  try {
+    resolvedStorage.setItem(NOTIFICATIONS_ENABLED_STORAGE_KEY, String(enabled));
+  } catch (error) {
+    console.warn("Unable to write notification preference.", error);
+  }
+}
+
+export async function requestBrowserNotificationPermission(
+  notificationApi?: BrowserNotificationApi
+): Promise<NotificationPermission | "unsupported"> {
+  const api = notificationApi ?? (typeof Notification === "undefined" ? undefined : Notification);
+  if (!api) {
+    return "unsupported";
+  }
+  if (api.permission !== "default") {
+    return api.permission;
+  }
+  return api.requestPermission();
 }
 
 function isAttentionSession(session: SessionMeta): boolean {
@@ -153,17 +225,11 @@ function createDocumentTitleAdapter(): TitleAdapter {
   };
 }
 
-function createBrowserNotificationAdapter(): NotificationAdapter {
+export function createBrowserNotificationAdapter(): NotificationAdapter {
   return {
     notify: async (alert) => {
-      if (typeof Notification === "undefined") {
-        return;
-      }
-      let permission = Notification.permission;
-      if (permission === "default") {
-        permission = await Notification.requestPermission();
-      }
-      if (permission !== "granted") {
+      const permission = browserNotificationPermission();
+      if (!notificationsEnabledFromState(permission, readBrowserNotificationsEnabled())) {
         return;
       }
       new Notification(alert.title, { body: alert.body });

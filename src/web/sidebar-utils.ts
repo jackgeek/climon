@@ -1,4 +1,7 @@
 export const remotesMenuLabel = "Remotes (experimental)…";
+export function notificationsMenuLabel(enabled: boolean): string {
+  return enabled ? "Disable notifications" : "Enable notifications";
+}
 
 export type SessionItemRef = (element: HTMLElement | null) => void;
 
