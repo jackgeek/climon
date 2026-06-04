@@ -106,7 +106,7 @@ describe("SessionItem compact rendering", () => {
     expect(markup).not.toContain("#729fcf");
   });
 
-  test("uses the highlighted color accent when active", () => {
+  test("uses a 4px highlighted color accent and inward triangle when active", () => {
     const { SessionItem } = require("../src/web/components/SessionItem.js") as typeof import("../src/web/components/SessionItem.js");
     const markup = renderToStaticMarkup(
       createElement(SessionItem, {
@@ -121,7 +121,9 @@ describe("SessionItem compact rendering", () => {
       })
     );
 
-    expect(markup).toContain("border-right:8px solid #729fcf");
+    expect(markup).toContain("border-right:4px solid #729fcf");
+    expect(markup).toContain("climon-active-marker");
+    expect(markup).toContain("border-right:16px solid #729fcf");
     expect(markup).not.toContain("#3465a4");
   });
 });

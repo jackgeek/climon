@@ -17,19 +17,6 @@ import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from ".
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
-interface Disposable {
-  dispose: () => void;
-}
-
-interface ParserTerminal {
-  parser: {
-    registerCsiHandler: (
-      id: { prefix?: string; final: string },
-      callback: (params: (number | number[])[]) => boolean
-    ) => Disposable;
-  };
-}
-
 interface FocusableTerminal {
   focus: () => void;
 }
@@ -49,8 +36,6 @@ interface FontResizableTerminal {
   refresh: (start: number, end: number) => void;
 }
 
-const ALTERNATE_SCREEN_MODES = new Set([47, 1047, 1049]);
-
 export const terminalOptions = {
   allowProposedApi: true,
   cursorBlink: true,
@@ -59,20 +44,6 @@ export const terminalOptions = {
   scrollback: 10_000,
   theme: { background: "#0d1117" }
 } as const;
-
-export function disableAlternateScreenBuffer(term: ParserTerminal): Disposable[] {
-  const handleAlternateScreen = (params: (number | number[])[]): boolean =>
-    params.some((param) =>
-      Array.isArray(param)
-        ? param.some((value) => ALTERNATE_SCREEN_MODES.has(value))
-        : ALTERNATE_SCREEN_MODES.has(param)
-    );
-
-  return [
-    term.parser.registerCsiHandler({ prefix: "?", final: "h" }, handleAlternateScreen),
-    term.parser.registerCsiHandler({ prefix: "?", final: "l" }, handleAlternateScreen)
-  ];
-}
 
 export function focusTerminalPane(term: FocusableTerminal | null): void {
   term?.focus();
@@ -233,7 +204,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       ...terminalOptions,
       fontSize: fontSizeRef.current
     });
-    const alternateScreenDisposables = disableAlternateScreenBuffer(term);
     const fit = new FitAddon();
     const webLinks = new WebLinksAddon();
     loadTerminalAddons(term, fit, webLinks);
@@ -279,9 +249,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     return () => {
       window.removeEventListener("resize", onWindowResize);
-      for (const disposable of alternateScreenDisposables) {
-        disposable.dispose();
-      }
       dataDisposable.dispose();
       closeWs();
       term.dispose();
@@ -369,11 +336,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachKey(session, visible)]);
 
-  // Refit when layout-affecting terminal chrome changes so xterm re-measures
-  // before sending geometry back to the daemon.
+  // Refit when the selected session or layout-affecting terminal chrome changes
+  // so xterm re-measures before sending geometry back to the daemon.
   useEffect(() => {
     refit();
-  }, [accentColor, maximized, visible, viewMode]);
+  }, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);
 
   useImperativeHandle(ref, () => ({
     getDimensions: () => {

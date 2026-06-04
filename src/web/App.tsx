@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
+import {
+  Button,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
+  Text,
+  makeStyles,
+  mergeClasses,
+  tokens
+} from "@fluentui/react-components";
 import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
 import {
@@ -24,7 +36,15 @@ import { KeyBar } from "./components/KeyBar.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { SplashScreen } from "./components/SplashScreen.js";
-import { useAttentionAlerts } from "./attentionAlerts.js";
+import {
+  browserNotificationPermissionMessage,
+  browserNotificationPermissionFailureTitle,
+  notificationsEnabledFromState,
+  readBrowserNotificationsEnabled,
+  requestBrowserNotificationPermission,
+  useAttentionAlerts,
+  writeBrowserNotificationsEnabled
+} from "./attentionAlerts.js";
 import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 
@@ -43,14 +63,12 @@ const useStyles = makeStyles({
   sidebar: {
     width: "320px",
     minWidth: "320px",
-    borderRight: `1px solid ${tokens.colorNeutralStroke1}`,
     flex: "0 0 auto",
     minHeight: 0,
     "@media (max-width: 768px)": {
       width: "100%",
       minWidth: 0,
       maxHeight: "none",
-      borderRight: "none",
       borderBottom: "none"
     }
   },
@@ -167,6 +185,10 @@ export function scheduleTerminalRefit(
   });
 }
 
+export function shouldDeleteSessionWithoutDialog(session: Pick<SessionMeta, "status">): boolean {
+  return session.status === "completed" || session.status === "failed" || session.status === "disconnected";
+}
+
 interface MainHeaderProps {
   activeSession: SessionMeta | null;
   hidden: boolean;
@@ -225,6 +247,8 @@ export function App() {
   const [tunnelLinkCopied, setTunnelLinkCopied] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [viewMode, setViewMode] = useState<TerminalResizeMode>("clamped");
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
+  const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const dismissSplash = useCallback(() => setShowSplash(false), []);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
@@ -381,7 +405,7 @@ export function App() {
     if (!session) {
       return;
     }
-    if (session.status === "completed" || session.status === "failed") {
+    if (shouldDeleteSessionWithoutDialog(session)) {
       void deleteSession(id).then(() => removeFromList(id));
       return;
     }
@@ -454,6 +478,25 @@ export function App() {
     scheduleTerminalRefit(terminalRef.current);
   }, []);
 
+  const handleToggleNotifications = useCallback((): void => {
+    if (notificationsEnabled) {
+      writeBrowserNotificationsEnabled(false);
+      setNotificationsEnabled(false);
+      return;
+    }
+
+    void requestBrowserNotificationPermission().then((permission) => {
+      const enabled = notificationsEnabledFromState(permission, true);
+      writeBrowserNotificationsEnabled(enabled);
+      setNotificationsEnabled(enabled);
+      setNotificationMessage(browserNotificationPermissionMessage(permission));
+    }).catch(() => {
+      writeBrowserNotificationsEnabled(false);
+      setNotificationsEnabled(false);
+      setNotificationMessage(browserNotificationPermissionMessage("request-failed"));
+    });
+  }, [notificationsEnabled]);
+
   const handleTunnelLink = useCallback(async (): Promise<void> => {
     setTunnelLinkOpen(true);
     setTunnelLinkError("");
@@ -484,6 +527,19 @@ export function App() {
   return (
     <div className={styles.root}>
       {showSplash && <SplashScreen onDone={dismissSplash} />}
+      <Dialog open={notificationMessage !== null} onOpenChange={(_, data) => !data.open && setNotificationMessage(null)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{browserNotificationPermissionFailureTitle}</DialogTitle>
+            <DialogContent>{notificationMessage}</DialogContent>
+            <DialogActions>
+              <Button appearance="primary" onClick={() => setNotificationMessage(null)}>
+                OK
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
       <div
         className={mergeClasses(
           styles.sidebar,
@@ -515,6 +571,8 @@ export function App() {
           }}
           onEdit={(session) => setEditTarget(session)}
           onManageRemote={() => setRemoteOpen(true)}
+          notificationsEnabled={notificationsEnabled}
+          onToggleNotifications={handleToggleNotifications}
           tunnelLinkStatus={tunnelLinkStatus}
           onTunnelLink={() => void handleTunnelLink()}
           onCloseTunnelLink={() => void handleCloseTunnelLink()}

@@ -14,6 +14,7 @@ import {
   tokens
 } from "@fluentui/react-components";
 import { createSession } from "../api.js";
+import type { CreateSessionBody } from "../api.js";
 import type { AnsiColor } from "../../types.js";
 import { SessionMetaFields, type MetaFieldsValue } from "./SessionMetaFields.js";
 
@@ -32,6 +33,30 @@ interface Props {
   onCreated: (id: string) => void;
   /** When set, spawn a new session from this session (cwd is inherited). */
   parent?: { id: string; cwd: string; priority?: number; color?: AnsiColor | null } | null;
+}
+
+interface CreateSessionBodyInput {
+  command: string;
+  cwd: string;
+  cols?: number;
+  rows?: number;
+  parentId?: string;
+  name: string;
+  priority: number;
+  color: CreateSessionBody["color"];
+}
+
+export function buildCreateSessionBody(input: CreateSessionBodyInput): CreateSessionBody {
+  return {
+    command: input.command,
+    cwd: input.cwd.trim() || undefined,
+    cols: input.cols,
+    rows: input.rows,
+    parentId: input.parentId,
+    name: input.name.trim() || undefined,
+    priority: input.priority,
+    color: input.color
+  };
 }
 
 export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated, parent }: Props) {
@@ -74,16 +99,16 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
       setBusy(false);
       return;
     }
-    const result = await createSession({
+    const result = await createSession(buildCreateSessionBody({
       command: trimmed,
-      cwd: parent ? undefined : cwd.trim() || undefined,
+      cwd,
       cols: dims?.cols,
       rows: dims?.rows,
       parentId: parent?.id,
-      name: fields.name.trim() || undefined,
+      name: fields.name,
       priority: priorityNum,
       color: fields.color
-    });
+    }));
     if (!result.ok) {
       setError(result.error || "Failed to create session.");
       setBusy(false);
@@ -119,28 +144,25 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
                 }}
               />
             </Field>
-            {parent ? (
-              <Field label="Working directory (from selected session)" style={{ marginTop: "12px" }}>
-                <Input value={cwd} readOnly />
-              </Field>
-            ) : (
-              <Field label="Working directory (optional)" style={{ marginTop: "12px" }}>
-                <Input
-                  value={cwd}
-                  placeholder="Leave blank for the server's working directory"
-                  autoComplete="off"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  onChange={(_, data) => setCwd(data.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      void submit();
-                    }
-                  }}
-                />
-              </Field>
-            )}
+            <Field
+              label={parent ? "Working directory (defaults to selected session)" : "Working directory (optional)"}
+              style={{ marginTop: "12px" }}
+            >
+              <Input
+                value={cwd}
+                placeholder="Leave blank for the server's working directory"
+                autoComplete="off"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                onChange={(_, data) => setCwd(data.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void submit();
+                  }
+                }}
+              />
+            </Field>
             <SessionMetaFields
               value={fields}
               onChange={setFields}

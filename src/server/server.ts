@@ -30,6 +30,7 @@ import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta } from "../
 import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
+import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
@@ -53,6 +54,10 @@ const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
 
 export type KillMode = "none" | "graceful" | "force";
 
@@ -235,6 +240,10 @@ export async function resolveParentSpawnColor(
     return color;
   }
   return parentColor ?? null;
+}
+
+export function resolveParentSpawnCwd(cwd: unknown, parentCwd: string): string {
+  return typeof cwd === "string" && cwd.trim().length > 0 ? cwd.trim() : parentCwd;
 }
 
 function resolveDevClientEntrypoint(): string | undefined {
@@ -548,11 +557,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           if (!parent) {
             return new Response("Parent session not found", { status: 404 });
           }
+          const cwd = resolveParentSpawnCwd(payload.cwd, parent.cwd);
           try {
-            const color = await resolveParentSpawnColor(metaInput.color, parent.color, parent.cwd);
+            const info = await stat(cwd);
+            if (!info.isDirectory()) {
+              return new Response(`Working directory is not a directory: ${cwd}`, { status: 400 });
+            }
+          } catch {
+            return new Response(`Working directory not found: ${cwd}`, { status: 400 });
+          }
+          try {
+            const color = await resolveParentSpawnColor(metaInput.color, parent.color, cwd);
             const id = await spawnHeadlessSession(
               argv,
-              parent.cwd,
+              cwd,
               String(parent.cols),
               String(parent.rows),
               {
@@ -567,10 +585,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             return new Response(`Failed to create session: ${message}`, { status: 500 });
           }
         }
-        const cwd =
-          typeof payload.cwd === "string" && payload.cwd.trim().length > 0
-            ? payload.cwd.trim()
-            : process.cwd();
+        const cwd = typeof payload.cwd === "string" && payload.cwd.trim().length > 0
+          ? payload.cwd.trim()
+          : process.cwd();
         try {
           const info = await stat(cwd);
           if (!info.isDirectory()) {
@@ -789,7 +806,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         if (!data) {
           return new Response("Not found", { status: 404 });
         }
-        return new Response(new Uint8Array(data), { headers: { "content-type": "application/octet-stream" } });
+        return new Response(exactArrayBuffer(sanitizeBrowserTerminalReplay(data)), {
+          headers: { "content-type": "application/octet-stream" }
+        });
       }
 
       if (url.pathname === "/api/events") {
@@ -846,8 +865,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
         daemon.on("data", (chunk) => {
           for (const frame of decoder.push(chunk)) {
-            if (frame.type === FrameType.Output || frame.type === FrameType.Replay) {
+            if (frame.type === FrameType.Output) {
               ws.sendBinary(frame.payload);
+            } else if (frame.type === FrameType.Replay) {
+              ws.sendBinary(sanitizeBrowserTerminalReplay(frame.payload));
             } else if (frame.type === FrameType.Exit) {
               const exit = parseJsonPayload<ExitPayload>(frame.payload);
               ws.send(JSON.stringify({ type: "exit", exitCode: exit.exitCode }));
