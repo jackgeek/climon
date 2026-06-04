@@ -386,6 +386,51 @@ describe("patchSessionMeta concurrency", () => {
     expect(finalOwner.token).toBe("live-recovery-owner-after-snapshot");
   });
 
+  test("stale recovery lock reclaim claim blocks compliant replacement after final validation", async () => {
+    const id = "stale-recovery-lock-claimed-final-window";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const recoveryLockPath = `${lockPath}.reclaim`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+    await mkdir(recoveryLockPath);
+    await writeFile(
+      join(recoveryLockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(999999998)),
+        createdAt: "1970-01-01T00:00:00.000Z"
+      })
+    );
+
+    let hookRan = false;
+    let contenderError: unknown;
+    const resetHooks = setPatchLockTestHooksForTest({
+      beforeQuarantineRenameAfterValidation: async ({ lockPath: pathBeingReclaimed }) => {
+        if (pathBeingReclaimed !== recoveryLockPath || hookRan) {
+          return;
+        }
+        hookRan = true;
+        try {
+          const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 });
+          await release();
+        } catch (error) {
+          contenderError = error;
+        }
+      }
+    });
+    try {
+      const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1 });
+      await release();
+    } finally {
+      resetHooks();
+    }
+
+    expect(hookRan).toBe(true);
+    expect(contenderError).toBeInstanceOf(Error);
+    expect((contenderError as Error).message).toMatch(/Timed out waiting for session metadata lock/);
+    expect(existsSync(recoveryLockPath)).toBe(false);
+  });
+
   test("release mismatch with a different owner token leaves the replacement live lock at the original path", async () => {
     const id = "release-mismatch-new-live-lock";
     await writeSessionMeta(baseMeta(id), env);

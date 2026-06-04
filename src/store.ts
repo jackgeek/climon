@@ -77,6 +77,7 @@ type PatchLockTestHooks = {
   afterReleaseRename?: (paths: { lockPath: string; releasePath: string }) => Promise<void> | void;
   beforeQuarantineRename?: (paths: { lockPath: string }) => Promise<void> | void;
   afterQuarantineSnapshot?: (paths: { lockPath: string }) => Promise<void> | void;
+  beforeQuarantineRenameAfterValidation?: (paths: { lockPath: string }) => Promise<void> | void;
   afterQuarantineRename?: (paths: { lockPath: string; quarantinePath: string }) => Promise<void> | void;
 };
 
@@ -329,8 +330,10 @@ async function isPatchLockStale(lockPath: string, staleMs: number): Promise<bool
 async function claimPatchLockForReclaim(lockPath: string): Promise<PatchLockOwner | undefined> {
   const claim = await getCurrentPatchLockOwner();
   try {
-    // Cooperating reclaimers must hold this claim before renaming so a stale
-    // lock cannot be replaced with a fresh one in the validation->rename window.
+    // Cooperating stale-reclaim paths must hold this claim before final
+    // validation and rename. An existing claim means another reclaimer owns the
+    // validation->rename window, so contenders must wait instead of replacing
+    // the lock path.
     await writeFile(join(lockPath, PATCH_LOCK_RECLAIM_CLAIM_FILE), `${JSON.stringify(claim)}\n`, { flag: "wx" });
     return claim;
   } catch (error) {
@@ -382,6 +385,7 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
     ) {
       return false;
     }
+    await patchLockTestHooks.beforeQuarantineRenameAfterValidation?.({ lockPath });
     while (true) {
       quarantinePath = `${lockPath}.stale-${process.pid}-${Date.now()}-${tempCounter++}`;
       try {
