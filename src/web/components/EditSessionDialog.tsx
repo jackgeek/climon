@@ -82,6 +82,8 @@ export function EditSessionDialog({ session, onClose }: Props) {
               onChange={setFields}
               namePlaceholder={session?.displayCommand ?? ""}
               onEnter={() => void submit()}
+              includeAuto
+              compactColors
             />
             <Text className={styles.error} style={{ display: "block", marginTop: "12px" }}>
               {error}
