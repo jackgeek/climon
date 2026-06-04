@@ -356,8 +356,11 @@ function writeSparseConfig(dir: string, record: Record<string, unknown>): void {
   if (hasLegacy && !hasCanonical) {
     try {
       renameSync(legacyPath, backupPath);
-    } catch {
-      // Best-effort backup; continue even if rename fails
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Wrote ${canonicalPath} but failed to back up legacy ${legacyPath} to ${backupPath}: ${message}`
+      );
     }
   }
 }

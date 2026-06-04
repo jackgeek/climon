@@ -196,4 +196,38 @@ describe("runConfigCommand", () => {
     const parsed = parseJsoncConfig(raw, "config.jsonc");
     expect((parsed.session as Record<string, unknown>).color).toBe("green");
   });
+
+  test("reports error when legacy config backup rename fails", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, "config.json"), JSON.stringify({ remote: { port: 3132 } }));
+    
+    // Create config.json.bak as a directory to cause rename to fail
+    mkdirSync(join(home, "config.json.bak"), { recursive: true });
+    
+    const stderr: string[] = [];
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: string) => {
+      stderr.push(String(chunk));
+      return true;
+    };
+    
+    try {
+      expect(runConfigCommand(["remote.enabled", "true"], env(), root)).toBe(2);
+    } finally {
+      process.stderr.write = originalStderrWrite;
+    }
+    
+    // Canonical config.jsonc should exist with the new setting
+    const jsoncPath = join(home, "config.jsonc");
+    expect(existsSync(jsoncPath)).toBe(true);
+    const parsed = parseJsoncConfig(readFileSync(jsoncPath, "utf8"), jsoncPath);
+    expect((parsed.remote as Record<string, unknown>).enabled).toBe(true);
+    
+    // Legacy config.json should still exist because backup rename failed
+    expect(existsSync(join(home, "config.json"))).toBe(true);
+    
+    // Stderr should mention the cleanup/migration problem
+    const stderrOutput = stderr.join("");
+    expect(stderrOutput).toContain("config.json.bak");
+  });
 });
