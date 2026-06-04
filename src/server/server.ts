@@ -77,6 +77,20 @@ export function parseBrowserStatusPatch(value: unknown): Extract<SessionStatus, 
   throw new Error("Invalid status; expected paused or running");
 }
 
+function validateBrowserStatusTransition(
+  current: SessionStatus,
+  next: Extract<SessionStatus, "paused" | "running">
+): void {
+  if (next === "paused") {
+    if (current === "running" || current === "available" || current === "needs-attention" || current === "paused") {
+      return;
+    }
+  } else if (current === "paused") {
+    return;
+  }
+  throw new Error(`Invalid status transition from ${current} to ${next}`);
+}
+
 /** Grace period before rechecking liveness after a graceful (SIGTERM) kill. */
 const KILL_GRACE_MS = 3000;
 
@@ -702,6 +716,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           return new Response("Invalid JSON body", { status: 400 });
         }
         const patch: { name?: string; priority?: number; color?: AnsiColor | null; status?: Extract<SessionStatus, "paused" | "running">; priorityReason?: "running" } = {};
+        let requestedStatus: Extract<SessionStatus, "paused" | "running"> | undefined;
         try {
           if (body.name !== undefined) {
             patch.name = String(body.name);
@@ -713,11 +728,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             patch.color = body.color === null ? null : parseColor(String(body.color));
           }
           if (body.status !== undefined) {
-            patch.status = parseBrowserStatusPatch(body.status);
+            requestedStatus = parseBrowserStatusPatch(body.status);
+            patch.status = requestedStatus;
             patch.priorityReason = "running";
           }
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
+        }
+        if (requestedStatus !== undefined) {
+          const current = await readSessionMeta(patchMatch[1]);
+          if (!current) {
+            return new Response("Not found", { status: 404 });
+          }
+          try {
+            validateBrowserStatusTransition(current.status, requestedStatus);
+          } catch (error) {
+            return new Response(error instanceof Error ? error.message : "Invalid status transition", { status: 400 });
+          }
         }
         const updated = await patchSessionMeta(patchMatch[1], patch);
         if (!updated) {
