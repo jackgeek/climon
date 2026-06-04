@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CONFIG_SETTINGS,
   acceptedConfigKeys,
+  allConfigKeys,
   buildDefaultConfigFromSettings,
   coerceConfigValueFromSettings,
   findConfigSetting,
@@ -47,7 +48,7 @@ describe("config settings registry", () => {
         setTitle: true
       },
       attention: { idleSeconds: 10 },
-      session: { color: "auto" }
+      session: { color: "auto", priority: 500 }
     });
   });
 
@@ -70,12 +71,34 @@ describe("config settings registry", () => {
     ]);
   });
 
+  test("allConfigKeys returns all 16 config paths including internal keys", () => {
+    expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
+    expect(allConfigKeys().length).toBe(16);
+  });
+
   test("coerces values through registry validators", () => {
     expect(coerceConfigValueFromSettings("remote.enabled", "true")).toBe(true);
+    expect(coerceConfigValueFromSettings("remote.enabled", "false")).toBe(false);
     expect(coerceConfigValueFromSettings("remote.port", "3132")).toBe(3132);
     expect(coerceConfigValueFromSettings("session.color", "green")).toBe("green");
     expect(() => coerceConfigValueFromSettings("session.priority", "1001")).toThrow(/between 0 and 1000/);
     expect(() => coerceConfigValueFromSettings("remote.port", "0")).toThrow(/positive integer/);
+  });
+
+  test("boolean coercion rejects values other than 'true' or 'false'", () => {
+    expect(() => coerceConfigValueFromSettings("remote.enabled", "1")).toThrow(/must be 'true' or 'false'/);
+    expect(() => coerceConfigValueFromSettings("remote.enabled", "0")).toThrow(/must be 'true' or 'false'/);
+    expect(() => coerceConfigValueFromSettings("remote.enabled", "yes")).toThrow(/must be 'true' or 'false'/);
+  });
+
+  test("validates terminal.detachPrefix range", () => {
+    expect(coerceConfigValueFromSettings("terminal.detachPrefix", "28")).toBe(28);
+    expect(() => coerceConfigValueFromSettings("terminal.detachPrefix", "256")).toThrow(/between 0 and 255/);
+    expect(() => coerceConfigValueFromSettings("terminal.detachPrefix", "-1")).toThrow(/between 0 and 255/);
+  });
+
+  test("rejects unknown config keys", () => {
+    expect(() => coerceConfigValueFromSettings("unknown.key", "value")).toThrow(/Unknown config key/);
   });
 
   test("renders settings table with default, scope, and markers", () => {

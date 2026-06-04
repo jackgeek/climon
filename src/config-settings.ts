@@ -1,4 +1,5 @@
 import type { ClimonConfig } from "./types.js";
+import { DEFAULT_PRIORITY } from "./session-meta.js";
 
 export const CONFIG_VERSION = 1;
 export const DEFAULT_DETACH_PREFIX = 0x1c; // Ctrl-\
@@ -146,6 +147,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "session.priority",
     type: "number",
+    defaultValue: DEFAULT_PRIORITY,
     purpose: "Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group.",
     scope: "client, daemon, server",
     acceptInput: true,
@@ -179,27 +181,27 @@ export function allConfigKeys(): string[] {
  * Only includes settings that have a defaultValue.
  */
 export function buildDefaultConfigFromSettings(): ClimonConfig {
-  const config: any = {};
+  const config: Record<string, unknown> = {};
 
   for (const setting of CONFIG_SETTINGS) {
     if (setting.defaultValue === undefined) continue;
 
     const parts = setting.path.split(".");
-    let current = config;
+    let current: Record<string, unknown> = config;
 
     for (let i = 0; i < parts.length - 1; i++) {
       const key = parts[i];
       if (!current[key]) {
         current[key] = {};
       }
-      current = current[key];
+      current = current[key] as Record<string, unknown>;
     }
 
     const finalKey = parts[parts.length - 1];
     current[finalKey] = setting.defaultValue;
   }
 
-  return config as ClimonConfig;
+  return config as unknown as ClimonConfig;
 }
 
 /**
@@ -216,7 +218,13 @@ export function coerceConfigValueFromSettings(path: string, value: string): unkn
 
   switch (setting.type) {
     case "boolean":
-      coerced = value === "true" || value === "1";
+      if (value === "true") {
+        coerced = true;
+      } else if (value === "false") {
+        coerced = false;
+      } else {
+        throw new Error(`Value for '${path}' must be 'true' or 'false'.`);
+      }
       break;
     case "number":
       coerced = Number(value);
