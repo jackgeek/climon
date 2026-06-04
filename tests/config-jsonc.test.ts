@@ -111,4 +111,61 @@ describe("config JSONC helpers", () => {
     const rendered = renderJsoncConfig({ version: 1 });
     expect(rendered.endsWith("\n")).toBe(true);
   });
+
+  test("reports unterminated block comment with path", () => {
+    expect(() => parseJsoncConfig('{"a": 1 /* unterminated', "/tmp/bad-comment.config.jsonc"))
+      .toThrow(/Unterminated block comment/);
+    expect(() => parseJsoncConfig('{"a": 1 /* unterminated', "/tmp/bad-comment.config.jsonc"))
+      .toThrow(/\/tmp\/bad-comment\.config\.jsonc/);
+  });
+
+  test("parent container keys do not get generated comments", () => {
+    const rendered = renderJsoncConfig({
+      server: { host: "127.0.0.1" }
+    });
+
+    const lines = rendered.split("\n");
+    const serverLineIndex = lines.findIndex(line => line.includes('"server":'));
+    expect(serverLineIndex).toBeGreaterThanOrEqual(0);
+    
+    // The line before "server": should not be a comment
+    const previousLine = lines[serverLineIndex - 1];
+    expect(previousLine).not.toMatch(/^\s*\/\//);
+    
+    // But the host setting should have its purpose comment
+    expect(rendered).toContain("// IP address the dashboard server binds to");
+    expect(rendered).toContain('"host": "127.0.0.1"');
+  });
+
+  test("renders empty nested objects without errors", () => {
+    const rendered = renderJsoncConfig({
+      server: {},
+      custom: {}
+    });
+
+    expect(rendered).toContain('"server": {}');
+    expect(rendered).toContain('"custom": {}');
+    expect(rendered.endsWith("\n")).toBe(true);
+  });
+
+  test("renders known top-level keys in exact registry order", () => {
+    const rendered = renderJsoncConfig({
+      zzz: true,
+      session: { color: "auto" },
+      server: { port: 3131 },
+      aaa: true,
+      version: 1
+    });
+
+    // Extract just the top-level keys in order
+    const lines = rendered.split("\n");
+    const keyLines = lines.filter(line => line.match(/^\s{2}"[^"]+":/));
+    const keys = keyLines.map(line => {
+      const match = line.match(/^\s{2}"([^"]+)":/);
+      return match ? match[1] : "";
+    });
+
+    // version, server, session are known (in that registry order), aaa and zzz are unknown (alphabetical)
+    expect(keys).toEqual(["version", "server", "session", "aaa", "zzz"]);
+  });
 });

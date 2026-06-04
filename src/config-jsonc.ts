@@ -9,7 +9,7 @@ export function parseJsoncConfig(raw: string, path: string): Record<string, unkn
     // Strip line comments (//...)
     // Strip block comments (/* ... */)
     // We need to be careful not to strip comment-like text inside strings
-    const stripped = stripComments(raw);
+    const stripped = stripComments(raw, path);
     const parsed = JSON.parse(stripped);
 
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -28,7 +28,7 @@ export function parseJsoncConfig(raw: string, path: string): Record<string, unkn
 /**
  * Strips JSONC line and block comments while preserving string contents.
  */
-function stripComments(raw: string): string {
+function stripComments(raw: string, path: string): string {
   let result = "";
   let i = 0;
   let inString = false;
@@ -76,12 +76,17 @@ function stripComments(raw: string): string {
     if (char === "/" && nextChar === "*") {
       // Skip until */
       i += 2;
+      let foundEnd = false;
       while (i < raw.length - 1) {
         if (raw[i] === "*" && raw[i + 1] === "/") {
           i += 2;
+          foundEnd = true;
           break;
         }
         i++;
+      }
+      if (!foundEnd) {
+        throw new Error(`Unterminated block comment in ${path}`);
       }
       continue;
     }
@@ -174,13 +179,20 @@ function renderObject(
     // Render the value
     if (typeof value === "object" && value !== null && !Array.isArray(value)) {
       // Nested object
-      const nestedObj = renderObject(value as Record<string, unknown>, path, settingMap, registryOrder, baseIndent + 1);
-      const nestedLines = nestedObj.split("\n");
-      lines.push(`${childIndentStr}"${key}": ${nestedLines[0]}`);
-      for (let j = 1; j < nestedLines.length - 1; j++) {
-        lines.push(nestedLines[j]);
+      const nestedRecord = value as Record<string, unknown>;
+      
+      // Check if the object is empty
+      if (Object.keys(nestedRecord).length === 0) {
+        lines.push(`${childIndentStr}"${key}": {}${isLast ? "" : ","}`);
+      } else {
+        const nestedObj = renderObject(nestedRecord, path, settingMap, registryOrder, baseIndent + 1);
+        const nestedLines = nestedObj.split("\n");
+        lines.push(`${childIndentStr}"${key}": ${nestedLines[0]}`);
+        for (let j = 1; j < nestedLines.length - 1; j++) {
+          lines.push(nestedLines[j]);
+        }
+        lines.push(nestedLines[nestedLines.length - 1] + (isLast ? "" : ","));
       }
-      lines.push(nestedLines[nestedLines.length - 1] + (isLast ? "" : ","));
     } else {
       // Leaf value
       const renderedValue = JSON.stringify(value);
