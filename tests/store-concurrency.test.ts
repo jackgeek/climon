@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { rm } from "node:fs/promises";
-import { patchSessionMeta, readSessionMeta, writeSessionMeta } from "../src/store.js";
+import { patchSessionMeta, patchSessionMetaWithCurrent, readSessionMeta, writeSessionMeta } from "../src/store.js";
 import type { SessionMeta } from "../src/types.js";
 
 const home = join(process.cwd(), `.climon-store-concurrency-${process.pid}`);
@@ -67,5 +68,64 @@ describe("patchSessionMeta concurrency", () => {
     expect(meta?.attentionReason).toBe("Screen idle for 10s");
     expect(meta?.cols).toBe(120);
     expect(meta?.rows).toBe(40);
+  });
+
+  test("conditional patches reject against current metadata without applying metadata fields", async () => {
+    const id = "conditional-current";
+    await writeSessionMeta({ ...baseMeta(id), status: "completed", priorityReason: "completed", name: undefined }, env);
+
+    await expect(
+      patchSessionMetaWithCurrent(
+        id,
+        { status: "running", name: "renamed" },
+        (current) => {
+          if (current.status === "completed") {
+            throw new Error("cannot resume completed session");
+          }
+        },
+        env
+      )
+    ).rejects.toThrow(/cannot resume completed session/);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("completed");
+    expect(meta?.name).toBeUndefined();
+  });
+
+  test("conditional patches do not overwrite terminal status from another process", async () => {
+    const id = "conditional-cross-process";
+    const signalPath = join(home, `${id}.signal`);
+    await writeSessionMeta(baseMeta(id), env);
+
+    const terminalWriter = Bun.spawn(
+      [
+        process.execPath,
+        "--eval",
+        `
+          import { existsSync } from "node:fs";
+          import { patchSessionMeta } from "./src/store.ts";
+          while (!existsSync(${JSON.stringify(signalPath)})) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          await patchSessionMeta(${JSON.stringify(id)}, { status: "completed", priorityReason: "completed" });
+        `
+      ],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+
+    await patchSessionMetaWithCurrent(
+      id,
+      { status: "paused", priorityReason: "running" },
+      () => {
+        writeFileSync(signalPath, "go");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      },
+      env
+    );
+    expect(await terminalWriter.exited).toBe(0);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("completed");
+    expect(meta?.priorityReason).toBe("completed");
   });
 });

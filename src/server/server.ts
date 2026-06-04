@@ -25,7 +25,7 @@ import {
   type TerminalResizeMode
 } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
-import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
+import { listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionStatus } from "../types.js";
 import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
@@ -735,18 +735,31 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
         }
+        let updated: SessionMeta | undefined;
         if (requestedStatus !== undefined) {
-          const current = await readSessionMeta(patchMatch[1]);
-          if (!current) {
-            return new Response("Not found", { status: 404 });
-          }
+          let transitionError: unknown;
           try {
-            validateBrowserStatusTransition(current.status, requestedStatus);
+            updated = await patchSessionMetaWithCurrent(
+              patchMatch[1],
+              patch,
+              (current) => {
+                try {
+                  validateBrowserStatusTransition(current.status, requestedStatus);
+                } catch (error) {
+                  transitionError = error;
+                  throw error;
+                }
+              }
+            );
           } catch (error) {
-            return new Response(error instanceof Error ? error.message : "Invalid status transition", { status: 400 });
+            if (error === transitionError) {
+              return new Response(error instanceof Error ? error.message : "Invalid status transition", { status: 400 });
+            }
+            throw error;
           }
+        } else {
+          updated = await patchSessionMeta(patchMatch[1], patch);
         }
-        const updated = await patchSessionMeta(patchMatch[1], patch);
         if (!updated) {
           return new Response("Not found", { status: 404 });
         }

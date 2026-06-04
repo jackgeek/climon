@@ -28,28 +28,61 @@ export async function readSessionMeta(id: string, env: NodeJS.ProcessEnv = proce
   }
 }
 
-// Serializes patchSessionMeta calls per session id within this process. The
-// patch is a read-merge-write, so concurrent patches (e.g. a `daemonPid` write
-// and a `status` write fired on the same tick) would
-// otherwise race and silently drop one field. Each daemon and the server run
-// in their own process, so a per-process per-id promise chain is sufficient to
-// keep that process's own bursts of patches consistent.
+// Serializes patchSessionMeta calls per session id within this process, while
+// the lock directory below serializes read-merge-write patches across daemon
+// and server processes. Without both layers, concurrent patches can silently
+// drop fields or overwrite fresher status transitions.
 const patchQueues = new Map<string, Promise<unknown>>();
+const PATCH_LOCK_RETRY_MS = 10;
+const PATCH_LOCK_TIMEOUT_MS = 30_000;
 
-export async function patchSessionMeta(
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquirePatchLock(id: string, env: NodeJS.ProcessEnv): Promise<() => Promise<void>> {
+  const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+  const deadline = Date.now() + PATCH_LOCK_TIMEOUT_MS;
+  await mkdir(dirname(lockPath), { recursive: true });
+  while (true) {
+    try {
+      await mkdir(lockPath);
+      return async () => {
+        await rm(lockPath, { recursive: true, force: true });
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for session metadata lock: ${id}`);
+      }
+      await sleep(PATCH_LOCK_RETRY_MS);
+    }
+  }
+}
+
+async function patchSessionMetaQueued(
   id: string,
   patch: SessionMetaPatch,
-  env: NodeJS.ProcessEnv = process.env
+  validateCurrent: ((current: SessionMeta) => void) | undefined,
+  env: NodeJS.ProcessEnv
 ): Promise<SessionMeta | undefined> {
   const prior = patchQueues.get(id) ?? Promise.resolve();
   const run = prior.then(async () => {
-    const current = await readSessionMeta(id, env);
-    if (!current) {
-      return undefined;
+    const releaseLock = await acquirePatchLock(id, env);
+    try {
+      const current = await readSessionMeta(id, env);
+      if (!current) {
+        return undefined;
+      }
+      validateCurrent?.(current);
+      const updated: SessionMeta = { ...current, ...patch, updatedAt: new Date().toISOString() };
+      await writeSessionMeta(updated, env);
+      return updated;
+    } finally {
+      await releaseLock();
     }
-    const updated: SessionMeta = { ...current, ...patch, updatedAt: new Date().toISOString() };
-    await writeSessionMeta(updated, env);
-    return updated;
   });
   // The queued tail never rejects, so later patches always run after this one.
   const tail = run.then(
@@ -64,6 +97,23 @@ export async function patchSessionMeta(
     }
   });
   return run;
+}
+
+export async function patchSessionMeta(
+  id: string,
+  patch: SessionMetaPatch,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<SessionMeta | undefined> {
+  return patchSessionMetaQueued(id, patch, undefined, env);
+}
+
+export async function patchSessionMetaWithCurrent(
+  id: string,
+  patch: SessionMetaPatch,
+  validateCurrent: (current: SessionMeta) => void,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<SessionMeta | undefined> {
+  return patchSessionMetaQueued(id, patch, validateCurrent, env);
 }
 
 export async function listSessions(env: NodeJS.ProcessEnv = process.env): Promise<SessionMeta[]> {
