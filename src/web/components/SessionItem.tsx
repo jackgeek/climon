@@ -3,7 +3,7 @@ import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular, Settings16
 import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
-import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH, SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
+import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
 const useStyles = makeStyles({
   root: {
@@ -26,6 +26,17 @@ const useStyles = makeStyles({
   },
   active: {
     backgroundColor: tokens.colorNeutralBackground1Selected
+  },
+  activeMarker: {
+    position: "absolute",
+    top: "50%",
+    right: 0,
+    width: 0,
+    height: 0,
+    transform: "translateY(-50%)",
+    borderTop: "16px solid transparent",
+    borderBottom: "16px solid transparent",
+    pointerEvents: "none"
   },
   cmd: {
     display: "block",
@@ -127,7 +138,7 @@ export function SessionItem({
       style={
         session.color
           ? {
-              borderRight: `${active ? ACTIVE_SESSION_COLOR_ACCENT_WIDTH : SESSION_COLOR_ACCENT_WIDTH} solid ${
+              borderRight: `${SESSION_COLOR_ACCENT_WIDTH} solid ${
                 active ? ANSI_HIGHLIGHT_CSS[session.color] : ANSI_CSS[session.color]
               }`
             }
@@ -145,6 +156,13 @@ export function SessionItem({
         }
       }}
     >
+      {active && session.color && (
+        <span
+          className={mergeClasses("climon-active-marker", styles.activeMarker)}
+          style={{ borderRight: `16px solid ${ANSI_HIGHLIGHT_CSS[session.color]}` }}
+          aria-hidden="true"
+        />
+      )}
       {!compact && ["running", "available", "needs-attention", "disconnected"].includes(session.status) && (
         <Button
           className={mergeClasses("climon-new", styles.newBtn)}

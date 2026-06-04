@@ -16,19 +16,27 @@ import {
   ChevronDoubleRightRegular,
   Navigation20Regular
 } from "@fluentui/react-icons";
+import { useEffect, useRef } from "react";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { SessionItem } from "./SessionItem.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { clampSizeMenuLabel, toggleViewMode } from "../view-mode.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
+import {
+  getStableSessionItemRef,
+  remotesMenuLabel,
+  scrollActiveSessionIntoView,
+  type StableSessionItemRefRegistry
+} from "../sidebar-utils.js";
 
 const useStyles = makeStyles({
   root: {
     display: "flex",
     flexDirection: "column",
     minHeight: 0,
-    height: "100%"
+    height: "100%",
+    overflow: "hidden"
   },
   collapsedRoot: {
     width: "64px"
@@ -41,6 +49,7 @@ const useStyles = makeStyles({
     height: DASHBOARD_HEADER_HEIGHT,
     padding: "4px 16px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
+    borderRight: `1px solid ${tokens.colorNeutralStroke1}`,
     flex: "0 0 auto"
   },
   collapsedHeader: {
@@ -62,7 +71,12 @@ const useStyles = makeStyles({
   },
   list: {
     overflowY: "auto",
-    flex: "1 1 auto"
+    flex: "1 1 auto",
+    minHeight: 0,
+    direction: "rtl"
+  },
+  listItem: {
+    direction: "ltr"
   },
   empty: {
     padding: "16px",
@@ -90,8 +104,6 @@ const useStyles = makeStyles({
     justifyContent: "center"
   }
 });
-
-export const remotesMenuLabel = "Remotes (experimental)…";
 
 interface Props {
   sessions: SessionMeta[];
@@ -130,6 +142,12 @@ export function Sidebar({
 }: Props) {
   const styles = useStyles();
   const animatedList = useAnimatedListReorder(sessions.map((session) => session.id));
+  const itemRefRegistry = useRef<StableSessionItemRefRegistry>({ refs: {}, animatedRefs: {}, elements: {} });
+
+  useEffect(() => {
+    scrollActiveSessionIntoView(activeId, (id) => itemRefRegistry.current.elements[id]);
+  }, [activeId, sessions]);
+
   return (
     <div className={mergeClasses(styles.root, collapsed && styles.collapsedRoot)}>
       <div className={mergeClasses(styles.header, collapsed && styles.collapsedHeader)}>
@@ -168,30 +186,39 @@ export function Sidebar({
           </Menu>
         </div>
       </div>
-      <div className={styles.list}>
+      <div className={styles.list} dir="rtl">
         {sessions.length === 0 ? (
-          <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)}>
+          <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)} dir="ltr">
             {collapsed ? "No sessions" : "No sessions yet."}
           </div>
         ) : (
-          sessions.map((s) => (
-            <div
-              key={s.id}
-              ref={animatedList.registerItem(s.id)}
-              style={animatedList.getItemStyle(s.id)}
-            >
-              <SessionItem
-                session={s}
-                active={s.id === activeId}
-                compact={collapsed}
-                onSelect={onSelect}
-                onClose={onClose}
-                onNew={onNewFrom}
-                onEdit={onEdit}
-                onMaximize={onMaximize}
-              />
-            </div>
-          ))
+          sessions.map((s) => {
+            const registerItem = getStableSessionItemRef(
+              itemRefRegistry.current,
+              s.id,
+              animatedList.registerItem
+            );
+            return (
+              <div
+                key={s.id}
+                className={styles.listItem}
+                dir="ltr"
+                ref={registerItem}
+                style={animatedList.getItemStyle(s.id)}
+              >
+                <SessionItem
+                  session={s}
+                  active={s.id === activeId}
+                  compact={collapsed}
+                  onSelect={onSelect}
+                  onClose={onClose}
+                  onNew={onNewFrom}
+                  onEdit={onEdit}
+                  onMaximize={onMaximize}
+                />
+              </div>
+            );
+          })
         )}
       </div>
       {collapsible && (

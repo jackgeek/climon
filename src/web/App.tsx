@@ -32,14 +32,12 @@ const useStyles = makeStyles({
   sidebar: {
     width: "320px",
     minWidth: "320px",
-    borderRight: `1px solid ${tokens.colorNeutralStroke1}`,
     flex: "0 0 auto",
     minHeight: 0,
     "@media (max-width: 768px)": {
       width: "100%",
       minWidth: 0,
       maxHeight: "none",
-      borderRight: "none",
       borderBottom: "none"
     }
   },
@@ -154,6 +152,10 @@ export function scheduleTerminalRefit(
   requestFrame(() => {
     requestFrame(() => terminal.refit());
   });
+}
+
+export function shouldDeleteSessionWithoutDialog(session: Pick<SessionMeta, "status">): boolean {
+  return session.status === "completed" || session.status === "failed" || session.status === "disconnected";
 }
 
 interface MainHeaderProps {
@@ -354,7 +356,7 @@ export function App() {
     if (!session) {
       return;
     }
-    if (session.status === "completed" || session.status === "failed") {
+    if (shouldDeleteSessionWithoutDialog(session)) {
       void deleteSession(id).then(() => removeFromList(id));
       return;
     }

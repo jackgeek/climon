@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { delegateToServer, resolveServerInvocation } from "../src/cli/server-exec.js";
+import { delegateToServer, resolveServerEnv, resolveServerInvocation } from "../src/cli/server-exec.js";
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "climon-srvexec-"));
@@ -22,6 +22,30 @@ describe("resolveServerInvocation", () => {
     const sibling = join(dir, "climon-server");
     writeFileSync(sibling, "");
     const execPath = join(dir, "climon");
+    expect(resolveServerInvocation(["server"], {} as NodeJS.ProcessEnv, execPath, undefined, "linux")).toEqual({
+      file: sibling,
+      args: ["server"]
+    });
+  });
+
+  test("prefers the dev entrypoint over a sibling binary in source mode", () => {
+    const dir = tmp();
+    const sibling = join(dir, "climon-server");
+    const devEntry = join(dir, "server.ts");
+    writeFileSync(sibling, "");
+    writeFileSync(devEntry, "");
+    const execPath = join(dir, "bun");
+    expect(resolveServerInvocation(["server"], {} as NodeJS.ProcessEnv, execPath, devEntry, "linux")).toEqual({
+      file: execPath,
+      args: [devEntry, "server"]
+    });
+  });
+
+  test("uses a sibling server when no dev entrypoint is available", () => {
+    const dir = tmp();
+    const sibling = join(dir, "climon-server");
+    writeFileSync(sibling, "");
+    const execPath = join(dir, "bun");
     expect(resolveServerInvocation(["server"], {} as NodeJS.ProcessEnv, execPath, undefined, "linux")).toEqual({
       file: sibling,
       args: ["server"]
@@ -56,6 +80,26 @@ describe("resolveServerInvocation", () => {
       file: "climon-server",
       args: ["server"]
     });
+  });
+});
+
+describe("resolveServerEnv", () => {
+  test("passes the current client executable to the server for dashboard-spawned child sessions", () => {
+    const env = { PATH: "/usr/bin" } as NodeJS.ProcessEnv;
+
+    expect(resolveServerEnv(env, "/opt/climon/bin/climon").CLIMON_CLIENT_BIN).toBe("/opt/climon/bin/climon");
+  });
+
+  test("does not overwrite an explicit CLIMON_CLIENT_BIN override", () => {
+    const env = { CLIMON_CLIENT_BIN: "/custom/climon" } as NodeJS.ProcessEnv;
+
+    expect(resolveServerEnv(env, "/opt/climon/bin/climon").CLIMON_CLIENT_BIN).toBe("/custom/climon");
+  });
+
+  test("does not treat the Bun runtime as the client binary in source mode", () => {
+    const env = { PATH: "/usr/bin" } as NodeJS.ProcessEnv;
+
+    expect(resolveServerEnv(env, "/usr/bin/bun", "/repo/src/server.ts").CLIMON_CLIENT_BIN).toBeUndefined();
   });
 });
 

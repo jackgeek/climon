@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { DASHBOARD_IDLE_TIMEOUT_SECONDS, buildRunArgs, resolveParentSpawnColor } from "../src/server/server.js";
+import {
+  DASHBOARD_IDLE_TIMEOUT_SECONDS,
+  buildRunArgs,
+  resolveParentSpawnColor,
+  resolveParentSpawnCwd
+} from "../src/server/server.js";
 import type { SpawnMetaOptions } from "../src/server/server.js";
 
 const unresolvedSpawnMeta: SpawnMetaOptions = { color: "auto" };
@@ -38,5 +43,9 @@ describe("buildRunArgs", () => {
 
   test("resolves absent parent color inheritance to none", async () => {
     await expect(resolveParentSpawnColor(undefined, undefined, process.cwd())).resolves.toBeNull();
+  });
+
+  test("uses an explicit cwd over the selected parent session cwd", () => {
+    expect(resolveParentSpawnCwd(" /tmp/child ", "/tmp/parent")).toBe("/tmp/child");
   });
 });

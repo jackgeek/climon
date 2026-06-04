@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionMeta } from "../src/types.js";
 import { scheduleTerminalRefit } from "../src/web/App.js";
 import { MainHeader } from "../src/web/App.js";
+import { shouldDeleteSessionWithoutDialog } from "../src/web/App.js";
 
 function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -24,6 +26,18 @@ function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
 }
 
 describe("scheduleTerminalRefit", () => {
+  test("does not render a divider between the sidebar and main viewport", () => {
+    const source = readFileSync("src/web/App.tsx", "utf8");
+
+    expect(source).not.toContain("borderRight:");
+  });
+
+  test("renders a divider between the sidebar header and main header only", () => {
+    const source = readFileSync("src/web/components/Sidebar.tsx", "utf8");
+
+    expect(source).toContain("borderRight: `1px solid ${tokens.colorNeutralStroke1}`");
+  });
+
   test("refits the terminal after layout settles across two animation frames", () => {
     let calls = 0;
     const scheduled: Array<(time: number) => void> = [];
@@ -86,5 +100,12 @@ describe("scheduleTerminalRefit", () => {
     });
 
     expect(scheduled).toBe(false);
+  });
+
+  test("deletes terminal sessions without opening the close dialog", () => {
+    expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "completed" }))).toBe(true);
+    expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "failed" }))).toBe(true);
+    expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "disconnected" }))).toBe(true);
+    expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "running" }))).toBe(false);
   });
 });
