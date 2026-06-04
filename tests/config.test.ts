@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import {
   defaultConfig,
+  getConfigPath,
   getScrollbackPath,
   getSessionMetaPath,
   getSessionsDir,
@@ -202,6 +204,82 @@ describe("detach prefix config", () => {
     );
     const config = await loadConfig(env);
     expect(config.terminal.detachPrefix).toBe(0x1c);
+    await rm(home, { recursive: true, force: true });
+  });
+});
+
+describe("config jsonc paths and migration", () => {
+  test("getConfigPath points at config.jsonc", () => {
+    const env = { CLIMON_HOME: "/tmp/test-home" } as NodeJS.ProcessEnv;
+    expect(getConfigPath(env)).toBe("/tmp/test-home/config.jsonc");
+  });
+
+  test("loadConfig creates config.jsonc with generated comments", async () => {
+    const home = await makeTestHome("climon-jsonc-create-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    const config = await loadConfig(env);
+    
+    // Check config structure includes registry defaults
+    expect(config.session?.color).toBe("auto");
+    expect(config.session?.priority).toBe(500);
+    
+    // Check that config.jsonc exists with comments
+    const configPath = join(home, "config.jsonc");
+    expect(existsSync(configPath)).toBe(true);
+    
+    const raw = await readFile(configPath, "utf8");
+    expect(raw).toContain("// Schema version for the persisted config.json format");
+    expect(raw).toContain('"version": 1');
+    expect(raw).toContain('"color": "auto"');
+    
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("loadConfig reads config.jsonc with comments", async () => {
+    const home = await makeTestHome("climon-jsonc-read-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.jsonc"),
+      `{
+  // Custom server port
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9999
+  },
+  /* Session preferences */
+  "session": {
+    "color": "blue"
+  }
+}`
+    );
+    const config = await loadConfig(env);
+    expect(config.server.port).toBe(9999);
+    expect(config.session?.color).toBe("blue");
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("loadConfig reads legacy config.json when config.jsonc is absent", async () => {
+    const home = await makeTestHome("climon-jsonc-fallback-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 7777 },
+        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        attention: { idleSeconds: 10 },
+        session: { color: "green" }
+      })
+    );
+    const config = await loadConfig(env);
+    expect(config.server.port).toBe(7777);
+    expect(config.session?.color).toBe("green");
+    
+    // Should still be reading from config.json, not creating config.jsonc
+    expect(existsSync(join(home, "config.json"))).toBe(true);
+    
     await rm(home, { recursive: true, force: true });
   });
 });

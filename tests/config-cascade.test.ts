@@ -96,7 +96,7 @@ describe("config cascade", () => {
     mkdirSync(repo, { recursive: true });
     writeConfigSetting("remote.enabled", "true", "local", env(), repo);
     const raw = JSON.parse(
-      require("node:fs").readFileSync(join(repo, ".climon", "config.json"), "utf8")
+      require("node:fs").readFileSync(join(repo, ".climon", "config.jsonc"), "utf8").replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "")
     );
     expect(raw).toEqual({ remote: { enabled: true } });
   });
@@ -149,7 +149,7 @@ describe("coerceConfigValue", () => {
   });
 
   test("rejects invalid session color config values", () => {
-    expect(() => coerceConfigValue("session.color", "orange")).toThrow(/Color must be one of/);
+    expect(() => coerceConfigValue("session.color", "orange")).toThrow(/must be one of/);
   });
 
   test("returns string values unchanged", () => {
@@ -187,7 +187,7 @@ describe("unsetConfigSetting", () => {
     expect(resolveConfigSetting("session.priority", env(), repo)).toBe(42);
     unsetConfigSetting("session.priority", "local", env(), repo);
     const raw = JSON.parse(
-      require("node:fs").readFileSync(join(repo, ".climon", "config.json"), "utf8")
+      require("node:fs").readFileSync(join(repo, ".climon", "config.jsonc"), "utf8").replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "")
     );
     expect(raw).toEqual({});
   });

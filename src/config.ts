@@ -1,13 +1,22 @@
-import { chmodSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseColorMode } from "./session-meta.js";
 import type { ClimonConfig } from "./types.js";
-
-const CONFIG_VERSION = 1;
+import { parseJsoncConfig, renderJsoncConfig } from "./config-jsonc.js";
+import {
+  acceptedConfigKeys,
+  buildDefaultConfigFromSettings,
+  coerceConfigValueFromSettings,
+  CONFIG_VERSION
+} from "./config-settings.js";
 
 export const DEFAULT_DETACH_PREFIX = 0x1c; // Ctrl-\
+
+const CONFIG_BASENAME = "config.jsonc";
+const LEGACY_CONFIG_BASENAME = "config.json";
+const LEGACY_CONFIG_BACKUP_BASENAME = "config.json.bak";
 
 /** Returns `value` if it is an integer in [0, 255], otherwise the default. */
 function normalizeDetachPrefix(value: unknown): number {
@@ -29,7 +38,28 @@ export function getClimonHome(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 export function getConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(getClimonHome(env), "config.json");
+  return join(getClimonHome(env), CONFIG_BASENAME);
+}
+
+function getConfigPathForDir(dir: string): string {
+  return join(dir, CONFIG_BASENAME);
+}
+
+function getLegacyConfigPathForDir(dir: string): string {
+  return join(dir, LEGACY_CONFIG_BASENAME);
+}
+
+function getLegacyBackupPathForDir(dir: string): string {
+  return join(dir, LEGACY_CONFIG_BACKUP_BASENAME);
+}
+
+/** Returns the existing config path for a dir: prefer canonical, fall back to legacy. */
+function existingConfigPathForDir(dir: string): string | undefined {
+  const canonical = getConfigPathForDir(dir);
+  if (existsSync(canonical)) return canonical;
+  const legacy = getLegacyConfigPathForDir(dir);
+  if (existsSync(legacy)) return legacy;
+  return undefined;
 }
 
 export function getSessionsDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -70,36 +100,37 @@ export async function ensureClimonHome(env: NodeJS.ProcessEnv = process.env): Pr
 }
 
 export function defaultConfig(): ClimonConfig {
-  return {
-    version: CONFIG_VERSION,
-    server: {
-      host: "127.0.0.1",
-      port: 3131
-    },
-    terminal: {
-      clampBrowserToHost: true,
-      detachPrefix: DEFAULT_DETACH_PREFIX,
-      setTitle: true
-    },
-    attention: {
-      idleSeconds: 10
-    },
-    session: {
-      color: "auto"
-    }
-  };
+  return buildDefaultConfigFromSettings() as ClimonConfig;
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Reads and parses a config file at the given path using JSONC parser. */
+async function readConfigRecordFromPath(path: string): Promise<Record<string, unknown>> {
+  const raw = await readFile(path, "utf8");
+  return parseJsoncConfig(raw, path);
+}
+
 export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<ClimonConfig> {
   await ensureClimonHome(env);
-  const configPath = getConfigPath(env);
+  const home = getClimonHome(env);
+  const canonicalPath = getConfigPathForDir(home);
+  const legacyPath = getLegacyConfigPathForDir(home);
+  
+  let configPath: string | undefined;
+  if (existsSync(canonicalPath)) {
+    configPath = canonicalPath;
+  } else if (existsSync(legacyPath)) {
+    configPath = legacyPath;
+  }
+  
   try {
-    const raw = await readFile(configPath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
+    if (!configPath) {
+      throw { code: "ENOENT" };
+    }
+    const parsed = await readConfigRecordFromPath(configPath);
     if (!isObjectRecord(parsed) || (parsed.version !== undefined && parsed.version !== CONFIG_VERSION)) {
       throw new Error(`Unsupported climon config format in ${configPath}`);
     }
@@ -155,10 +186,12 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
 
 export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   await ensureClimonHome(env);
-  const configPath = getConfigPath(env);
-  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  const home = getClimonHome(env);
+  const canonicalPath = getConfigPathForDir(home);
+  const rendered = renderJsoncConfig(config as unknown as Record<string, unknown>);
+  await writeFile(canonicalPath, rendered, { mode: 0o600 });
   try {
-    await chmod(configPath, 0o600);
+    await chmod(canonicalPath, 0o600);
   } catch {
     // Windows and some filesystems do not support POSIX permissions.
   }
@@ -188,8 +221,10 @@ export function candidateConfigDirs(
 
 function readSparseConfig(dir: string): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(readFileSync(join(dir, "config.json"), "utf8")) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    const configPath = existingConfigPathForDir(dir);
+    if (!configPath) return {};
+    const raw = readFileSync(configPath, "utf8");
+    return parseJsoncConfig(raw, configPath);
   } catch {
     return {};
   }
@@ -244,14 +279,16 @@ export function listConfigDebugEntries(
   cwd: string = process.cwd()
 ): ConfigDebugEntry[] {
   return candidateConfigDirs(env, cwd).map((dir) => {
-    const path = join(dir, "config.json");
-    if (!existsSync(path)) return { path, exists: false, keys: [] };
+    const configPath = existingConfigPathForDir(dir);
+    const reportedPath = getConfigPathForDir(dir);
+    
+    if (!configPath) return { path: reportedPath, exists: false, keys: [] };
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-      return { path, exists: true, keys: collectDottedKeys(parsed).sort() };
+      const parsed = parseJsoncConfig(readFileSync(configPath, "utf8"), configPath);
+      return { path: reportedPath, exists: true, keys: collectDottedKeys(parsed).sort() };
     } catch (error) {
       return {
-        path,
+        path: reportedPath,
         exists: true,
         keys: [],
         error: error instanceof Error ? error.message : String(error)
@@ -271,59 +308,58 @@ export function resolveWriteDir(
   if (scope === "local") return join(resolve(cwd), ".climon");
   if (scope === "global") return getClimonHome(env);
   for (const dir of candidateConfigDirs(env, cwd)) {
-    if (existsSync(join(dir, "config.json"))) return dir;
+    if (existingConfigPathForDir(dir)) return dir;
   }
   return getClimonHome(env);
 }
 
-const CONFIG_KEY_TYPES: Record<string, "string" | "number" | "boolean"> = {
-  "remote.enabled": "boolean",
-  "remote.host": "string",
-  "remote.ingestHost": "string",
-  "remote.tunnelId": "string",
-  "remote.tunnelToken": "string",
-  "remote.port": "number",
-  "remote.clientId": "string",
-  "session.color": "string",
-  "session.priority": "number"
-};
-
+/** Registry-backed config key helpers */
 export function isKnownConfigKey(key: string): boolean {
-  return key in CONFIG_KEY_TYPES;
+  return acceptedConfigKeys().includes(key);
 }
 
 export function knownConfigKeys(): string[] {
-  return Object.keys(CONFIG_KEY_TYPES);
+  return acceptedConfigKeys();
 }
 
 /** Coerces a string CLI value to the typed value for a known key. Throws on bad input. */
 export function coerceConfigValue(key: string, value: string): string | number | boolean {
-  const type = CONFIG_KEY_TYPES[key];
-  if (type === "boolean") {
-    if (value === "true") return true;
-    if (value === "false") return false;
-    throw new Error(`Value for '${key}' must be 'true' or 'false'.`);
+  const coerced = coerceConfigValueFromSettings(key, value);
+  // Ensure return type matches expected primitives
+  if (typeof coerced === "string" || typeof coerced === "number" || typeof coerced === "boolean") {
+    return coerced;
   }
-  if (type === "number") {
-    const n = Number(value);
-    if (!Number.isInteger(n)) {
-      throw new Error(`Value for '${key}' must be an integer.`);
-    }
-    if (key === "session.priority") {
-      if (n < 0 || n > 1000) {
-        throw new Error("Value for 'session.priority' must be between 0 and 1000.");
-      }
-      return n;
-    }
-    if (n <= 0) {
-      throw new Error(`Value for '${key}' must be a positive integer.`);
-    }
-    return n;
+  throw new Error(`Value for '${key}' could not be coerced to a primitive type.`);
+}
+
+/** Writes a sparse config record to the target dir, backing up legacy config.json if needed. */
+function writeSparseConfig(dir: string, record: Record<string, unknown>): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const canonicalPath = getConfigPathForDir(dir);
+  const legacyPath = getLegacyConfigPathForDir(dir);
+  const backupPath = getLegacyBackupPathForDir(dir);
+  
+  // Check if migration is needed
+  const hasLegacy = existsSync(legacyPath);
+  const hasCanonical = existsSync(canonicalPath);
+  
+  // Write the canonical config.jsonc
+  const rendered = renderJsoncConfig(record);
+  writeFileSync(canonicalPath, rendered, { mode: 0o600 });
+  try {
+    chmodSync(canonicalPath, 0o600);
+  } catch {
+    // Non-POSIX filesystems.
   }
-  if (key === "session.color") {
-    return parseColorMode(value);
+  
+  // Migrate legacy config.json to backup if it exists
+  if (hasLegacy && !hasCanonical) {
+    try {
+      renameSync(legacyPath, backupPath);
+    } catch {
+      // Best-effort backup; continue even if rename fails
+    }
   }
-  return value;
 }
 
 /** Sets a dotted key, coercing booleans/numbers, writing a sparse file (0600). */
@@ -335,8 +371,6 @@ export function writeConfigSetting(
   cwd: string = process.cwd()
 ): string {
   const dir = resolveWriteDir(scope, env, cwd);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = join(dir, "config.json");
   const current = readSparseConfig(dir);
   const [section, field] = key.split(".");
   const sub = (current[section] && typeof current[section] === "object"
@@ -344,12 +378,7 @@ export function writeConfigSetting(
     : {}) as Record<string, unknown>;
   sub[field] = coerceConfigValue(key, value);
   current[section] = sub;
-  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Non-POSIX filesystems.
-  }
+  writeSparseConfig(dir, current);
   return dir;
 }
 
@@ -361,7 +390,8 @@ export function unsetConfigSetting(
   cwd: string = process.cwd()
 ): void {
   const dir = resolveWriteDir(scope, env, cwd);
-  if (!existsSync(join(dir, "config.json"))) return;
+  const existingPath = existingConfigPathForDir(dir);
+  if (!existingPath) return;
   const current = readSparseConfig(dir);
   const [section, field] = key.split(".");
   const sub = current[section];
@@ -369,8 +399,7 @@ export function unsetConfigSetting(
     delete (sub as Record<string, unknown>)[field];
     if (Object.keys(sub as Record<string, unknown>).length === 0) delete current[section];
   }
-  const path = join(dir, "config.json");
-  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { mode: 0o600 });
+  writeSparseConfig(dir, current);
 }
 
 /** Absolute path to the home machine's tunnel-hosting desired-state file. */
