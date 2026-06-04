@@ -40,6 +40,7 @@ const PATCH_LOCK_TIMEOUT_MS = 30_000;
 const PATCH_LOCK_STALE_MS = 60_000;
 const PATCH_LOCK_OWNER_FILE = "owner.json";
 const PATCH_LOCK_RECOVERY_SUFFIX = ".reclaim";
+const PATCH_LOCK_RECLAIM_CLAIM_FILE = ".reclaiming.json";
 
 type PatchLockOptions = {
   timeoutMs?: number;
@@ -75,6 +76,7 @@ type PatchLockSnapshot = {
 type PatchLockTestHooks = {
   afterReleaseRename?: (paths: { lockPath: string; releasePath: string }) => Promise<void> | void;
   beforeQuarantineRename?: (paths: { lockPath: string }) => Promise<void> | void;
+  afterQuarantineSnapshot?: (paths: { lockPath: string }) => Promise<void> | void;
   afterQuarantineRename?: (paths: { lockPath: string; quarantinePath: string }) => Promise<void> | void;
 };
 
@@ -153,8 +155,12 @@ async function writePatchLockOwner(lockPath: string, owner: PatchLockOwner): Pro
 }
 
 async function readPatchLockOwner(lockPath: string): Promise<Partial<PatchLockOwner> | undefined> {
+  return readPatchLockOwnerFile(join(lockPath, PATCH_LOCK_OWNER_FILE));
+}
+
+async function readPatchLockOwnerFile(path: string): Promise<Partial<PatchLockOwner> | undefined> {
   try {
-    return JSON.parse(await readFile(join(lockPath, PATCH_LOCK_OWNER_FILE), "utf8")) as Partial<PatchLockOwner>;
+    return JSON.parse(await readFile(path, "utf8")) as Partial<PatchLockOwner>;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -320,6 +326,33 @@ async function isPatchLockStale(lockPath: string, staleMs: number): Promise<bool
   }
 }
 
+async function claimPatchLockForReclaim(lockPath: string): Promise<PatchLockOwner | undefined> {
+  const claim = await getCurrentPatchLockOwner();
+  try {
+    // Cooperating reclaimers must hold this claim before renaming so a stale
+    // lock cannot be replaced with a fresh one in the validation->rename window.
+    await writeFile(join(lockPath, PATCH_LOCK_RECLAIM_CLAIM_FILE), `${JSON.stringify(claim)}\n`, { flag: "wx" });
+    return claim;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EEXIST" || code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function isSamePatchLockReclaimClaim(lockPath: string, expected: PatchLockOwner): Promise<boolean> {
+  const actual = await readPatchLockOwnerFile(join(lockPath, PATCH_LOCK_RECLAIM_CLAIM_FILE));
+  return isSamePatchLockOwner(actual, expected);
+}
+
+async function releasePatchLockReclaimClaim(lockPath: string, claim: PatchLockOwner): Promise<void> {
+  if (await isSamePatchLockReclaimClaim(lockPath, claim)) {
+    await rm(join(lockPath, PATCH_LOCK_RECLAIM_CLAIM_FILE), { force: true });
+  }
+}
+
 async function quarantineStalePatchLock(lockPath: string, staleMs: number): Promise<boolean> {
   const staleSnapshot = await getPatchLockSnapshot(lockPath);
   if (!staleSnapshot) {
@@ -333,12 +366,27 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
   if (!isSamePatchLockReclaimSnapshot(preRenameSnapshot, staleSnapshot) || !(await isPatchLockStale(lockPath, staleMs))) {
     return false;
   }
+  const reclaimClaim = await claimPatchLockForReclaim(lockPath);
+  if (!reclaimClaim) {
+    return false;
+  }
   let quarantinePath = "";
+  let renamed = false;
   try {
+    await patchLockTestHooks.afterQuarantineSnapshot?.({ lockPath });
+    const claimedSnapshot = await getPatchLockSnapshot(lockPath);
+    if (
+      !isSamePatchLockReclaimSnapshot(claimedSnapshot, preRenameSnapshot) ||
+      !(await isPatchLockStale(lockPath, staleMs)) ||
+      !(await isSamePatchLockReclaimClaim(lockPath, reclaimClaim))
+    ) {
+      return false;
+    }
     while (true) {
       quarantinePath = `${lockPath}.stale-${process.pid}-${Date.now()}-${tempCounter++}`;
       try {
         await rename(lockPath, quarantinePath);
+        renamed = true;
         break;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
@@ -353,6 +401,10 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
       return false;
     }
     throw error;
+  } finally {
+    if (!renamed) {
+      await releasePatchLockReclaimClaim(lockPath, reclaimClaim);
+    }
   }
   await patchLockTestHooks.afterQuarantineRename?.({ lockPath, quarantinePath });
 

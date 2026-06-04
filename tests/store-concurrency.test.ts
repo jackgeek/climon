@@ -333,6 +333,59 @@ describe("patchSessionMeta concurrency", () => {
     expect(finalOwner.token).toBe("live-recovery-owner");
   });
 
+  test("stale recovery lock reclaim preserves a newly live recovery lock replaced after snapshot validation", async () => {
+    const id = "stale-recovery-lock-after-snapshot-race";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const recoveryLockPath = `${lockPath}.reclaim`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+    await mkdir(recoveryLockPath);
+    await writeFile(
+      join(recoveryLockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(999999998)),
+        createdAt: "1970-01-01T00:00:00.000Z"
+      })
+    );
+
+    let liveIdentity: { dev: number; ino: number } | undefined;
+    const resetHooks = setPatchLockTestHooksForTest({
+      afterQuarantineSnapshot: async ({ lockPath: pathBeingReclaimed }) => {
+        if (pathBeingReclaimed !== recoveryLockPath) {
+          return;
+        }
+        await rm(recoveryLockPath, { recursive: true, force: true });
+        await mkdir(recoveryLockPath);
+        await writeFile(
+          join(recoveryLockPath, "owner.json"),
+          JSON.stringify({
+            ...(await lockOwner(process.pid)),
+            token: "live-recovery-owner-after-snapshot"
+          })
+        );
+        const liveStat = await stat(recoveryLockPath);
+        liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
+      }
+    });
+    try {
+      await expect(
+        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 })
+      ).rejects.toThrow(/Timed out waiting for session metadata lock/);
+    } finally {
+      resetHooks();
+    }
+
+    expect(liveIdentity).toBeDefined();
+    if (!liveIdentity) {
+      throw new Error("test hook did not create a replacement recovery lock");
+    }
+    const finalStat = await stat(recoveryLockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(recoveryLockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("live-recovery-owner-after-snapshot");
+  });
+
   test("release mismatch with a different owner token leaves the replacement live lock at the original path", async () => {
     const id = "release-mismatch-new-live-lock";
     await writeSessionMeta(baseMeta(id), env);
