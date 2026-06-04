@@ -46,6 +46,14 @@ describe("parseArgs", () => {
     });
   });
 
+  test("parses server with --enable-remotes", () => {
+    expect(parseArgs(["server", "--enable-remotes", "--port", "9000"])).toEqual({
+      command: "server",
+      port: 9000,
+      enableRemotes: true
+    });
+  });
+
   test("parses internal session entrypoint", () => {
     expect(parseArgs(["__session", "abc"])).toEqual({ command: "session", id: "abc" });
   });
