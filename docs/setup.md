@@ -58,7 +58,21 @@ On first run, climon writes `~/.climon/config.jsonc`:
   },
   "terminal": {
     // When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling.
-    "clampBrowserToHost": true
+    "clampBrowserToHost": true,
+    // Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255].
+    "detachPrefix": 28,
+    // When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.
+    "setTitle": true
+  },
+  "attention": {
+    // Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.
+    "idleSeconds": 10
+  },
+  "session": {
+    // Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment.
+    "color": "auto",
+    // Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group.
+    "priority": 500
   }
 }
 ```
