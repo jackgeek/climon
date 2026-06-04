@@ -46,6 +46,8 @@ interface WsData {
   socketPath: string;
 }
 
+export const DASHBOARD_IDLE_TIMEOUT_SECONDS = 255;
+
 const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
@@ -471,6 +473,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     server = Bun.serve<WsData>({
     hostname: config.server.host,
     port: config.server.port,
+    idleTimeout: DASHBOARD_IDLE_TIMEOUT_SECONDS,
     async fetch(request, srv) {
       const url = new URL(request.url);
 

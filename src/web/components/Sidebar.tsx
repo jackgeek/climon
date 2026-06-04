@@ -91,6 +91,8 @@ const useStyles = makeStyles({
   }
 });
 
+export const remotesMenuLabel = "Remotes (experimental)…";
+
 interface Props {
   sessions: SessionMeta[];
   activeId: string | null;
@@ -160,7 +162,7 @@ export function Sidebar({
                   {viewMode === "clamped" ? "✓ " : ""}
                   {clampSizeMenuLabel}
                 </MenuItem>
-                <MenuItem onClick={onManageRemote}>Remotes…</MenuItem>
+                <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>
               </MenuList>
             </MenuPopover>
           </Menu>

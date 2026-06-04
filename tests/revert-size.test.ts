@@ -205,6 +205,7 @@ describe("fill window mode host warning and restore", () => {
         ? true
         : undefined
     );
+    await waitFor(async () => (hostWarnings.some((warning) => warning.kind === "restored") ? true : undefined));
 
     host.end();
     viewer.end();
@@ -220,6 +221,69 @@ describe("fill window mode host warning and restore", () => {
     await proc.exited;
     expect(viewerModes.some((mode) => mode.mode === "clamped")).toBe(true);
     expect(viewerSizes.some((size) => size.cols === 80 && size.rows === 24)).toBe(true);
+    expect(hostWarnings.some((warning) => warning.kind === "restored")).toBe(true);
+  }, 30000);
+
+  test("viewer disconnect clears the local host overgrown warning", async () => {
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    const meta = await waitFor(async () => {
+      const m = await readMeta(id).catch(() => undefined);
+      return m?.socketPath && isResolvedSessionSocketRef(m.socketPath) ? m : undefined;
+    });
+
+    const host = open(meta.socketPath);
+    const hostDecoder = new FrameDecoder();
+    const hostWarnings: TerminalWarningPayload[] = [];
+    host.on("data", (chunk) => {
+      for (const frame of hostDecoder.push(chunk)) {
+        if (frame.type === FrameType.TerminalWarning) {
+          hostWarnings.push(parseJsonPayload<TerminalWarningPayload>(frame.payload));
+        }
+      }
+    });
+    await new Promise((r) => host.once("connect", r));
+    host.write(encodeJsonFrame(FrameType.Resize, { cols: 80, rows: 24, source: "host" }));
+
+    const viewer = open(meta.socketPath);
+    const viewerDecoder = new FrameDecoder();
+    const viewerSizes: PtySizePayload[] = [];
+    viewer.on("data", (chunk) => {
+      for (const frame of viewerDecoder.push(chunk)) {
+        if (frame.type === FrameType.PtySize) {
+          viewerSizes.push(parseJsonPayload<PtySizePayload>(frame.payload));
+        }
+      }
+    });
+    await new Promise((r) => viewer.once("connect", r));
+
+    viewer.write(encodeJsonFrame(FrameType.Resize, { cols: 140, rows: 40, source: "viewer", mode: "fill" }));
+
+    await waitFor(async () =>
+      viewerSizes.some((size) => size.cols === 140 && size.rows === 40) ? true : undefined
+    );
+    await waitFor(async () => (hostWarnings.some((warning) => warning.kind === "overgrown") ? true : undefined));
+
+    viewer.end();
+
+    await waitFor(async () => (hostWarnings.some((warning) => warning.kind === "restored") ? true : undefined));
+
+    host.end();
+    const pid = (await readMeta(id)).daemonPid;
+    if (pid) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // already gone
+      }
+    }
+    proc.kill();
+    await proc.exited;
+    expect(hostWarnings.some((warning) => warning.kind === "overgrown")).toBe(true);
+    expect(hostWarnings.some((warning) => warning.kind === "restored")).toBe(true);
   }, 30000);
 
   test("browser clamp mode request returns an overgrown fill session to the host size", async () => {
@@ -405,9 +469,11 @@ describe("fill window mode host warning and restore", () => {
 
     const host2 = open(meta.socketPath);
     const host2Decoder = new FrameDecoder();
+    const host2Frames: FrameType[] = [];
     const host2Warnings: TerminalWarningPayload[] = [];
     host2.on("data", (chunk) => {
       for (const frame of host2Decoder.push(chunk)) {
+        host2Frames.push(frame.type);
         if (frame.type === FrameType.TerminalWarning) {
           host2Warnings.push(parseJsonPayload<TerminalWarningPayload>(frame.payload));
         }
@@ -436,5 +502,6 @@ describe("fill window mode host warning and restore", () => {
     proc.kill();
     await proc.exited;
     expect(host2Warnings.some((warning) => warning.kind === "overgrown")).toBe(true);
+    expect(host2Frames.indexOf(FrameType.TerminalWarning)).toBeLessThan(host2Frames.indexOf(FrameType.Replay));
   }, 30000);
 });

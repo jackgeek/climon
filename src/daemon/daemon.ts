@@ -113,6 +113,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
   let currentAttentionMatchedAt: string | undefined;
   let currentAttentionFingerprint: string | undefined;
   const warnedHosts = new Set<Socket>();
+  let hostWarningActive = false;
   let exited = false;
   let exitInfo: { exitCode: number } | undefined;
   let resolveExit: (() => void) | undefined;
@@ -178,7 +179,15 @@ export async function runSessionDaemon(id: string): Promise<void> {
     const payload = overgrownWarningPayload();
     if (payload) {
       writeHostWarning(payload);
+      hostWarningActive = true;
     } else {
+      if (hostWarningActive) {
+        const frame = encodeJsonFrame(FrameType.TerminalWarning, { kind: "restored" } satisfies TerminalWarningPayload);
+        for (const host of hosts) {
+          host.write(frame);
+        }
+      }
+      hostWarningActive = false;
       warnedHosts.clear();
     }
   }
@@ -391,19 +400,30 @@ export async function runSessionDaemon(id: string): Promise<void> {
   await patchSessionMeta(id, { status: "running", priorityReason: "running", daemonPid: pty.pid });
 
   const server: Server = createServer((socket) => {
-    clients.add(socket);
-    socket.write(encodeJsonFrame(FrameType.PtySize, { cols: appliedCols, rows: appliedRows }));
-    socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
-    socket.write(encodeFrame(FrameType.Replay, scrollback.snapshot()));
-    if (exited && exitInfo) {
-      socket.write(encodeJsonFrame(FrameType.Exit, exitInfo));
-      socket.end();
-      clients.delete(socket);
-      return;
-    }
+    let initialized = false;
+    const initialFramesTimer = setTimeout(writeInitialFrames, 10);
 
-    if (setTitle && currentName.length > 0) {
-      socket.write(encodeJsonFrame(FrameType.Title, { name: currentName }));
+    function writeInitialFrames(): void {
+      if (initialized) {
+        return;
+      }
+      initialized = true;
+      clearTimeout(initialFramesTimer);
+      clients.add(socket);
+      socket.write(encodeJsonFrame(FrameType.PtySize, { cols: appliedCols, rows: appliedRows }));
+      socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
+      updateOvergrownWarning();
+      socket.write(encodeFrame(FrameType.Replay, scrollback.snapshot()));
+      if (exited && exitInfo) {
+        socket.write(encodeJsonFrame(FrameType.Exit, exitInfo));
+        socket.end();
+        clients.delete(socket);
+        return;
+      }
+
+      if (setTitle && currentName.length > 0) {
+        socket.write(encodeJsonFrame(FrameType.Title, { name: currentName }));
+      }
     }
 
     const decoder = new FrameDecoder();
@@ -419,13 +439,16 @@ export async function runSessionDaemon(id: string): Promise<void> {
             viewers.add(socket);
           }
           applyResize(size);
+          writeInitialFrames();
         } else if (frame.type === FrameType.TerminalMode) {
           const mode = parseJsonPayload<TerminalModePayload>(frame.payload).mode;
           if (mode === "clamped" || mode === "fill") {
             applyTerminalMode(mode);
           }
+          writeInitialFrames();
         } else if (frame.type === FrameType.Attention) {
           applyAttention(parseJsonPayload<AttentionPayload>(frame.payload), "user");
+          writeInitialFrames();
         }
       }
     });

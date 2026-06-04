@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveSessionDefaults, chooseAutoSessionColor } from "../src/launcher.js";
+import { launchBanner, resolveSessionDefaults, chooseAutoSessionColor } from "../src/launcher.js";
 import type { AnsiColor, SessionMeta } from "../src/types.js";
 
 const homes: string[] = [];
@@ -68,6 +68,16 @@ describe("chooseAutoSessionColor", () => {
     }
     writeSession(home, "one-green", "green");
     await expect(chooseAutoSessionColor({ CLIMON_HOME: join(home, ".climon") })).resolves.toBe("green");
+  });
+});
+
+describe("launchBanner", () => {
+  test("launch banner omits dashboard URL", () => {
+    const banner = launchBanner("0.1.16", "session-1");
+
+    expect(banner).toContain("climon v0.1.16 monitoring session session-1");
+    expect(banner).not.toContain("dashboard");
+    expect(banner).not.toContain("http://");
   });
 });
 

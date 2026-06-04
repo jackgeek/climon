@@ -44,6 +44,10 @@ export function resolveLaunchSize(env: NodeJS.ProcessEnv): { cols: number; rows:
   };
 }
 
+export function launchBanner(version: string, id: string): string {
+  return `climon v${version} monitoring session ${id}\r\n`;
+}
+
 async function waitForSessionReady(id: string, timeoutMs = 10000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -279,9 +283,8 @@ export async function startMonitoredCommand(
 
   meta.socketPath = await waitForSessionReady(id);
 
-  const dashboardUrl = `http://${config.server.host}:${config.server.port}/`;
   const detachKey = describeDetachKey(config.terminal.detachPrefix);
-  process.stdout.write(`climon v${VERSION} monitoring session ${id} — dashboard: ${dashboardUrl}\r\n`);
+  process.stdout.write(launchBanner(VERSION, id));
   process.stdout.write(`Detach with ${detachKey} then d.\r\n`);
 
   const result = await connectToSession(meta.socketPath, config.terminal.detachPrefix);

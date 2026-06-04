@@ -29,6 +29,18 @@ interface ProcessedInput {
   action: InputAction;
 }
 
+export class LocalTerminalOutputGate {
+  private suppressPtyOutput = false;
+
+  applyWarning(warning: TerminalWarningPayload): void {
+    this.suppressPtyOutput = warning.kind === "overgrown";
+  }
+
+  writePtyOutput(payload: Buffer): Buffer | null {
+    return this.suppressPtyOutput ? null : payload;
+  }
+}
+
 export class InputProcessor {
   private armed = false;
 
@@ -63,6 +75,19 @@ function terminalSize(): { cols: number; rows: number } {
   };
 }
 
+export function renderTerminalWarning(warning: TerminalWarningPayload, detachPrefix: number): string {
+  if (warning.kind === "restored") {
+    return "\r\n\x1b[32m[climon] Local terminal rendering restored; browser terminal is clamped again.\x1b[0m\r\n";
+  }
+
+  return (
+    `\r\n\x1b[33m[climon] The browser terminal is not clamped (${warning.cols}x${warning.rows}), ` +
+    `which is larger than this local terminal (${warning.hostCols}x${warning.hostRows}). ` +
+    `Local PTY output is paused here to avoid corrupt rendering. Press ${describeDetachKey(detachPrefix)} then c ` +
+    `to restore clamp mode, choose "Clamp size" in the web terminal menu, or stop viewing the terminal in the web server.\x1b[0m\r\n`
+  );
+}
+
 /**
  * Connects the local terminal to a running session daemon. Forwards keystrokes,
  * renders PTY output, and supports detaching with the configured prefix then d.
@@ -77,6 +102,7 @@ export function connectToSession(socketPath: string, detachPrefix: number = 0x1c
     let exitCode = 0;
     let detached = false;
     const titleController = new TitleController(process.stdout);
+    const outputGate = new LocalTerminalOutputGate();
 
     const onStdin = (chunk: Buffer): void => {
       const { forward, action } = inputProcessor.process(chunk);
@@ -118,33 +144,30 @@ export function connectToSession(socketPath: string, detachPrefix: number = 0x1c
     }
 
     socket.on("connect", () => {
+      onResize();
       if (stdin.isTTY) {
         stdin.setRawMode(true);
       }
       stdin.resume();
       stdin.on("data", onStdin);
       process.stdout.on("resize", onResize);
-      onResize();
     });
 
     socket.on("data", (chunk) => {
       for (const frame of decoder.push(chunk)) {
         if (frame.type === FrameType.Output || frame.type === FrameType.Replay) {
-          process.stdout.write(frame.payload);
+          const payload = outputGate.writePtyOutput(frame.payload);
+          if (payload) {
+            process.stdout.write(payload);
+          }
         } else if (frame.type === FrameType.Exit) {
           exitCode = parseJsonPayload<ExitPayload>(frame.payload).exitCode;
         } else if (frame.type === FrameType.Title) {
           titleController.apply(parseJsonPayload<TitlePayload>(frame.payload).name);
         } else if (frame.type === FrameType.TerminalWarning) {
           const warning = parseJsonPayload<TerminalWarningPayload>(frame.payload);
-          if (warning.kind === "overgrown") {
-            process.stdout.write(
-              `\r\n\x1b[33m[climon] Browser fill-window terminal is ${warning.cols}x${warning.rows}, ` +
-                `larger than this terminal (${warning.hostCols}x${warning.hostRows}). ` +
-                `The local terminal may not render correctly. Press ${describeDetachKey(detachPrefix)} then c ` +
-                `to restore clamped mode.\x1b[0m\r\n`
-            );
-          }
+          outputGate.applyWarning(warning);
+          process.stdout.write(renderTerminalWarning(warning, detachPrefix));
         }
       }
     });
