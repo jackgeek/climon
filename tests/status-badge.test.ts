@@ -4,7 +4,15 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionStatus } from "../src/types.js";
 import { StatusBadge, STATUS_INITIALS, STATUS_LABELS, statusBadgeColor } from "../src/web/components/StatusBadge.js";
 
-const statuses: SessionStatus[] = ["running", "available", "needs-attention", "completed", "failed", "disconnected"];
+const statuses: SessionStatus[] = [
+  "running",
+  "available",
+  "needs-attention",
+  "completed",
+  "paused",
+  "failed",
+  "disconnected"
+];
 
 describe("StatusBadge label maps", () => {
   test("defines compact initials for every session status", () => {
@@ -13,6 +21,7 @@ describe("StatusBadge label maps", () => {
       available: "A",
       "needs-attention": "NA",
       completed: "C",
+      paused: "P",
       failed: "F",
       disconnected: "D"
     });
@@ -28,6 +37,7 @@ describe("StatusBadge label maps", () => {
       available: "available",
       "needs-attention": "needs attention",
       completed: "completed",
+      paused: "paused",
       failed: "failed",
       disconnected: "disconnected"
     });
@@ -41,6 +51,14 @@ describe("StatusBadge label maps", () => {
 describe("statusBadgeColor", () => {
   test("uses a blue brand pill for running sessions", () => {
     expect(statusBadgeColor("running")).toBe("brand");
+  });
+
+  test("uses a green success pill for available sessions", () => {
+    expect(statusBadgeColor("available")).toBe("success");
+  });
+
+  test("uses a grey subtle pill for paused sessions", () => {
+    expect(statusBadgeColor("paused")).toBe("subtle");
   });
 });
 

@@ -8,6 +8,7 @@ const COLOR: Record<SessionStatus, BadgeColor> = {
   available: "success",
   "needs-attention": "warning",
   completed: "success",
+  paused: "subtle",
   failed: "danger",
   disconnected: "subtle"
 };
@@ -21,6 +22,7 @@ export const STATUS_LABELS: Record<SessionStatus, string> = {
   available: "available",
   "needs-attention": "needs attention",
   completed: "completed",
+  paused: "paused",
   failed: "failed",
   disconnected: "disconnected"
 };
@@ -30,6 +32,7 @@ export const STATUS_INITIALS: Record<SessionStatus, string> = {
   available: "A",
   "needs-attention": "NA",
   completed: "C",
+  paused: "P",
   failed: "F",
   disconnected: "D"
 };
