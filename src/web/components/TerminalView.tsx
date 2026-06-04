@@ -1,7 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { makeStyles } from "@fluentui/react-components";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITerminalAddon } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import {
@@ -97,6 +98,15 @@ export function applyTerminalFontSize(term: FontResizableTerminal, fontSize: num
   term.clearTextureAtlas();
   term.refresh(0, Math.max(term.rows - 1, 0));
   refit();
+}
+
+export function loadTerminalAddons(
+  term: Pick<Terminal, "loadAddon">,
+  fit: ITerminalAddon,
+  webLinks: ITerminalAddon
+): void {
+  term.loadAddon(fit);
+  term.loadAddon(webLinks);
 }
 
 export interface TerminalHandle {
@@ -225,7 +235,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     });
     const alternateScreenDisposables = disableAlternateScreenBuffer(term);
     const fit = new FitAddon();
-    term.loadAddon(fit);
+    const webLinks = new WebLinksAddon();
+    loadTerminalAddons(term, fit, webLinks);
     term.open(container);
     termRef.current = term;
     fitRef.current = fit;

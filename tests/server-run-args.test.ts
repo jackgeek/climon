@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildRunArgs, resolveParentSpawnColor } from "../src/server/server.js";
+import { DASHBOARD_IDLE_TIMEOUT_SECONDS, buildRunArgs, resolveParentSpawnColor } from "../src/server/server.js";
 import type { SpawnMetaOptions } from "../src/server/server.js";
 
 const unresolvedSpawnMeta: SpawnMetaOptions = { color: "auto" };
@@ -10,6 +10,12 @@ describe("buildRunArgs", () => {
     expect(buildRunArgs(["npm", "run", "dev"], {})).toEqual([
       "run", "--headless", "npm", "run", "dev"
     ]);
+  });
+
+  describe("dashboard server timeout", () => {
+    test("uses a long idle timeout for dashboard SSE and WebSocket connections", () => {
+      expect(DASHBOARD_IDLE_TIMEOUT_SECONDS).toBeGreaterThan(10);
+    });
   });
 
   test("prepends priority, color, and name flags before the command", () => {

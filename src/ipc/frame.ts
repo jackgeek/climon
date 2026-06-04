@@ -57,13 +57,17 @@ export interface TerminalModePayload {
   mode: TerminalResizeMode;
 }
 
-export interface TerminalWarningPayload {
-  kind: "overgrown";
-  cols: number;
-  rows: number;
-  hostCols: number;
-  hostRows: number;
-}
+export type TerminalWarningPayload =
+  | {
+      kind: "overgrown";
+      cols: number;
+      rows: number;
+      hostCols: number;
+      hostRows: number;
+    }
+  | {
+      kind: "restored";
+    };
 
 const HEADER_SIZE = 5; // 4-byte length + 1-byte type
 

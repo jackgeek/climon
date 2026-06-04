@@ -8,6 +8,7 @@ import {
   disableAlternateScreenBuffer,
   focusTerminalPane,
   TerminalView,
+  loadTerminalAddons,
   terminalOptions
 } from "../src/web/components/TerminalView.js";
 
@@ -36,6 +37,20 @@ describe("TerminalView", () => {
 
   test("keeps enough terminal scrollback for long-running command output", () => {
     expect(terminalOptions.scrollback).toBeGreaterThanOrEqual(10_000);
+  });
+
+  test("loads fit and web link addons", () => {
+    const loaded: string[] = [];
+    const fitAddon = { activate: () => {}, dispose: () => {} };
+    const webLinksAddon = { activate: () => {}, dispose: () => {} };
+
+    loadTerminalAddons(
+      { loadAddon: (addon) => loaded.push(addon === fitAddon ? "fit" : "web-links") },
+      fitAddon,
+      webLinksAddon
+    );
+
+    expect(loaded).toEqual(["fit", "web-links"]);
   });
 
   test("focuses xterm when the terminal pane is clicked", () => {
