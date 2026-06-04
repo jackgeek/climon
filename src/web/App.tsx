@@ -27,6 +27,7 @@ import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed 
 import { SplashScreen } from "./components/SplashScreen.js";
 import {
   browserNotificationPermissionMessage,
+  browserNotificationPermissionFailureTitle,
   notificationsEnabledFromState,
   readBrowserNotificationsEnabled,
   requestBrowserNotificationPermission,
@@ -479,7 +480,7 @@ export function App() {
       <Dialog open={notificationMessage !== null} onOpenChange={(_, data) => !data.open && setNotificationMessage(null)}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>Notifications are not enabled</DialogTitle>
+            <DialogTitle>{browserNotificationPermissionFailureTitle}</DialogTitle>
             <DialogContent>{notificationMessage}</DialogContent>
             <DialogActions>
               <Button appearance="primary" onClick={() => setNotificationMessage(null)}>

@@ -41,6 +41,7 @@ type AudioContextConstructor = typeof AudioContext;
 type BrowserNotificationApi = Pick<typeof Notification, "permission" | "requestPermission">;
 type NotificationStorage = Pick<Storage, "getItem" | "setItem">;
 export type BrowserNotificationPermissionResult = NotificationPermission | "unsupported" | "insecure-context";
+export const browserNotificationPermissionFailureTitle = "Failed to enable notifications";
 
 interface WindowWithWebkitAudioContext extends Window {
   AudioContext?: AudioContextConstructor;

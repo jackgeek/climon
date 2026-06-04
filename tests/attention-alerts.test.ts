@@ -3,6 +3,7 @@ import type { SessionMeta } from "../src/types.js";
 import {
   buildAttentionNotification,
   browserNotificationPermissionMessage,
+  browserNotificationPermissionFailureTitle,
   createAttentionAlertManager,
   createBrowserNotificationAdapter,
   formatAttentionTitle,
@@ -165,6 +166,10 @@ describe("attention notification content", () => {
     });
 
     describe("browserNotificationPermissionMessage", () => {
+      test("titles permission failures as failed notification enabling", () => {
+        expect(browserNotificationPermissionFailureTitle).toBe("Failed to enable notifications");
+      });
+
       test("explains when the browser blocked the notification permission prompt", () => {
         expect(browserNotificationPermissionMessage("denied")).toBe(
           "Notifications are blocked in your browser. Enable them for this site in Edge site settings, then try again."
