@@ -44,25 +44,29 @@ Then `climon ...` is available globally (so you can prefix any command with it).
 
 ## Configuration
 
-On first run, climon writes `~/.climon/config.json`:
+On first run, climon writes `~/.climon/config.jsonc`:
 
-```json
+```jsonc
 {
+  // Schema version for the persisted config.json format. Always 1 for the current release.
   "version": 1,
-  "server": { "host": "127.0.0.1", "port": 3131, "lan": false, "token": "<random>" },
-  "terminal": { "clampBrowserToHost": true }
+  "server": {
+    // IP address the dashboard server binds to. Defaults to loopback for local-only access.
+    "host": "127.0.0.1",
+    // TCP port the dashboard server listens on. Change if 3131 conflicts with another service.
+    "port": 3131
+  },
+  "terminal": {
+    // When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling.
+    "clampBrowserToHost": true
+  }
 }
 ```
 
+climon generates these comments automatically from the settings registry. See `climon config --help` or the [configuration reference](./usage.md#climon-config) for all available settings.
+
 - Set `CLIMON_HOME` to use a different state directory (useful for testing).
-- `--port N` and `--lan` flags on `climon server` override host/port/lan.
-- The `token` is required for non-localhost (LAN) access.
-- `terminal.clampBrowserToHost` (default `true`) stops a browser viewer from
-  growing the shared PTY beyond the local terminal that launched the session.
-  The local terminal renders raw PTY output and cannot reflow, so a larger
-  browser viewport would otherwise mangle its rendering. With clamping on, both
-  views show the same content. Set it to `false` to let the browser drive the
-  full PTY size (restart the affected session daemon for the change to apply).
+- `--port N` flag on `climon server` overrides the port at runtime.
 
 ## Verify the install
 

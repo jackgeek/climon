@@ -183,20 +183,37 @@ available on the home machine; otherwise keep `devtunnel host climon-tunnel`
 running yourself. Then copy the generated climon config script from the dialog
 and run it on the devbox.
 
+<!-- BEGIN GENERATED CONFIG SETTINGS -->
 ### `climon config`
 
-`climon config` works like `git config`. It reads/writes a project-local or
-global `.climon/config.json`:
+`climon config` works like `git config`. It reads project-local config first, then ancestor directories, then the global config under `$CLIMON_HOME`.
 
 - `climon config remote.tunnelId <id>` — set a value.
 - `climon config remote.tunnelId` — print a value (exit 1 if unset).
-- `climon config --list` — print all values.
-- `climon config --debug` — print each candidate config file and the keys found
-  in resolution order.
+- `climon config --list` — print all set user-facing values.
+- `climon config --debug` — print each candidate config file and the keys found in resolution order.
 - `climon config --unset remote.tunnelId` — remove a value.
-- `--global` (default) writes `~/.climon`; `--local` writes `./.climon`.
+- `climon config --help` — print this settings reference in the terminal.
+- `--global` writes `$CLIMON_HOME/config.jsonc`; `--local` writes `./.climon/config.jsonc`.
 
-When climon reads a setting it checks `.climon/config.json` in the current
-directory, then each ancestor, then `~/.climon/config.json`. When writing a
-setting, if no `.climon` directory exists in the current directory or its
-ancestors, climon creates one in `~/`.
+climon writes `config.jsonc` so generated comments can explain each setting. Legacy `config.json` files are read for backward compatibility and migrated to `config.jsonc` on first write, leaving `config.json.bak` as a backup.
+
+| Path | Type | Default | Scope | Description |
+|------|------|---------|-------|-------------|
+| `version` | number | `1` | client, daemon, server | Schema version for the persisted config.json format. Always 1 for the current release. (**internal**) |
+| `server.host` | string | `127.0.0.1` | server | IP address the dashboard server binds to. Defaults to loopback for local-only access. |
+| `server.port` | number | `3131` | server | TCP port the dashboard server listens on. Change if 3131 conflicts with another service. |
+| `terminal.clampBrowserToHost` | boolean | `true` | daemon | When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling. |
+| `terminal.detachPrefix` | number | `28` | client | Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255]. |
+| `terminal.setTitle` | boolean | `true` | client | When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false. |
+| `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |
+| `remote.enabled` | boolean | unset | client | Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection. |
+| `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
+| `remote.ingestHost` | string | unset | client | Host address where the dashboard-side ingest daemon should listen for incoming remote session connections. |
+| `remote.tunnelId` | string | unset | client | Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward local climon traffic to a remote dashboard. |
+| `remote.tunnelToken` | string | unset | client | Stores the dev tunnel connect token scoped to this tunnel. Supplied via DEVTUNNEL_ACCESS_TOKEN environment variable. (**sensitive**) |
+| `remote.port` | number | unset | client | Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set. |
+| `remote.clientId` | string | unset | client | Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client. (**internal**) |
+| `session.color` | string | `auto` | client, daemon, server | Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment. |
+| `session.priority` | number | `500` | client, daemon, server | Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group. |
+<!-- END GENERATED CONFIG SETTINGS -->
