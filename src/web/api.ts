@@ -58,12 +58,13 @@ export interface UpdateSessionBody {
   name?: string;
   priority?: number;
   color?: AnsiColor | null;
+  status?: Extract<SessionMeta["status"], "paused" | "running">;
 }
 
 export async function updateSession(
   id: string,
   body: UpdateSessionBody
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; session?: SessionMeta; error?: string }> {
   try {
     const res = await fetch(withQuery(`/api/sessions/${id}`), {
       method: "PATCH",
@@ -73,7 +74,8 @@ export async function updateSession(
     if (!res.ok) {
       return { ok: false, error: (await res.text()) || `Failed (${res.status})` };
     }
-    return { ok: true };
+    const session = (await res.json()) as SessionMeta;
+    return { ok: true, session };
   } catch {
     return { ok: false, error: "Network error." };
   }
@@ -146,7 +148,7 @@ export function attachSocketUrl(id: string): string {
 }
 
 export function isLiveStatus(status: SessionMeta["status"]): boolean {
-  return status === "running" || status === "available" || status === "needs-attention";
+  return status === "running" || status === "available" || status === "needs-attention" || status === "paused";
 }
 
 export function attentionAckMessage(attentionMatchedAt: string): string {
