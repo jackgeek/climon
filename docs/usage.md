@@ -105,7 +105,7 @@ of the dashboard. As soon as the screen changes again the session reverts to
 `running`. Open it and type the response in the web terminal to unblock the
 command.
 
-Tune the idle window in `~/.climon/config.json` under `attention.idleSeconds`;
+Tune the idle window in `~/.climon/config.jsonc` under `attention.idleSeconds`;
 set it to `0` (or less) to disable static-screen detection. Detection runs only
 while a local client is attached.
 
