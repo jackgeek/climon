@@ -1,12 +1,38 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
-import { rm } from "node:fs/promises";
-import { patchSessionMeta, patchSessionMetaWithCurrent, readSessionMeta, writeSessionMeta } from "../src/store.js";
+import { mkdir, readlink, rm, writeFile } from "node:fs/promises";
+import {
+  acquireSessionMetaPatchLockForTest,
+  patchSessionMeta,
+  patchSessionMetaWithCurrent,
+  readSessionMeta,
+  writeSessionMeta
+} from "../src/store.js";
+import { getSessionMetaPath } from "../src/config.js";
 import type { SessionMeta } from "../src/types.js";
 
 const home = join(process.cwd(), `.climon-store-concurrency-${process.pid}`);
 const env = { ...process.env, CLIMON_HOME: home };
+
+async function lockOwner(pid: number): Promise<Record<string, unknown>> {
+  let pidNamespace: string | undefined;
+  if (process.platform === "linux") {
+    try {
+      pidNamespace = await readlink("/proc/self/ns/pid");
+    } catch {
+      pidNamespace = undefined;
+    }
+  }
+  return {
+    pid,
+    createdAt: new Date().toISOString(),
+    hostname: hostname(),
+    platform: process.platform,
+    ...(pidNamespace ? { pidNamespace } : {})
+  };
+}
 
 function baseMeta(id: string): SessionMeta {
   const now = new Date().toISOString();
@@ -127,5 +153,111 @@ describe("patchSessionMeta concurrency", () => {
     const meta = await readSessionMeta(id, env);
     expect(meta?.status).toBe("completed");
     expect(meta?.priorityReason).toBe("completed");
+  });
+
+  test("patchSessionMeta recovers a stale lock owned by a dead process", async () => {
+    const id = "stale-dead-owner";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+
+    await patchSessionMeta(id, { daemonPid: 1234 }, env);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.daemonPid).toBe(1234);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("fresh live locks are preserved when acquisition times out", async () => {
+    const id = "fresh-live-owner";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })
+    );
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  test("fresh locks from a foreign owner are preserved until age-based staleness", async () => {
+    const id = "fresh-foreign-owner";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        pid: 999999999,
+        createdAt: new Date().toISOString(),
+        hostname: "foreign-host",
+        platform: process.platform
+      })
+    );
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  test("old same-scope locks with a reused pid identity are reclaimed", async () => {
+    const id = "reused-pid-owner";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(process.pid)),
+        createdAt: "1970-01-01T00:00:00.000Z",
+        processStartTime: "not-the-current-process-start-time"
+      })
+    );
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5, staleMs: 1 });
+    await release();
+
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("old same-scope locks with a live pid but no start-time identity are preserved", async () => {
+    const id = "live-pid-no-start-time";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    const { processStartTime: _processStartTime, ...ownerWithoutStartTime } = await lockOwner(process.pid);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ ...ownerWithoutStartTime, createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  test("new acquisitions wait while stale-lock recovery is active", async () => {
+    const id = "active-recovery";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(`${lockPath}.reclaim`);
+    await writeFile(join(`${lockPath}.reclaim`, "owner.json"), JSON.stringify(await lockOwner(process.pid)));
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(`${lockPath}.reclaim`)).toBe(true);
   });
 });

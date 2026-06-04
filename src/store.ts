@@ -1,4 +1,5 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { getScrollbackPath, getSessionMetaPath, getSessionsDir } from "./config.js";
 import type { SessionMeta, SessionMetaPatch } from "./types.js";
@@ -35,18 +36,221 @@ export async function readSessionMeta(id: string, env: NodeJS.ProcessEnv = proce
 const patchQueues = new Map<string, Promise<unknown>>();
 const PATCH_LOCK_RETRY_MS = 10;
 const PATCH_LOCK_TIMEOUT_MS = 30_000;
+const PATCH_LOCK_STALE_MS = 60_000;
+const PATCH_LOCK_OWNER_FILE = "owner.json";
+const PATCH_LOCK_RECOVERY_SUFFIX = ".reclaim";
+
+type PatchLockOptions = {
+  timeoutMs?: number;
+  retryMs?: number;
+  staleMs?: number;
+};
+
+type PatchLockOwner = {
+  pid: number;
+  createdAt: string;
+  hostname: string;
+  platform: NodeJS.Platform;
+  pidNamespace?: string;
+  processStartTime?: string;
+};
+
+let currentPidNamespace: Promise<string | undefined> | undefined;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function acquirePatchLock(id: string, env: NodeJS.ProcessEnv): Promise<() => Promise<void>> {
+async function getCurrentPidNamespace(): Promise<string | undefined> {
+  currentPidNamespace ??= (async () => {
+    if (process.platform !== "linux") {
+      return undefined;
+    }
+    try {
+      return await readlink("/proc/self/ns/pid");
+    } catch {
+      return undefined;
+    }
+  })();
+  return currentPidNamespace;
+}
+
+async function getProcessStartTime(pid: number): Promise<string | undefined> {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  try {
+    const statRaw = await readFile(`/proc/${pid}/stat`, "utf8");
+    const fieldsAfterCommand = statRaw.slice(statRaw.lastIndexOf(")") + 2).trim().split(/\s+/);
+    return fieldsAfterCommand[19];
+  } catch {
+    return undefined;
+  }
+}
+
+async function getCurrentPatchLockOwner(): Promise<PatchLockOwner> {
+  const [pidNamespace, processStartTime] = await Promise.all([
+    getCurrentPidNamespace(),
+    getProcessStartTime(process.pid)
+  ]);
+  return {
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+    hostname: hostname(),
+    platform: process.platform,
+    ...(pidNamespace ? { pidNamespace } : {}),
+    ...(processStartTime ? { processStartTime } : {})
+  };
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function writePatchLockOwner(lockPath: string): Promise<void> {
+  await writeFile(join(lockPath, PATCH_LOCK_OWNER_FILE), `${JSON.stringify(await getCurrentPatchLockOwner())}\n`);
+}
+
+async function isSamePidScope(owner: { hostname?: unknown; platform?: unknown; pidNamespace?: unknown }): Promise<boolean> {
+  if (owner.hostname !== hostname() || owner.platform !== process.platform) {
+    return false;
+  }
+  const pidNamespace = await getCurrentPidNamespace();
+  if (pidNamespace) {
+    return owner.pidNamespace === pidNamespace;
+  }
+  return owner.pidNamespace === undefined;
+}
+
+async function isPatchLockStale(lockPath: string, staleMs: number): Promise<boolean> {
+  const now = Date.now();
+  let lockStat;
+  try {
+    lockStat = await stat(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+
+  try {
+    const raw = await readFile(join(lockPath, PATCH_LOCK_OWNER_FILE), "utf8");
+    const owner = JSON.parse(raw) as Partial<PatchLockOwner>;
+    const pid = typeof owner.pid === "number" ? owner.pid : NaN;
+    const createdAtMs = typeof owner.createdAt === "string" ? Date.parse(owner.createdAt) : NaN;
+    if (Number.isInteger(pid) && pid > 0 && (await isSamePidScope(owner))) {
+      if (!isProcessAlive(pid)) {
+        return true;
+      }
+      const currentStartTime = await getProcessStartTime(pid);
+      if (owner.processStartTime && currentStartTime && owner.processStartTime !== currentStartTime) {
+        return true;
+      }
+      return false;
+    }
+    return (Number.isFinite(createdAtMs) ? now - createdAtMs : now - lockStat.mtimeMs) > staleMs;
+  } catch {
+    return now - lockStat.mtimeMs > staleMs;
+  }
+}
+
+async function recoverStalePatchLock(lockPath: string, staleMs: number): Promise<boolean> {
+  if (!(await isPatchLockStale(lockPath, staleMs))) {
+    return false;
+  }
+  await rm(lockPath, { recursive: true, force: true });
+  return true;
+}
+
+async function acquirePatchLockRecoveryLock(lockPath: string, staleMs: number): Promise<(() => Promise<void>) | undefined> {
+  const recoveryLockPath = `${lockPath}${PATCH_LOCK_RECOVERY_SUFFIX}`;
+  try {
+    await mkdir(recoveryLockPath);
+    try {
+      await writePatchLockOwner(recoveryLockPath);
+    } catch (error) {
+      await rm(recoveryLockPath, { recursive: true, force: true });
+      throw error;
+    }
+    return async () => {
+      await rm(recoveryLockPath, { recursive: true, force: true });
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error;
+    }
+    if (await isPatchLockStale(recoveryLockPath, staleMs)) {
+      await rm(recoveryLockPath, { recursive: true, force: true });
+    }
+    return undefined;
+  }
+}
+
+async function isPatchLockRecoveryActive(lockPath: string, staleMs: number): Promise<boolean> {
+  const recoveryLockPath = `${lockPath}${PATCH_LOCK_RECOVERY_SUFFIX}`;
+  try {
+    await stat(recoveryLockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  if (await isPatchLockStale(recoveryLockPath, staleMs)) {
+    await rm(recoveryLockPath, { recursive: true, force: true });
+    return false;
+  }
+  return true;
+}
+
+async function recoverStalePatchLockIfRecoveryOwner(lockPath: string, staleMs: number): Promise<boolean> {
+  const releaseRecoveryLock = await acquirePatchLockRecoveryLock(lockPath, staleMs);
+  if (!releaseRecoveryLock) {
+    return false;
+  }
+  try {
+    return await recoverStalePatchLock(lockPath, staleMs);
+  } finally {
+    await releaseRecoveryLock();
+  }
+}
+
+async function acquirePatchLock(
+  id: string,
+  env: NodeJS.ProcessEnv,
+  options: PatchLockOptions = {}
+): Promise<() => Promise<void>> {
   const lockPath = `${getSessionMetaPath(id, env)}.lock`;
-  const deadline = Date.now() + PATCH_LOCK_TIMEOUT_MS;
+  const retryMs = options.retryMs ?? PATCH_LOCK_RETRY_MS;
+  const staleMs = options.staleMs ?? PATCH_LOCK_STALE_MS;
+  const deadline = Date.now() + (options.timeoutMs ?? PATCH_LOCK_TIMEOUT_MS);
   await mkdir(dirname(lockPath), { recursive: true });
   while (true) {
     try {
       await mkdir(lockPath);
+      if (await isPatchLockRecoveryActive(lockPath, staleMs)) {
+        await rm(lockPath, { recursive: true, force: true });
+        if (Date.now() >= deadline) {
+          throw new Error(`Timed out waiting for session metadata lock: ${id}`);
+        }
+        await sleep(retryMs);
+        continue;
+      }
+      try {
+        await writePatchLockOwner(lockPath);
+      } catch (error) {
+        await rm(lockPath, { recursive: true, force: true });
+        throw error;
+      }
       return async () => {
         await rm(lockPath, { recursive: true, force: true });
       };
@@ -57,9 +261,18 @@ async function acquirePatchLock(id: string, env: NodeJS.ProcessEnv): Promise<() 
       if (Date.now() >= deadline) {
         throw new Error(`Timed out waiting for session metadata lock: ${id}`);
       }
-      await sleep(PATCH_LOCK_RETRY_MS);
+      await recoverStalePatchLockIfRecoveryOwner(lockPath, staleMs);
+      await sleep(retryMs);
     }
   }
+}
+
+export async function acquireSessionMetaPatchLockForTest(
+  id: string,
+  env: NodeJS.ProcessEnv,
+  options: PatchLockOptions
+): Promise<() => Promise<void>> {
+  return acquirePatchLock(id, env, options);
 }
 
 async function patchSessionMetaQueued(
