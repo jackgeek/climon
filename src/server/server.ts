@@ -26,7 +26,7 @@ import {
 } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
-import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta } from "../types.js";
+import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionStatus } from "../types.js";
 import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
@@ -68,6 +68,13 @@ export function parseKillMode(value: string | null): KillMode | null {
     return value;
   }
   return null;
+}
+
+export function parseBrowserStatusPatch(value: unknown): Extract<SessionStatus, "paused" | "running"> {
+  if (value === "paused" || value === "running") {
+    return value;
+  }
+  throw new Error("Invalid status; expected paused or running");
 }
 
 /** Grace period before rechecking liveness after a graceful (SIGTERM) kill. */
@@ -688,13 +695,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let body: { name?: unknown; priority?: unknown; color?: unknown };
+        let body: { name?: unknown; priority?: unknown; color?: unknown; status?: unknown };
         try {
           body = (await request.json()) as typeof body;
         } catch {
           return new Response("Invalid JSON body", { status: 400 });
         }
-        const patch: { name?: string; priority?: number; color?: AnsiColor | null } = {};
+        const patch: { name?: string; priority?: number; color?: AnsiColor | null; status?: Extract<SessionStatus, "paused" | "running">; priorityReason?: "running" } = {};
         try {
           if (body.name !== undefined) {
             patch.name = String(body.name);
@@ -704,6 +711,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           }
           if (body.color !== undefined) {
             patch.color = body.color === null ? null : parseColor(String(body.color));
+          }
+          if (body.status !== undefined) {
+            patch.status = parseBrowserStatusPatch(body.status);
+            patch.priorityReason = "running";
           }
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
