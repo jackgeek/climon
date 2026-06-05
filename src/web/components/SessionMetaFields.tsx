@@ -1,28 +1,16 @@
 import {
+  Dropdown,
   Field,
   Input,
-  Radio,
-  RadioGroup,
+  Option,
   makeStyles,
   tokens
 } from "@fluentui/react-components";
 import type { AnsiColor, SessionColorMode } from "../../types.js";
-import { ANSI_COLORS } from "../../session-meta.js";
 import { ANSI_CSS } from "../colors.js";
-
-const COLOR_OPTIONS: readonly AnsiColor[] = ANSI_COLORS;
+import { sessionColorDropdownOptions } from "../session-color-options.js";
 
 const useStyles = makeStyles({
-  colors: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: "8px"
-  },
-  compactColors: {
-    display: "grid",
-    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-    gap: "8px 12px"
-  },
   swatch: {
     width: "14px",
     height: "14px",
@@ -46,7 +34,6 @@ interface Props {
   namePlaceholder: string;
   onEnter?: () => void;
   includeAuto?: boolean;
-  compactColors?: boolean;
 }
 
 export function SessionMetaFields({
@@ -54,8 +41,7 @@ export function SessionMetaFields({
   onChange,
   namePlaceholder,
   onEnter,
-  includeAuto = false,
-  compactColors = false
+  includeAuto = false
 }: Props) {
   const styles = useStyles();
   return (
@@ -84,26 +70,22 @@ export function SessionMetaFields({
         />
       </Field>
       <Field label="Color" style={{ marginTop: "12px" }}>
-        <RadioGroup
-          className={compactColors ? styles.compactColors : styles.colors}
+        <Dropdown
           value={value.color}
-          onChange={(_, data) => onChange({ ...value, color: data.value as SessionColorMode })}
+          selectedOptions={[value.color]}
+          onOptionSelect={(_, data) =>
+            onChange({ ...value, color: (data.optionValue as SessionColorMode | undefined) ?? "none" })
+          }
         >
-          {includeAuto && <Radio value="auto" label="Auto" />}
-          <Radio value="none" label="None" />
-          {COLOR_OPTIONS.map((color) => (
-            <Radio
-              key={color}
-              value={color}
-              label={
-                <span>
-                  <span className={styles.swatch} style={{ backgroundColor: ANSI_CSS[color] }} />
-                  {color}
-                </span>
-              }
-            />
+          {sessionColorDropdownOptions(includeAuto).map((color) => (
+            <Option key={color} value={color} text={color}>
+              {color !== "none" && color !== "auto" && (
+                <span className={styles.swatch} style={{ backgroundColor: ANSI_CSS[color as AnsiColor] }} />
+              )}
+              {color === "none" ? "None" : color === "auto" ? "Auto" : color}
+            </Option>
           ))}
-        </RadioGroup>
+        </Dropdown>
       </Field>
     </>
   );

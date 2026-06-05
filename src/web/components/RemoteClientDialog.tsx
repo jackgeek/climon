@@ -16,8 +16,9 @@ import {
   makeStyles,
   tokens
 } from "@fluentui/react-components";
-import type { AnsiColor } from "../../types.js";
+import type { SessionColorMode } from "../../types.js";
 import { ANSI_CSS } from "../colors.js";
+import { sessionColorDropdownOptions } from "../session-color-options.js";
 import {
   buildSetupScript,
   copyToClipboard,
@@ -28,18 +29,6 @@ import {
   type RemoteStatus
 } from "../api.js";
 import { applyRemoteStatusToDraft, type RemoteClientDraftState } from "./remoteClientState.js";
-
-const COLOR_OPTIONS: Array<AnsiColor | "none"> = [
-  "none",
-  "black",
-  "red",
-  "green",
-  "yellow",
-  "blue",
-  "magenta",
-  "cyan",
-  "white"
-];
 
 const useStyles = makeStyles({
   script: {
@@ -78,7 +67,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     tunnelInput: "",
     connectToken: ""
   });
-  const [color, setColor] = useState<AnsiColor | "none">("none");
+  const [color, setColor] = useState<SessionColorMode>("auto");
   const [priority, setPriority] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -230,12 +219,12 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                 <Dropdown
                   value={color}
                   selectedOptions={[color]}
-                  onOptionSelect={(_, d) => setColor((d.optionValue as AnsiColor | "none") ?? "none")}
+                  onOptionSelect={(_, d) => setColor((d.optionValue as SessionColorMode | undefined) ?? "auto")}
                 >
-                  {COLOR_OPTIONS.map((c) => (
+                  {sessionColorDropdownOptions(true).map((c) => (
                     <Option key={c} value={c} text={c}>
-                      {c !== "none" && <span className={styles.swatch} style={{ backgroundColor: ANSI_CSS[c] }} />}
-                      {c}
+                      {c !== "none" && c !== "auto" && <span className={styles.swatch} style={{ backgroundColor: ANSI_CSS[c] }} />}
+                      {c === "none" ? "None" : c === "auto" ? "Auto" : c}
                     </Option>
                   ))}
                 </Dropdown>

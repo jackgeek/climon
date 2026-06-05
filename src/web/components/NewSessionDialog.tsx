@@ -169,7 +169,6 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
               namePlaceholder="Defaults to the command"
               onEnter={() => void submit()}
               includeAuto
-              compactColors
             />
             <Text className={styles.error} style={{ display: "block", marginTop: "12px" }}>
               {error}
