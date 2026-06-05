@@ -148,7 +148,9 @@ describe("Sidebar menu", () => {
       onTunnelLink: () => {},
       onCloseTunnelLink: () => {},
       viewMode: "clamped" as const,
-      onViewModeChange: () => {},
+      viewModeLocked: false,
+      viewModeToggleable: false,
+      onViewModeToggle: () => {},
       onMaximize: () => {}
     };
 
@@ -157,6 +159,38 @@ describe("Sidebar menu", () => {
 
     expect(disabled).not.toContain(remotesMenuLabel);
     expect(enabled).toContain(remotesMenuLabel);
+  });
+
+  test("no longer shows the clamp terminal size item in the hamburger menu", () => {
+    const commonProps = {
+      sessions: [],
+      activeId: null,
+      collapsed: false,
+      collapsible: true,
+      onCollapsedChange: () => {},
+      onSelect: () => {},
+      onClose: () => {},
+      onNew: () => {},
+      onNewFrom: () => {},
+      onEdit: () => {},
+      onPauseToggle: () => {},
+      onManageRemote: () => {},
+      notificationsEnabled: false,
+      onToggleNotifications: () => {},
+      tunnelLinkStatus: null,
+      onTunnelLink: () => {},
+      onCloseTunnelLink: () => {},
+      viewMode: "clamped" as const,
+      viewModeLocked: false,
+      viewModeToggleable: false,
+      onViewModeToggle: () => {},
+      onMaximize: () => {}
+    };
+
+    const html = renderToStaticMarkup(createElement(Sidebar, commonProps));
+
+    expect(html).not.toContain("Clamp size");
+    expect(html).not.toContain("Clamp terminal size");
   });
 
   test("shows the bug report mail link only when expanded", () => {
@@ -178,7 +212,9 @@ describe("Sidebar menu", () => {
       onTunnelLink: () => {},
       onCloseTunnelLink: () => {},
       viewMode: "clamped" as const,
-      onViewModeChange: () => {},
+      viewModeLocked: false,
+      viewModeToggleable: false,
+      onViewModeToggle: () => {},
       onMaximize: () => {}
     };
 

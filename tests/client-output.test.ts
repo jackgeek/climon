@@ -21,7 +21,7 @@ describe("local terminal overgrown warning", () => {
 
     expect(message).toContain("not clamped");
     expect(message).toContain("Ctrl-\\ then c");
-    expect(message).toContain("Clamp terminal size");
+    expect(message).toContain("lock icon");
     expect(message).toContain("stop viewing");
   });
 

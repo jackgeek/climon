@@ -5,10 +5,14 @@ import {
   FullScreenMaximize16Regular,
   Pause16Regular,
   Play16Regular,
-  Settings16Regular
+  Settings16Regular,
+  LockClosed16Regular,
+  LockOpen16Regular
 } from "@fluentui/react-icons";
 import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
+import type { TerminalResizeMode } from "../../ipc/frame.js";
+import { clampSizeMenuLabel } from "../view-mode.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 
@@ -22,7 +26,8 @@ const useStyles = makeStyles({
     ":hover .climon-close": { display: "inline-flex" },
     ":hover .climon-new": { display: "inline-flex" },
     ":hover .climon-edit": { display: "inline-flex" },
-    ":hover .climon-pause": { display: "inline-flex" }
+    ":hover .climon-pause": { display: "inline-flex" },
+    ":hover .climon-lock": { display: "inline-flex" }
   },
   compactRoot: {
     minHeight: "54px",
@@ -99,6 +104,20 @@ const useStyles = makeStyles({
     right: "92px",
     display: "none"
   },
+  lockBtn: {
+    position: "absolute",
+    top: "8px",
+    right: "120px",
+    display: "none",
+    "@media (max-width: 768px)": {
+      display: "inline-flex"
+    }
+  },
+  activeCmd: {
+    "@media (max-width: 768px)": {
+      paddingRight: "148px"
+    }
+  },
   maximize: {
     display: "none",
     marginTop: "8px",
@@ -119,6 +138,10 @@ interface Props {
   onEdit: (session: SessionMeta) => void;
   onPauseToggle: (session: SessionMeta) => void;
   onMaximize: (id: string) => void;
+  viewMode?: TerminalResizeMode;
+  viewModeLocked?: boolean;
+  viewModeToggleable?: boolean;
+  onViewModeToggle?: () => void;
 }
 
 export function sessionDisplayTitle(session: Pick<SessionMeta, "name" | "displayCommand">): string {
@@ -144,7 +167,11 @@ export function SessionItem({
   onNew,
   onEdit,
   onPauseToggle,
-  onMaximize
+  onMaximize,
+  viewMode,
+  viewModeLocked = false,
+  viewModeToggleable = false,
+  onViewModeToggle
 }: Props) {
   const styles = useStyles();
   const displayTitle = sessionDisplayTitle(session);
@@ -208,6 +235,21 @@ export function SessionItem({
           }}
         />
       )}
+      {active && !compact && (
+        <Button
+          className={mergeClasses("climon-lock", styles.lockBtn)}
+          appearance="subtle"
+          size="small"
+          icon={viewMode === "fill" && !viewModeLocked ? <LockOpen16Regular /> : <LockClosed16Regular />}
+          title={clampSizeMenuLabel}
+          aria-label={clampSizeMenuLabel}
+          disabled={!viewModeToggleable || viewModeLocked}
+          onClick={(e) => {
+            e.stopPropagation();
+            onViewModeToggle?.();
+          }}
+        />
+      )}
       {!compact && (
         <Button
           className={mergeClasses("climon-pause", styles.pauseBtn)}
@@ -237,7 +279,10 @@ export function SessionItem({
         />
       )}
       {!compact && (
-        <Text className={styles.cmd} title={session.displayCommand}>
+        <Text
+          className={mergeClasses(styles.cmd, active && !compact && styles.activeCmd)}
+          title={session.displayCommand}
+        >
           {displayTitle}
         </Text>
       )}

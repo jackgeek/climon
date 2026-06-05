@@ -204,6 +204,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     onViewModeChangeRef.current = onViewModeChange;
   }, [onViewModeChange]);
 
+  // A queued view-mode request belongs to the session that was attached when it
+  // was queued. Drop it when the session changes so it can never flush to a
+  // different session's socket.
+  useEffect(() => {
+    queuedViewModeRef.current = null;
+  }, [session?.id]);
+
   function sendResize(): void {
     const term = termRef.current;
     const ws = wsRef.current;
