@@ -50,9 +50,6 @@ jobs:
           tag="$(git describe --tags --exact-match HEAD)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Push bump commit and tag
-        run: git push --follow-tags origin HEAD:main
-
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -71,11 +68,14 @@ jobs:
           )
 
           for file in "${expected[@]}"; do
-            test -f "$file"
+            test -f "$file" || { echo "Missing artifact: $file"; exit 1; }
           done
 
           actual_count="$(find dist -maxdepth 1 -type f -name 'climon-*.zip' | wc -l | tr -d ' ')"
           test "$actual_count" = "${#expected[@]}"
+
+      - name: Push bump commit and tag
+        run: git push --follow-tags origin HEAD:main
 
       - name: Publish GitHub Release
         env:
