@@ -148,6 +148,11 @@ describe("buildSetupScript", () => {
     expect(script).toContain("climon config session.color none");
   });
 
+  test("emits the 'auto' color when selected", () => {
+    const script = buildSetupScript({ ...BASE, color: "auto" });
+    expect(script).toContain("climon config session.color auto");
+  });
+
   test("returns guidance when the tunnel id is missing", () => {
     const script = buildSetupScript({ ...BASE, tunnelId: "" });
     expect(script).toContain("# Create or paste a dev tunnel");

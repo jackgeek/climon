@@ -3,7 +3,7 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionMeta } from "../src/types.js";
 
-let lastMetaFieldsProps: { includeAuto?: boolean; compactColors?: boolean } | null = null;
+let lastMetaFieldsProps: { includeAuto?: boolean } | null = null;
 
 type PassthroughProps = {
   children?: ReactNode;
@@ -33,7 +33,7 @@ mock.module("@fluentui/react-components", () => ({
 }));
 
 mock.module("../src/web/components/SessionMetaFields.js", () => ({
-  SessionMetaFields: (props: { includeAuto?: boolean; compactColors?: boolean }) => {
+  SessionMetaFields: (props: { includeAuto?: boolean }) => {
     lastMetaFieldsProps = props;
     return createElement("div", { "data-testid": "session-meta-fields" });
   }
@@ -60,14 +60,13 @@ function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
 }
 
 describe("EditSessionDialog", () => {
-  test("uses the shared auto color option and compact color grid", () => {
+  test("uses the shared auto color option", () => {
     lastMetaFieldsProps = null;
 
     renderToStaticMarkup(createElement(EditSessionDialog, { session: makeSession(), onClose: () => {} }));
 
     expect(lastMetaFieldsProps).toMatchObject({
-      includeAuto: true,
-      compactColors: true
+      includeAuto: true
     });
   });
 });

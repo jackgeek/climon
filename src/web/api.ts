@@ -290,7 +290,7 @@ export interface SetupScriptParams {
   tunnelId: string;
   connectToken: string;
   ingestPort: number;
-  color?: AnsiColor | "none";
+  color?: SessionColorMode;
   priority?: number;
 }
 
