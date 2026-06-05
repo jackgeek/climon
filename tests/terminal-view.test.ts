@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   applyAuthoritativeTerminalSize,
   applyTerminalFontSize,
+  applyTerminalScrollbackForSession,
   canRefitTerminalForSession,
   completeInitialReplay,
   focusTerminalPane,
@@ -44,8 +45,32 @@ describe("TerminalView", () => {
     expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);");
   });
 
-  test("keeps enough terminal scrollback for long-running command output", () => {
-    expect(terminalOptions.scrollback).toBeGreaterThanOrEqual(10_000);
+  test("keeps browser-side scrollback for live terminal mouse wheel history", () => {
+    expect(terminalOptions.scrollback).toBe(10_000);
+  });
+
+  test("keeps browser-side scrollback for live sessions and captured terminal replay", () => {
+    const term = { options: { scrollback: 0 } };
+
+    applyTerminalScrollbackForSession(term, { status: "running" });
+    expect(term.options.scrollback).toBe(10_000);
+
+    applyTerminalScrollbackForSession(term, { status: "completed" });
+    expect(term.options.scrollback).toBe(10_000);
+
+    applyTerminalScrollbackForSession(term, null);
+    expect(term.options.scrollback).toBe(10_000);
+  });
+
+  test("hides the xterm viewport scrollbar while retaining scrollback", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain('"& .xterm-viewport"');
+    expect(source).toContain('scrollbarWidth: "none"');
+    expect(source).toContain('msOverflowStyle: "none"');
+    expect(source).toContain('"& .xterm-viewport::-webkit-scrollbar"');
+    expect(source).toContain('display: "none"');
+    expect(terminalOptions.scrollback).toBe(10_000);
   });
 
   test("loads fit and web link addons", () => {
@@ -68,6 +93,14 @@ describe("TerminalView", () => {
     focusTerminalPane({ focus: () => calls++ });
 
     expect(calls).toBe(1);
+  });
+
+  test("does not capture wheel events so xterm can forward them to terminal mouse tracking", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).not.toContain("addEventListener(\"wheel\"");
+    expect(source).not.toContain("scrollTerminalViewportElementOnWheel");
+    expect(source).not.toContain("stopImmediatePropagation");
   });
 
   test("does not refit after an authoritative daemon size changes the browser terminal grid", () => {

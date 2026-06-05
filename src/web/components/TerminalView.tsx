@@ -44,14 +44,29 @@ interface FontResizableTerminal {
   refresh: (start: number, end: number) => void;
 }
 
+interface ScrollbackConfigurableTerminal {
+  options: {
+    scrollback?: number;
+  };
+}
+
+const TERMINAL_SCROLLBACK = 10_000;
+
 export const terminalOptions = {
   allowProposedApi: true,
   cursorBlink: true,
   fontFamily: "ui-monospace, monospace",
   fontSize: 13,
-  scrollback: 10_000,
+  scrollback: TERMINAL_SCROLLBACK,
   theme: { background: "#0d1117" }
 } as const;
+
+export function applyTerminalScrollbackForSession(
+  term: ScrollbackConfigurableTerminal,
+  _session: RefitSessionState | null
+): void {
+  term.options.scrollback = TERMINAL_SCROLLBACK;
+}
 
 export function focusTerminalPane(term: FocusableTerminal | null): void {
   term?.focus();
@@ -136,7 +151,14 @@ const useStyles = makeStyles({
     flex: "1 1 auto",
     minHeight: 0,
     padding: "8px",
-    backgroundColor: "#0d1117"
+    backgroundColor: "#0d1117",
+    "& .xterm-viewport": {
+      scrollbarWidth: "none",
+      msOverflowStyle: "none"
+    },
+    "& .xterm-viewport::-webkit-scrollbar": {
+      display: "none"
+    }
   }
 });
 
@@ -327,6 +349,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
     closeWs();
     initialReplayCompleteRef.current = true;
+    applyTerminalScrollbackForSession(term, session);
     resetTerminalForSession(term, session);
     const attachmentGeneration = attachmentGenerationRef.current;
 
