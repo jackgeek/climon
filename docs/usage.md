@@ -74,6 +74,10 @@ climon kill <id>          # terminate a session and remove its metadata
     visible status until you resume.
   - For **completed/failed** sessions, the terminal shows the captured final
     output (read-only).
+  - On touch devices, scroll the terminal with a vertical one-finger swipe: it
+    drives the same scrolling as a mouse wheel — moving through scrollback for
+    normal output, or scrolling within apps that track the mouse. The swipe does
+    not trigger the browser's pull-to-refresh while you are over the terminal.
 - **View mode**: each session row shows a **lock icon** next to the pause button
   on the active session. A closed lock means **clamped** — the browser and the
   attached climon client stay on the same terminal grid. An open lock means
