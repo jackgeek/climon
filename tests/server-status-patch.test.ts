@@ -167,6 +167,7 @@ describe("PATCH /api/sessions/:id status", () => {
       const persisted = await readSessionMeta("sess-running", env);
       expect(persisted?.status).toBe("paused");
       expect(persisted?.priorityReason).toBe("running");
+      expect(persisted?.userPaused).toBe(true);
     });
   }, 30000);
 
@@ -215,6 +216,7 @@ describe("PATCH /api/sessions/:id status", () => {
       expect(res.status).toBe(200);
       const persisted = await readSessionMeta("sess-paused", env);
       expect(persisted?.status).toBe("running");
+      expect(persisted?.userPaused).toBe(false);
     });
   }, 30000);
 

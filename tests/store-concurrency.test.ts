@@ -8,6 +8,7 @@ import {
   patchSessionMeta,
   patchSessionMetaFromCurrent,
   patchSessionMetaWithCurrent,
+  listSessions,
   readSessionMeta,
   setPatchLockTestHooksForTest,
   writeSessionMeta
@@ -140,6 +141,51 @@ describe("patchSessionMeta concurrency", () => {
     const meta = await readSessionMeta(id, env);
     expect(meta?.status).toBe("paused");
     expect(meta?.priorityReason).toBe("running");
+  });
+
+  test("user pause marker overrides live attention writes from older daemons", async () => {
+    const id = "paused-overlay-1";
+    await writeSessionMeta(
+      {
+        ...baseMeta(id),
+        status: "needs-attention",
+        priorityReason: "attention",
+        attentionMatchedAt: "token",
+        attentionReason: "Screen idle for 1s",
+        userPaused: true
+      } as SessionMeta,
+      env
+    );
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("paused");
+    expect(meta?.priorityReason).toBe("running");
+    expect(meta?.attentionMatchedAt).toBeUndefined();
+    expect(meta?.attentionReason).toBeUndefined();
+
+    const listed = await listSessions(env);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.status).toBe("paused");
+  });
+
+  test("user pause marker does not override terminal outcomes", async () => {
+    const id = "paused-overlay-2";
+    await writeSessionMeta(
+      {
+        ...baseMeta(id),
+        status: "completed",
+        priorityReason: "completed",
+        completedAt: new Date().toISOString(),
+        exitCode: 0,
+        userPaused: true
+      } as SessionMeta,
+      env
+    );
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("completed");
+    expect(meta?.priorityReason).toBe("completed");
+    expect(meta?.exitCode).toBe(0);
   });
 
   test("conditional patches do not overwrite terminal status from another process", async () => {

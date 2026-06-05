@@ -185,6 +185,47 @@ describe("headless session attention", () => {
     }
   }, 20000);
 
+  test("a paused idle session is not bumped to needs-attention by the daemon", async () => {
+    await mkdir(home, { recursive: true });
+    const config = defaultConfig();
+    config.attention.idleSeconds = 1;
+    await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
+
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    try {
+      await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.daemonPid ? m : undefined;
+      });
+
+      await patchSessionMeta(id, { status: "paused", priorityReason: "running" }, env);
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+
+      const paused = await readMeta(id);
+      expect(paused.status).toBe("paused");
+      expect(paused.priorityReason).toBe("running");
+      expect(paused.attentionMatchedAt).toBeUndefined();
+      expect(paused.attentionReason).toBeUndefined();
+    } finally {
+      const pid = await readMeta(id)
+        .then((m) => m.daemonPid)
+        .catch(() => undefined);
+      if (pid) {
+        try {
+          process.kill(pid);
+        } catch {
+          // already gone
+        }
+      }
+      proc.kill();
+      await proc.exited;
+    }
+  }, 20000);
+
   test("a paused session still records completed when the process exits", async () => {
     await mkdir(home, { recursive: true });
     const config = defaultConfig();

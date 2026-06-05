@@ -7,6 +7,13 @@ import type { SessionMeta, SessionMetaPatch } from "./types.js";
 
 let tempCounter = 0;
 
+const USER_PAUSED_OVERLAY_STATUSES = new Set<SessionMeta["status"]>([
+  "running",
+  "available",
+  "needs-attention",
+  "paused"
+]);
+
 async function atomicWrite(path: string, data: Buffer | string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tempPath = `${path}.${process.pid}.${Date.now()}.${tempCounter++}.tmp`;
@@ -21,13 +28,26 @@ export async function writeSessionMeta(meta: SessionMeta, env: NodeJS.ProcessEnv
 export async function readSessionMeta(id: string, env: NodeJS.ProcessEnv = process.env): Promise<SessionMeta | undefined> {
   try {
     const raw = await readFile(getSessionMetaPath(id, env), "utf8");
-    return JSON.parse(raw) as SessionMeta;
+    return applyUserPausedOverlay(JSON.parse(raw) as SessionMeta);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
     }
     throw error;
   }
+}
+
+function applyUserPausedOverlay(meta: SessionMeta): SessionMeta {
+  if (!meta.userPaused || !USER_PAUSED_OVERLAY_STATUSES.has(meta.status)) {
+    return meta;
+  }
+  return {
+    ...meta,
+    status: "paused",
+    priorityReason: "running",
+    attentionMatchedAt: undefined,
+    attentionReason: undefined
+  };
 }
 
 // Serializes patchSessionMeta calls per session id within this process, while
@@ -748,7 +768,7 @@ export async function listSessions(env: NodeJS.ProcessEnv = process.env): Promis
     }
     try {
       const raw = await readFile(join(dir, entry), "utf8");
-      sessions.push(JSON.parse(raw) as SessionMeta);
+      sessions.push(applyUserPausedOverlay(JSON.parse(raw) as SessionMeta));
     } catch {
       // Skip partially written or corrupt entries.
     }

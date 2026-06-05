@@ -720,7 +720,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         } catch {
           return new Response("Invalid JSON body", { status: 400 });
         }
-        const patch: { name?: string; priority?: number; color?: AnsiColor | null; status?: Extract<SessionStatus, "paused" | "running">; priorityReason?: "running" } = {};
+        const patch: {
+          name?: string;
+          priority?: number;
+          color?: AnsiColor | null;
+          status?: Extract<SessionStatus, "paused" | "running">;
+          priorityReason?: "running";
+          userPaused?: boolean;
+          attentionMatchedAt?: undefined;
+          attentionReason?: undefined;
+        } = {};
         let requestedStatus: Extract<SessionStatus, "paused" | "running"> | undefined;
         try {
           if (body.name !== undefined) {
@@ -736,6 +745,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             requestedStatus = parseBrowserStatusPatch(body.status);
             patch.status = requestedStatus;
             patch.priorityReason = "running";
+            patch.userPaused = requestedStatus === "paused";
+            if (requestedStatus === "running") {
+              patch.attentionMatchedAt = undefined;
+              patch.attentionReason = undefined;
+            }
           }
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });

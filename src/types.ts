@@ -138,6 +138,8 @@ export interface SessionMeta {
   priority?: number;
   /** Accent color for the sidebar item, or null/absent for none. */
   color?: AnsiColor | null;
+  /** User-controlled pause marker; live daemon writes must not visually unpause while true. */
+  userPaused?: boolean;
 }
 
 export interface SessionMetaPatch {
@@ -156,6 +158,7 @@ export interface SessionMetaPatch {
   name?: string;
   priority?: number;
   color?: AnsiColor | null;
+  userPaused?: boolean;
 }
 
 export interface SessionListResponse {
