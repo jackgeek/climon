@@ -142,6 +142,19 @@ describe("listExistingConfigFiles", () => {
     expect(listExistingConfigFiles(env(), repo)).toEqual([]);
   });
 
+  test("lists canonical symlink and legacy target in the same config dir", () => {
+    const repo = join(root, "repo");
+    const configDir = join(repo, ".climon");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.json"), "{}");
+    symlinkSync(join(configDir, "config.json"), join(configDir, "config.jsonc"));
+
+    expect(listExistingConfigFiles(env(), repo)).toEqual([
+      join(configDir, "config.jsonc"),
+      join(configDir, "config.json")
+    ]);
+  });
+
   test("does not list duplicate files when CLIMON_HOME aliases an ancestor .climon dir", () => {
     const repo = join(root, "repo");
     const configDir = join(repo, ".climon");

@@ -244,23 +244,20 @@ export function listExistingConfigFiles(
   cwd: string = process.cwd()
 ): string[] {
   const files: string[] = [];
-  const seen = new Set<string>();
+  const seenDirs = new Set<string>();
   for (const dir of candidateConfigDirs(env, cwd)) {
+    if (!existsSync(dir)) continue;
+    const dirKey = realpathSync(dir);
+    if (seenDirs.has(dirKey)) continue;
+    seenDirs.add(dirKey);
+
     const canonical = getConfigPathForDir(dir);
     if (existsSync(canonical)) {
-      const canonicalKey = realpathSync(canonical);
-      if (!seen.has(canonicalKey)) {
-        files.push(canonical);
-        seen.add(canonicalKey);
-      }
+      files.push(canonical);
     }
     const legacy = getLegacyConfigPathForDir(dir);
     if (existsSync(legacy)) {
-      const legacyKey = realpathSync(legacy);
-      if (!seen.has(legacyKey)) {
-        files.push(legacy);
-        seen.add(legacyKey);
-      }
+      files.push(legacy);
     }
   }
   return files;
