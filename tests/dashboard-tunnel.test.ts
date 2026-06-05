@@ -273,7 +273,7 @@ describe("createDashboardTunnelManager", () => {
     expect(hostCommands).toHaveLength(2);
   });
 
-  test("close stops the host process and deletes an owned tunnel", async () => {
+  test("close stops the host process but keeps persisted tunnel metadata for reuse", async () => {
     const commands: string[] = [];
     let stopped = false;
     const manager = createDashboardTunnelManager({
@@ -284,10 +284,10 @@ describe("createDashboardTunnelManager", () => {
         if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
-        if (args[0] === "delete") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected command: ${args.join(" ")}`);
       },
-      hostSpawner: (_cmd, _args, handlers) => {
+      hostSpawner: (_cmd, args, handlers) => {
+        commands.push(args.join(" "));
         handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
         return { stop: () => { stopped = true; }, isAlive: () => true };
       }
@@ -295,14 +295,15 @@ describe("createDashboardTunnelManager", () => {
 
     await manager.ensure();
     await manager.close();
+    await expect(manager.status()).resolves.toMatchObject({ running: false, url: undefined });
+    await manager.ensure();
 
     expect(stopped).toBe(true);
-    expect(commands).toContain("delete climon-test");
-    await expect(manager.status()).resolves.toMatchObject({ running: false, url: undefined });
+    expect(commands.filter((cmd) => cmd.startsWith("create"))).toHaveLength(1);
+    expect(commands.filter((cmd) => cmd.startsWith("host"))).toHaveLength(2);
   });
 
-  test("delete failure does not permanently disable watchdog restarts", async () => {
-    let deleteFails = true;
+  test("close does not permanently disable watchdog restarts", async () => {
     let latestBreak: (() => void) | undefined;
     let hostCount = 0;
     const manager = createDashboardTunnelManager({
@@ -312,11 +313,6 @@ describe("createDashboardTunnelManager", () => {
         if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
-        if (args[0] === "delete") {
-          return deleteFails
-            ? { status: 1, stdout: "", stderr: "delete failed" }
-            : { status: 0, stdout: "", stderr: "" };
-        }
         throw new Error(`unexpected command: ${args.join(" ")}`);
       },
       hostSpawner: (_cmd, _args, handlers) => {
@@ -331,10 +327,8 @@ describe("createDashboardTunnelManager", () => {
       },
       watchdogMs: 1
     });
-
     await manager.ensure();
-    await expect(manager.close()).rejects.toThrow("delete failed");
-    deleteFails = false;
+    await manager.close();
     await manager.ensure();
     latestBreak?.();
     await new Promise((resolve) => setTimeout(resolve, 10));

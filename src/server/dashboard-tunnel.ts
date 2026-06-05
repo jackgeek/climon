@@ -301,14 +301,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
         }
         host?.stop();
         host = undefined;
-        const ownedTunnel = tunnelId;
-        tunnelId = undefined;
-        cluster = undefined;
         url = undefined;
-        if (ownedTunnel) {
-          const deleted = await runner("devtunnel", ["delete", ownedTunnel]);
-          ensureOk(deleted, "devtunnel delete");
-        }
       } finally {
         closing = false;
       }

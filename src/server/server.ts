@@ -619,7 +619,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   if (options.port !== undefined) {
     config.server.port = options.port;
   }
-  const dashboardTunnel = createDashboardTunnelManager({ port: config.server.port });
+  const dashboardTunnel = createDashboardTunnelManager({
+    port: config.server.port,
+    persisted: {
+      tunnelId: config.remote.dashboardTunnelId,
+      cluster: config.remote.dashboardTunnelCluster
+    },
+    onPersistTunnel: async ({ tunnelId, cluster }) => {
+      config.remote.dashboardTunnelId = tunnelId;
+      config.remote.dashboardTunnelCluster = cluster;
+      await saveConfig(config);
+    },
+    onClearPersistedTunnel: async () => {
+      config.remote.dashboardTunnelId = undefined;
+      config.remote.dashboardTunnelCluster = undefined;
+      await saveConfig(config);
+    }
+  });
   config.server.host = "127.0.0.1";
   await saveConfig(config);
 
