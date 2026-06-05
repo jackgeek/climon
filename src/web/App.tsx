@@ -48,6 +48,7 @@ import {
 } from "./attentionAlerts.js";
 import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
+import { resolveMobileViewMode, toggleViewMode, type MobileViewModeState } from "./view-mode.js";
 
 const useStyles = makeStyles({
   root: {
@@ -248,7 +249,10 @@ export function App() {
   const [tunnelLinkError, setTunnelLinkError] = useState("");
   const [tunnelLinkCopied, setTunnelLinkCopied] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
-  const [viewMode, setViewMode] = useState<TerminalResizeMode>("clamped");
+  const [activeViewMode, setActiveViewMode] = useState<{ sessionId: string | null; mode: TerminalResizeMode }>({
+    sessionId: null,
+    mode: "clamped"
+  });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const dismissSplash = useCallback(() => setShowSplash(false), []);
@@ -454,10 +458,35 @@ export function App() {
     }
   }
 
-  const requestViewMode = useCallback((mode: TerminalResizeMode): void => {
-    setViewMode(mode);
-    terminalRef.current?.setViewMode(mode);
-  }, []);
+  // The active session's mode, tagged with the session it belongs to. It is
+  // `null` right after switching sessions (before the new session's daemon
+  // reports its mode) so callers never act on a stale value.
+  const authoritativeViewMode = activeViewMode.sessionId === activeId ? activeViewMode.mode : null;
+
+  const requestViewMode = useCallback(
+    (mode: TerminalResizeMode): void => {
+      setActiveViewMode({ sessionId: activeId, mode });
+      terminalRef.current?.setViewMode(mode);
+    },
+    [activeId]
+  );
+
+  // On mobile the active session's shared PTY should stay clamped so a narrow
+  // viewport doesn't shrink the terminal for every viewer. Remember the mode we
+  // clamp away from (per session) and restore it when leaving mobile.
+  const mobileViewModeRef = useRef<MobileViewModeState>({ wasMobile: isMobile, saved: null });
+  useEffect(() => {
+    const { requestMode, next } = resolveMobileViewMode(
+      isMobile,
+      activeId,
+      authoritativeViewMode,
+      mobileViewModeRef.current
+    );
+    mobileViewModeRef.current = next;
+    if (requestMode) {
+      requestViewMode(requestMode);
+    }
+  }, [isMobile, activeId, authoritativeViewMode, requestViewMode]);
 
   // Selecting a session on desktop moves keyboard focus into the terminal so
   // the user can start typing immediately. On mobile the terminal is offscreen
@@ -591,8 +620,10 @@ export function App() {
           onTunnelLink={() => void handleTunnelLink()}
           onCloseTunnelLink={() => void handleCloseTunnelLink()}
           showRemotesMenu={remotesEnabled}
-          viewMode={viewMode}
-          onViewModeChange={requestViewMode}
+          viewMode={isMobile ? "clamped" : authoritativeViewMode ?? "clamped"}
+          viewModeLocked={isMobile}
+          viewModeToggleable={authoritativeViewMode !== null}
+          onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "clamped"))}
           onMaximize={(id) => {
             const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
@@ -618,8 +649,12 @@ export function App() {
           accentColor={activeSession?.color}
           maximized={maximized}
           visible={terminalVisible}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
+          viewMode={authoritativeViewMode ?? "clamped"}
+          onViewModeChange={(mode) => {
+            if (activeId) {
+              setActiveViewMode({ sessionId: activeId, mode });
+            }
+          }}
         />
         {keyBarOpen && maximized && activeSession && isLiveStatus(activeSession.status) && (
           <>
