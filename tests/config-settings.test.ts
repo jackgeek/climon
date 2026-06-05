@@ -26,6 +26,8 @@ describe("config settings registry", () => {
       "remote.host",
       "remote.ingestHost",
       "remote.tunnelId",
+      "remote.dashboardTunnelId",
+      "remote.dashboardTunnelCluster",
       "remote.tunnelToken",
       "remote.port",
       "remote.clientId",
@@ -64,6 +66,21 @@ describe("config settings registry", () => {
     expect(findConfigSetting("version")?.internal).toBe(true);
   });
 
+  test("config registry includes internal dashboard tunnel persistence fields", () => {
+    const tunnelId = findConfigSetting("remote.dashboardTunnelId");
+    const tunnelCluster = findConfigSetting("remote.dashboardTunnelCluster");
+
+    expect(tunnelId).toBeDefined();
+    expect(tunnelId?.type).toBe("string");
+    expect(tunnelId?.internal).toBe(true);
+    expect(tunnelId?.acceptInput).not.toBe(true);
+
+    expect(tunnelCluster).toBeDefined();
+    expect(tunnelCluster?.type).toBe("string");
+    expect(tunnelCluster?.internal).toBe(true);
+    expect(tunnelCluster?.acceptInput).not.toBe(true);
+  });
+
   test("accepted config keys exclude internal and default-only keys", () => {
     expect(acceptedConfigKeys()).toEqual([
       "remote.enabled",
@@ -77,9 +94,9 @@ describe("config settings registry", () => {
     ]);
   });
 
-  test("allConfigKeys returns all 16 config paths including internal keys", () => {
+  test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(16);
+    expect(allConfigKeys().length).toBe(18);
   });
 
   test("coerces values through registry validators", () => {

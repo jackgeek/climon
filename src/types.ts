@@ -64,6 +64,10 @@ export interface RemoteConfig {
   ingestHost?: string;
   /** Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect`. */
   tunnelId?: string;
+  /** Server-owned persisted dashboard tunnel id reused for tunnel link sessions. */
+  dashboardTunnelId?: string;
+  /** Server-owned persisted dashboard tunnel cluster reused for tunnel link sessions. */
+  dashboardTunnelCluster?: string;
   /** `connect`-scoped dev tunnel access token, supplied via DEVTUNNEL_ACCESS_TOKEN. */
   tunnelToken?: string;
   /** Local port the devbox forwards and the ingest daemon listens on. */

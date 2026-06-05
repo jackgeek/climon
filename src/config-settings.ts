@@ -105,6 +105,20 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     acceptInput: true
   },
   {
+    path: "remote.dashboardTunnelId",
+    type: "string",
+    purpose: "Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions.",
+    scope: ["server"],
+    internal: true
+  },
+  {
+    path: "remote.dashboardTunnelCluster",
+    type: "string",
+    purpose: "Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions.",
+    scope: ["server"],
+    internal: true
+  },
+  {
     path: "remote.tunnelToken",
     type: "string",
     purpose: "Stores the dev tunnel connect token scoped to this tunnel. Supplied via DEVTUNNEL_ACCESS_TOKEN environment variable.",
