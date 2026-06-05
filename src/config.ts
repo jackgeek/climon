@@ -1,4 +1,4 @@
-import { chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -247,16 +247,20 @@ export function listExistingConfigFiles(
   const seen = new Set<string>();
   for (const dir of candidateConfigDirs(env, cwd)) {
     const canonical = getConfigPathForDir(dir);
-    const canonicalKey = resolve(canonical);
-    if (existsSync(canonical) && !seen.has(canonicalKey)) {
-      files.push(canonical);
-      seen.add(canonicalKey);
+    if (existsSync(canonical)) {
+      const canonicalKey = realpathSync(canonical);
+      if (!seen.has(canonicalKey)) {
+        files.push(canonical);
+        seen.add(canonicalKey);
+      }
     }
     const legacy = getLegacyConfigPathForDir(dir);
-    const legacyKey = resolve(legacy);
-    if (existsSync(legacy) && !seen.has(legacyKey)) {
-      files.push(legacy);
-      seen.add(legacyKey);
+    if (existsSync(legacy)) {
+      const legacyKey = realpathSync(legacy);
+      if (!seen.has(legacyKey)) {
+        files.push(legacy);
+        seen.add(legacyKey);
+      }
     }
   }
   return files;

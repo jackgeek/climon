@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import {
   candidateConfigDirs,
@@ -150,6 +150,23 @@ describe("listExistingConfigFiles", () => {
     writeFileSync(join(configDir, "config.json"), "{}");
 
     expect(listExistingConfigFiles({ CLIMON_HOME: `${configDir}${sep}` }, repo)).toEqual([
+      join(configDir, "config.jsonc"),
+      join(configDir, "config.json")
+    ]);
+  });
+
+  test("does not list duplicate files when CLIMON_HOME symlinks to an ancestor .climon dir", () => {
+    const repo = join(root, "repo");
+    const nested = join(repo, "src");
+    const configDir = join(repo, ".climon");
+    const symlinkHome = join(root, "home-link");
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    symlinkSync(configDir, symlinkHome, "dir");
+    writeFileSync(join(configDir, "config.jsonc"), "{}");
+    writeFileSync(join(configDir, "config.json"), "{}");
+
+    expect(listExistingConfigFiles({ CLIMON_HOME: symlinkHome }, nested)).toEqual([
       join(configDir, "config.jsonc"),
       join(configDir, "config.json")
     ]);
