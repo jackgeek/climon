@@ -119,6 +119,74 @@ describe("createDashboardTunnelManager", () => {
     expect(commands.filter((cmd) => cmd.startsWith("host"))).toHaveLength(1);
   });
 
+  test("uses persisted tunnel id without creating a new tunnel", async () => {
+    const commands: string[] = [];
+    const manager = createDashboardTunnelManager({
+      port: 3131,
+      persisted: { tunnelId: "saved-tunnel", cluster: "eun1" },
+      runner: async (_cmd, args) => {
+        commands.push(args.join(" "));
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, args, handlers) => {
+        commands.push(args.join(" "));
+        handlers.onStdout("Ready: https://saved-tunnel-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await manager.ensure();
+
+    expect(commands.filter((cmd) => cmd.startsWith("create"))).toHaveLength(0);
+    expect(commands).toContain("host saved-tunnel");
+  });
+
+  test("recreates and persists replacement when persisted tunnel no longer exists", async () => {
+    const persistedWrites: Array<{ tunnelId: string; cluster?: string }> = [];
+    const cleared: number[] = [];
+    let firstHost = true;
+    const manager = createDashboardTunnelManager({
+      port: 3131,
+      persisted: { tunnelId: "stale-tunnel", cluster: "eun1" },
+      onPersistTunnel: (value) => {
+        persistedWrites.push(value);
+      },
+      onClearPersistedTunnel: () => {
+        cleared.push(1);
+      },
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") {
+          return {
+            status: 0,
+            stdout: JSON.stringify({ tunnelId: "fresh-tunnel", clusterId: "use1" }),
+            stderr: ""
+          };
+        }
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, args, handlers) => {
+        if (args[0] === "host" && firstHost) {
+          firstHost = false;
+          handlers.onStderr("Tunnel stale-tunnel not found");
+          handlers.onExit(1);
+          return { stop: () => undefined, isAlive: () => false };
+        }
+        handlers.onStdout("Ready: https://fresh-tunnel-3131.use1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await manager.ensure();
+
+    expect(cleared).toHaveLength(1);
+    expect(persistedWrites).toContainEqual({ tunnelId: "fresh-tunnel", cluster: "use1" });
+  });
+
   test("hosts the existing tunnel without passing port args after creating the port", async () => {
     const hostCommands: string[] = [];
     const manager = createDashboardTunnelManager({

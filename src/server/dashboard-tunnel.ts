@@ -39,6 +39,12 @@ interface DashboardTunnelManagerOptions {
   runner?: DashboardTunnelRunner;
   hostSpawner?: HostSpawner;
   watchdogMs?: number;
+  persisted?: {
+    tunnelId?: string;
+    cluster?: string;
+  };
+  onPersistTunnel?: (value: { tunnelId: string; cluster?: string }) => void | Promise<void>;
+  onClearPersistedTunnel?: () => void | Promise<void>;
 }
 
 export interface DashboardTunnelManager {
@@ -135,12 +141,16 @@ function isAuthenticatedUserOutput(output: string): boolean {
   }
 }
 
+function isMissingTunnelError(output: string): boolean {
+  return /not\s+found|does\s+not\s+exist|404|no tunnel/i.test(output);
+}
+
 export function createDashboardTunnelManager(options: DashboardTunnelManagerOptions): DashboardTunnelManager {
   const runner = options.runner ?? defaultRunner;
   const hostSpawner = options.hostSpawner ?? defaultHostSpawner;
   const watchdogMs = options.watchdogMs ?? 5000;
-  let tunnelId: string | undefined;
-  let cluster: string | undefined;
+  let tunnelId: string | undefined = options.persisted?.tunnelId;
+  let cluster: string | undefined = options.persisted?.cluster;
   let url: string | undefined;
   let host: HostProcess | undefined;
   let closing = false;
@@ -193,6 +203,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
       "http"
     ]);
     ensureOk(port, "devtunnel port create");
+    await options.onPersistTunnel?.({ tunnelId, cluster });
   }
 
   async function startHost(): Promise<DashboardTunnelInfo> {
@@ -202,12 +213,17 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     if (!tunnelId) {
       throw new Error("Tunnel id was not initialized.");
     }
-    const args = ["host", tunnelId];
+    const attemptedTunnelId = tunnelId;
+    let startupStdout = "";
+    let startupStderr = "";
+    const args = ["host", attemptedTunnelId];
     const startedHost = hostSpawner("devtunnel", args, {
       onStdout: (text) => {
+        startupStdout += text;
         url = parseDashboardTunnelUrl(text) ?? url;
       },
       onStderr: (text) => {
+        startupStderr += text;
         url = parseDashboardTunnelUrl(text) ?? url;
       },
       onExit: () => {
@@ -215,14 +231,21 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
       }
     });
     host = startedHost;
-    if (!url && cluster) {
-      url = buildDashboardTunnelUrl(tunnelId, options.port, cluster);
-    }
     const deadline = Date.now() + HOST_URL_TIMEOUT_MS;
     while (!url && startedHost.isAlive() && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     if (!url) {
+      const startupOutput = `${startupStdout}\n${startupStderr}`.trim();
+      const usedPersistedTunnel = attemptedTunnelId === options.persisted?.tunnelId;
+      if (!startedHost.isAlive() && usedPersistedTunnel && isMissingTunnelError(startupOutput)) {
+        tunnelId = undefined;
+        cluster = undefined;
+        url = undefined;
+        await options.onClearPersistedTunnel?.();
+        await createTunnel();
+        return startHost();
+      }
       if (cluster) {
         url = buildDashboardTunnelUrl(tunnelId, options.port, cluster);
       } else {
