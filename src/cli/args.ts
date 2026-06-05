@@ -5,7 +5,7 @@ import type { SessionColorMode } from "../types.js";
 export type ParsedCommand =
   | { command: "help" }
   | { command: "version" }
-  | { command: "server"; port?: number }
+  | { command: "server"; port?: number; enableRemotes?: boolean }
   | { command: "session"; id: string }
   | { command: "attach"; id: string }
   | { command: "ls" }
@@ -23,7 +23,8 @@ Usage:
                                Run a command in a monitored PTY session
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white)
-  climon server [--port N]      Start the dashboard web server (loopback only)
+  climon server [--port N] [--enable-remotes]
+                               Start the dashboard web server (loopback only)
   climon ls                    List monitored sessions
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
@@ -101,6 +102,7 @@ export function parseArgs(argv: string[]): ParsedCommand {
       return { command: "version" };
     case "server": {
       let port: number | undefined;
+      let enableRemotes = false;
       for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
         if (arg === "--port") {
@@ -108,9 +110,11 @@ export function parseArgs(argv: string[]): ParsedCommand {
           i += 1;
         } else if (arg.startsWith("--port=")) {
           port = Number(arg.slice("--port=".length));
+        } else if (arg === "--enable-remotes") {
+          enableRemotes = true;
         }
       }
-      return { command: "server", port };
+      return { command: "server", port, ...(enableRemotes ? { enableRemotes } : {}) };
     }
     case "__session": {
       const id = rest[0];

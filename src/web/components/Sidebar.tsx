@@ -138,6 +138,7 @@ interface Props {
   tunnelLinkStatus: DashboardTunnelStatus | null;
   onTunnelLink: () => void;
   onCloseTunnelLink: () => void;
+  showRemotesMenu?: boolean;
   viewMode: TerminalResizeMode;
   onViewModeChange: (mode: TerminalResizeMode) => void;
   onMaximize: (id: string) => void;
@@ -161,6 +162,7 @@ export function Sidebar({
   tunnelLinkStatus,
   onTunnelLink,
   onCloseTunnelLink,
+  showRemotesMenu = false,
   viewMode,
   onViewModeChange,
   onMaximize
@@ -212,7 +214,7 @@ export function Sidebar({
                 {shouldShowCloseTunnelLink(tunnelLinkStatus) && (
                   <MenuItem onClick={onCloseTunnelLink}>{closeTunnelLinkMenuLabel}</MenuItem>
                 )}
-                <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>
+                {showRemotesMenu && <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>}
               </MenuList>
             </MenuPopover>
           </Menu>

@@ -127,16 +127,19 @@ export function eventsUrl(): string {
   return withQuery("/api/events");
 }
 
-export async function fetchHealth(): Promise<{ version: string | null }> {
+export async function fetchHealth(): Promise<{ version: string | null; remotesEnabled: boolean }> {
   try {
     const res = await fetch(withQuery("/health"));
     if (!res.ok) {
-      return { version: null };
+      return { version: null, remotesEnabled: false };
     }
-    const data = (await res.json()) as { version?: string };
-    return { version: typeof data.version === "string" ? data.version : null };
+    const data = (await res.json()) as { version?: string; remotesEnabled?: boolean };
+    return {
+      version: typeof data.version === "string" ? data.version : null,
+      remotesEnabled: data.remotesEnabled === true
+    };
   } catch {
-    return { version: null };
+    return { version: null, remotesEnabled: false };
   }
 }
 
