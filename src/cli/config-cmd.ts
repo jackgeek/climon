@@ -1,7 +1,9 @@
+import { readSync, unlinkSync } from "node:fs";
 import {
   coerceConfigValue,
   isKnownConfigKey,
   listConfigDebugEntries,
+  listExistingConfigFiles,
   knownConfigKeys,
   resolveConfigSetting,
   unsetConfigSetting,
@@ -55,6 +57,28 @@ Settings:
 
 ${renderConfigSettingsHelp()}
 `;
+}
+
+export interface ConfigCommandIO {
+  stdout?: (chunk: string) => void;
+  stderr?: (chunk: string) => void;
+  confirm?: (path: string) => boolean;
+}
+
+function defaultConfirm(_path: string): boolean {
+  const buffer = Buffer.alloc(256);
+  const bytesRead = readSync(0, buffer, 0, buffer.length, null);
+  if (bytesRead <= 0) return false;
+  const answer = buffer.subarray(0, bytesRead).toString("utf8").trim().toLowerCase();
+  return answer === "y" || answer === "yes";
+}
+
+function normalizeCommandIO(io: ConfigCommandIO = {}): Required<ConfigCommandIO> {
+  return {
+    stdout: io.stdout ?? ((chunk) => process.stdout.write(chunk)),
+    stderr: io.stderr ?? ((chunk) => process.stderr.write(chunk)),
+    confirm: io.confirm ?? defaultConfirm
+  };
 }
 
 export function parseConfigArgs(argv: string[]): ConfigAction {
@@ -112,19 +136,21 @@ export function parseConfigArgs(argv: string[]): ConfigAction {
 export function runConfigCommand(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  io: ConfigCommandIO = {}
 ): number {
+  const commandIO = normalizeCommandIO(io);
   let action: ConfigAction;
   try {
     action = parseConfigArgs(argv);
   } catch (error) {
-    process.stderr.write(`climon config: ${(error as Error).message}\n`);
+    commandIO.stderr(`climon config: ${(error as Error).message}\n`);
     return 2;
   }
   try {
     switch (action.action) {
       case "help": {
-        process.stdout.write(configHelpText());
+        commandIO.stdout(configHelpText());
         return 0;
       }
       case "debug": {
@@ -141,24 +167,41 @@ export function runConfigCommand(
             for (const key of entry.keys) lines.push(`  ${key}`);
           }
         }
-        process.stdout.write(`${lines.join("\n")}\n`);
+        commandIO.stdout(`${lines.join("\n")}\n`);
         return 0;
       }
-      case "purge":
-        throw new Error("Config purge is not implemented yet.");
+      case "purge": {
+        const files = listExistingConfigFiles(env, cwd);
+        if (files.length === 0) {
+          commandIO.stdout("No climon config files found.\n");
+          return 0;
+        }
+        for (const file of files) {
+          commandIO.stdout(`Delete ${file}? [y/N] `);
+          if (!commandIO.confirm(file)) {
+            commandIO.stdout("\n");
+            commandIO.stdout("Purge cancelled.\n");
+            return 0;
+          }
+          commandIO.stdout("\n");
+          unlinkSync(file);
+          commandIO.stdout(`Deleted ${file}\n`);
+        }
+        return 0;
+      }
       case "list": {
         const lines: string[] = [];
         for (const key of knownConfigKeys()) {
           const value = resolveConfigSetting(key, env, cwd);
           if (value !== undefined) lines.push(`${key}=${value}`);
         }
-        if (lines.length > 0) process.stdout.write(`${lines.join("\n")}\n`);
+        if (lines.length > 0) commandIO.stdout(`${lines.join("\n")}\n`);
         return 0;
       }
       case "get": {
         const value = resolveConfigSetting(action.key, env, cwd);
         if (value === undefined) return 1;
-        process.stdout.write(`${String(value)}\n`);
+        commandIO.stdout(`${String(value)}\n`);
         return 0;
       }
       case "set":
@@ -169,7 +212,7 @@ export function runConfigCommand(
         return 0;
     }
   } catch (error) {
-    process.stderr.write(`climon config: ${(error as Error).message}\n`);
+    commandIO.stderr(`climon config: ${(error as Error).message}\n`);
     return 2;
   }
 }
