@@ -273,6 +273,7 @@ describe("runConfigCommand", () => {
     const printed = out.join("");
     expect(printed).toContain("Usage:");
     expect(printed).toContain("climon config <key>");
+    expect(printed).toContain("climon config --purge");
     expect(printed).toContain("config.jsonc");
     expect(printed).toContain("Legacy config.json files");
     expect(printed).not.toContain("| Path | Type | Default | Scope | Description |");
@@ -284,6 +285,7 @@ describe("runConfigCommand", () => {
     expect(printed).toContain("    Type: string; Default: unset; Scope: client; sensitive");
     expect(printed).toContain("  version");
     expect(printed).toContain("    Type: number; Default: 1; Scope: client, daemon, server; internal");
+    expect(printed).toContain("Delete config files from cwd ancestry and $CLIMON_HOME");
   });
 
   test("prints config help with short help flag", () => {

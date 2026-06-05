@@ -36,6 +36,7 @@ Usage:
   climon config --unset <key>      Remove a config setting
   climon config --list             List all set configuration values
   climon config --debug            Show config files and keys in resolution order
+  climon config --purge            Delete config files from cwd ancestry and $CLIMON_HOME
   climon config --help             Show this help
 
 Scope (where the setting is written):
@@ -52,6 +53,10 @@ Configuration files and cascade:
   Config resolution checks local .climon/config.jsonc files from the current
   working directory upward, then falls back to the global $CLIMON_HOME/config.jsonc.
   Settings from more specific (local) files override global ones.
+
+  Use climon config --purge to walk the same cascade, prompting before deleting
+  each existing config.jsonc or legacy config.json file. Declining a prompt stops
+  the purge without checking later files.
 
 Settings:
 
