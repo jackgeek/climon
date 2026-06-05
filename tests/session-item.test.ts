@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { createElement, type CSSProperties, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionMeta } from "../src/types.js";
@@ -336,5 +337,15 @@ describe("SessionItem clamp lock", () => {
 
     expect(markup).not.toContain('data-icon="lock-closed"');
     expect(markup).not.toContain('data-icon="lock-open"');
+  });
+
+  test("reveals the lock on hover like the other actions, but keeps it visible on mobile", () => {
+    const source = readFileSync("src/web/components/SessionItem.tsx", "utf8");
+
+    expect(source).toContain('":hover .climon-lock": { display: "inline-flex" }');
+    expect(source).toContain('mergeClasses("climon-lock", styles.lockBtn)');
+    expect(source).toMatch(
+      /lockBtn:\s*\{[\s\S]*?display:\s*"none"[\s\S]*?@media \(max-width: 768px\)[\s\S]*?display:\s*"inline-flex"/
+    );
   });
 });

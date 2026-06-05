@@ -26,7 +26,8 @@ const useStyles = makeStyles({
     ":hover .climon-close": { display: "inline-flex" },
     ":hover .climon-new": { display: "inline-flex" },
     ":hover .climon-edit": { display: "inline-flex" },
-    ":hover .climon-pause": { display: "inline-flex" }
+    ":hover .climon-pause": { display: "inline-flex" },
+    ":hover .climon-lock": { display: "inline-flex" }
   },
   compactRoot: {
     minHeight: "54px",
@@ -107,10 +108,15 @@ const useStyles = makeStyles({
     position: "absolute",
     top: "8px",
     right: "120px",
-    display: "inline-flex"
+    display: "none",
+    "@media (max-width: 768px)": {
+      display: "inline-flex"
+    }
   },
   activeCmd: {
-    paddingRight: "148px"
+    "@media (max-width: 768px)": {
+      paddingRight: "148px"
+    }
   },
   maximize: {
     display: "none",
@@ -231,7 +237,7 @@ export function SessionItem({
       )}
       {active && !compact && (
         <Button
-          className={styles.lockBtn}
+          className={mergeClasses("climon-lock", styles.lockBtn)}
           appearance="subtle"
           size="small"
           icon={viewMode === "fill" && !viewModeLocked ? <LockOpen16Regular /> : <LockClosed16Regular />}
