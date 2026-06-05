@@ -29,6 +29,7 @@ Usage:
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files and keys in resolution order
+  climon config --purge         Prompt to delete config files in resolution order
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
   climon kill --all            Kill or remove all active sessions

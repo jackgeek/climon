@@ -59,6 +59,20 @@ describe("parseConfigArgs", () => {
   test("rejects help combined with unset", () => {
     expect(() => parseConfigArgs(["--help", "--unset", "remote.port"])).toThrow(/without other config/);
   });
+
+  test("parses purge as a standalone action", () => {
+    expect(parseConfigArgs(["--purge"])).toEqual({ action: "purge" });
+  });
+
+  test("rejects purge combined with other config arguments", () => {
+    expect(() => parseConfigArgs(["--purge", "remote.port"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--help"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--debug"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--list"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--unset", "remote.port"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--local"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--global"])).toThrow(/without other config arguments/);
+  });
 });
 
 describe("runConfigCommand", () => {
@@ -259,6 +273,7 @@ describe("runConfigCommand", () => {
     const printed = out.join("");
     expect(printed).toContain("Usage:");
     expect(printed).toContain("climon config <key>");
+    expect(printed).toContain("climon config --purge");
     expect(printed).toContain("config.jsonc");
     expect(printed).toContain("Legacy config.json files");
     expect(printed).not.toContain("| Path | Type | Default | Scope | Description |");
@@ -270,6 +285,7 @@ describe("runConfigCommand", () => {
     expect(printed).toContain("    Type: string; Default: unset; Scope: client; sensitive");
     expect(printed).toContain("  version");
     expect(printed).toContain("    Type: number; Default: 1; Scope: client, daemon, server; internal");
+    expect(printed).toContain("Delete config files from cwd ancestry and $CLIMON_HOME");
   });
 
   test("prints config help with short help flag", () => {
@@ -300,5 +316,83 @@ describe("runConfigCommand", () => {
   test("rejects help with other operations", () => {
     expect(runConfigCommand(["--help", "--unset", "remote.port"], env(), root)).toBe(2);
     expect(runConfigCommand(["--help", "remote.port"], env(), root)).toBe(2);
+  });
+
+  test("--purge deletes confirmed config files and continues through the cascade", () => {
+    const repo = join(root, "repo");
+    const nested = join(repo, "src");
+    mkdirSync(join(repo, ".climon"), { recursive: true });
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(home, { recursive: true });
+
+    const localConfig = join(repo, ".climon", "config.jsonc");
+    const localLegacy = join(repo, ".climon", "config.json");
+    const globalConfig = join(home, "config.jsonc");
+    writeFileSync(localConfig, "{}");
+    writeFileSync(localLegacy, "{}");
+    writeFileSync(globalConfig, "{}");
+
+    const out: string[] = [];
+    const result = runConfigCommand(["--purge"], env(), nested, {
+      stdout: (chunk) => out.push(chunk),
+      stderr: () => undefined,
+      confirm: () => true
+    });
+
+    expect(result).toBe(0);
+    expect(existsSync(localConfig)).toBe(false);
+    expect(existsSync(localLegacy)).toBe(false);
+    expect(existsSync(globalConfig)).toBe(false);
+    expect(out.join("")).toContain(`Delete ${localConfig}?`);
+    expect(out.join("")).toContain(`Deleted ${localConfig}`);
+    expect(out.join("")).toContain(`Delete ${localLegacy}?`);
+    expect(out.join("")).toContain(`Delete ${globalConfig}?`);
+  });
+
+  test("--purge exits immediately when a config deletion is declined", () => {
+    const repo = join(root, "repo");
+    const nested = join(repo, "src");
+    mkdirSync(join(repo, ".climon"), { recursive: true });
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(home, { recursive: true });
+
+    const localConfig = join(repo, ".climon", "config.jsonc");
+    const globalConfig = join(home, "config.jsonc");
+    writeFileSync(localConfig, "{}");
+    writeFileSync(globalConfig, "{}");
+
+    let promptCount = 0;
+    const out: string[] = [];
+    const result = runConfigCommand(["--purge"], env(), nested, {
+      stdout: (chunk) => out.push(chunk),
+      stderr: () => undefined,
+      confirm: () => {
+        promptCount += 1;
+        return false;
+      }
+    });
+
+    expect(result).toBe(0);
+    expect(promptCount).toBe(1);
+    expect(existsSync(localConfig)).toBe(true);
+    expect(existsSync(globalConfig)).toBe(true);
+    expect(out.join("")).toContain("Purge cancelled.");
+  });
+
+  test("--purge succeeds when no config files exist", () => {
+    const repo = join(root, "repo");
+    mkdirSync(repo, { recursive: true });
+
+    const out: string[] = [];
+    const result = runConfigCommand(["--purge"], env(), repo, {
+      stdout: (chunk) => out.push(chunk),
+      stderr: () => undefined,
+      confirm: () => {
+        throw new Error("confirm should not be called");
+      }
+    });
+
+    expect(result).toBe(0);
+    expect(out.join("")).toContain("No climon config files found.");
   });
 });
