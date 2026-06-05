@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { join, sep } from "node:path";
 import {
   candidateConfigDirs,
   coerceConfigValue,
+  listExistingConfigFiles,
   resolveConfigSetting,
   unsetConfigSetting,
   writeConfigSetting
@@ -109,6 +110,79 @@ describe("config cascade", () => {
     const cfg = await loadConfig(env());
     expect(cfg.version).toBe(1);
     expect(cfg.server.host).toBe("127.0.0.1");
+  });
+});
+
+describe("listExistingConfigFiles", () => {
+  test("lists canonical and legacy config files from cwd ancestors then home", () => {
+    const repo = join(root, "work", "repo");
+    const nested = join(repo, "src", "app");
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(join(repo, ".climon"), { recursive: true });
+    mkdirSync(join(root, "work", ".climon"), { recursive: true });
+    mkdirSync(join(home, ".climon"), { recursive: true });
+
+    writeFileSync(join(repo, ".climon", "config.jsonc"), "{}");
+    writeFileSync(join(repo, ".climon", "config.json"), "{}");
+    writeFileSync(join(root, "work", ".climon", "config.json"), "{}");
+    writeFileSync(join(home, ".climon", "config.jsonc"), "{}");
+
+    expect(listExistingConfigFiles(env(), nested)).toEqual([
+      join(repo, ".climon", "config.jsonc"),
+      join(repo, ".climon", "config.json"),
+      join(root, "work", ".climon", "config.json"),
+      join(home, ".climon", "config.jsonc")
+    ]);
+  });
+
+  test("returns an empty array when no cascade config files exist", () => {
+    const repo = join(root, "repo");
+    mkdirSync(repo, { recursive: true });
+
+    expect(listExistingConfigFiles(env(), repo)).toEqual([]);
+  });
+
+  test("lists canonical symlink and legacy target in the same config dir", () => {
+    const repo = join(root, "repo");
+    const configDir = join(repo, ".climon");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.json"), "{}");
+    symlinkSync(join(configDir, "config.json"), join(configDir, "config.jsonc"));
+
+    expect(listExistingConfigFiles(env(), repo)).toEqual([
+      join(configDir, "config.jsonc"),
+      join(configDir, "config.json")
+    ]);
+  });
+
+  test("does not list duplicate files when CLIMON_HOME aliases an ancestor .climon dir", () => {
+    const repo = join(root, "repo");
+    const configDir = join(repo, ".climon");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.jsonc"), "{}");
+    writeFileSync(join(configDir, "config.json"), "{}");
+
+    expect(listExistingConfigFiles({ CLIMON_HOME: `${configDir}${sep}` }, repo)).toEqual([
+      join(configDir, "config.jsonc"),
+      join(configDir, "config.json")
+    ]);
+  });
+
+  test("does not list duplicate files when CLIMON_HOME symlinks to an ancestor .climon dir", () => {
+    const repo = join(root, "repo");
+    const nested = join(repo, "src");
+    const configDir = join(repo, ".climon");
+    const symlinkHome = join(root, "home-link");
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    symlinkSync(configDir, symlinkHome, "dir");
+    writeFileSync(join(configDir, "config.jsonc"), "{}");
+    writeFileSync(join(configDir, "config.json"), "{}");
+
+    expect(listExistingConfigFiles({ CLIMON_HOME: symlinkHome }, nested)).toEqual([
+      join(configDir, "config.jsonc"),
+      join(configDir, "config.json")
+    ]);
   });
 });
 

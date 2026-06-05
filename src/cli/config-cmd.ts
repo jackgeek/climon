@@ -1,7 +1,9 @@
+import { readSync, unlinkSync } from "node:fs";
 import {
   coerceConfigValue,
   isKnownConfigKey,
   listConfigDebugEntries,
+  listExistingConfigFiles,
   knownConfigKeys,
   resolveConfigSetting,
   unsetConfigSetting,
@@ -13,6 +15,7 @@ import { renderConfigSettingsHelp } from "../config-settings.js";
 export type ConfigAction =
   | { action: "help" }
   | { action: "debug" }
+  | { action: "purge" }
   | { action: "list"; scope: WriteScope }
   | { action: "get"; scope: WriteScope; key: string }
   | { action: "set"; scope: WriteScope; key: string; value: string }
@@ -33,6 +36,7 @@ Usage:
   climon config --unset <key>      Remove a config setting
   climon config --list             List all set configuration values
   climon config --debug            Show config files and keys in resolution order
+  climon config --purge            Delete config files from cwd ancestry and $CLIMON_HOME
   climon config --help             Show this help
 
 Scope (where the setting is written):
@@ -50,15 +54,42 @@ Configuration files and cascade:
   working directory upward, then falls back to the global $CLIMON_HOME/config.jsonc.
   Settings from more specific (local) files override global ones.
 
+  Use climon config --purge to walk the same cascade, prompting before deleting
+  each existing config.jsonc or legacy config.json file. Declining a prompt stops
+  the purge without checking later files.
+
 Settings:
 
 ${renderConfigSettingsHelp()}
 `;
 }
 
+export interface ConfigCommandIO {
+  stdout?: (chunk: string) => void;
+  stderr?: (chunk: string) => void;
+  confirm?: (path: string) => boolean;
+}
+
+function defaultConfirm(_path: string): boolean {
+  const buffer = Buffer.alloc(256);
+  const bytesRead = readSync(0, buffer, 0, buffer.length, null);
+  if (bytesRead <= 0) return false;
+  const answer = buffer.subarray(0, bytesRead).toString("utf8").trim().toLowerCase();
+  return answer === "y" || answer === "yes";
+}
+
+function normalizeCommandIO(io: ConfigCommandIO = {}): Required<ConfigCommandIO> {
+  return {
+    stdout: io.stdout ?? ((chunk) => process.stdout.write(chunk)),
+    stderr: io.stderr ?? ((chunk) => process.stderr.write(chunk)),
+    confirm: io.confirm ?? defaultConfirm
+  };
+}
+
 export function parseConfigArgs(argv: string[]): ConfigAction {
   let scope: WriteScope = "auto";
   let debug = false;
+  let purge = false;
   let list = false;
   let unset = false;
   let help = false;
@@ -67,22 +98,29 @@ export function parseConfigArgs(argv: string[]): ConfigAction {
     if (arg === "--global") scope = "global";
     else if (arg === "--local") scope = "local";
     else if (arg === "--debug") debug = true;
+    else if (arg === "--purge") purge = true;
     else if (arg === "--list" || arg === "-l") list = true;
     else if (arg === "--unset") unset = true;
     else if (arg === "--help" || arg === "-h") help = true;
     else positional.push(arg);
   }
   if (help) {
-    if (scope !== "auto" || debug || list || unset || positional.length > 0) {
+    if (scope !== "auto" || debug || purge || list || unset || positional.length > 0) {
       throw new Error("Use `climon config --help` without other config arguments.");
     }
     return { action: "help" };
   }
   if (debug) {
-    if (list || unset || positional.length > 0) {
+    if (purge || list || unset || positional.length > 0) {
       throw new Error("Use `climon config --debug` without other config arguments.");
     }
     return { action: "debug" };
+  }
+  if (purge) {
+    if (scope !== "auto" || list || unset || positional.length > 0) {
+      throw new Error("Use `climon config --purge` without other config arguments.");
+    }
+    return { action: "purge" };
   }
   if (list) return { action: "list", scope };
   if (unset) {
@@ -103,19 +141,21 @@ export function parseConfigArgs(argv: string[]): ConfigAction {
 export function runConfigCommand(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  io: ConfigCommandIO = {}
 ): number {
+  const commandIO = normalizeCommandIO(io);
   let action: ConfigAction;
   try {
     action = parseConfigArgs(argv);
   } catch (error) {
-    process.stderr.write(`climon config: ${(error as Error).message}\n`);
+    commandIO.stderr(`climon config: ${(error as Error).message}\n`);
     return 2;
   }
   try {
     switch (action.action) {
       case "help": {
-        process.stdout.write(configHelpText());
+        commandIO.stdout(configHelpText());
         return 0;
       }
       case "debug": {
@@ -132,7 +172,26 @@ export function runConfigCommand(
             for (const key of entry.keys) lines.push(`  ${key}`);
           }
         }
-        process.stdout.write(`${lines.join("\n")}\n`);
+        commandIO.stdout(`${lines.join("\n")}\n`);
+        return 0;
+      }
+      case "purge": {
+        const files = listExistingConfigFiles(env, cwd);
+        if (files.length === 0) {
+          commandIO.stdout("No climon config files found.\n");
+          return 0;
+        }
+        for (const file of files) {
+          commandIO.stdout(`Delete ${file}? [y/N] `);
+          if (!commandIO.confirm(file)) {
+            commandIO.stdout("\n");
+            commandIO.stdout("Purge cancelled.\n");
+            return 0;
+          }
+          commandIO.stdout("\n");
+          unlinkSync(file);
+          commandIO.stdout(`Deleted ${file}\n`);
+        }
         return 0;
       }
       case "list": {
@@ -141,13 +200,13 @@ export function runConfigCommand(
           const value = resolveConfigSetting(key, env, cwd);
           if (value !== undefined) lines.push(`${key}=${value}`);
         }
-        if (lines.length > 0) process.stdout.write(`${lines.join("\n")}\n`);
+        if (lines.length > 0) commandIO.stdout(`${lines.join("\n")}\n`);
         return 0;
       }
       case "get": {
         const value = resolveConfigSetting(action.key, env, cwd);
         if (value === undefined) return 1;
-        process.stdout.write(`${String(value)}\n`);
+        commandIO.stdout(`${String(value)}\n`);
         return 0;
       }
       case "set":
@@ -158,7 +217,7 @@ export function runConfigCommand(
         return 0;
     }
   } catch (error) {
-    process.stderr.write(`climon config: ${(error as Error).message}\n`);
+    commandIO.stderr(`climon config: ${(error as Error).message}\n`);
     return 2;
   }
 }

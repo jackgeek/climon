@@ -1,4 +1,4 @@
-import { chmodSync, constants, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -237,6 +237,30 @@ export function candidateConfigDirs(
   const home = getClimonHome(env);
   if (!dirs.includes(home)) dirs.push(home);
   return dirs;
+}
+
+export function listExistingConfigFiles(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): string[] {
+  const files: string[] = [];
+  const seenDirs = new Set<string>();
+  for (const dir of candidateConfigDirs(env, cwd)) {
+    if (!existsSync(dir)) continue;
+    const dirKey = realpathSync(dir);
+    if (seenDirs.has(dirKey)) continue;
+    seenDirs.add(dirKey);
+
+    const canonical = getConfigPathForDir(dir);
+    if (existsSync(canonical)) {
+      files.push(canonical);
+    }
+    const legacy = getLegacyConfigPathForDir(dir);
+    if (existsSync(legacy)) {
+      files.push(legacy);
+    }
+  }
+  return files;
 }
 
 function readSparseConfig(dir: string): Record<string, unknown> {
