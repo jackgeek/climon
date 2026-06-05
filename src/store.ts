@@ -75,12 +75,20 @@ type PatchLockSnapshot = {
   ownerRaw: string | undefined;
 };
 
+type PatchLockOwnerFileSnapshot = {
+  identity: PatchLockIdentity;
+  mtimeMs: number;
+  owner: Partial<PatchLockOwner> | undefined;
+  ownerRaw: string;
+};
+
 type PatchLockTestHooks = {
   afterReleaseRename?: (paths: { lockPath: string; releasePath: string }) => Promise<void> | void;
   beforeQuarantineRename?: (paths: { lockPath: string }) => Promise<void> | void;
   afterQuarantineSnapshot?: (paths: { lockPath: string }) => Promise<void> | void;
   beforeQuarantineRenameAfterValidation?: (paths: { lockPath: string }) => Promise<void> | void;
   afterQuarantineRename?: (paths: { lockPath: string; quarantinePath: string }) => Promise<void> | void;
+  beforeReclaimClaimRemove?: (paths: { claimPath: string }) => Promise<void> | void;
 };
 
 let patchLockTestHooks: PatchLockTestHooks = {};
@@ -169,6 +177,27 @@ async function readPatchLockOwnerFile(path: string): Promise<Partial<PatchLockOw
       return undefined;
     }
     if (error instanceof SyntaxError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function getPatchLockOwnerFileSnapshot(path: string): Promise<PatchLockOwnerFileSnapshot | undefined> {
+  try {
+    const ownerStat = await stat(path);
+    const ownerRaw = await readFile(path, "utf8");
+    let owner: Partial<PatchLockOwner> | undefined;
+    try {
+      owner = JSON.parse(ownerRaw) as Partial<PatchLockOwner>;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+    }
+    return { identity: { dev: ownerStat.dev, ino: ownerStat.ino }, mtimeMs: ownerStat.mtimeMs, owner, ownerRaw };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
     }
     throw error;
@@ -312,9 +341,12 @@ async function isSamePidScope(owner: { hostname?: unknown; platform?: unknown; p
   return owner.pidNamespace === undefined;
 }
 
-async function isPatchLockSnapshotStale(snapshot: PatchLockSnapshot, staleMs: number): Promise<boolean> {
+async function isPatchLockOwnerStale(
+  owner: Partial<PatchLockOwner> | undefined,
+  fallbackMtimeMs: number,
+  staleMs: number
+): Promise<boolean> {
   const now = Date.now();
-  const owner = snapshot.owner;
   const pid = typeof owner?.pid === "number" ? owner.pid : NaN;
   const createdAtMs = typeof owner?.createdAt === "string" ? Date.parse(owner.createdAt) : NaN;
   if (owner && Number.isInteger(pid) && pid > 0 && (await isSamePidScope(owner))) {
@@ -327,24 +359,111 @@ async function isPatchLockSnapshotStale(snapshot: PatchLockSnapshot, staleMs: nu
     }
     return false;
   }
-  return (Number.isFinite(createdAtMs) ? now - createdAtMs : now - snapshot.mtimeMs) > staleMs;
+  return (Number.isFinite(createdAtMs) ? now - createdAtMs : now - fallbackMtimeMs) > staleMs;
 }
 
-async function claimPatchLockForReclaim(lockPath: string): Promise<PatchLockOwner | undefined> {
+async function isPatchLockSnapshotStale(snapshot: PatchLockSnapshot, staleMs: number): Promise<boolean> {
+  return isPatchLockOwnerStale(snapshot.owner, snapshot.mtimeMs, staleMs);
+}
+
+function isCompletePatchLockOwner(owner: Partial<PatchLockOwner> | undefined): owner is PatchLockOwner {
+  return (
+    Number.isInteger(owner?.pid) &&
+    typeof owner?.createdAt === "string" &&
+    Number.isFinite(Date.parse(owner.createdAt)) &&
+    typeof owner?.hostname === "string" &&
+    typeof owner?.platform === "string" &&
+    typeof owner?.token === "string"
+  );
+}
+
+function isSamePatchLockOwnerFileSnapshot(
+  actual: PatchLockOwnerFileSnapshot | undefined,
+  expected: PatchLockOwnerFileSnapshot
+): boolean {
+  return (
+    actual !== undefined &&
+    isSamePatchLockIdentity(actual.identity, expected.identity) &&
+    actual.ownerRaw === expected.ownerRaw &&
+    isSamePatchLockSnapshot(actual.owner, expected.owner)
+  );
+}
+
+async function isPatchLockReclaimClaimStale(
+  snapshot: PatchLockOwnerFileSnapshot,
+  staleMs: number
+): Promise<boolean> {
+  if (isCompletePatchLockOwner(snapshot.owner)) {
+    return isPatchLockOwnerStale(snapshot.owner, snapshot.mtimeMs, staleMs);
+  }
+  const createdAtMs = typeof snapshot.owner?.createdAt === "string" ? Date.parse(snapshot.owner.createdAt) : NaN;
+  return (Number.isFinite(createdAtMs) ? Date.now() - createdAtMs : Date.now() - snapshot.mtimeMs) > staleMs;
+}
+
+async function claimPatchLockForReclaim(lockPath: string, staleMs: number): Promise<PatchLockOwner | undefined> {
   const claim = await getCurrentPatchLockOwner();
-  try {
-    // Cooperating stale-reclaim paths must hold this claim before final
-    // validation and rename. An existing claim means another reclaimer owns the
-    // validation->rename window, so contenders must wait instead of replacing
-    // the lock path.
-    await writeFile(join(lockPath, PATCH_LOCK_RECLAIM_CLAIM_FILE), `${JSON.stringify(claim)}\n`, { flag: "wx" });
-    return claim;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST" || code === "ENOENT") {
+  const claimPath = join(lockPath, PATCH_LOCK_RECLAIM_CLAIM_FILE);
+  while (true) {
+    try {
+      // Cooperating stale-reclaim paths must hold this claim before final
+      // validation and rename. An existing live claim means another reclaimer
+      // owns the validation->rename window, so contenders must wait instead of
+      // replacing the lock path.
+      await writeFile(claimPath, `${JSON.stringify(claim)}\n`, { flag: "wx" });
+      return claim;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        return undefined;
+      }
+      if (code !== "EEXIST") {
+        throw error;
+      }
+    }
+
+    const staleClaimSnapshot = await getPatchLockOwnerFileSnapshot(claimPath);
+    if (!staleClaimSnapshot) {
+      continue;
+    }
+    if (!(await isPatchLockReclaimClaimStale(staleClaimSnapshot, staleMs))) {
       return undefined;
     }
-    throw error;
+
+    await patchLockTestHooks.beforeReclaimClaimRemove?.({ claimPath });
+    const quarantinePath = `${claimPath}.stale-${process.pid}-${Date.now()}-${tempCounter++}`;
+    try {
+      await rename(claimPath, quarantinePath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        continue;
+      }
+      if (code === "EEXIST") {
+        continue;
+      }
+      throw error;
+    }
+
+    const quarantinedClaimSnapshot = await getPatchLockOwnerFileSnapshot(quarantinePath);
+    if (
+      quarantinedClaimSnapshot &&
+      isSamePatchLockOwnerFileSnapshot(quarantinedClaimSnapshot, staleClaimSnapshot) &&
+      (await isPatchLockReclaimClaimStale(quarantinedClaimSnapshot, staleMs))
+    ) {
+      await rm(quarantinePath, { force: true });
+      continue;
+    }
+    if (quarantinedClaimSnapshot) {
+      try {
+        await writeFile(claimPath, quarantinedClaimSnapshot.ownerRaw, { flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw error;
+        }
+      }
+      await rm(quarantinePath, { force: true });
+    }
+    return undefined;
   }
 }
 
@@ -376,7 +495,7 @@ async function quarantineStalePatchLock(lockPath: string, staleMs: number): Prom
   ) {
     return false;
   }
-  const reclaimClaim = await claimPatchLockForReclaim(lockPath);
+  const reclaimClaim = await claimPatchLockForReclaim(lockPath, staleMs);
   if (!reclaimClaim) {
     return false;
   }
