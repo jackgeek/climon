@@ -42,6 +42,11 @@ describe("shouldMarkDisconnected", () => {
     expect(await shouldMarkDisconnected(meta({ origin: "remote" }), probeDead)).toBe(true);
   });
 
+  test("paused live sessions can be marked disconnected when unreachable", async () => {
+    const probeDead = async () => false;
+    expect(await shouldMarkDisconnected(meta({ status: "paused", origin: "remote" }), probeDead)).toBe(true);
+  });
+
   test("terminated sessions are never touched", async () => {
     const probe = async () => false;
     expect(await shouldMarkDisconnected(meta({ status: "completed" }), probe)).toBe(false);

@@ -99,12 +99,14 @@ view, interact with, or manage your monitored sessions from a browser.
 
 Once the server is running you can also start new sessions directly from the
 dashboard. Session creation is **per-session**: hover any live session
-(`running`, `needs-attention`, or `disconnected`) and click its **[+]** button to
-launch a new session from it. The server spawns the new session directly,
-inheriting the selected session's working directory, so you are prompted only for
-the command. Because this no longer depends on an attached terminal, you can
-launch a session from any live session — including ones that were themselves
-spawned this way (arbitrary nesting).
+(`running`, `available`, `needs-attention`, `paused`, or `disconnected`) and
+click its **[+]** button to launch a new session from it. The server spawns the
+new session directly, inheriting the selected session's working directory, so you
+are prompted only for the command. Because this no longer depends on an attached
+terminal, you can launch a session from any live session — including ones that
+were themselves spawned this way (arbitrary nesting). Hover a session row to
+pause or resume its dashboard status; pausing does not suspend the underlying
+process or terminal input.
 
 When there are **no** sessions at all, a global **[+]** appears in the
 sidebar header instead. It asks the dashboard server to spawn a session for you

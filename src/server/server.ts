@@ -28,8 +28,8 @@ import {
   type TerminalResizeMode
 } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
-import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
-import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta } from "../types.js";
+import { listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
+import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionStatus } from "../types.js";
 import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
@@ -214,6 +214,27 @@ export function parseKillMode(value: string | null): KillMode | null {
     return value;
   }
   return null;
+}
+
+export function parseBrowserStatusPatch(value: unknown): Extract<SessionStatus, "paused" | "running"> {
+  if (value === "paused" || value === "running") {
+    return value;
+  }
+  throw new Error("Invalid status; expected paused or running");
+}
+
+function validateBrowserStatusTransition(
+  current: SessionStatus,
+  next: Extract<SessionStatus, "paused" | "running">
+): void {
+  if (next === "paused") {
+    if (current === "running" || current === "available" || current === "needs-attention" || current === "paused") {
+      return;
+    }
+  } else if (current === "paused") {
+    return;
+  }
+  throw new Error(`Invalid status transition from ${current} to ${next}`);
 }
 
 /** Grace period before rechecking liveness after a graceful (SIGTERM) kill. */
@@ -509,7 +530,12 @@ export async function shouldMarkDisconnected(
   session: SessionMeta,
   probe: (socketPath: string) => Promise<boolean>
 ): Promise<boolean> {
-  if (session.status !== "running" && session.status !== "available" && session.status !== "needs-attention") {
+  if (
+    session.status !== "running" &&
+    session.status !== "available" &&
+    session.status !== "needs-attention" &&
+    session.status !== "paused"
+  ) {
     return false;
   }
   if (session.origin === "remote") {
@@ -923,13 +949,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let body: { name?: unknown; priority?: unknown; color?: unknown };
+        let body: { name?: unknown; priority?: unknown; color?: unknown; status?: unknown };
         try {
           body = (await request.json()) as typeof body;
         } catch {
           return new Response("Invalid JSON body", { status: 400 });
         }
-        const patch: { name?: string; priority?: number; color?: AnsiColor | null } = {};
+        const patch: {
+          name?: string;
+          priority?: number;
+          color?: AnsiColor | null;
+          status?: Extract<SessionStatus, "paused" | "running">;
+          priorityReason?: "running";
+          userPaused?: boolean;
+          attentionMatchedAt?: undefined;
+          attentionReason?: undefined;
+        } = {};
+        let requestedStatus: Extract<SessionStatus, "paused" | "running"> | undefined;
         try {
           if (body.name !== undefined) {
             patch.name = String(body.name);
@@ -940,10 +976,44 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           if (body.color !== undefined) {
             patch.color = body.color === null ? null : parseColor(String(body.color));
           }
+          if (body.status !== undefined) {
+            requestedStatus = parseBrowserStatusPatch(body.status);
+            patch.status = requestedStatus;
+            patch.priorityReason = "running";
+            patch.userPaused = requestedStatus === "paused";
+            if (requestedStatus === "running") {
+              patch.attentionMatchedAt = undefined;
+              patch.attentionReason = undefined;
+            }
+          }
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
         }
-        const updated = await patchSessionMeta(patchMatch[1], patch);
+        let updated: SessionMeta | undefined;
+        if (requestedStatus !== undefined) {
+          let transitionError: unknown;
+          try {
+            updated = await patchSessionMetaWithCurrent(
+              patchMatch[1],
+              patch,
+              (current) => {
+                try {
+                  validateBrowserStatusTransition(current.status, requestedStatus);
+                } catch (error) {
+                  transitionError = error;
+                  throw error;
+                }
+              }
+            );
+          } catch (error) {
+            if (error === transitionError) {
+              return new Response(error instanceof Error ? error.message : "Invalid status transition", { status: 400 });
+            }
+            throw error;
+          }
+        } else {
+          updated = await patchSessionMeta(patchMatch[1], patch);
+        }
         if (!updated) {
           return new Response("Not found", { status: 404 });
         }

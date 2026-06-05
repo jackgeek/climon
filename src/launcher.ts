@@ -384,7 +384,10 @@ export async function killAllSessions(
   const activeSessions = (await listSessions())
     .filter(
       (session) =>
-        session.status === "running" || session.status === "available" || session.status === "needs-attention"
+        session.status === "running" ||
+        session.status === "available" ||
+        session.status === "needs-attention" ||
+        session.status === "paused"
     )
     .sort((a, b) => a.id.localeCompare(b.id));
   if (activeSessions.length === 0) {

@@ -6,8 +6,9 @@ const rank: Record<SessionMeta["status"], number> = {
   available: 1,
   running: 2,
   completed: 3,
-  failed: 4,
-  disconnected: 5
+  paused: 4,
+  failed: 5,
+  disconnected: 6
 };
 
 function timestamp(value: string | undefined): number {

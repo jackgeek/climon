@@ -143,6 +143,7 @@ interface Props {
   onNew: () => void;
   onNewFrom: (session: SessionMeta) => void;
   onEdit: (session: SessionMeta) => void;
+  onPauseToggle: (session: SessionMeta) => void;
   onManageRemote: () => void;
   notificationsEnabled: boolean;
   onToggleNotifications: () => void;
@@ -167,6 +168,7 @@ export function Sidebar({
   onNew,
   onNewFrom,
   onEdit,
+  onPauseToggle,
   onManageRemote,
   notificationsEnabled,
   onToggleNotifications,
@@ -259,6 +261,7 @@ export function Sidebar({
                   onClose={onClose}
                   onNew={onNewFrom}
                   onEdit={onEdit}
+                  onPauseToggle={onPauseToggle}
                   onMaximize={onMaximize}
                 />
               </div>

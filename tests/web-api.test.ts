@@ -34,8 +34,10 @@ describe("attachKey", () => {
     const running = attachKey(session({ status: "running" }), true);
     const available = attachKey(session({ status: "available" }), true);
     const attention = attachKey(session({ status: "needs-attention" }), true);
+    const paused = attachKey(session({ status: "paused" }), true);
     expect(running).toBe(available);
     expect(running).toBe(attention);
+    expect(running).toBe(paused);
   });
 
   test("changes when the session stops being live", () => {
@@ -62,10 +64,11 @@ describe("attachKey", () => {
 });
 
 describe("isLiveStatus", () => {
-  test("treats running, available, and needs-attention as live statuses", () => {
+  test("treats running, available, needs-attention, and paused as live statuses", () => {
     expect(isLiveStatus("running")).toBe(true);
     expect(isLiveStatus("available")).toBe(true);
     expect(isLiveStatus("needs-attention")).toBe(true);
+    expect(isLiveStatus("paused")).toBe(true);
     expect(isLiveStatus("completed")).toBe(false);
     expect(isLiveStatus("failed")).toBe(false);
     expect(isLiveStatus("disconnected")).toBe(false);

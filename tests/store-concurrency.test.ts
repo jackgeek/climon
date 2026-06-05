@@ -1,11 +1,41 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
-import { rm } from "node:fs/promises";
-import { patchSessionMeta, readSessionMeta, writeSessionMeta } from "../src/store.js";
+import { mkdir, readFile, readlink, rm, stat, utimes, writeFile } from "node:fs/promises";
+import {
+  acquireSessionMetaPatchLockForTest,
+  patchSessionMeta,
+  patchSessionMetaFromCurrent,
+  patchSessionMetaWithCurrent,
+  listSessions,
+  readSessionMeta,
+  setPatchLockTestHooksForTest,
+  writeSessionMeta
+} from "../src/store.js";
+import { getSessionMetaPath } from "../src/config.js";
 import type { SessionMeta } from "../src/types.js";
 
 const home = join(process.cwd(), `.climon-store-concurrency-${process.pid}`);
 const env = { ...process.env, CLIMON_HOME: home };
+
+async function lockOwner(pid: number): Promise<Record<string, unknown>> {
+  let pidNamespace: string | undefined;
+  if (process.platform === "linux") {
+    try {
+      pidNamespace = await readlink("/proc/self/ns/pid");
+    } catch {
+      pidNamespace = undefined;
+    }
+  }
+  return {
+    pid,
+    createdAt: new Date().toISOString(),
+    hostname: hostname(),
+    platform: process.platform,
+    ...(pidNamespace ? { pidNamespace } : {})
+  };
+}
 
 function baseMeta(id: string): SessionMeta {
   const now = new Date().toISOString();
@@ -67,5 +97,779 @@ describe("patchSessionMeta concurrency", () => {
     expect(meta?.attentionReason).toBe("Screen idle for 10s");
     expect(meta?.cols).toBe(120);
     expect(meta?.rows).toBe(40);
+  });
+
+  test("conditional patches reject against current metadata without applying metadata fields", async () => {
+    const id = "conditional-current";
+    await writeSessionMeta({ ...baseMeta(id), status: "completed", priorityReason: "completed", name: undefined }, env);
+
+    await expect(
+      patchSessionMetaWithCurrent(
+        id,
+        { status: "running", name: "renamed" },
+        (current) => {
+          if (current.status === "completed") {
+            throw new Error("cannot resume completed session");
+          }
+        },
+        env
+      )
+    ).rejects.toThrow(/cannot resume completed session/);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("completed");
+    expect(meta?.name).toBeUndefined();
+  });
+
+  test("current-based patches compute from metadata after earlier queued writes", async () => {
+    const id = "current-based-1";
+    await writeSessionMeta(baseMeta(id), env);
+
+    await Promise.all([
+      patchSessionMeta(id, { status: "paused", priorityReason: "running" }, env),
+      patchSessionMetaFromCurrent(
+        id,
+        (current) => ({
+          status: current.status === "paused" ? "paused" : "needs-attention",
+          priorityReason: current.status === "paused" ? "running" : "attention",
+          attentionMatchedAt: undefined
+        }),
+        env
+      )
+    ]);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("paused");
+    expect(meta?.priorityReason).toBe("running");
+  });
+
+  test("user pause marker overrides live attention writes from older daemons", async () => {
+    const id = "paused-overlay-1";
+    await writeSessionMeta(
+      {
+        ...baseMeta(id),
+        status: "needs-attention",
+        priorityReason: "attention",
+        attentionMatchedAt: "token",
+        attentionReason: "Screen idle for 1s",
+        userPaused: true
+      } as SessionMeta,
+      env
+    );
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("paused");
+    expect(meta?.priorityReason).toBe("running");
+    expect(meta?.attentionMatchedAt).toBeUndefined();
+    expect(meta?.attentionReason).toBeUndefined();
+
+    const listed = await listSessions(env);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.status).toBe("paused");
+  });
+
+  test("user pause marker does not override terminal outcomes", async () => {
+    const id = "paused-overlay-2";
+    await writeSessionMeta(
+      {
+        ...baseMeta(id),
+        status: "completed",
+        priorityReason: "completed",
+        completedAt: new Date().toISOString(),
+        exitCode: 0,
+        userPaused: true
+      } as SessionMeta,
+      env
+    );
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("completed");
+    expect(meta?.priorityReason).toBe("completed");
+    expect(meta?.exitCode).toBe(0);
+  });
+
+  test("conditional patches do not overwrite terminal status from another process", async () => {
+    const id = "conditional-cross-process";
+    const signalPath = join(home, `${id}.signal`);
+    await writeSessionMeta(baseMeta(id), env);
+
+    const terminalWriter = Bun.spawn(
+      [
+        process.execPath,
+        "--eval",
+        `
+          import { existsSync } from "node:fs";
+          import { patchSessionMeta } from "./src/store.ts";
+          while (!existsSync(${JSON.stringify(signalPath)})) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          await patchSessionMeta(${JSON.stringify(id)}, { status: "completed", priorityReason: "completed" });
+        `
+      ],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+
+    await patchSessionMetaWithCurrent(
+      id,
+      { status: "paused", priorityReason: "running" },
+      () => {
+        writeFileSync(signalPath, "go");
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      },
+      env
+    );
+    expect(await terminalWriter.exited).toBe(0);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("completed");
+    expect(meta?.priorityReason).toBe("completed");
+  });
+
+  test("patchSessionMeta recovers a stale lock owned by a dead process", async () => {
+    const id = "stale-dead-owner";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+
+    await patchSessionMeta(id, { daemonPid: 1234 }, env);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.daemonPid).toBe(1234);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test(
+    "patchSessionMeta recovers a stale lock with missing owner metadata",
+    async () => {
+      const id = "stale-missing-owner";
+      await writeSessionMeta(baseMeta(id), env);
+      const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+      await mkdir(lockPath);
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lockPath, old, old);
+
+      await patchSessionMeta(id, { daemonPid: 2345 }, env);
+
+      const meta = await readSessionMeta(id, env);
+      expect(meta?.daemonPid).toBe(2345);
+      expect(existsSync(lockPath)).toBe(false);
+    },
+    35_000
+  );
+
+  test(
+    "patchSessionMeta recovers a stale lock with malformed owner metadata",
+    async () => {
+      const id = "stale-malformed-owner";
+      await writeSessionMeta(baseMeta(id), env);
+      const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+      await mkdir(lockPath);
+      await writeFile(join(lockPath, "owner.json"), "{not-json");
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lockPath, old, old);
+
+      await patchSessionMeta(id, { daemonPid: 5678 }, env);
+
+      const meta = await readSessionMeta(id, env);
+      expect(meta?.daemonPid).toBe(5678);
+      expect(existsSync(lockPath)).toBe(false);
+    },
+    35_000
+  );
+
+  test(
+    "patchSessionMeta preserves ownerless staleness after reclaim bookkeeping mutates the lock directory",
+    async () => {
+      const id = "stale-ownerless-after-reclaim-marker";
+      await writeSessionMeta(baseMeta(id), env);
+      const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+      await mkdir(lockPath);
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lockPath, old, old);
+      let mtimeAfterClaim = 0;
+      const resetHooks = setPatchLockTestHooksForTest({
+        beforeQuarantineRenameAfterValidation: async ({ lockPath: pathBeingReclaimed }) => {
+          if (pathBeingReclaimed === lockPath) {
+            mtimeAfterClaim = (await stat(lockPath)).mtimeMs;
+          }
+        }
+      });
+
+      try {
+        await patchSessionMeta(id, { daemonPid: 6789 }, env);
+      } finally {
+        resetHooks();
+      }
+
+      expect(mtimeAfterClaim).toBeGreaterThan(old.getTime());
+      const meta = await readSessionMeta(id, env);
+      expect(meta?.daemonPid).toBe(6789);
+      expect(existsSync(lockPath)).toBe(false);
+    },
+    35_000
+  );
+
+  test("fresh live locks are preserved when acquisition times out", async () => {
+    const id = "fresh-live-owner";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })
+    );
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  test("fresh locks from a foreign owner are preserved until age-based staleness", async () => {
+    const id = "fresh-foreign-owner";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        pid: 999999999,
+        createdAt: new Date().toISOString(),
+        hostname: "foreign-host",
+        platform: process.platform
+      })
+    );
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  test("old same-scope locks with a reused pid identity are reclaimed", async () => {
+    const id = "reused-pid-owner";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(process.pid)),
+        createdAt: "1970-01-01T00:00:00.000Z",
+        processStartTime: "not-the-current-process-start-time"
+      })
+    );
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5, staleMs: 1 });
+    await release();
+
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("old same-scope locks with a live pid but no start-time identity are preserved", async () => {
+    const id = "live-pid-no-start-time";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    const { processStartTime: _processStartTime, ...ownerWithoutStartTime } = await lockOwner(process.pid);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ ...ownerWithoutStartTime, createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  test("new acquisitions wait while stale-lock recovery is active", async () => {
+    const id = "active-recovery";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(`${lockPath}.reclaim`);
+    await writeFile(join(`${lockPath}.reclaim`, "owner.json"), JSON.stringify(await lockOwner(process.pid)));
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(`${lockPath}.reclaim`)).toBe(true);
+  });
+
+  test("stale recovery locks are reclaimed before stale main lock recovery", async () => {
+    const id = "stale-recovery-lock";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const recoveryLockPath = `${lockPath}.reclaim`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+    await mkdir(recoveryLockPath);
+    await writeFile(join(recoveryLockPath, "owner.json"), JSON.stringify(await lockOwner(999999998)));
+
+    await patchSessionMeta(id, { daemonPid: 5678 }, env);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.daemonPid).toBe(5678);
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(recoveryLockPath)).toBe(false);
+  });
+
+  test("stale recovery lock reclaim preserves a newly live recovery lock when ownership changes before rename", async () => {
+    const id = "stale-recovery-lock-pre-rename-race";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const recoveryLockPath = `${lockPath}.reclaim`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+    await mkdir(recoveryLockPath);
+    await writeFile(
+      join(recoveryLockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(999999998)),
+        createdAt: "1970-01-01T00:00:00.000Z"
+      })
+    );
+
+    let liveIdentity: { dev: number; ino: number } | undefined;
+    const resetHooks = setPatchLockTestHooksForTest({
+      beforeQuarantineRename: async ({ lockPath: pathBeingReclaimed }) => {
+        if (pathBeingReclaimed !== recoveryLockPath) {
+          return;
+        }
+        await rm(recoveryLockPath, { recursive: true, force: true });
+        await mkdir(recoveryLockPath);
+        await writeFile(
+          join(recoveryLockPath, "owner.json"),
+          JSON.stringify({
+            ...(await lockOwner(process.pid)),
+            token: "live-recovery-owner"
+          })
+        );
+        const liveStat = await stat(recoveryLockPath);
+        liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
+      }
+    });
+    try {
+      await expect(
+        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 })
+      ).rejects.toThrow(/Timed out waiting for session metadata lock/);
+    } finally {
+      resetHooks();
+    }
+
+    expect(liveIdentity).toBeDefined();
+    if (!liveIdentity) {
+      throw new Error("test hook did not create a replacement recovery lock");
+    }
+    const finalStat = await stat(recoveryLockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(recoveryLockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("live-recovery-owner");
+  });
+
+  test("stale recovery lock reclaim preserves a newly live recovery lock replaced after snapshot validation", async () => {
+    const id = "stale-recovery-lock-after-snapshot-race";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const recoveryLockPath = `${lockPath}.reclaim`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+    await mkdir(recoveryLockPath);
+    await writeFile(
+      join(recoveryLockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(999999998)),
+        createdAt: "1970-01-01T00:00:00.000Z"
+      })
+    );
+
+    let liveIdentity: { dev: number; ino: number } | undefined;
+    const resetHooks = setPatchLockTestHooksForTest({
+      afterQuarantineSnapshot: async ({ lockPath: pathBeingReclaimed }) => {
+        if (pathBeingReclaimed !== recoveryLockPath) {
+          return;
+        }
+        await rm(recoveryLockPath, { recursive: true, force: true });
+        await mkdir(recoveryLockPath);
+        await writeFile(
+          join(recoveryLockPath, "owner.json"),
+          JSON.stringify({
+            ...(await lockOwner(process.pid)),
+            token: "live-recovery-owner-after-snapshot"
+          })
+        );
+        const liveStat = await stat(recoveryLockPath);
+        liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
+      }
+    });
+    try {
+      await expect(
+        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 })
+      ).rejects.toThrow(/Timed out waiting for session metadata lock/);
+    } finally {
+      resetHooks();
+    }
+
+    expect(liveIdentity).toBeDefined();
+    if (!liveIdentity) {
+      throw new Error("test hook did not create a replacement recovery lock");
+    }
+    const finalStat = await stat(recoveryLockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(recoveryLockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("live-recovery-owner-after-snapshot");
+  });
+
+  test("stale recovery lock reclaim claim blocks compliant replacement after final validation", async () => {
+    const id = "stale-recovery-lock-claimed-final-window";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const recoveryLockPath = `${lockPath}.reclaim`;
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, "owner.json"), JSON.stringify(await lockOwner(999999999)));
+    await mkdir(recoveryLockPath);
+    await writeFile(
+      join(recoveryLockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(999999998)),
+        createdAt: "1970-01-01T00:00:00.000Z"
+      })
+    );
+
+    let hookRan = false;
+    let contenderError: unknown;
+    const resetHooks = setPatchLockTestHooksForTest({
+      beforeQuarantineRenameAfterValidation: async ({ lockPath: pathBeingReclaimed }) => {
+        if (pathBeingReclaimed !== recoveryLockPath || hookRan) {
+          return;
+        }
+        hookRan = true;
+        try {
+          const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 });
+          await release();
+        } catch (error) {
+          contenderError = error;
+        }
+      }
+    });
+    try {
+      const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1 });
+      await release();
+    } finally {
+      resetHooks();
+    }
+
+    expect(hookRan).toBe(true);
+    expect(contenderError).toBeInstanceOf(Error);
+    expect((contenderError as Error).message).toMatch(/Timed out waiting for session metadata lock/);
+    expect(existsSync(recoveryLockPath)).toBe(false);
+  });
+
+  test("patchSessionMeta recovers a stale lock with an orphaned dead reclaim claim", async () => {
+    const id = "stale-lock-orphaned-reclaim-claim";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ ...(await lockOwner(999999999)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+    await writeFile(
+      join(lockPath, ".reclaiming.json"),
+      JSON.stringify({ ...(await lockOwner(999999998)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+
+    await patchSessionMeta(id, { daemonPid: 2468 }, env);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.daemonPid).toBe(2468);
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("stale malformed reclaim claim metadata is reclaimed", async () => {
+    const id = "stale-malformed-reclaim-claim";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const claimPath = join(lockPath, ".reclaiming.json");
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ ...(await lockOwner(999999999)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+    await writeFile(claimPath, "{not-json");
+    const old = new Date(Date.now() - 120_000);
+    await utimes(claimPath, old, old);
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1 });
+    await release();
+
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("old malformed reclaim claim with a live pid is reclaimed", async () => {
+    const id = "old-malformed-live-pid-reclaim-claim";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const claimPath = join(lockPath, ".reclaiming.json");
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ ...(await lockOwner(999999999)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+    await writeFile(
+      claimPath,
+      JSON.stringify({ ...(await lockOwner(process.pid)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1 });
+    await release();
+
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("old reclaim claim with invalid createdAt and a live pid is reclaimed", async () => {
+    const id = "old-invalid-created-at-live-pid-reclaim-claim";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const claimPath = join(lockPath, ".reclaiming.json");
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ ...(await lockOwner(999999999)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+    await writeFile(
+      claimPath,
+      JSON.stringify({ ...(await lockOwner(process.pid)), createdAt: "not-a-date", token: "invalid-created-at-claim" })
+    );
+    const old = new Date(Date.now() - 120_000);
+    await utimes(claimPath, old, old);
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1 });
+    await release();
+
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("fresh live reclaim claims still block stale lock recovery", async () => {
+    const id = "fresh-live-reclaim-claim";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const claimPath = join(lockPath, ".reclaiming.json");
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ ...(await lockOwner(999999999)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+    await writeFile(claimPath, JSON.stringify({ ...(await lockOwner(process.pid)), token: "live-reclaim-claim" }));
+
+    await expect(acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 })).rejects.toThrow(
+      /Timed out waiting for session metadata lock/
+    );
+
+    expect(existsSync(lockPath)).toBe(true);
+    expect(existsSync(claimPath)).toBe(true);
+  });
+
+  test("stale reclaim claim cleanup preserves a replacement live claim", async () => {
+    const id = "stale-reclaim-claim-replaced-before-remove";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    const claimPath = join(lockPath, ".reclaiming.json");
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({ ...(await lockOwner(999999999)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+    await writeFile(
+      claimPath,
+      JSON.stringify({ ...(await lockOwner(999999998)), createdAt: "1970-01-01T00:00:00.000Z" })
+    );
+
+    let liveClaimToken: string | undefined;
+    const hooks = {
+      beforeReclaimClaimRemove: async ({ claimPath: pathBeingRemoved }: { claimPath: string }) => {
+        if (pathBeingRemoved !== claimPath || liveClaimToken) {
+          return;
+        }
+        await rm(claimPath, { force: true });
+        liveClaimToken = "replacement-live-reclaim-claim";
+        await writeFile(claimPath, JSON.stringify({ ...(await lockOwner(process.pid)), token: liveClaimToken }));
+      }
+    };
+    const resetHooks = setPatchLockTestHooksForTest(hooks);
+    try {
+      await expect(
+        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1 })
+      ).rejects.toThrow(/Timed out waiting for session metadata lock/);
+    } finally {
+      resetHooks();
+    }
+
+    expect(liveClaimToken).toBeDefined();
+    if (!liveClaimToken) {
+      throw new Error("test hook did not create a replacement reclaim claim");
+    }
+    const finalClaim = JSON.parse(await readFile(claimPath, "utf8"));
+    expect(finalClaim.token).toBe(liveClaimToken);
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  test("release mismatch with a different owner token leaves the replacement live lock at the original path", async () => {
+    const id = "release-mismatch-new-live-lock";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5 });
+    await rm(lockPath, { recursive: true, force: true });
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(process.pid)),
+        token: "replacement-owner"
+      })
+    );
+
+    const liveStat = await stat(lockPath);
+    const liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
+
+    await release();
+
+    const finalStat = await stat(lockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("replacement-owner");
+  });
+
+  test("stale quarantine mismatch leaves a newly acquired live lock at the original path", async () => {
+    const id = "stale-quarantine-mismatch-new-live-lock";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        pid: 999999999,
+        createdAt: "1970-01-01T00:00:00.000Z",
+        hostname: "foreign-host",
+        platform: process.platform
+      })
+    );
+
+    let liveIdentity: { dev: number; ino: number } | undefined;
+    const resetHooks = setPatchLockTestHooksForTest({
+      afterQuarantineRename: async ({ quarantinePath }) => {
+        await writeFile(
+          join(quarantinePath, "owner.json"),
+          JSON.stringify({
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            hostname: hostname(),
+            platform: process.platform,
+            token: "changed-after-quarantine"
+          })
+        );
+        await mkdir(lockPath);
+        await writeFile(
+          join(lockPath, "owner.json"),
+          JSON.stringify({ ...(await lockOwner(process.pid)), token: "replacement-live-lock" })
+        );
+        const liveStat = await stat(lockPath);
+        liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
+      }
+    });
+    try {
+      await expect(
+        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1000 })
+      ).rejects.toThrow(/Timed out waiting for session metadata lock/);
+    } finally {
+      resetHooks();
+    }
+
+    expect(liveIdentity).toBeDefined();
+    if (!liveIdentity) {
+      throw new Error("test hook did not create a replacement lock");
+    }
+    const finalStat = await stat(lockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("replacement-live-lock");
+  });
+
+  test("release identity mismatch with the same owner token leaves the replacement live lock at the original path", async () => {
+    const id = "release-owner-token-race";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5 });
+    const owner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    await rm(lockPath, { recursive: true, force: true });
+    await mkdir(lockPath);
+    await writeFile(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        ...(await lockOwner(process.pid)),
+        token: owner.token
+      })
+    );
+    const liveStat = await stat(lockPath);
+    const liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
+
+    await release();
+
+    const finalStat = await stat(lockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe(owner.token);
+  });
+
+  test("release ownership change after rename leaves a newly acquired live lock at the original path", async () => {
+    const id = "release-owner-token-post-rename-race";
+    await writeSessionMeta(baseMeta(id), env);
+    const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+
+    const release = await acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 100, retryMs: 5 });
+    let liveIdentity: { dev: number; ino: number } | undefined;
+    const resetHooks = setPatchLockTestHooksForTest({
+      afterReleaseRename: async ({ releasePath }) => {
+        await writeFile(
+          join(releasePath, "owner.json"),
+          JSON.stringify({
+            ...(await lockOwner(process.pid)),
+            token: "changed-after-release-rename"
+          })
+        );
+        await mkdir(lockPath);
+        await writeFile(
+          join(lockPath, "owner.json"),
+          JSON.stringify({
+            ...(await lockOwner(process.pid)),
+            token: "replacement-owner"
+          })
+        );
+        const liveStat = await stat(lockPath);
+        liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
+      }
+    });
+    try {
+      await release();
+    } finally {
+      resetHooks();
+    }
+
+    expect(liveIdentity).toBeDefined();
+    if (!liveIdentity) {
+      throw new Error("test hook did not create a replacement lock");
+    }
+    const finalStat = await stat(lockPath);
+    expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("replacement-owner");
   });
 });

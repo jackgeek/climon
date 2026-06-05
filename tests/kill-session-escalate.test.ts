@@ -149,6 +149,7 @@ describe("killAllSessions", () => {
       status: "needs-attention",
       priorityReason: "attention"
     });
+    await seedSession("paused", 3333, { status: "paused" });
     await seedSession("remote-only", undefined, { origin: "remote" });
     const calls: Array<[number, boolean]> = [];
 
@@ -163,10 +164,12 @@ describe("killAllSessions", () => {
     expect(code).toBe(0);
     expect(calls).toEqual([
       [1111, false],
+      [3333, false],
       [2222, false]
     ]);
     expect(await readSessionMeta("one")).toBeUndefined();
     expect(await readSessionMeta("two")).toBeUndefined();
+    expect(await readSessionMeta("paused")).toBeUndefined();
     expect(await readSessionMeta("remote-only")).toBeUndefined();
   });
 

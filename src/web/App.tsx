@@ -20,6 +20,7 @@ import {
   deleteSession,
   fetchHealth,
   isLiveStatus,
+  updateSession,
   closeDashboardTunnel,
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
@@ -476,6 +477,14 @@ export function App() {
     [isMobile, sessions]
   );
 
+  const handlePauseToggle = useCallback(async (session: SessionMeta): Promise<void> => {
+    const nextStatus = session.status === "paused" ? "running" : "paused";
+    const result = await updateSession(session.id, { status: nextStatus });
+    if (result.ok && result.session) {
+      setSessions((prev) => prev.map((current) => (current.id === result.session?.id ? result.session : current)));
+    }
+  }, []);
+
   const handleSidebarCollapsedChange = useCallback((collapsed: boolean): void => {
     setSidebarCollapsed(collapsed);
     writeSidebarCollapsed(collapsed);
@@ -574,6 +583,7 @@ export function App() {
             setDialogOpen(true);
           }}
           onEdit={(session) => setEditTarget(session)}
+          onPauseToggle={handlePauseToggle}
           onManageRemote={() => setRemoteOpen(true)}
           notificationsEnabled={notificationsEnabled}
           onToggleNotifications={handleToggleNotifications}

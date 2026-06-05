@@ -40,6 +40,33 @@ function sampleMeta(id: string): SessionMeta {
   };
 }
 
+async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 2000): Promise<T> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const value = await fn().catch(() => undefined);
+    if (value !== undefined) {
+      return value;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error("timed out");
+}
+
+async function closeClientAndServer(
+  client: ReturnType<typeof connect>,
+  server: Server,
+  sessionId?: string
+): Promise<void> {
+  client.destroy();
+  if (sessionId) {
+    await waitFor(async () => {
+      const meta = await readSessionMeta(sessionId, env);
+      return meta?.status === "disconnected" ? meta : undefined;
+    }).catch(() => undefined);
+  }
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
 describe("isValidRemoteId", () => {
   test("accepts safe ids", () => {
     expect(isValidRemoteId("abc-123_x.y")).toBe(true);
@@ -79,13 +106,12 @@ describe("runIngestConnection", () => {
     expect(meta?.socketPath).toMatch(/^tcp:\/\/127\.0\.0\.1:\d+$/);
 
     client.destroy();
-    let after: SessionMeta | undefined;
-    for (let i = 0; i < 50 && after?.status !== "disconnected"; i++) {
-      await new Promise((r) => setTimeout(r, 20));
-      after = await readSessionMeta("dev1~s1", env);
-    }
-    expect(after?.status).toBe("disconnected");
-    server.close();
+    const after = await waitFor(async () => {
+      const meta = await readSessionMeta("dev1~s1", env);
+      return meta?.status === "disconnected" ? meta : undefined;
+    });
+    expect(after.status).toBe("disconnected");
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   test("rejects server-controlled fields in session updates", async () => {
@@ -121,8 +147,7 @@ describe("runIngestConnection", () => {
     expect(after?.origin).toBe("remote");
     expect(after?.clientLabel).toBe("dev1");
 
-    client.destroy();
-    server.close();
+    await closeClientAndServer(client, server, "dev1~s1");
   });
 
   test("coerces invalid remote status reason and color on session add", async () => {
@@ -151,8 +176,7 @@ describe("runIngestConnection", () => {
     expect(meta?.priorityReason).toBe("running");
     expect(meta?.color).toBeUndefined();
 
-    client.destroy();
-    server.close();
+    await closeClientAndServer(client, server, "dev1~s1");
   });
 
   test("rejects a malicious session id before any write", async () => {
@@ -167,8 +191,7 @@ describe("runIngestConnection", () => {
     client.write(encodeControl({ kind: "session-added", meta: sampleMeta("../evil") }));
     await new Promise((r) => setTimeout(r, 100));
     expect(await listSessions(env)).toHaveLength(0);
-    client.destroy();
-    server.close();
+    await closeClientAndServer(client, server);
   });
 });
 
