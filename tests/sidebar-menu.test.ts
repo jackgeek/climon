@@ -157,4 +157,35 @@ describe("Sidebar menu", () => {
     expect(disabled).not.toContain(remotesMenuLabel);
     expect(enabled).toContain(remotesMenuLabel);
   });
+
+  test("shows the bug report mail link only when expanded", () => {
+    const commonProps = {
+      sessions: [],
+      activeId: null,
+      collapsible: true,
+      onCollapsedChange: () => {},
+      onSelect: () => {},
+      onClose: () => {},
+      onNew: () => {},
+      onNewFrom: () => {},
+      onEdit: () => {},
+      onManageRemote: () => {},
+      notificationsEnabled: false,
+      onToggleNotifications: () => {},
+      tunnelLinkStatus: null,
+      onTunnelLink: () => {},
+      onCloseTunnelLink: () => {},
+      viewMode: "clamped" as const,
+      onViewModeChange: () => {},
+      onMaximize: () => {}
+    };
+
+    const expanded = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, collapsed: false }));
+    const collapsed = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, collapsed: true }));
+
+    expect(expanded).toContain('href="mailto://jackallan@microsoft.com"');
+    expect(expanded).toContain("File a bug");
+    expect(collapsed).not.toContain('href="mailto://jackallan@microsoft.com"');
+    expect(collapsed).not.toContain("File a bug");
+  });
 });
