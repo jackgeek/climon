@@ -209,6 +209,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const touchScrollRef = useRef<TouchScrollState>({ active: false, lastY: 0 });
   const wsRef = useRef<WebSocket | null>(null);
   const attachedSessionIdRef = useRef<string | null>(null);
   const viewModeRef = useRef<TerminalResizeMode>(viewMode);
@@ -335,6 +336,71 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const onWindowResize = (): void => fitNow();
     window.addEventListener("resize", onWindowResize);
 
+    // Translate one-finger touch drags into synthetic wheel events so mobile
+    // viewers can scroll like a mouse wheel. xterm's own wheel handling then
+    // scrolls local scrollback (normal buffer) or forwards wheel->mouse events
+    // to the app (mouse reporting active). Capture-phase touchmove runs before
+    // xterm's own touch listeners; we always stopPropagation (so xterm's native
+    // touch-scroll never double-handles) and preventDefault only while armed
+    // (suppresses the browser's pull-to-refresh over the terminal without
+    // blocking multi-touch pinch-zoom). The listener is non-passive so
+    // preventDefault is honored.
+    const onTouchStart = (e: TouchEvent): void => {
+      const touch = e.touches[0];
+      if (!touch) {
+        return;
+      }
+      touchScrollRef.current = startTouchScroll(e.touches.length, touch.clientY);
+    };
+    const onTouchMove = (e: TouchEvent): void => {
+      const touch = e.touches[0];
+      if (!touch) {
+        return;
+      }
+      const move = moveTouchScroll(touchScrollRef.current, e.touches.length, touch.clientY);
+      touchScrollRef.current = move.state;
+      // We fully own terminal scrolling via synthetic wheel events, so always
+      // stop xterm's own touch-scroll handler from also processing this gesture
+      // (including the multi-touch case, where xterm would otherwise scroll and
+      // cancel the browser's pinch-zoom).
+      e.stopPropagation();
+      if (!move.state.active) {
+        // Disarmed (multi-touch / pinch-zoom): leave the browser default intact.
+        return;
+      }
+      if (move.deltaY !== 0) {
+        // clientX/clientY are required: in mouse-reporting mode xterm maps the
+        // wheel to a terminal cell from these coordinates and drops the event if
+        // they fall outside the terminal.
+        term.element?.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: move.deltaY,
+            deltaMode: 0,
+            bubbles: true,
+            cancelable: true,
+            clientX: touch.clientX,
+            clientY: touch.clientY,
+            screenX: touch.screenX,
+            screenY: touch.screenY,
+            ctrlKey: e.ctrlKey,
+            altKey: e.altKey,
+            shiftKey: e.shiftKey,
+            metaKey: e.metaKey
+          })
+        );
+      }
+      // preventDefault only while armed (single-finger) suppresses pull-to-refresh
+      // for terminal scrolling without blocking multi-touch browser gestures.
+      e.preventDefault();
+    };
+    const onTouchEnd = (): void => {
+      touchScrollRef.current = { active: false, lastY: 0 };
+    };
+    container.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
+    container.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
+    container.addEventListener("touchend", onTouchEnd, { passive: true, capture: true });
+    container.addEventListener("touchcancel", onTouchEnd, { passive: true, capture: true });
+
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown" || !event.ctrlKey) {
         return true;
@@ -369,6 +435,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     return () => {
       window.removeEventListener("resize", onWindowResize);
+      container.removeEventListener("touchstart", onTouchStart, true);
+      container.removeEventListener("touchmove", onTouchMove, true);
+      container.removeEventListener("touchend", onTouchEnd, true);
+      container.removeEventListener("touchcancel", onTouchEnd, true);
       dataDisposable.dispose();
       closeWs();
       term.dispose();

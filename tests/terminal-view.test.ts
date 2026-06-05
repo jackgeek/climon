@@ -105,6 +105,15 @@ describe("TerminalView", () => {
     expect(source).not.toContain("stopImmediatePropagation");
   });
 
+  test("wires terminal touch drags to synthetic wheel scrolling", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain('addEventListener("touchmove"');
+    expect(source).toContain("passive: false");
+    expect(source).toContain("moveTouchScroll(");
+    expect(source).toContain('new WheelEvent("wheel"');
+  });
+
   test("does not refit after an authoritative daemon size changes the browser terminal grid", () => {
     const resizedTo: Array<{ cols: number; rows: number }> = [];
 
