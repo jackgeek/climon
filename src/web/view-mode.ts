@@ -1,6 +1,6 @@
 import type { TerminalResizeMode } from "../ipc/frame.js";
 
-export const clampSizeMenuLabel = "Clamp size";
+export const clampSizeMenuLabel = "Clamp terminal size";
 export const websocketOpenState = 1;
 
 export interface QueuedViewMode {

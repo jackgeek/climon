@@ -8,16 +8,16 @@ import {
 } from "../src/web/view-mode.js";
 
 describe("view mode menu", () => {
-  test("Clamp size toggles from clamped to fill", () => {
+  test("Clamp terminal size toggles from clamped to fill", () => {
     expect(toggleViewMode("clamped")).toBe("fill");
   });
 
-  test("Clamp size toggles from fill to clamped", () => {
+  test("Clamp terminal size toggles from fill to clamped", () => {
     expect(toggleViewMode("fill")).toBe("clamped");
   });
 
   test("uses one menu label for both modes", () => {
-    expect(clampSizeMenuLabel).toBe("Clamp size");
+    expect(clampSizeMenuLabel).toBe("Clamp terminal size");
   });
 
   test("queues a mode request when the WebSocket is not open, then flushes it on open", () => {

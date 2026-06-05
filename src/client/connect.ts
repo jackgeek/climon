@@ -84,7 +84,7 @@ export function renderTerminalWarning(warning: TerminalWarningPayload, detachPre
     `\r\n\x1b[33m[climon] The browser terminal is not clamped (${warning.cols}x${warning.rows}), ` +
     `which is larger than this local terminal (${warning.hostCols}x${warning.hostRows}). ` +
     `Local PTY output is paused here to avoid corrupt rendering. Press ${describeDetachKey(detachPrefix)} then c ` +
-    `to restore clamp mode, choose "Clamp size" in the web terminal menu, or stop viewing the terminal in the web server.\x1b[0m\r\n`
+    `to restore clamp mode, choose "Clamp terminal size" in the web terminal menu, or stop viewing the terminal in the web server.\x1b[0m\r\n`
   );
 }
 
