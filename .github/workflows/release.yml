@@ -40,15 +40,44 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      - name: Detect existing release tag
+        id: existing-release
+        run: |
+          set -euo pipefail
+          next_tag="$(bun -e '
+            const { readFileSync } = require("node:fs");
+            const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+            const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(pkg.version);
+            if (!match) throw new Error(`Invalid package version: ${pkg.version}`);
+            console.log(`v${match[1]}.${match[2]}.${Number(match[3]) + 1}`);
+          ')"
+          git fetch --tags --force origin
+          if git rev-parse "refs/tags/$next_tag" >/dev/null 2>&1; then
+            echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out existing release tag
+        if: ${{ steps.existing-release.outputs.tag != '' }}
+        run: git checkout "${{ steps.existing-release.outputs.tag }}"
+
       - name: Patch release (bump + commit + tag)
+        if: ${{ steps.existing-release.outputs.tag == '' }}
         run: bun run release
 
       - name: Capture release tag
         id: release-tag
+        env:
+          EXISTING_TAG: ${{ steps.existing-release.outputs.tag }}
         run: |
           set -euo pipefail
-          tag="$(git describe --tags --exact-match HEAD)"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$EXISTING_TAG" ]; then
+            echo "tag=$EXISTING_TAG" >> "$GITHUB_OUTPUT"
+          else
+            tag="$(git describe --tags --exact-match HEAD)"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -75,6 +104,7 @@ jobs:
           test "$actual_count" = "${#expected[@]}"
 
       - name: Push bump commit and tag
+        if: ${{ steps.existing-release.outputs.tag == '' }}
         run: git push --follow-tags origin HEAD:main
 
       - name: Publish GitHub Release
