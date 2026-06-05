@@ -27,6 +27,14 @@ interface ResizableTerminal {
   resize: (cols: number, rows: number) => void;
 }
 
+interface ResettableTerminal extends ResizableTerminal {
+  reset: () => void;
+}
+
+interface RefitSessionState {
+  status: SessionMeta["status"];
+}
+
 interface FontResizableTerminal {
   options: {
     fontSize?: number;
@@ -62,6 +70,40 @@ export function applyAuthoritativeTerminalSize(
   } catch {
     // Ignore invalid sizes.
   }
+}
+
+export function resetTerminalForSession(term: ResettableTerminal, session: { cols: number; rows: number } | null): void {
+  if (session) {
+    applyAuthoritativeTerminalSize(term, session.cols, session.rows);
+  }
+  term.reset();
+}
+
+export function canRefitTerminalForSession(
+  session: RefitSessionState | null,
+  initialReplayComplete: boolean,
+  visible = true
+): boolean {
+  if (!visible) {
+    return false;
+  }
+  if (!session) {
+    return true;
+  }
+  return isLiveStatus(session.status) && initialReplayComplete;
+}
+
+export function completeInitialReplay(
+  replayGeneration: number,
+  currentGeneration: number,
+  markComplete: () => void,
+  refit: () => void
+): void {
+  if (replayGeneration !== currentGeneration) {
+    return;
+  }
+  markComplete();
+  refit();
 }
 
 export function applyTerminalFontSize(term: FontResizableTerminal, fontSize: number, refit: () => void): void {
@@ -122,10 +164,19 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const fontSizeRef = useRef(13);
   const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
   const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
+  const selectedSessionRef = useRef<SessionMeta | null>(session);
+  const visibleRef = useRef(visible);
+  const initialReplayCompleteRef = useRef(true);
+  const attachmentGenerationRef = useRef(0);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
   }, [viewMode]);
+
+  useEffect(() => {
+    selectedSessionRef.current = session;
+    visibleRef.current = visible;
+  }, [session, visible]);
 
   useEffect(() => {
     onViewModeChangeRef.current = onViewModeChange;
@@ -167,6 +218,15 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }
 
   function fitNow(): void {
+    if (
+      !canRefitTerminalForSession(
+        selectedSessionRef.current,
+        initialReplayCompleteRef.current,
+        visibleRef.current
+      )
+    ) {
+      return;
+    }
     try {
       fitRef.current?.fit();
       sendResize();
@@ -183,6 +243,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }
 
   function closeWs(): void {
+    attachmentGenerationRef.current++;
     if (wsRef.current) {
       try {
         wsRef.current.close();
@@ -265,7 +326,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       return;
     }
     closeWs();
-    term.reset();
+    initialReplayCompleteRef.current = true;
+    resetTerminalForSession(term, session);
+    const attachmentGeneration = attachmentGenerationRef.current;
 
     if (!session) {
       return;
@@ -283,12 +346,19 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
       attachedSessionIdRef.current = session.id;
+      initialReplayCompleteRef.current = false;
       ws.onopen = () => {
         flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
         flushAttentionAck();
-        fitNow();
       };
       ws.onmessage = (ev) => {
+        if (
+          wsRef.current !== ws ||
+          attachedSessionIdRef.current !== session.id ||
+          attachmentGeneration !== attachmentGenerationRef.current
+        ) {
+          return;
+        }
         if (typeof ev.data === "string") {
           try {
             const msg = JSON.parse(ev.data) as {
@@ -311,7 +381,21 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             // Ignore malformed control messages.
           }
         } else {
-          term.write(new Uint8Array(ev.data as ArrayBuffer));
+          const data = new Uint8Array(ev.data as ArrayBuffer);
+          if (initialReplayCompleteRef.current) {
+            term.write(data);
+          } else {
+            term.write(data, () => {
+              completeInitialReplay(
+                attachmentGeneration,
+                attachmentGenerationRef.current,
+                () => {
+                  initialReplayCompleteRef.current = true;
+                },
+                refit
+              );
+            });
+          }
         }
       };
     } else {
@@ -320,9 +404,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
           return;
         }
         if (buf) {
-          term.write(buf);
+          term.write(buf, () => {
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refit);
+          });
         } else {
-          term.write("\x1b[90m[no output captured]\x1b[0m\r\n");
+          term.write("\x1b[90m[no output captured]\x1b[0m\r\n", () => {
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refit);
+          });
         }
       });
     }
@@ -339,7 +427,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   // Refit when the selected session or layout-affecting terminal chrome changes
   // so xterm re-measures before sending geometry back to the daemon.
   useEffect(() => {
-    refit();
+    if (canRefitTerminalForSession(session, initialReplayCompleteRef.current, visible)) {
+      refit();
+    }
   }, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);
 
   useImperativeHandle(ref, () => ({
