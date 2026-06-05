@@ -137,6 +137,36 @@ export function loadTerminalAddons(
   term.loadAddon(webLinks);
 }
 
+export interface TouchScrollState {
+  active: boolean;
+  lastY: number;
+}
+
+export interface TouchScrollMove {
+  state: TouchScrollState;
+  deltaY: number;
+}
+
+// Arm the gesture only for single-finger drags so multi-touch (e.g. pinch-zoom)
+// is left entirely to the browser.
+export function startTouchScroll(touchCount: number, clientY: number): TouchScrollState {
+  return { active: touchCount === 1, lastY: clientY };
+}
+
+// Translate a single-finger drag into a mouse-wheel delta. deltaY mirrors the
+// wheel convention: dragging the finger up (content moves up) scrolls toward
+// newer output (positive), dragging down scrolls toward older history (negative).
+export function moveTouchScroll(
+  prev: TouchScrollState,
+  touchCount: number,
+  clientY: number
+): TouchScrollMove {
+  if (!prev.active || touchCount !== 1) {
+    return { state: { active: false, lastY: clientY }, deltaY: 0 };
+  }
+  return { state: { active: true, lastY: clientY }, deltaY: prev.lastY - clientY };
+}
+
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
   refit: () => void;
