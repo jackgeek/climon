@@ -9,12 +9,15 @@ type PassthroughProps = {
   children?: ReactNode;
 };
 
+type ButtonProps = PassthroughProps & Record<string, unknown>;
+
 function Passthrough({ children }: PassthroughProps) {
   return createElement("div", null, children);
 }
 
 mock.module("@fluentui/react-components", () => ({
-  Button: ({ children }: PassthroughProps) => createElement("button", null, children),
+  Badge: ({ children, ...props }: ButtonProps) => createElement("div", props, children),
+  Button: ({ children, ...props }: ButtonProps) => createElement("button", props, children),
   Dialog: Passthrough,
   DialogActions: Passthrough,
   DialogBody: Passthrough,
@@ -23,6 +26,7 @@ mock.module("@fluentui/react-components", () => ({
   DialogTitle: Passthrough,
   Text: Passthrough,
   makeStyles: () => () => ({ error: "error" }),
+  mergeClasses: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(" "),
   tokens: {
     colorPaletteRedForeground1: "#cc0000"
   }

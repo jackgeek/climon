@@ -59,15 +59,19 @@ climon kill <id>          # terminate a session and remove its metadata
 ## The dashboard
 
 - **Session list** (left): every monitored session with a status badge —
-  `running`, `needs-attention`, `completed`, `failed`, or `disconnected`.
-  Sessions are ordered `needs-attention` first, then `running`, then
-  `completed`/`failed`. Hover over a row to reveal a close box (×) that cleans
-  up the session — this removes it from the dashboard without ending a climon
-  client still attached to it.
+  `running`, `available`, `needs-attention`, `completed`, `paused`, `failed`,
+  or `disconnected`. Sessions are ordered `needs-attention` first, then
+  `available`, `running`, terminal outcomes, `paused`, `failed`, and
+  `disconnected`. Hover over a row to reveal controls for editing, pausing or
+  resuming, spawning a child session, and closing the session. Closing removes it
+  from the dashboard without ending a climon client still attached to it unless
+  you choose to kill the process.
 - **Terminal** (right): click a session to open it.
-  - For **running** sessions, the terminal is live and interactive over a
-    WebSocket — type to send input (e.g. answer a Copilot prompt to let it
-    continue).
+  - For **running**, **available**, **needs-attention**, and **paused** sessions,
+    the terminal is live and interactive over a WebSocket — type to send input
+    (e.g. answer a Copilot prompt to let it continue). Pausing is dashboard-only:
+    it keeps the PTY running but prevents live-state automation from changing the
+    visible status until you resume.
   - For **completed/failed** sessions, the terminal shows the captured final
     output (read-only).
 - **View mode**: open the hamburger menu and toggle **Clamp size**. When checked,
@@ -87,11 +91,11 @@ climon kill <id>          # terminate a session and remove its metadata
 ## Creating sessions from the dashboard
 
 Session creation happens **from a session**. Hover any live session (`running`,
-`needs-attention`, or `disconnected`) and click its **[+]** to launch a new
-session from it. The server spawns the new session directly, inheriting the
-originating session's working directory, so you are prompted only for the
-command. This works from any live session, including ones that were themselves
-spawned this way (arbitrary nesting).
+`available`, `needs-attention`, `paused`, or `disconnected`) and click its
+**[+]** to launch a new session from it. The server spawns the new session
+directly, inheriting the originating session's working directory, so you are
+prompted only for the command. This works from any live session, including ones
+that were themselves spawned this way (arbitrary nesting).
 
 When there are no sessions at all, the sidebar header shows a single **[+]**
 instead, which asks the server to create a session for you (prompting for a

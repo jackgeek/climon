@@ -91,6 +91,8 @@ type PatchLockTestHooks = {
   beforeReclaimClaimRemove?: (paths: { claimPath: string }) => Promise<void> | void;
 };
 
+type SessionMetaPatchInput = SessionMetaPatch | ((current: SessionMeta) => SessionMetaPatch | undefined);
+
 let patchLockTestHooks: PatchLockTestHooks = {};
 
 export function setPatchLockTestHooksForTest(hooks: PatchLockTestHooks): () => void {
@@ -322,7 +324,15 @@ async function releasePatchLock(lockPath: string, instance: PatchLockInstance): 
 
   await patchLockTestHooks.afterReleaseRename?.({ lockPath, releasePath });
 
-  const releaseIdentity = await getPatchLockIdentity(releasePath);
+  let releaseIdentity: PatchLockIdentity;
+  try {
+    releaseIdentity = await getPatchLockIdentity(releasePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
   const releaseOwner = await readPatchLockOwner(releasePath);
   if (!isSamePatchLockIdentity(releaseIdentity, instance.identity) || !isSamePatchLockOwner(releaseOwner, instance.owner)) {
     return;
@@ -656,7 +666,7 @@ export async function acquireSessionMetaPatchLockForTest(
 
 async function patchSessionMetaQueued(
   id: string,
-  patch: SessionMetaPatch,
+  patch: SessionMetaPatchInput,
   validateCurrent: ((current: SessionMeta) => void) | undefined,
   env: NodeJS.ProcessEnv
 ): Promise<SessionMeta | undefined> {
@@ -669,7 +679,11 @@ async function patchSessionMetaQueued(
         return undefined;
       }
       validateCurrent?.(current);
-      const updated: SessionMeta = { ...current, ...patch, updatedAt: new Date().toISOString() };
+      const resolvedPatch = typeof patch === "function" ? patch(current) : patch;
+      if (resolvedPatch === undefined) {
+        return current;
+      }
+      const updated: SessionMeta = { ...current, ...resolvedPatch, updatedAt: new Date().toISOString() };
       await writeSessionMeta(updated, env);
       return updated;
     } finally {
@@ -706,6 +720,14 @@ export async function patchSessionMetaWithCurrent(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<SessionMeta | undefined> {
   return patchSessionMetaQueued(id, patch, validateCurrent, env);
+}
+
+export async function patchSessionMetaFromCurrent(
+  id: string,
+  updateCurrent: (current: SessionMeta) => SessionMetaPatch | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<SessionMeta | undefined> {
+  return patchSessionMetaQueued(id, updateCurrent, undefined, env);
 }
 
 export async function listSessions(env: NodeJS.ProcessEnv = process.env): Promise<SessionMeta[]> {

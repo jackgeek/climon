@@ -359,7 +359,12 @@ export async function shouldMarkDisconnected(
   session: SessionMeta,
   probe: (socketPath: string) => Promise<boolean>
 ): Promise<boolean> {
-  if (session.status !== "running" && session.status !== "available" && session.status !== "needs-attention") {
+  if (
+    session.status !== "running" &&
+    session.status !== "available" &&
+    session.status !== "needs-attention" &&
+    session.status !== "paused"
+  ) {
     return false;
   }
   if (session.origin === "remote") {

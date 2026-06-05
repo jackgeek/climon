@@ -79,6 +79,7 @@ describe("SessionItem compact rendering", () => {
         onEdit: () => {},
         onMaximize: () => {},
         onNew: () => {},
+        onPauseToggle: () => {},
         onSelect: () => {}
       })
     );
@@ -98,6 +99,7 @@ describe("SessionItem compact rendering", () => {
         onEdit: () => {},
         onMaximize: () => {},
         onNew: () => {},
+        onPauseToggle: () => {},
         onSelect: () => {}
       })
     );
@@ -117,11 +119,74 @@ describe("SessionItem compact rendering", () => {
         onEdit: () => {},
         onMaximize: () => {},
         onNew: () => {},
+        onPauseToggle: () => {},
         onSelect: () => {}
       })
     );
 
     expect(markup).toContain("border-right:8px solid #729fcf");
     expect(markup).not.toContain("#3465a4");
+  });
+});
+
+describe("SessionItem pause control", () => {
+  test("renders a pause button for expanded running sessions", () => {
+    const { SessionItem } = require("../src/web/components/SessionItem.js") as typeof import("../src/web/components/SessionItem.js");
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        active: false,
+        compact: false,
+        session: makeSession({ status: "running" }),
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onPauseToggle: () => {},
+        onSelect: () => {}
+      })
+    );
+
+    expect(markup).toContain('title="Pause session"');
+    expect(markup).toContain('aria-label="Pause session"');
+  });
+
+  test("renders a resume button for expanded paused sessions", () => {
+    const { SessionItem } = require("../src/web/components/SessionItem.js") as typeof import("../src/web/components/SessionItem.js");
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        active: false,
+        compact: false,
+        session: makeSession({ status: "paused" }),
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onPauseToggle: () => {},
+        onSelect: () => {}
+      })
+    );
+
+    expect(markup).toContain('title="Resume session"');
+    expect(markup).toContain('aria-label="Resume session"');
+  });
+
+  test("omits the pause control in compact mode", () => {
+    const { SessionItem } = require("../src/web/components/SessionItem.js") as typeof import("../src/web/components/SessionItem.js");
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        active: false,
+        compact: true,
+        session: makeSession({ status: "running" }),
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onPauseToggle: () => {},
+        onSelect: () => {}
+      })
+    );
+
+    expect(markup).not.toContain("Pause session");
+    expect(markup).not.toContain("Resume session");
   });
 });

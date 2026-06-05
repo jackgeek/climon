@@ -6,6 +6,7 @@ import { mkdir, readFile, readlink, rm, stat, utimes, writeFile } from "node:fs/
 import {
   acquireSessionMetaPatchLockForTest,
   patchSessionMeta,
+  patchSessionMetaFromCurrent,
   patchSessionMetaWithCurrent,
   readSessionMeta,
   setPatchLockTestHooksForTest,
@@ -117,6 +118,28 @@ describe("patchSessionMeta concurrency", () => {
     const meta = await readSessionMeta(id, env);
     expect(meta?.status).toBe("completed");
     expect(meta?.name).toBeUndefined();
+  });
+
+  test("current-based patches compute from metadata after earlier queued writes", async () => {
+    const id = "current-based-1";
+    await writeSessionMeta(baseMeta(id), env);
+
+    await Promise.all([
+      patchSessionMeta(id, { status: "paused", priorityReason: "running" }, env),
+      patchSessionMetaFromCurrent(
+        id,
+        (current) => ({
+          status: current.status === "paused" ? "paused" : "needs-attention",
+          priorityReason: current.status === "paused" ? "running" : "attention",
+          attentionMatchedAt: undefined
+        }),
+        env
+      )
+    ]);
+
+    const meta = await readSessionMeta(id, env);
+    expect(meta?.status).toBe("paused");
+    expect(meta?.priorityReason).toBe("running");
   });
 
   test("conditional patches do not overwrite terminal status from another process", async () => {

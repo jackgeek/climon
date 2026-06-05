@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
-import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus } from "./api.js";
+import { eventsUrl, fetchSessions, deleteSession, fetchHealth, isLiveStatus, updateSession } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { EditSessionDialog } from "./components/EditSessionDialog.js";
@@ -421,6 +421,14 @@ export function App() {
     [isMobile, sessions]
   );
 
+  const handlePauseToggle = useCallback(async (session: SessionMeta): Promise<void> => {
+    const nextStatus = session.status === "paused" ? "running" : "paused";
+    const result = await updateSession(session.id, { status: nextStatus });
+    if (result.ok && result.session) {
+      setSessions((prev) => prev.map((current) => (current.id === result.session?.id ? result.session : current)));
+    }
+  }, []);
+
   const handleSidebarCollapsedChange = useCallback((collapsed: boolean): void => {
     setSidebarCollapsed(collapsed);
     writeSidebarCollapsed(collapsed);
@@ -464,6 +472,7 @@ export function App() {
             setDialogOpen(true);
           }}
           onEdit={(session) => setEditTarget(session)}
+          onPauseToggle={handlePauseToggle}
           onManageRemote={() => setRemoteOpen(true)}
           viewMode={viewMode}
           onViewModeChange={requestViewMode}

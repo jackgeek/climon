@@ -34,6 +34,7 @@ const SESSION_STATUSES = new Set<SessionStatus>([
   "available",
   "needs-attention",
   "completed",
+  "paused",
   "failed",
   "disconnected"
 ]);
@@ -345,7 +346,10 @@ async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<voi
   for (const meta of await listSessions(env)) {
     if (
       meta.origin === "remote" &&
-      (meta.status === "running" || meta.status === "available" || meta.status === "needs-attention")
+      (meta.status === "running" ||
+        meta.status === "available" ||
+        meta.status === "needs-attention" ||
+        meta.status === "paused")
     ) {
       await patchSessionMeta(meta.id, { status: "disconnected", priorityReason: "disconnected" }, env);
     }

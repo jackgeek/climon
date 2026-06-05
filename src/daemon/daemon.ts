@@ -18,7 +18,7 @@ import {
 import { spawnPty, resolveCommand, type PtyHandle } from "../pty.js";
 import { ScrollbackBuffer } from "./buffer.js";
 import { ScreenIdleDetector } from "./idle-detector.js";
-import { patchSessionMeta, readSessionMeta, writeScrollback } from "../store.js";
+import { patchSessionMeta, patchSessionMetaFromCurrent, readSessionMeta, writeScrollback } from "../store.js";
 import { cleanupSessionSocket, listenOnSessionSocket } from "../session-socket.js";
 
 /**
@@ -274,11 +274,11 @@ export async function runSessionDaemon(id: string): Promise<void> {
    * Transitions are de-duped against the last applied value and ignored after
    * the PTY exits so the completed/failed patch always wins.
    */
-  function applyAttention(
+  async function applyAttention(
     payload: AttentionPayload,
     source: "detector" | "user" = "detector",
     currentFingerprint: string = fingerprint()
-  ): void {
+  ): Promise<void> {
     if (exited) {
       return;
     }
@@ -302,28 +302,33 @@ export async function runSessionDaemon(id: string): Promise<void> {
         idleDetector.acknowledge(currentFingerprint, Date.now());
       }
       const now = new Date().toISOString();
-      void patchSessionMeta(id, {
-        status: source === "user" ? "available" : "running",
+      void patchSessionMetaFromCurrent(id, (current) => ({
+        status: current.status === "paused" ? "paused" : source === "user" ? "available" : "running",
         priorityReason: "running",
         attentionMatchedAt: undefined,
         attentionReason: undefined,
         lastActivityAt: now
-      });
+      }));
       return;
     }
     if (lastAttentionState === payload.needsAttention) {
       return;
     }
-    lastAttentionState = payload.needsAttention;
     const now = new Date().toISOString();
-    currentAttentionMatchedAt = now;
-    currentAttentionFingerprint = currentFingerprint;
-    void patchSessionMeta(id, {
-      status: "needs-attention",
-      priorityReason: "attention",
-      attentionMatchedAt: now,
-      attentionReason: payload.reason,
-      lastActivityAt: now
+    void patchSessionMetaFromCurrent(id, (current) => {
+      if (current.status === "paused") {
+        return undefined;
+      }
+      lastAttentionState = payload.needsAttention;
+      currentAttentionMatchedAt = now;
+      currentAttentionFingerprint = currentFingerprint;
+      return {
+        status: "needs-attention",
+        priorityReason: "attention",
+        attentionMatchedAt: now,
+        attentionReason: payload.reason,
+        lastActivityAt: now
+      };
     });
   }
 
@@ -369,7 +374,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
           const currentFingerprint = fingerprint();
           const transition = idleDetector.update(currentFingerprint, Date.now());
           if (transition) {
-            applyAttention(transition, "detector", currentFingerprint);
+            void applyAttention(transition, "detector", currentFingerprint);
           }
         }, 1000)
       : undefined;
@@ -397,7 +402,11 @@ export async function runSessionDaemon(id: string): Promise<void> {
     resolveExit?.();
   });
 
-  await patchSessionMeta(id, { status: "running", priorityReason: "running", daemonPid: pty.pid });
+  await patchSessionMetaFromCurrent(id, (current) =>
+    current.status === "paused"
+      ? { daemonPid: pty.pid, priorityReason: "running" }
+      : { status: "running", priorityReason: "running", daemonPid: pty.pid }
+  );
 
   const server: Server = createServer((socket) => {
     let initialized = false;
@@ -447,7 +456,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
           }
           writeInitialFrames();
         } else if (frame.type === FrameType.Attention) {
-          applyAttention(parseJsonPayload<AttentionPayload>(frame.payload), "user");
+          void applyAttention(parseJsonPayload<AttentionPayload>(frame.payload), "user");
           writeInitialFrames();
         }
       }

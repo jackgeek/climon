@@ -1,5 +1,12 @@
 import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
-import { Dismiss16Regular, Add16Regular, FullScreenMaximize16Regular, Settings16Regular } from "@fluentui/react-icons";
+import {
+  Dismiss16Regular,
+  Add16Regular,
+  FullScreenMaximize16Regular,
+  Pause16Regular,
+  Play16Regular,
+  Settings16Regular
+} from "@fluentui/react-icons";
 import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
@@ -14,7 +21,8 @@ const useStyles = makeStyles({
     ":hover": { backgroundColor: tokens.colorNeutralBackground1Hover },
     ":hover .climon-close": { display: "inline-flex" },
     ":hover .climon-new": { display: "inline-flex" },
-    ":hover .climon-edit": { display: "inline-flex" }
+    ":hover .climon-edit": { display: "inline-flex" },
+    ":hover .climon-pause": { display: "inline-flex" }
   },
   compactRoot: {
     minHeight: "54px",
@@ -74,6 +82,12 @@ const useStyles = makeStyles({
     right: "64px",
     display: "none"
   },
+  pauseBtn: {
+    position: "absolute",
+    top: "8px",
+    right: "92px",
+    display: "none"
+  },
   maximize: {
     display: "none",
     marginTop: "8px",
@@ -92,6 +106,7 @@ interface Props {
   onClose: (id: string) => void;
   onNew: (session: SessionMeta) => void;
   onEdit: (session: SessionMeta) => void;
+  onPauseToggle: (session: SessionMeta) => void;
   onMaximize: (id: string) => void;
 }
 
@@ -117,10 +132,12 @@ export function SessionItem({
   onClose,
   onNew,
   onEdit,
+  onPauseToggle,
   onMaximize
 }: Props) {
   const styles = useStyles();
   const displayTitle = sessionDisplayTitle(session);
+  const pauseTitle = session.status === "paused" ? "Resume session" : "Pause session";
   return (
     <div
       className={mergeClasses(styles.root, compact && styles.compactRoot, active && styles.active)}
@@ -145,7 +162,7 @@ export function SessionItem({
         }
       }}
     >
-      {!compact && ["running", "available", "needs-attention", "disconnected"].includes(session.status) && (
+      {!compact && ["running", "available", "needs-attention", "paused", "disconnected"].includes(session.status) && (
         <Button
           className={mergeClasses("climon-new", styles.newBtn)}
           appearance="subtle"
@@ -170,6 +187,20 @@ export function SessionItem({
           onClick={(e) => {
             e.stopPropagation();
             onEdit(session);
+          }}
+        />
+      )}
+      {!compact && (
+        <Button
+          className={mergeClasses("climon-pause", styles.pauseBtn)}
+          appearance="subtle"
+          size="small"
+          icon={session.status === "paused" ? <Play16Regular /> : <Pause16Regular />}
+          title={pauseTitle}
+          aria-label={pauseTitle}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPauseToggle(session);
           }}
         />
       )}

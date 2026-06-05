@@ -168,7 +168,7 @@ export function canSendAttentionAck(
  * Re-attaching is only required when the selected session changes, when it
  * crosses the live/terminated boundary (WebSocket vs. captured scrollback), or
  * when the terminal's visibility changes. It must NOT change on transitions
- * between live states (running <-> available <-> needs-attention),
+ * between live states (running <-> available <-> needs-attention <-> paused),
  * which would otherwise reset the terminal and trigger a host-size revert/regrow
  * flicker on every idle toggle.
  */
