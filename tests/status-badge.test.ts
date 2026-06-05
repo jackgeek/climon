@@ -6,7 +6,7 @@ import { StatusBadge, STATUS_INITIALS, STATUS_LABELS, statusBadgeColor } from ".
 
 const statuses: SessionStatus[] = [
   "running",
-  "available",
+  "acknowledged",
   "needs-attention",
   "completed",
   "paused",
@@ -18,7 +18,7 @@ describe("StatusBadge label maps", () => {
   test("defines compact initials for every session status", () => {
     expect(STATUS_INITIALS).toEqual({
       running: "R",
-      available: "A",
+      acknowledged: "A",
       "needs-attention": "NA",
       completed: "C",
       paused: "P",
@@ -34,7 +34,7 @@ describe("StatusBadge label maps", () => {
   test("keeps full labels for every session status", () => {
     expect(STATUS_LABELS).toEqual({
       running: "running",
-      available: "available",
+      acknowledged: "acknowledged",
       "needs-attention": "needs attention",
       completed: "completed",
       paused: "paused",
@@ -53,8 +53,8 @@ describe("statusBadgeColor", () => {
     expect(statusBadgeColor("running")).toBe("brand");
   });
 
-  test("uses a green success pill for available sessions", () => {
-    expect(statusBadgeColor("available")).toBe("success");
+  test("uses a green success pill for acknowledged sessions", () => {
+    expect(statusBadgeColor("acknowledged")).toBe("success");
   });
 
   test("uses a grey subtle pill for paused sessions", () => {

@@ -32,10 +32,10 @@ describe("attachKey", () => {
     // Idle detection flips a live session running <-> needs-attention. Both are
     // "live", so the terminal must keep the same WebSocket (no reset/refit flicker).
     const running = attachKey(session({ status: "running" }), true);
-    const available = attachKey(session({ status: "available" }), true);
+    const acknowledged = attachKey(session({ status: "acknowledged" }), true);
     const attention = attachKey(session({ status: "needs-attention" }), true);
     const paused = attachKey(session({ status: "paused" }), true);
-    expect(running).toBe(available);
+    expect(running).toBe(acknowledged);
     expect(running).toBe(attention);
     expect(running).toBe(paused);
   });
@@ -64,9 +64,9 @@ describe("attachKey", () => {
 });
 
 describe("isLiveStatus", () => {
-  test("treats running, available, needs-attention, and paused as live statuses", () => {
+  test("treats running, acknowledged, needs-attention, and paused as live statuses", () => {
     expect(isLiveStatus("running")).toBe(true);
-    expect(isLiveStatus("available")).toBe(true);
+    expect(isLiveStatus("acknowledged")).toBe(true);
     expect(isLiveStatus("needs-attention")).toBe(true);
     expect(isLiveStatus("paused")).toBe(true);
     expect(isLiveStatus("completed")).toBe(false);

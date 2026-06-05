@@ -1,6 +1,6 @@
 export type SessionStatus =
   | "running"
-  | "available"
+  | "acknowledged"
   | "needs-attention"
   | "completed"
   | "paused"

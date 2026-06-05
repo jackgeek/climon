@@ -5,7 +5,7 @@ type BadgeColor = "brand" | "informative" | "warning" | "success" | "danger" | "
 
 const COLOR: Record<SessionStatus, BadgeColor> = {
   running: "brand",
-  available: "success",
+  acknowledged: "success",
   "needs-attention": "warning",
   completed: "success",
   paused: "subtle",
@@ -19,7 +19,7 @@ export function statusBadgeColor(status: SessionStatus): BadgeColor {
 
 export const STATUS_LABELS: Record<SessionStatus, string> = {
   running: "running",
-  available: "available",
+  acknowledged: "acknowledged",
   "needs-attention": "needs attention",
   completed: "completed",
   paused: "paused",
@@ -29,7 +29,7 @@ export const STATUS_LABELS: Record<SessionStatus, string> = {
 
 export const STATUS_INITIALS: Record<SessionStatus, string> = {
   running: "R",
-  available: "A",
+  acknowledged: "A",
   "needs-attention": "NA",
   completed: "C",
   paused: "P",

@@ -207,7 +207,7 @@ export function SessionItem({
           aria-hidden="true"
         />
       )}
-      {!compact && ["running", "available", "needs-attention", "paused", "disconnected"].includes(session.status) && (
+      {!compact && ["running", "acknowledged", "needs-attention", "paused", "disconnected"].includes(session.status) && (
         <Button
           className={mergeClasses("climon-new", styles.newBtn)}
           appearance="subtle"

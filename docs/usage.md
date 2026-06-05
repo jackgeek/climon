@@ -59,15 +59,15 @@ climon kill <id>          # terminate a session and remove its metadata
 ## The dashboard
 
 - **Session list** (left): every monitored session with a status badge —
-  `running`, `available`, `needs-attention`, `completed`, `paused`, `failed`,
+  `running`, `acknowledged`, `needs-attention`, `completed`, `paused`, `failed`,
   or `disconnected`. Sessions are ordered `needs-attention` first, then
-  `available`, `running`, terminal outcomes, `paused`, `failed`, and
+  `acknowledged`, `running`, terminal outcomes, `paused`, `failed`, and
   `disconnected`. Hover over a row to reveal controls for editing, pausing or
   resuming, spawning a child session, and closing the session. Closing removes it
   from the dashboard without ending a climon client still attached to it unless
   you choose to kill the process.
 - **Terminal** (right): click a session to open it.
-  - For **running**, **available**, **needs-attention**, and **paused** sessions,
+  - For **running**, **acknowledged**, **needs-attention**, and **paused** sessions,
     the terminal is live and interactive over a WebSocket — type to send input
     (e.g. answer a Copilot prompt to let it continue). Pausing is dashboard-only:
     it keeps the PTY running but prevents live-state automation from changing the
@@ -95,7 +95,7 @@ climon kill <id>          # terminate a session and remove its metadata
 ## Creating sessions from the dashboard
 
 Session creation happens **from a session**. Hover any live session (`running`,
-`available`, `needs-attention`, `paused`, or `disconnected`) and click its
+`acknowledged`, `needs-attention`, `paused`, or `disconnected`) and click its
 **[+]** to launch a new session from it. The server spawns the new session
 directly, inheriting the originating session's working directory, so you are
 prompted only for the command. This works from any live session, including ones
@@ -115,6 +115,15 @@ remains — climon flags the session as `needs-attention` and bumps it to the to
 of the dashboard. As soon as the screen changes again the session reverts to
 `running`. Open it and type the response in the web terminal to unblock the
 command.
+
+Opening a flagged session in the dashboard marks it `acknowledged`: it stays in
+that calmer state — and is not re-flagged — until the screen meaningfully
+changes. A browser resize or refit alone does not count as a change, so simply
+viewing a static screen will not bounce it back to `needs-attention`. Typing into
+a session has the same effect: after you send input, climon will not raise
+`needs-attention` again until the program emits genuinely new output that then
+sits idle for the window. This keeps a command you started but that runs silently
+(for example `sleep 30`) from being flagged while it works.
 
 Browser notifications use the message title `climon needs attention` and name
 the specific session in the body. Sound and browser notifications depend on the

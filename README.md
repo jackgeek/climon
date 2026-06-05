@@ -99,7 +99,7 @@ view, interact with, or manage your monitored sessions from a browser.
 
 Once the server is running you can also start new sessions directly from the
 dashboard. Session creation is **per-session**: hover any live session
-(`running`, `available`, `needs-attention`, `paused`, or `disconnected`) and
+(`running`, `acknowledged`, `needs-attention`, `paused`, or `disconnected`) and
 click its **[+]** button to launch a new session from it. The server spawns the
 new session directly, inheriting the selected session's working directory, so you
 are prompted only for the command. Because this no longer depends on an attached

@@ -9,7 +9,7 @@ let tempCounter = 0;
 
 const USER_PAUSED_OVERLAY_STATUSES = new Set<SessionMeta["status"]>([
   "running",
-  "available",
+  "acknowledged",
   "needs-attention",
   "paused"
 ]);

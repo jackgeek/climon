@@ -61,7 +61,7 @@ function priorityReasonFor(status: SessionStatus): PriorityReason {
   switch (status) {
     case "needs-attention":
       return "attention";
-    case "available":
+    case "acknowledged":
     case "paused":
     case "running":
       return "running";
@@ -179,7 +179,7 @@ describe("parseBrowserStatusPatch", () => {
     expect(() => parseBrowserStatusPatch("completed")).toThrow(/Invalid status/);
     expect(() => parseBrowserStatusPatch("failed")).toThrow(/Invalid status/);
     expect(() => parseBrowserStatusPatch("disconnected")).toThrow(/Invalid status/);
-    expect(() => parseBrowserStatusPatch("available")).toThrow(/Invalid status/);
+    expect(() => parseBrowserStatusPatch("acknowledged")).toThrow(/Invalid status/);
     expect(() => parseBrowserStatusPatch("needs-attention")).toThrow(/Invalid status/);
   });
 
@@ -204,14 +204,14 @@ describe("PATCH /api/sessions/:id status", () => {
     });
   }, 30000);
 
-  test("pauses an available session", async () => {
+  test("pauses an acknowledged session", async () => {
     await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-available", "available"), env);
+      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-acknowledged", "acknowledged"), env);
 
-      const res = await patchStatus(base, "sess-available", "paused");
+      const res = await patchStatus(base, "sess-acknowledged", "paused");
 
       expect(res.status).toBe(200);
-      const persisted = await readSessionMeta("sess-available", env);
+      const persisted = await readSessionMeta("sess-acknowledged", env);
       expect(persisted?.status).toBe("paused");
     });
   }, 30000);

@@ -48,10 +48,10 @@ describe("sortSessionsByPriority", () => {
     expect(sorted).toEqual(["a", "r", "c"]);
   });
 
-  test("available sorts between needs-attention and running", () => {
+  test("acknowledged sorts between needs-attention and running", () => {
     const sessions = [
       meta({ id: "r", status: "running" }),
-      meta({ id: "v", status: "available" }),
+      meta({ id: "v", status: "acknowledged" }),
       meta({ id: "a", status: "needs-attention" })
     ];
     const sorted = sortSessionsByPriority(sessions).map((s) => s.id);
@@ -91,7 +91,7 @@ describe("sortSessionsByPriority", () => {
       meta({ id: "pause", status: "paused", priority: 500 }),
       meta({ id: "done", status: "completed", priority: 500 }),
       meta({ id: "run", status: "running", priority: 500 }),
-      meta({ id: "avail", status: "available", priority: 500 }),
+      meta({ id: "avail", status: "acknowledged", priority: 500 }),
       meta({ id: "attn", status: "needs-attention", priority: 500 })
     ];
     const sorted = sortSessionsByPriority(sessions).map((s) => s.id);

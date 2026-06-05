@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultConfig } from "../src/config.js";
-import { encodeJsonFrame, FrameDecoder, FrameType, type AttentionPayload } from "../src/ipc/frame.js";
+import { encodeFrame, encodeJsonFrame, FrameDecoder, FrameType, type AttentionPayload } from "../src/ipc/frame.js";
 import { connectSessionSocket } from "../src/session-socket.js";
 import { patchSessionMeta } from "../src/store.js";
 import type { SessionMeta } from "../src/types.js";
@@ -55,6 +55,24 @@ async function acknowledgeAttention(id: string): Promise<void> {
   });
 }
 
+async function sendInput(id: string, data: string): Promise<void> {
+  const meta = await readMeta(id);
+  await new Promise<void>((resolve, reject) => {
+    const socket = connectSessionSocket(meta.socketPath);
+    socket.once("connect", () => {
+      socket.write(encodeFrame(FrameType.Input, data), () => {
+        // Give the daemon a moment to write the input to the PTY and absorb the
+        // echo before disconnecting.
+        setTimeout(() => {
+          socket.end();
+          resolve();
+        }, 200);
+      });
+    });
+    socket.once("error", reject);
+  });
+}
+
 afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
@@ -96,7 +114,7 @@ describe("headless session attention", () => {
     }
   }, 20000);
 
-  test("acknowledging a static needs-attention session keeps it available until the screen changes", async () => {
+  test("acknowledging a static needs-attention session keeps it acknowledged until the screen changes", async () => {
     await mkdir(home, { recursive: true });
     const config = defaultConfig();
     config.attention.idleSeconds = 1;
@@ -115,16 +133,16 @@ describe("headless session attention", () => {
 
       await acknowledgeAttention(id);
 
-      const available = await waitFor(async () => {
+      const acknowledged = await waitFor(async () => {
         const m = await readMeta(id);
-        return m.status === "available" ? m : undefined;
+        return m.status === "acknowledged" ? m : undefined;
       });
-      expect(available.priorityReason).toBe("running");
+      expect(acknowledged.priorityReason).toBe("running");
 
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      const stillAvailable = await readMeta(id);
-      expect(stillAvailable.status).toBe("available");
-      expect(stillAvailable.priorityReason).toBe("running");
+      const stillAcknowledged = await readMeta(id);
+      expect(stillAcknowledged.status).toBe("acknowledged");
+      expect(stillAcknowledged.priorityReason).toBe("running");
     } finally {
       const pid = await readMeta(id)
         .then((m) => m.daemonPid)
@@ -253,6 +271,106 @@ describe("headless session attention", () => {
     } finally {
       proc.kill();
       await proc.exited.catch(() => undefined);
+    }
+  }, 20000);
+
+  test("typing into an idle session suppresses re-flagging while the command stays silent", async () => {
+    await mkdir(home, { recursive: true });
+    const config = defaultConfig();
+    config.attention.idleSeconds = 1;
+    await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
+
+    // A silent long-lived process: the PTY echoes typed input, but the program
+    // itself produces no further output, mirroring `sleep 30` typed at a prompt.
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    try {
+      // 1. The static launch screen flags needs-attention.
+      await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "needs-attention" ? m : undefined;
+      });
+
+      // 2. The user types a command; the echoed screen is absorbed as input.
+      await sendInput(id, "do-something\n");
+
+      // 3. The session clears to running and must stay there: the post-input
+      //    screen is static well beyond the idle window but must not re-flag.
+      const running = await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "running" ? m : undefined;
+      });
+      expect(running.status).toBe("running");
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const stillRunning = await readMeta(id);
+      expect(stillRunning.status).toBe("running");
+    } finally {
+      const pid = await readMeta(id)
+        .then((m) => m.daemonPid)
+        .catch(() => undefined);
+      if (pid) {
+        try {
+          process.kill(pid);
+        } catch {
+          // already gone
+        }
+      }
+      proc.kill();
+      await proc.exited;
+    }
+  }, 20000);
+
+  test("output after the user's command settles into a fresh needs-attention", async () => {
+    await mkdir(home, { recursive: true });
+    const config = defaultConfig();
+    config.attention.idleSeconds = 1;
+    await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
+
+    // The program prints a line shortly after receiving input, then goes quiet.
+    const script =
+      "process.stdin.on('data',()=>{setTimeout(()=>process.stdout.write('done\\r\\n'),1500)});setTimeout(()=>{},30000)";
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", script],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    try {
+      await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "needs-attention" ? m : undefined;
+      });
+
+      // Typing clears attention and suppresses the immediate echo screen.
+      await sendInput(id, "go\n");
+      await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "running" ? m : undefined;
+      });
+
+      // The later program output is genuinely new; once it settles the session
+      // flags needs-attention again.
+      const reflagged = await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "needs-attention" ? m : undefined;
+      });
+      expect(reflagged.status).toBe("needs-attention");
+    } finally {
+      const pid = await readMeta(id)
+        .then((m) => m.daemonPid)
+        .catch(() => undefined);
+      if (pid) {
+        try {
+          process.kill(pid);
+        } catch {
+          // already gone
+        }
+      }
+      proc.kill();
+      await proc.exited;
     }
   }, 20000);
 });

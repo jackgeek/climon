@@ -228,7 +228,7 @@ export function validateBrowserStatusTransition(
   next: Extract<SessionStatus, "paused" | "running">
 ): void {
   if (next === "paused") {
-    if (current === "running" || current === "available" || current === "needs-attention" || current === "paused") {
+    if (current === "running" || current === "acknowledged" || current === "needs-attention" || current === "paused") {
       return;
     }
   } else if (current === "paused") {
@@ -532,7 +532,7 @@ export async function shouldMarkDisconnected(
 ): Promise<boolean> {
   if (
     session.status !== "running" &&
-    session.status !== "available" &&
+    session.status !== "acknowledged" &&
     session.status !== "needs-attention" &&
     session.status !== "paused"
   ) {

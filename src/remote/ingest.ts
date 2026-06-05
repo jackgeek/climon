@@ -32,7 +32,7 @@ function boundedString(value: unknown, fallback = ""): string {
 
 const SESSION_STATUSES = new Set<SessionStatus>([
   "running",
-  "available",
+  "acknowledged",
   "needs-attention",
   "completed",
   "paused",
@@ -349,7 +349,7 @@ async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<voi
     if (
       meta.origin === "remote" &&
       (meta.status === "running" ||
-        meta.status === "available" ||
+        meta.status === "acknowledged" ||
         meta.status === "needs-attention" ||
         meta.status === "paused")
     ) {

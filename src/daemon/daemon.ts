@@ -128,6 +128,25 @@ export async function runSessionDaemon(id: string): Promise<void> {
     allowProposedApi: true
   });
   const idleDetector = new ScreenIdleDetector(config.attention.idleSeconds);
+  const idleEnabled = config.attention.idleSeconds > 0;
+  // While true, the user has sent input and we are waiting for the PTY echo to
+  // render so it can be absorbed by the idle detector instead of looking like a
+  // fresh idle screen. Settling is driven by the first post-input PTY output
+  // (deterministic), with a short grace fallback for non-echoing input.
+  const INPUT_SETTLE_GRACE_MS = 1500;
+  let awaitingInputEcho = false;
+  let echoSettleScheduled = false;
+  let inputAt = 0;
+
+  function settleInputEcho(): void {
+    awaitingInputEcho = false;
+    echoSettleScheduled = false;
+    const currentFingerprint = fingerprint();
+    const transition = idleDetector.settleInput(currentFingerprint, Date.now());
+    if (transition) {
+      void applyAttention(transition, "detector", currentFingerprint);
+    }
+  }
 
   function fingerprint(): string {
     const buffer = headlessTerm.buffer.active;
@@ -238,6 +257,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
     pty.resize(cols, rows);
     if (changed) {
       headlessTerm.resize(Math.max(cols, 1), Math.max(rows, 1));
+      idleDetector.rebase(fingerprint());
       void patchSessionMeta(id, { cols, rows });
       broadcast(encodeJsonFrame(FrameType.PtySize, { cols, rows }));
     } else if (clampedViewer) {
@@ -263,6 +283,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
     appliedRows = target.rows;
     pty.resize(target.cols, target.rows);
     headlessTerm.resize(Math.max(target.cols, 1), Math.max(target.rows, 1));
+    idleDetector.rebase(fingerprint());
     void patchSessionMeta(id, { cols: target.cols, rows: target.rows });
     broadcast(encodeJsonFrame(FrameType.PtySize, { cols: target.cols, rows: target.rows }));
     updateOvergrownWarning();
@@ -303,7 +324,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
       }
       const now = new Date().toISOString();
       void patchSessionMetaFromCurrent(id, (current) => ({
-        status: current.status === "paused" ? "paused" : source === "user" ? "available" : "running",
+        status: current.status === "paused" ? "paused" : source === "user" ? "acknowledged" : "running",
         priorityReason: "running",
         attentionMatchedAt: undefined,
         attentionReason: undefined,
@@ -361,23 +382,40 @@ export async function runSessionDaemon(id: string): Promise<void> {
   // fast-exiting command are never missed while metadata is being written.
   pty.onData((data) => {
     scrollback.append(data);
-    headlessTerm.write(data);
+    if (idleEnabled && awaitingInputEcho && !echoSettleScheduled) {
+      // First PTY output after user input: settle once it has been parsed into
+      // the headless grid so the echoed keystrokes are absorbed rather than
+      // mistaken for a new idle screen.
+      echoSettleScheduled = true;
+      headlessTerm.write(data, settleInputEcho);
+    } else {
+      headlessTerm.write(data);
+    }
     broadcast(encodeFrame(FrameType.Output, data));
   });
 
   // Sample the rendered screen once a second; a fingerprint unchanged for
   // `idleSeconds` flips the session to "needs-attention" (and back when output
   // resumes). Disabled when idle detection is turned off (idleSeconds <= 0).
-  const idleTimer =
-    config.attention.idleSeconds > 0
-      ? setInterval(() => {
-          const currentFingerprint = fingerprint();
-          const transition = idleDetector.update(currentFingerprint, Date.now());
-          if (transition) {
-            void applyAttention(transition, "detector", currentFingerprint);
+  const idleTimer = idleEnabled
+    ? setInterval(() => {
+        const now = Date.now();
+        if (awaitingInputEcho) {
+          // Don't flag while waiting for the echo to render. If no PTY output
+          // ever arrives (e.g. non-echoing input), settle after a short grace
+          // so detection resumes instead of stalling.
+          if (!echoSettleScheduled && now - inputAt >= INPUT_SETTLE_GRACE_MS) {
+            settleInputEcho();
           }
-        }, 1000)
-      : undefined;
+          return;
+        }
+        const currentFingerprint = fingerprint();
+        const transition = idleDetector.update(currentFingerprint, now);
+        if (transition) {
+          void applyAttention(transition, "detector", currentFingerprint);
+        }
+      }, 1000)
+    : undefined;
   idleTimer?.unref?.();
 
   pty.onExit(async (exitCode) => {
@@ -440,6 +478,10 @@ export async function runSessionDaemon(id: string): Promise<void> {
       for (const frame of decoder.push(chunk)) {
         if (frame.type === FrameType.Input) {
           pty.write(frame.payload.toString("utf8"));
+          if (idleEnabled) {
+            awaitingInputEcho = true;
+            inputAt = Date.now();
+          }
         } else if (frame.type === FrameType.Resize) {
           const size = parseJsonPayload<ResizePayload>(frame.payload);
           if (size.source === "host") {

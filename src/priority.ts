@@ -3,7 +3,7 @@ import { DEFAULT_PRIORITY } from "./session-meta.js";
 
 const rank: Record<SessionMeta["status"], number> = {
   "needs-attention": 0,
-  available: 1,
+  acknowledged: 1,
   running: 2,
   completed: 3,
   paused: 4,
