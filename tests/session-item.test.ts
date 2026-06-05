@@ -9,21 +9,30 @@ type FluentProps = {
   style?: CSSProperties;
   title?: string;
   "aria-label"?: string;
+  icon?: ReactNode;
+  disabled?: boolean;
 };
 
 mock.module("@fluentui/react-components", () => ({
   Badge: ({ children, className, title }: FluentProps) => createElement("div", { className, title }, children),
-  Button: ({ children, className, title, "aria-label": ariaLabel }: FluentProps) =>
-    createElement("button", { className, title, "aria-label": ariaLabel }, children),
+  Button: ({ children, className, title, "aria-label": ariaLabel, icon, disabled }: FluentProps) =>
+    createElement(
+      "button",
+      { className, title, "aria-label": ariaLabel, "data-disabled": disabled ? "true" : undefined },
+      icon,
+      children
+    ),
   Text: ({ children, className, title }: FluentProps) => createElement("div", { className, title }, children),
   makeStyles: () => () => ({
     active: "active",
+    activeCmd: "activeCmd",
     activeMarker: "activeMarker",
     close: "close",
     cmd: "cmd",
     compactMeta: "compactMeta",
     compactRoot: "compactRoot",
     editBtn: "editBtn",
+    lockBtn: "lockBtn",
     maximize: "maximize",
     meta: "meta",
     newBtn: "newBtn",
@@ -50,7 +59,9 @@ mock.module("@fluentui/react-icons", () => ({
   FullScreenMaximize16Regular: () => createElement("span", null),
   Pause16Regular: () => createElement("span", null),
   Play16Regular: () => createElement("span", null),
-  Settings16Regular: () => createElement("span", null)
+  Settings16Regular: () => createElement("span", null),
+  LockClosed16Regular: () => createElement("span", { "data-icon": "lock-closed" }),
+  LockOpen16Regular: () => createElement("span", { "data-icon": "lock-open" })
 }));
 
 const { SessionItem, sessionAccessibleLabel, sessionDisplayTitle } = await import(
@@ -237,5 +248,93 @@ describe("SessionItem pause control", () => {
 
     expect(markup).not.toContain("Pause session");
     expect(markup).not.toContain("Resume session");
+  });
+});
+
+describe("SessionItem clamp lock", () => {
+  const lockProps = {
+    compact: false,
+    onClose: () => {},
+    onEdit: () => {},
+    onMaximize: () => {},
+    onNew: () => {},
+    onPauseToggle: () => {},
+    onSelect: () => {}
+  };
+
+  test("shows a closed lock for the active clamped session", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        ...lockProps,
+        active: true,
+        session: makeSession(),
+        viewMode: "clamped",
+        viewModeToggleable: true
+      })
+    );
+
+    expect(markup).toContain('data-icon="lock-closed"');
+    expect(markup).not.toContain('data-icon="lock-open"');
+  });
+
+  test("shows an open lock for the active fill session", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        ...lockProps,
+        active: true,
+        session: makeSession(),
+        viewMode: "fill",
+        viewModeToggleable: true
+      })
+    );
+
+    expect(markup).toContain('data-icon="lock-open"');
+    expect(markup).not.toContain('data-icon="lock-closed"');
+  });
+
+  test("forces a closed, disabled lock when locked even if the mode is fill", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        ...lockProps,
+        active: true,
+        session: makeSession(),
+        viewMode: "fill",
+        viewModeToggleable: true,
+        viewModeLocked: true
+      })
+    );
+
+    expect(markup).toContain('data-icon="lock-closed"');
+    expect(markup).not.toContain('data-icon="lock-open"');
+    expect(markup).toContain('data-disabled="true"');
+  });
+
+  test("disables the lock when the mode is not toggleable", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        ...lockProps,
+        active: true,
+        session: makeSession(),
+        viewMode: "clamped",
+        viewModeToggleable: false
+      })
+    );
+
+    expect(markup).toContain('data-disabled="true"');
+  });
+
+  test("does not render a lock for an inactive session", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        ...lockProps,
+        active: false,
+        session: makeSession(),
+        viewMode: "fill",
+        viewModeToggleable: true
+      })
+    );
+
+    expect(markup).not.toContain('data-icon="lock-closed"');
+    expect(markup).not.toContain('data-icon="lock-open"');
   });
 });
