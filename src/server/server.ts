@@ -1,12 +1,15 @@
 import { existsSync, watch } from "node:fs";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline/promises";
+import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import {
   ensureClimonHome,
+  getClimonHome,
   getSessionsDir,
   loadConfig,
   saveConfig
@@ -30,15 +33,20 @@ import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionSta
 import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
+import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
+import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
+import { resolveServerInvocation } from "../cli/server-exec.js";
 import { resolveSessionDefaults } from "../launcher.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
+import { canBindTcpPort, chooseAvailablePort, isAddressInUse, PORT_RETRY_ATTEMPTS } from "../port-choice.js";
 
 interface StartServerOptions {
   port?: number;
+  enableRemotes?: boolean;
 }
 
 interface WsData {
@@ -53,7 +61,145 @@ const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 export type KillMode = "none" | "graceful" | "force";
+
+interface ExistingDashboardServer {
+  url: string;
+  pid?: number;
+}
+
+type ServerConflictAction = "continue" | "exit";
+
+export function getServerPidPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getClimonHome(env), "server.pid");
+}
+
+function dashboardUrl(host: string, port: number): string {
+  return `http://${host}:${port}/`;
+}
+
+async function readLivePid(
+  path: string,
+  isAlive: (pid: number) => boolean = isProcessAlive
+): Promise<number | undefined> {
+  try {
+    const pid = Number.parseInt((await readFile(path, "utf8")).trim(), 10);
+    return Number.isInteger(pid) && pid > 0 && isAlive(pid) ? pid : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+export async function findExistingDashboardServer(
+  host: string,
+  port: number,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    fetchFn?: typeof fetch;
+    isProcessAliveFn?: (pid: number) => boolean;
+  } = {}
+): Promise<ExistingDashboardServer | undefined> {
+  const url = dashboardUrl(host, port);
+  const fetchFn = options.fetchFn ?? fetch;
+  let healthy = false;
+  try {
+    const res = await fetchFn(`${url}health`);
+    if (res.ok) {
+      const body = (await res.json()) as { ok?: unknown };
+      healthy = body.ok === true;
+    }
+  } catch {
+    healthy = false;
+  }
+  if (!healthy) return undefined;
+
+  const pid = await readLivePid(getServerPidPath(options.env), options.isProcessAliveFn);
+  return pid === undefined ? { url } : { url, pid };
+}
+
+export async function stopDashboardServer(options: {
+  env?: NodeJS.ProcessEnv;
+  killProcess?: (pid: number, force: boolean) => boolean;
+  isProcessAlive?: (pid: number) => boolean;
+  graceMs?: number;
+  pollMs?: number;
+} = {}): Promise<boolean> {
+  const env = options.env ?? process.env;
+  const kill = options.killProcess ?? killProcess;
+  const isAlive = options.isProcessAlive ?? isProcessAlive;
+  const graceMs = options.graceMs ?? KILL_GRACE_MS;
+  const pollMs = options.pollMs ?? 50;
+  const pid = await readLivePid(getServerPidPath(env), isAlive);
+  if (pid === undefined) return false;
+  if (!kill(pid, false)) return false;
+  const waitForExit = async (): Promise<boolean> => {
+    const deadline = Date.now() + graceMs;
+    for (;;) {
+      if (!isAlive(pid)) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  };
+  if (await waitForExit()) return true;
+  if (!kill(pid, true)) return false;
+  return waitForExit();
+}
+
+async function askExistingServerTermination(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
+}
+
+export async function handleExistingDashboardServer(
+  existing: ExistingDashboardServer,
+  options: {
+    stdinIsTTY?: boolean;
+    write?: (text: string) => void;
+    ask?: (question: string) => Promise<string>;
+    stopServer?: (pid: number) => Promise<boolean>;
+  } = {}
+): Promise<ServerConflictAction> {
+  const write = options.write ?? ((text: string) => process.stdout.write(text));
+  const stdinIsTTY = options.stdinIsTTY ?? process.stdin.isTTY === true;
+  const stopServer =
+    options.stopServer ??
+    (async () => {
+      return await stopDashboardServer();
+    });
+
+  if (!stdinIsTTY) {
+    write(`climon server is already running at ${existing.url}\n`);
+    return "exit";
+  }
+
+  const ask = options.ask ?? askExistingServerTermination;
+  const answer = (await ask(`climon server is already running at ${existing.url}. Terminate it? [y/N] `))
+    .trim()
+    .toLowerCase();
+  if (answer !== "y" && answer !== "yes") {
+    write(`Existing server left running at ${existing.url}\n`);
+    return "exit";
+  }
+  if (existing.pid === undefined) {
+    write(`Unable to determine the existing server process id. Existing server is at ${existing.url}\n`);
+    return "exit";
+  }
+  if (!(await stopServer(existing.pid))) {
+    write(`Unable to terminate the existing server. Existing server is at ${existing.url}\n`);
+    return "exit";
+  }
+  write("Existing climon server terminated. Starting a new server...\n");
+  return "continue";
+}
 
 /**
  * Parses the `kill` query parameter of a DELETE request. An absent (`null`),
@@ -257,6 +403,10 @@ export async function resolveParentSpawnColor(
   return parentColor ?? null;
 }
 
+export function resolveParentSpawnCwd(cwd: unknown, parentCwd: string): string {
+  return typeof cwd === "string" && cwd.trim().length > 0 ? cwd.trim() : parentCwd;
+}
+
 function resolveDevClientEntrypoint(): string | undefined {
   if (!import.meta.url.startsWith("file:")) {
     return undefined;
@@ -267,6 +417,27 @@ function resolveDevClientEntrypoint(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function resolveDevIngestEntrypoint(): string | undefined {
+  if (!import.meta.url.startsWith("file:")) {
+    return undefined;
+  }
+  try {
+    const candidate = fileURLToPath(new URL("../server.ts", import.meta.url));
+    return existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveIngestInvocation(
+  env: NodeJS.ProcessEnv,
+  execPath: string,
+  devEntrypoint: string | undefined = resolveDevIngestEntrypoint()
+): { file: string; args: string[] } {
+  const inv = resolveServerInvocation([], env, execPath, devEntrypoint);
+  return { file: inv.file, args: [...inv.args, "__ingest"] };
 }
 
 /**
@@ -437,9 +608,8 @@ async function ensureIngestDaemon(): Promise<void> {
     alive = false;
   }
   if (alive) return;
-  const { resolveServerInvocation } = await import("../cli/server-exec.js");
-  const inv = resolveServerInvocation([], process.env, process.execPath);
-  const child = spawn(inv.file, [...inv.args, "__ingest"], { detached: true, stdio: "ignore" });
+  const inv = resolveIngestInvocation(process.env, process.execPath);
+  const child = spawn(inv.file, inv.args, { detached: true, stdio: "ignore" });
   child.unref();
 }
 
@@ -449,8 +619,26 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   if (options.port !== undefined) {
     config.server.port = options.port;
   }
+  const dashboardTunnel = createDashboardTunnelManager({ port: config.server.port });
   config.server.host = "127.0.0.1";
   await saveConfig(config);
+
+  const existing = await findExistingDashboardServer(config.server.host, config.server.port);
+  if (existing) {
+    const action = await handleExistingDashboardServer(existing);
+    if (action === "exit") return;
+  }
+
+  const dashboardPort = await chooseAvailablePort(config.server.port, {
+    canBind: (port) => canBindTcpPort(config.server.host, port)
+  });
+  if (dashboardPort.changed) {
+    process.stdout.write(
+      `climon server port ${config.server.port} is busy; using ${dashboardPort.port} instead.\n`
+    );
+    config.server.port = dashboardPort.port;
+    await saveConfig(config);
+  }
 
   // Clean up stale sessions whose daemons are no longer responsive.
   await cleanupStaleSessions();
@@ -498,13 +686,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   try {
     server = Bun.serve<WsData>({
     hostname: config.server.host,
-    port: config.server.port,
+    port: dashboardPort.port,
     idleTimeout: DASHBOARD_IDLE_TIMEOUT_SECONDS,
     async fetch(request, srv) {
       const url = new URL(request.url);
 
       if (url.pathname === "/health") {
-        return Response.json({ ok: true, version: VERSION });
+        return Response.json({ ok: true, version: VERSION, remotesEnabled: options.enableRemotes === true });
       }
 
       const asset = await getStaticAsset(url.pathname);
@@ -572,11 +760,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           if (!parent) {
             return new Response("Parent session not found", { status: 404 });
           }
+          const cwd = resolveParentSpawnCwd(payload.cwd, parent.cwd);
           try {
-            const color = await resolveParentSpawnColor(metaInput.color, parent.color, parent.cwd);
+            const info = await stat(cwd);
+            if (!info.isDirectory()) {
+              return new Response(`Working directory is not a directory: ${cwd}`, { status: 400 });
+            }
+          } catch {
+            return new Response(`Working directory not found: ${cwd}`, { status: 400 });
+          }
+          try {
+            const color = await resolveParentSpawnColor(metaInput.color, parent.color, cwd);
             const id = await spawnHeadlessSession(
               argv,
-              parent.cwd,
+              cwd,
               String(parent.cols),
               String(parent.rows),
               {
@@ -591,10 +788,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             return new Response(`Failed to create session: ${message}`, { status: 500 });
           }
         }
-        const cwd =
-          typeof payload.cwd === "string" && payload.cwd.trim().length > 0
-            ? payload.cwd.trim()
-            : process.cwd();
+        const cwd = typeof payload.cwd === "string" && payload.cwd.trim().length > 0
+          ? payload.cwd.trim()
+          : process.cwd();
         try {
           const info = await stat(cwd);
           if (!info.isDirectory()) {
@@ -636,6 +832,45 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
           canHost: state?.canHost ?? detect.available
         });
+      }
+
+      if (url.pathname === "/api/dashboard-tunnel/status" && request.method === "GET") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        return Response.json(await dashboardTunnel.status());
+      }
+
+      if (url.pathname === "/api/dashboard-tunnel" && request.method === "POST") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        try {
+          return Response.json(await dashboardTunnel.ensure());
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Tunnel Link error";
+          return new Response(message, { status: message === dashboardTunnelAuthMessage ? 401 : 500 });
+        }
+      }
+
+      if (url.pathname === "/api/dashboard-tunnel" && request.method === "DELETE") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type") ?? "application/json",
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        try {
+          await dashboardTunnel.close();
+          return new Response(null, { status: 204 });
+        } catch (error) {
+          return new Response(error instanceof Error ? error.message : "Tunnel Link error", { status: 500 });
+        }
       }
 
       if (url.pathname === "/api/remote/tunnel" && request.method === "POST") {
@@ -818,7 +1053,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         if (!data) {
           return new Response("Not found", { status: 404 });
         }
-        return new Response(new Uint8Array(data), { headers: { "content-type": "application/octet-stream" } });
+        return new Response(exactArrayBuffer(sanitizeBrowserTerminalReplay(data)), {
+          headers: { "content-type": "application/octet-stream" }
+        });
       }
 
       if (url.pathname === "/api/events") {
@@ -875,8 +1112,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
         daemon.on("data", (chunk) => {
           for (const frame of decoder.push(chunk)) {
-            if (frame.type === FrameType.Output || frame.type === FrameType.Replay) {
+            if (frame.type === FrameType.Output) {
               ws.sendBinary(frame.payload);
+            } else if (frame.type === FrameType.Replay) {
+              ws.sendBinary(sanitizeBrowserTerminalReplay(frame.payload));
             } else if (frame.type === FrameType.Exit) {
               const exit = parseJsonPayload<ExitPayload>(frame.payload);
               ws.send(JSON.stringify({ type: "exit", exitCode: exit.exitCode }));
@@ -936,16 +1175,27 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }
     });
   } catch (error) {
+    if (isAddressInUse(error)) {
+      throw new Error(
+        `No available dashboard port found from ${config.server.port} to ${config.server.port + PORT_RETRY_ATTEMPTS - 1}.`
+      );
+    }
     throw describeListenError(error, config.server.host, config.server.port);
   }
 
-  printStartup(config, config.server.port);
+  await writeFile(getServerPidPath(), `${process.pid}\n`, { mode: 0o600 });
+  printStartup(config, dashboardPort.port);
 
   await new Promise<void>((resolve) => {
+    let shuttingDown = false;
     const shutdown = (): void => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       watcher.close();
       server.stop();
-      void stopIngestDaemon().finally(resolve);
+      void rm(getServerPidPath(), { force: true })
+        .then(() => stopIngestDaemon())
+        .finally(resolve);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);

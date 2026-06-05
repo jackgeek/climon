@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import xterm from "@xterm/headless";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   applyAuthoritativeTerminalSize,
   applyTerminalFontSize,
-  disableAlternateScreenBuffer,
+  canRefitTerminalForSession,
+  completeInitialReplay,
   focusTerminalPane,
+  resetTerminalForSession,
   TerminalView,
   loadTerminalAddons,
   terminalOptions
@@ -33,6 +36,12 @@ describe("TerminalView", () => {
 
     expect(markup).toContain("border:8px solid #729fcf");
     expect(markup).not.toContain("border-top:");
+  });
+
+  test("refits when the selected session changes even if terminal chrome is unchanged", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);");
   });
 
   test("keeps enough terminal scrollback for long-running command output", () => {
@@ -77,6 +86,47 @@ describe("TerminalView", () => {
     expect(resizedTo).toEqual([{ cols: 120, rows: 40 }]);
   });
 
+  test("resizes to the selected session grid before clearing for replay", () => {
+    const calls: string[] = [];
+
+    resetTerminalForSession(
+      {
+        cols: 120,
+        rows: 40,
+        resize: (cols: number, rows: number) => calls.push(`resize:${cols}x${rows}`),
+        reset: () => calls.push("reset")
+      },
+      { cols: 80, rows: 24 }
+    );
+
+    expect(calls).toEqual(["resize:80x24", "reset"]);
+  });
+
+  test("does not refit while a selected session replay depends on its captured grid", () => {
+    expect(canRefitTerminalForSession({ status: "running" }, true)).toBe(true);
+    expect(canRefitTerminalForSession({ status: "running" }, false)).toBe(false);
+    expect(canRefitTerminalForSession({ status: "completed" }, false)).toBe(false);
+  });
+
+  test("ignores stale initial replay callbacks from a previous session", () => {
+    let replayComplete = false;
+    let refits = 0;
+
+    completeInitialReplay(1, 2, () => {
+      replayComplete = true;
+    }, () => refits++);
+
+    expect(replayComplete).toBe(false);
+    expect(refits).toBe(0);
+
+    completeInitialReplay(2, 2, () => {
+      replayComplete = true;
+    }, () => refits++);
+
+    expect(replayComplete).toBe(true);
+    expect(refits).toBe(1);
+  });
+
   test("redraws terminal history when the font size changes", () => {
     const refreshed: Array<{ start: number; end: number }> = [];
     let cleared = 0;
@@ -96,19 +146,19 @@ describe("TerminalView", () => {
     expect(refits).toBe(1);
   });
 
-  test("keeps browser history scrollable when a command uses the alternate screen", async () => {
+  test("keeps alternate-screen output out of normal browser scrollback", async () => {
     const term = new Terminal({ cols: 20, rows: 3, scrollback: 100, allowProposedApi: true });
-    disableAlternateScreenBuffer(term);
 
     await writeTerminal(term, "normal1\r\nnormal2\r\nnormal3\r\nnormal4\r\n");
-    await writeTerminal(term, "\x1b[?1049halt1\r\nalt2\r\nalt3\r\nalt4\r\n");
+    await writeTerminal(term, "\x1b[?1049halt1\r\nalt2\r\nalt3\r\nalt4\r\n\x1b[?1049l");
 
     expect(term.buffer.active.type).toBe("normal");
     expect(term.buffer.active.baseY).toBeGreaterThan(0);
-
-    const bottom = term.buffer.active.viewportY;
-    term.scrollLines(-2);
-
-    expect(term.buffer.active.viewportY).toBeLessThan(bottom);
+    const history = Array.from({ length: term.buffer.active.length }, (_, index) =>
+      term.buffer.active.getLine(index)?.translateToString(true)
+    );
+    expect(history).toContain("normal4");
+    expect(history).not.toContain("alt1");
+    expect(history).not.toContain("alt4");
   });
 });

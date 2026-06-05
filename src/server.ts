@@ -6,7 +6,7 @@ import { startServer } from "./server/server.js";
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.command === "server") {
-    await startServer({ port: parsed.port });
+    await startServer({ port: parsed.port, enableRemotes: parsed.enableRemotes });
     return 0;
   }
   if (parsed.command === "ingest") {

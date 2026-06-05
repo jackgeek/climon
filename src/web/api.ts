@@ -129,16 +129,19 @@ export function eventsUrl(): string {
   return withQuery("/api/events");
 }
 
-export async function fetchHealth(): Promise<{ version: string | null }> {
+export async function fetchHealth(): Promise<{ version: string | null; remotesEnabled: boolean }> {
   try {
     const res = await fetch(withQuery("/health"));
     if (!res.ok) {
-      return { version: null };
+      return { version: null, remotesEnabled: false };
     }
-    const data = (await res.json()) as { version?: string };
-    return { version: typeof data.version === "string" ? data.version : null };
+    const data = (await res.json()) as { version?: string; remotesEnabled?: boolean };
+    return {
+      version: typeof data.version === "string" ? data.version : null,
+      remotesEnabled: data.remotesEnabled === true
+    };
   } catch {
-    return { version: null };
+    return { version: null, remotesEnabled: false };
   }
 }
 
@@ -149,6 +152,44 @@ export function attachSocketUrl(id: string): string {
 
 export function isLiveStatus(status: SessionMeta["status"]): boolean {
   return status === "running" || status === "available" || status === "needs-attention" || status === "paused";
+}
+
+export interface DashboardTunnelStatus {
+  devtunnelAvailable: boolean;
+  authenticated: boolean;
+  running: boolean;
+  url?: string;
+  version?: string;
+}
+
+export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatus> {
+  const res = await fetch(withQuery("/api/dashboard-tunnel/status"));
+  if (!res.ok) {
+    throw new Error(`Failed to load Tunnel Link status (${res.status})`);
+  }
+  return (await res.json()) as DashboardTunnelStatus;
+}
+
+export async function ensureDashboardTunnel(): Promise<DashboardTunnelStatus> {
+  const res = await fetch(withQuery("/api/dashboard-tunnel"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}"
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || `Failed to start Tunnel Link (${res.status})`);
+  }
+  return (await res.json()) as DashboardTunnelStatus;
+}
+
+export async function closeDashboardTunnel(): Promise<void> {
+  const res = await fetch(withQuery("/api/dashboard-tunnel"), {
+    method: "DELETE",
+    headers: { "content-type": "application/json" }
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || `Failed to close Tunnel Link (${res.status})`);
+  }
 }
 
 export function attentionAckMessage(attentionMatchedAt: string): string {

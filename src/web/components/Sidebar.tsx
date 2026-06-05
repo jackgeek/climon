@@ -16,19 +16,29 @@ import {
   ChevronDoubleRightRegular,
   Navigation20Regular
 } from "@fluentui/react-icons";
+import { useEffect, useRef } from "react";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
+import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { clampSizeMenuLabel, toggleViewMode } from "../view-mode.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
+import {
+  getStableSessionItemRef,
+  notificationsMenuLabel,
+  remotesMenuLabel,
+  scrollActiveSessionIntoView,
+  type StableSessionItemRefRegistry
+} from "../sidebar-utils.js";
 
 const useStyles = makeStyles({
   root: {
     display: "flex",
     flexDirection: "column",
     minHeight: 0,
-    height: "100%"
+    height: "100%",
+    overflow: "hidden"
   },
   collapsedRoot: {
     width: "64px"
@@ -41,6 +51,7 @@ const useStyles = makeStyles({
     height: DASHBOARD_HEADER_HEIGHT,
     padding: "4px 16px",
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`,
+    borderRight: `1px solid ${tokens.colorNeutralStroke1}`,
     flex: "0 0 auto"
   },
   collapsedHeader: {
@@ -62,7 +73,12 @@ const useStyles = makeStyles({
   },
   list: {
     overflowY: "auto",
-    flex: "1 1 auto"
+    flex: "1 1 auto",
+    minHeight: 0,
+    direction: "rtl"
+  },
+  listItem: {
+    direction: "ltr"
   },
   empty: {
     padding: "16px",
@@ -82,16 +98,38 @@ const useStyles = makeStyles({
   footer: {
     flex: "0 0 auto",
     display: "flex",
+    alignItems: "center",
     justifyContent: "flex-end",
+    gap: "8px",
     padding: "6px 8px",
     borderTop: `1px solid ${tokens.colorNeutralStroke1}`
   },
   collapsedFooter: {
     justifyContent: "center"
+  },
+  bugLink: {
+    marginRight: "auto",
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground3,
+    textDecoration: "none",
+    ":hover": {
+      textDecoration: "underline"
+    }
   }
 });
 
-export const remotesMenuLabel = "Remotes (experimental)…";
+export const tunnelLinkMenuLabel = "Tunnel Link";
+export const closeTunnelLinkMenuLabel = "Close Tunnel Link";
+
+export function shouldShowTunnelLink(status: Pick<DashboardTunnelStatus, "devtunnelAvailable"> | null): boolean {
+  return status?.devtunnelAvailable === true;
+}
+
+export function shouldShowCloseTunnelLink(
+  status: Pick<DashboardTunnelStatus, "devtunnelAvailable" | "running"> | null
+): boolean {
+  return status?.devtunnelAvailable === true && status.running === true;
+}
 
 interface Props {
   sessions: SessionMeta[];
@@ -107,6 +145,12 @@ interface Props {
   onEdit: (session: SessionMeta) => void;
   onPauseToggle: (session: SessionMeta) => void;
   onManageRemote: () => void;
+  notificationsEnabled: boolean;
+  onToggleNotifications: () => void;
+  tunnelLinkStatus: DashboardTunnelStatus | null;
+  onTunnelLink: () => void;
+  onCloseTunnelLink: () => void;
+  showRemotesMenu?: boolean;
   viewMode: TerminalResizeMode;
   onViewModeChange: (mode: TerminalResizeMode) => void;
   onMaximize: (id: string) => void;
@@ -126,12 +170,24 @@ export function Sidebar({
   onEdit,
   onPauseToggle,
   onManageRemote,
+  notificationsEnabled,
+  onToggleNotifications,
+  tunnelLinkStatus,
+  onTunnelLink,
+  onCloseTunnelLink,
+  showRemotesMenu = false,
   viewMode,
   onViewModeChange,
   onMaximize
 }: Props) {
   const styles = useStyles();
   const animatedList = useAnimatedListReorder(sessions.map((session) => session.id));
+  const itemRefRegistry = useRef<StableSessionItemRefRegistry>({ refs: {}, animatedRefs: {}, elements: {} });
+
+  useEffect(() => {
+    scrollActiveSessionIntoView(activeId, (id) => itemRefRegistry.current.elements[id]);
+  }, [activeId, sessions]);
+
   return (
     <div className={mergeClasses(styles.root, collapsed && styles.collapsedRoot)}>
       <div className={mergeClasses(styles.header, collapsed && styles.collapsedHeader)}>
@@ -164,41 +220,62 @@ export function Sidebar({
                   {viewMode === "clamped" ? "✓ " : ""}
                   {clampSizeMenuLabel}
                 </MenuItem>
-                <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>
+                <MenuItem onClick={onToggleNotifications}>{notificationsMenuLabel(notificationsEnabled)}</MenuItem>
+                {shouldShowTunnelLink(tunnelLinkStatus) && (
+                  <MenuItem onClick={onTunnelLink}>{tunnelLinkMenuLabel}</MenuItem>
+                )}
+                {shouldShowCloseTunnelLink(tunnelLinkStatus) && (
+                  <MenuItem onClick={onCloseTunnelLink}>{closeTunnelLinkMenuLabel}</MenuItem>
+                )}
+                {showRemotesMenu && <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>}
               </MenuList>
             </MenuPopover>
           </Menu>
         </div>
       </div>
-      <div className={styles.list}>
+      <div className={styles.list} dir="rtl">
         {sessions.length === 0 ? (
-          <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)}>
+          <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)} dir="ltr">
             {collapsed ? "No sessions" : "No sessions yet."}
           </div>
         ) : (
-          sessions.map((s) => (
-            <div
-              key={s.id}
-              ref={animatedList.registerItem(s.id)}
-              style={animatedList.getItemStyle(s.id)}
-            >
-              <SessionItem
-                session={s}
-                active={s.id === activeId}
-                compact={collapsed}
-                onSelect={onSelect}
-                onClose={onClose}
-                onNew={onNewFrom}
-                onEdit={onEdit}
-                onPauseToggle={onPauseToggle}
-                onMaximize={onMaximize}
-              />
-            </div>
-          ))
+          sessions.map((s) => {
+            const registerItem = getStableSessionItemRef(
+              itemRefRegistry.current,
+              s.id,
+              animatedList.registerItem
+            );
+            return (
+              <div
+                key={s.id}
+                className={styles.listItem}
+                dir="ltr"
+                ref={registerItem}
+                style={animatedList.getItemStyle(s.id)}
+              >
+                <SessionItem
+                  session={s}
+                  active={s.id === activeId}
+                  compact={collapsed}
+                  onSelect={onSelect}
+                  onClose={onClose}
+                  onNew={onNewFrom}
+                  onEdit={onEdit}
+                  onPauseToggle={onPauseToggle}
+                  onMaximize={onMaximize}
+                />
+              </div>
+            );
+          })
         )}
       </div>
       {collapsible && (
         <div className={mergeClasses(styles.footer, collapsed && styles.collapsedFooter)}>
+          {!collapsed && (
+            <a className={styles.bugLink} href="mailto://jackallan@microsoft.com">
+              File a bug
+            </a>
+          )}
           <Button
             appearance="subtle"
             size="small"

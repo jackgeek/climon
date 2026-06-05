@@ -4,13 +4,14 @@ import { watch, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
-import { getClimonHome, getRemoteHostPath, resolveConfigSetting } from "../config.js";
+import { getClimonHome, getRemoteHostPath, resolveConfigSetting, writeConfigSetting } from "../config.js";
 import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
 import { acquireSingleton } from "./singleton.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { cleanupSessionSocket, formatSessionSocketRef, listenOnSessionSocket } from "../session-socket.js";
+import { canBindTcpPort, chooseAvailablePort } from "../port-choice.js";
 
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
@@ -332,6 +333,7 @@ export function getIngestPidPath(env: NodeJS.ProcessEnv = process.env): string {
 
 /** Default loopback port the ingest daemon listens on. */
 export const DEFAULT_INGEST_PORT = 3132;
+const INGEST_PORT_RETRY_ATTEMPTS = 20;
 
 function asString(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
@@ -368,13 +370,20 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   const state = await readRemoteHostState(env);
   const port = state?.ingestPort ?? asNumber(resolveConfigSetting("remote.port", env)) ?? DEFAULT_INGEST_PORT;
   const host = asString(resolveConfigSetting("remote.ingestHost", env)) ?? state?.ingestHost ?? "127.0.0.1";
+  const ingestPort = await chooseAvailablePort(port, {
+    maxAttempts: INGEST_PORT_RETRY_ATTEMPTS,
+    canBind: (candidate) => canBindTcpPort(host, candidate)
+  });
+  if (ingestPort.changed && !state) {
+    writeConfigSetting("remote.port", String(ingestPort.port), "global", env);
+  }
 
   const server = createNetServer((socket) => {
     void runIngestConnection(socket, { env });
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, host, resolve);
+    server.listen(ingestPort.port, host, resolve);
   });
 
   const supervisor = new TunnelHostSupervisor({ env });

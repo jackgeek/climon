@@ -56,4 +56,40 @@ describe("GET /health", () => {
       await server.exited;
     }
   }, 30000);
+
+  test("reports remotes disabled unless the server is started with --enable-remotes", async () => {
+    const port = await freePort();
+    const server = Bun.spawn(
+      [process.execPath, "src/server.ts", "server", "--port", String(port)],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      const body = await waitFor(async () => {
+        const res = await fetch(`${base}/health`).catch(() => undefined);
+        return res?.ok ? ((await res.json()) as { remotesEnabled?: boolean }) : undefined;
+      });
+      expect(body.remotesEnabled).toBe(false);
+    } finally {
+      server.kill();
+      await server.exited;
+    }
+
+    const enabledPort = await freePort();
+    const enabledServer = Bun.spawn(
+      [process.execPath, "src/server.ts", "server", "--enable-remotes", "--port", String(enabledPort)],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const enabledBase = `http://127.0.0.1:${enabledPort}`;
+    try {
+      const body = await waitFor(async () => {
+        const res = await fetch(`${enabledBase}/health`).catch(() => undefined);
+        return res?.ok ? ((await res.json()) as { remotesEnabled?: boolean }) : undefined;
+      });
+      expect(body.remotesEnabled).toBe(true);
+    } finally {
+      enabledServer.kill();
+      await enabledServer.exited;
+    }
+  }, 30000);
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
-import { readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeSessionMeta } from "../src/store.js";
@@ -77,10 +77,11 @@ describe("POST /api/sessions with a parentId", () => {
         return res?.ok ? true : undefined;
       });
 
+      const childCwd = await mkdtemp(join(tmpdir(), "climon-child-cwd-"));
       const ok = await fetch(`${base}/api/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ command: "sleep 30", parentId })
+        body: JSON.stringify({ command: "sleep 30", parentId, cwd: childCwd })
       });
       expect(ok.status).toBe(201);
       const body = (await ok.json()) as { id?: string };
@@ -90,7 +91,7 @@ describe("POST /api/sessions with a parentId", () => {
       const childMeta = JSON.parse(
         await readFile(join(home, "sessions", `${childId}.json`), "utf8")
       ) as SessionMeta;
-      expect(childMeta.cwd).toBe(process.platform === "win32" ? "C:\\tmp" : "/tmp");
+      expect(childMeta.cwd).toBe(childCwd);
 
       const missing = await fetch(`${base}/api/sessions`, {
         method: "POST",

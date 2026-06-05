@@ -9,10 +9,21 @@ export interface ServerInvocation {
   args: string[];
 }
 
+export function resolveServerEnv(
+  env: NodeJS.ProcessEnv,
+  execPath: string,
+  devEntrypoint?: string
+): NodeJS.ProcessEnv {
+  if (env.CLIMON_CLIENT_BIN?.trim() || devEntrypoint) {
+    return env;
+  }
+  return { ...env, CLIMON_CLIENT_BIN: execPath };
+}
+
 /**
  * Resolves how to launch the dashboard server, without spawning it.
- * Order: CLIMON_SERVER_BIN override → sibling of the running executable →
- * dev source entrypoint (when present) → bare name on PATH.
+ * Order: CLIMON_SERVER_BIN override → dev source entrypoint (when present) →
+ * sibling of the running executable → bare name on PATH.
  */
 export function resolveServerInvocation(
   forwardArgs: string[],
@@ -26,14 +37,14 @@ export function resolveServerInvocation(
     return { file: override, args: forwardArgs };
   }
 
+  if (devEntrypoint && existsSync(devEntrypoint)) {
+    return { file: execPath, args: [devEntrypoint, ...forwardArgs] };
+  }
+
   const exe = platform === "win32" ? ".exe" : "";
   const sibling = join(dirname(execPath), `${SERVER_BIN_NAME}${exe}`);
   if (existsSync(sibling)) {
     return { file: sibling, args: forwardArgs };
-  }
-
-  if (devEntrypoint && existsSync(devEntrypoint)) {
-    return { file: execPath, args: [devEntrypoint, ...forwardArgs] };
   }
 
   return { file: SERVER_BIN_NAME, args: forwardArgs };
@@ -50,7 +61,10 @@ export function delegateToServer(
   devEntrypoint?: string
 ): number {
   const { file, args } = resolveServerInvocation(forwardArgs, env, execPath, devEntrypoint);
-  const result = spawnSync(file, args, { stdio: "inherit", env });
+  const result = spawnSync(file, args, {
+    stdio: "inherit",
+    env: resolveServerEnv(env, execPath, devEntrypoint)
+  });
   if (result.error) {
     if ((result.error as NodeJS.ErrnoException).code === "ENOENT") {
       process.stderr.write(

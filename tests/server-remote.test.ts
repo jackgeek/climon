@@ -53,6 +53,137 @@ describe("shouldMarkDisconnected", () => {
   });
 });
 
+describe("resolveIngestInvocation", () => {
+  test("uses the dev server entrypoint when running from source", () => {
+    const testTmp = join(process.cwd(), ".copilot-tmp");
+    mkdirSync(testTmp, { recursive: true });
+    const dir = mkdtempSync(join(testTmp, "climon-ingest-invocation-"));
+    const devEntry = join(dir, "server.ts");
+    writeFileSync(devEntry, "");
+
+    const resolveIngestInvocation = (
+      serverModule as typeof serverModule & {
+        resolveIngestInvocation?: (
+          env: NodeJS.ProcessEnv,
+          execPath: string,
+          devEntrypoint?: string
+        ) => { file: string; args: string[] };
+      }
+    ).resolveIngestInvocation;
+
+    expect(typeof resolveIngestInvocation).toBe("function");
+    expect(resolveIngestInvocation?.({} as NodeJS.ProcessEnv, "/usr/bin/bun", devEntry)).toEqual({
+      file: "/usr/bin/bun",
+      args: [devEntry, "__ingest"]
+    });
+  });
+});
+
+describe("handleExistingDashboardServer", () => {
+  test("non-interactive launch prints the existing URL and exits", async () => {
+    let output = "";
+    let stopped = false;
+    const handleExistingDashboardServer = (
+      serverModule as typeof serverModule & {
+        handleExistingDashboardServer?: (
+          existing: { url: string; pid?: number },
+          options: {
+            stdinIsTTY: boolean;
+            write: (text: string) => void;
+            stopServer: (pid: number) => Promise<boolean>;
+          }
+        ) => Promise<"continue" | "exit">;
+      }
+    ).handleExistingDashboardServer;
+
+    expect(typeof handleExistingDashboardServer).toBe("function");
+    const action = await handleExistingDashboardServer?.(
+      { url: "http://127.0.0.1:3131/", pid: 1234 },
+      {
+        stdinIsTTY: false,
+        write: (text) => {
+          output += text;
+        },
+        stopServer: async () => {
+          stopped = true;
+          return true;
+        }
+      }
+    );
+
+    expect(action).toBe("exit");
+    expect(output).toContain("climon server is already running at http://127.0.0.1:3131/");
+    expect(stopped).toBe(false);
+  });
+
+  test("interactive launch terminates the existing server when confirmed", async () => {
+    const stopped: number[] = [];
+    const handleExistingDashboardServer = (
+      serverModule as typeof serverModule & {
+        handleExistingDashboardServer?: (
+          existing: { url: string; pid?: number },
+          options: {
+            stdinIsTTY: boolean;
+            write: (text: string) => void;
+            ask: (question: string) => Promise<string>;
+            stopServer: (pid: number) => Promise<boolean>;
+          }
+        ) => Promise<"continue" | "exit">;
+      }
+    ).handleExistingDashboardServer;
+
+    const action = await handleExistingDashboardServer?.(
+      { url: "http://127.0.0.1:3131/", pid: 1234 },
+      {
+        stdinIsTTY: true,
+        write: () => {},
+        ask: async () => "y",
+        stopServer: async (pid) => {
+          stopped.push(pid);
+          return true;
+        }
+      }
+    );
+
+    expect(action).toBe("continue");
+    expect(stopped).toEqual([1234]);
+  });
+
+  test("interactive launch exits when termination is declined", async () => {
+    let output = "";
+    const handleExistingDashboardServer = (
+      serverModule as typeof serverModule & {
+        handleExistingDashboardServer?: (
+          existing: { url: string; pid?: number },
+          options: {
+            stdinIsTTY: boolean;
+            write: (text: string) => void;
+            ask: (question: string) => Promise<string>;
+            stopServer: (pid: number) => Promise<boolean>;
+          }
+        ) => Promise<"continue" | "exit">;
+      }
+    ).handleExistingDashboardServer;
+
+    const action = await handleExistingDashboardServer?.(
+      { url: "http://127.0.0.1:3131/", pid: 1234 },
+      {
+        stdinIsTTY: true,
+        write: (text) => {
+          output += text;
+        },
+        ask: async () => "no",
+        stopServer: async () => {
+          throw new Error("should not stop");
+        }
+      }
+    );
+
+    expect(action).toBe("exit");
+    expect(output).toContain("Existing server left running at http://127.0.0.1:3131/");
+  });
+});
+
 describe("stopIngestDaemon", () => {
   test("sends a graceful stop to the pid recorded by the ingest daemon", async () => {
     const testTmp = join(process.cwd(), ".copilot-tmp");
