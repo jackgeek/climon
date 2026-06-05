@@ -1,12 +1,15 @@
 import { existsSync, watch } from "node:fs";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline/promises";
+import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import {
   ensureClimonHome,
+  getClimonHome,
   getSessionsDir,
   loadConfig,
   saveConfig
@@ -35,9 +38,11 @@ import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
+import { resolveServerInvocation } from "../cli/server-exec.js";
 import { resolveSessionDefaults } from "../launcher.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
+import { canBindTcpPort, chooseAvailablePort, isAddressInUse, PORT_RETRY_ATTEMPTS } from "../port-choice.js";
 
 interface StartServerOptions {
   port?: number;
@@ -61,6 +66,140 @@ function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 export type KillMode = "none" | "graceful" | "force";
+
+interface ExistingDashboardServer {
+  url: string;
+  pid?: number;
+}
+
+type ServerConflictAction = "continue" | "exit";
+
+export function getServerPidPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getClimonHome(env), "server.pid");
+}
+
+function dashboardUrl(host: string, port: number): string {
+  return `http://${host}:${port}/`;
+}
+
+async function readLivePid(
+  path: string,
+  isAlive: (pid: number) => boolean = isProcessAlive
+): Promise<number | undefined> {
+  try {
+    const pid = Number.parseInt((await readFile(path, "utf8")).trim(), 10);
+    return Number.isInteger(pid) && pid > 0 && isAlive(pid) ? pid : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+export async function findExistingDashboardServer(
+  host: string,
+  port: number,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    fetchFn?: typeof fetch;
+    isProcessAliveFn?: (pid: number) => boolean;
+  } = {}
+): Promise<ExistingDashboardServer | undefined> {
+  const url = dashboardUrl(host, port);
+  const fetchFn = options.fetchFn ?? fetch;
+  let healthy = false;
+  try {
+    const res = await fetchFn(`${url}health`);
+    if (res.ok) {
+      const body = (await res.json()) as { ok?: unknown };
+      healthy = body.ok === true;
+    }
+  } catch {
+    healthy = false;
+  }
+  if (!healthy) return undefined;
+
+  const pid = await readLivePid(getServerPidPath(options.env), options.isProcessAliveFn);
+  return pid === undefined ? { url } : { url, pid };
+}
+
+export async function stopDashboardServer(options: {
+  env?: NodeJS.ProcessEnv;
+  killProcess?: (pid: number, force: boolean) => boolean;
+  isProcessAlive?: (pid: number) => boolean;
+  graceMs?: number;
+  pollMs?: number;
+} = {}): Promise<boolean> {
+  const env = options.env ?? process.env;
+  const kill = options.killProcess ?? killProcess;
+  const isAlive = options.isProcessAlive ?? isProcessAlive;
+  const graceMs = options.graceMs ?? KILL_GRACE_MS;
+  const pollMs = options.pollMs ?? 50;
+  const pid = await readLivePid(getServerPidPath(env), isAlive);
+  if (pid === undefined) return false;
+  if (!kill(pid, false)) return false;
+  const waitForExit = async (): Promise<boolean> => {
+    const deadline = Date.now() + graceMs;
+    for (;;) {
+      if (!isAlive(pid)) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  };
+  if (await waitForExit()) return true;
+  if (!kill(pid, true)) return false;
+  return waitForExit();
+}
+
+async function askExistingServerTermination(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
+}
+
+export async function handleExistingDashboardServer(
+  existing: ExistingDashboardServer,
+  options: {
+    stdinIsTTY?: boolean;
+    write?: (text: string) => void;
+    ask?: (question: string) => Promise<string>;
+    stopServer?: (pid: number) => Promise<boolean>;
+  } = {}
+): Promise<ServerConflictAction> {
+  const write = options.write ?? ((text: string) => process.stdout.write(text));
+  const stdinIsTTY = options.stdinIsTTY ?? process.stdin.isTTY === true;
+  const stopServer =
+    options.stopServer ??
+    (async () => {
+      return await stopDashboardServer();
+    });
+
+  if (!stdinIsTTY) {
+    write(`climon server is already running at ${existing.url}\n`);
+    return "exit";
+  }
+
+  const ask = options.ask ?? askExistingServerTermination;
+  const answer = (await ask(`climon server is already running at ${existing.url}. Terminate it? [y/N] `))
+    .trim()
+    .toLowerCase();
+  if (answer !== "y" && answer !== "yes") {
+    write(`Existing server left running at ${existing.url}\n`);
+    return "exit";
+  }
+  if (existing.pid === undefined) {
+    write(`Unable to determine the existing server process id. Existing server is at ${existing.url}\n`);
+    return "exit";
+  }
+  if (!(await stopServer(existing.pid))) {
+    write(`Unable to terminate the existing server. Existing server is at ${existing.url}\n`);
+    return "exit";
+  }
+  write("Existing climon server terminated. Starting a new server...\n");
+  return "continue";
+}
 
 /**
  * Parses the `kill` query parameter of a DELETE request. An absent (`null`),
@@ -259,6 +398,27 @@ function resolveDevClientEntrypoint(): string | undefined {
   }
 }
 
+function resolveDevIngestEntrypoint(): string | undefined {
+  if (!import.meta.url.startsWith("file:")) {
+    return undefined;
+  }
+  try {
+    const candidate = fileURLToPath(new URL("../server.ts", import.meta.url));
+    return existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveIngestInvocation(
+  env: NodeJS.ProcessEnv,
+  execPath: string,
+  devEntrypoint: string | undefined = resolveDevIngestEntrypoint()
+): { file: string; args: string[] } {
+  const inv = resolveServerInvocation([], env, execPath, devEntrypoint);
+  return { file: inv.file, args: [...inv.args, "__ingest"] };
+}
+
 /**
  * Spawns `climon run --headless <argv>` using this process's own runtime and
  * entry script (the same mechanism the per-session daemon uses), captures the
@@ -422,9 +582,8 @@ async function ensureIngestDaemon(): Promise<void> {
     alive = false;
   }
   if (alive) return;
-  const { resolveServerInvocation } = await import("../cli/server-exec.js");
-  const inv = resolveServerInvocation([], process.env, process.execPath);
-  const child = spawn(inv.file, [...inv.args, "__ingest"], { detached: true, stdio: "ignore" });
+  const inv = resolveIngestInvocation(process.env, process.execPath);
+  const child = spawn(inv.file, inv.args, { detached: true, stdio: "ignore" });
   child.unref();
 }
 
@@ -437,6 +596,23 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   const dashboardTunnel = createDashboardTunnelManager({ port: config.server.port });
   config.server.host = "127.0.0.1";
   await saveConfig(config);
+
+  const existing = await findExistingDashboardServer(config.server.host, config.server.port);
+  if (existing) {
+    const action = await handleExistingDashboardServer(existing);
+    if (action === "exit") return;
+  }
+
+  const dashboardPort = await chooseAvailablePort(config.server.port, {
+    canBind: (port) => canBindTcpPort(config.server.host, port)
+  });
+  if (dashboardPort.changed) {
+    process.stdout.write(
+      `climon server port ${config.server.port} is busy; using ${dashboardPort.port} instead.\n`
+    );
+    config.server.port = dashboardPort.port;
+    await saveConfig(config);
+  }
 
   // Clean up stale sessions whose daemons are no longer responsive.
   await cleanupStaleSessions();
@@ -484,7 +660,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   try {
     server = Bun.serve<WsData>({
     hostname: config.server.host,
-    port: config.server.port,
+    port: dashboardPort.port,
     idleTimeout: DASHBOARD_IDLE_TIMEOUT_SECONDS,
     async fetch(request, srv) {
       const url = new URL(request.url);
@@ -929,16 +1105,27 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }
     });
   } catch (error) {
+    if (isAddressInUse(error)) {
+      throw new Error(
+        `No available dashboard port found from ${config.server.port} to ${config.server.port + PORT_RETRY_ATTEMPTS - 1}.`
+      );
+    }
     throw describeListenError(error, config.server.host, config.server.port);
   }
 
-  printStartup(config, config.server.port);
+  await writeFile(getServerPidPath(), `${process.pid}\n`, { mode: 0o600 });
+  printStartup(config, dashboardPort.port);
 
   await new Promise<void>((resolve) => {
+    let shuttingDown = false;
     const shutdown = (): void => {
+      if (shuttingDown) return;
+      shuttingDown = true;
       watcher.close();
       server.stop();
-      void stopIngestDaemon().finally(resolve);
+      void rm(getServerPidPath(), { force: true })
+        .then(() => stopIngestDaemon())
+        .finally(resolve);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
