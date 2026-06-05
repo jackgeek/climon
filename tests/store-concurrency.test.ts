@@ -209,6 +209,38 @@ describe("patchSessionMeta concurrency", () => {
     35_000
   );
 
+  test(
+    "patchSessionMeta preserves ownerless staleness after reclaim bookkeeping mutates the lock directory",
+    async () => {
+      const id = "stale-ownerless-after-reclaim-marker";
+      await writeSessionMeta(baseMeta(id), env);
+      const lockPath = `${getSessionMetaPath(id, env)}.lock`;
+      await mkdir(lockPath);
+      const old = new Date(Date.now() - 120_000);
+      await utimes(lockPath, old, old);
+      let mtimeAfterClaim = 0;
+      const resetHooks = setPatchLockTestHooksForTest({
+        beforeQuarantineRenameAfterValidation: async ({ lockPath: pathBeingReclaimed }) => {
+          if (pathBeingReclaimed === lockPath) {
+            mtimeAfterClaim = (await stat(lockPath)).mtimeMs;
+          }
+        }
+      });
+
+      try {
+        await patchSessionMeta(id, { daemonPid: 6789 }, env);
+      } finally {
+        resetHooks();
+      }
+
+      expect(mtimeAfterClaim).toBeGreaterThan(old.getTime());
+      const meta = await readSessionMeta(id, env);
+      expect(meta?.daemonPid).toBe(6789);
+      expect(existsSync(lockPath)).toBe(false);
+    },
+    35_000
+  );
+
   test("fresh live locks are preserved when acquisition times out", async () => {
     const id = "fresh-live-owner";
     await writeSessionMeta(baseMeta(id), env);
