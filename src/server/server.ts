@@ -223,7 +223,7 @@ export function parseBrowserStatusPatch(value: unknown): Extract<SessionStatus, 
   throw new Error("Invalid status; expected paused or running");
 }
 
-function validateBrowserStatusTransition(
+export function validateBrowserStatusTransition(
   current: SessionStatus,
   next: Extract<SessionStatus, "paused" | "running">
 ): void {

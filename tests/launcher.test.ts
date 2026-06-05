@@ -1,24 +1,36 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { launchBanner, resolveSessionDefaults, chooseAutoSessionColor } from "../src/launcher.js";
 import type { AnsiColor, SessionMeta } from "../src/types.js";
 
 const homes: string[] = [];
+const homesBase = join(tmpdir(), "climon-defaults-tests");
+
+function safeRm(path: string): void {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "EACCES" && code !== "EPERM") {
+      throw error;
+    }
+  }
+}
 
 function tmpHome(): string {
-  const base = join(process.cwd(), ".test-homes");
-  mkdirSync(base, { recursive: true });
-  const home = mkdtempSync(join(base, "climon-defaults-"));
+  mkdirSync(homesBase, { recursive: true });
+  const home = mkdtempSync(join(homesBase, "climon-defaults-"));
   homes.push(home);
   return home;
 }
 
 afterEach(() => {
   for (const home of homes.splice(0)) {
-    rmSync(home, { recursive: true, force: true });
+    safeRm(home);
   }
-  rmSync(join(process.cwd(), ".test-homes"), { recursive: true, force: true });
+  safeRm(homesBase);
 });
 
 function writeSession(home: string, id: string, color?: AnsiColor | null): void {
