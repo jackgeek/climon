@@ -13,6 +13,7 @@ import { renderConfigSettingsHelp } from "../config-settings.js";
 export type ConfigAction =
   | { action: "help" }
   | { action: "debug" }
+  | { action: "purge" }
   | { action: "list"; scope: WriteScope }
   | { action: "get"; scope: WriteScope; key: string }
   | { action: "set"; scope: WriteScope; key: string; value: string }
@@ -59,6 +60,7 @@ ${renderConfigSettingsHelp()}
 export function parseConfigArgs(argv: string[]): ConfigAction {
   let scope: WriteScope = "auto";
   let debug = false;
+  let purge = false;
   let list = false;
   let unset = false;
   let help = false;
@@ -67,22 +69,29 @@ export function parseConfigArgs(argv: string[]): ConfigAction {
     if (arg === "--global") scope = "global";
     else if (arg === "--local") scope = "local";
     else if (arg === "--debug") debug = true;
+    else if (arg === "--purge") purge = true;
     else if (arg === "--list" || arg === "-l") list = true;
     else if (arg === "--unset") unset = true;
     else if (arg === "--help" || arg === "-h") help = true;
     else positional.push(arg);
   }
   if (help) {
-    if (scope !== "auto" || debug || list || unset || positional.length > 0) {
+    if (scope !== "auto" || debug || purge || list || unset || positional.length > 0) {
       throw new Error("Use `climon config --help` without other config arguments.");
     }
     return { action: "help" };
   }
   if (debug) {
-    if (list || unset || positional.length > 0) {
+    if (purge || list || unset || positional.length > 0) {
       throw new Error("Use `climon config --debug` without other config arguments.");
     }
     return { action: "debug" };
+  }
+  if (purge) {
+    if (scope !== "auto" || list || unset || positional.length > 0) {
+      throw new Error("Use `climon config --purge` without other config arguments.");
+    }
+    return { action: "purge" };
   }
   if (list) return { action: "list", scope };
   if (unset) {
@@ -135,6 +144,8 @@ export function runConfigCommand(
         process.stdout.write(`${lines.join("\n")}\n`);
         return 0;
       }
+      case "purge":
+        throw new Error("Config purge is not implemented yet.");
       case "list": {
         const lines: string[] = [];
         for (const key of knownConfigKeys()) {

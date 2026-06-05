@@ -59,6 +59,20 @@ describe("parseConfigArgs", () => {
   test("rejects help combined with unset", () => {
     expect(() => parseConfigArgs(["--help", "--unset", "remote.port"])).toThrow(/without other config/);
   });
+
+  test("parses purge as a standalone action", () => {
+    expect(parseConfigArgs(["--purge"])).toEqual({ action: "purge" });
+  });
+
+  test("rejects purge combined with other config arguments", () => {
+    expect(() => parseConfigArgs(["--purge", "remote.port"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--help"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--debug"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--list"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--unset", "remote.port"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--local"])).toThrow(/without other config arguments/);
+    expect(() => parseConfigArgs(["--purge", "--global"])).toThrow(/without other config arguments/);
+  });
 });
 
 describe("runConfigCommand", () => {
