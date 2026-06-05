@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import * as serverModule from "../src/server/server.js";
-import type { SessionMeta } from "../src/types.js";
+import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
 const { shouldMarkDisconnected } = serverModule;
 
@@ -181,6 +181,124 @@ describe("handleExistingDashboardServer", () => {
 
     expect(action).toBe("exit");
     expect(output).toContain("Existing server left running at http://127.0.0.1:3131/");
+  });
+});
+
+describe("applyDashboardTunnelPersistence", () => {
+  test("persist creates remote config when undefined", () => {
+    const applyDashboardTunnelPersistence = (
+      serverModule as typeof serverModule & {
+        applyDashboardTunnelPersistence?: (
+          config: import("../src/types.js").ClimonConfig,
+          action:
+            | { type: "persist"; tunnelId: string; cluster?: string }
+            | { type: "clear" }
+        ) => void;
+      }
+    ).applyDashboardTunnelPersistence;
+
+    expect(typeof applyDashboardTunnelPersistence).toBe("function");
+    const config: ClimonConfig = {
+      version: 1 as const,
+      server: { host: "127.0.0.1", port: 3131 },
+      terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+      attention: { idleSeconds: 30 }
+    };
+
+    applyDashboardTunnelPersistence?.(config, { type: "persist", tunnelId: "tunnel-1", cluster: "eun1" });
+
+    expect(config.remote).toEqual({
+      dashboardTunnelId: "tunnel-1",
+      dashboardTunnelCluster: "eun1"
+    });
+  });
+
+  test("persist preserves unrelated remote config keys", () => {
+    const applyDashboardTunnelPersistence = (
+      serverModule as typeof serverModule & {
+        applyDashboardTunnelPersistence?: (
+          config: import("../src/types.js").ClimonConfig,
+          action:
+            | { type: "persist"; tunnelId: string; cluster?: string }
+            | { type: "clear" }
+        ) => void;
+      }
+    ).applyDashboardTunnelPersistence;
+
+    const config: ClimonConfig = {
+      version: 1 as const,
+      server: { host: "127.0.0.1", port: 3131 },
+      terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+      attention: { idleSeconds: 30 },
+      remote: { enabled: true, tunnelId: "uplink", ingestHost: "localhost" }
+    };
+
+    applyDashboardTunnelPersistence?.(config, { type: "persist", tunnelId: "dashboard-1", cluster: "use1" });
+
+    expect(config.remote).toEqual({
+      enabled: true,
+      tunnelId: "uplink",
+      ingestHost: "localhost",
+      dashboardTunnelId: "dashboard-1",
+      dashboardTunnelCluster: "use1"
+    });
+  });
+
+  test("clear is a no-op when remote config is undefined", () => {
+    const applyDashboardTunnelPersistence = (
+      serverModule as typeof serverModule & {
+        applyDashboardTunnelPersistence?: (
+          config: import("../src/types.js").ClimonConfig,
+          action:
+            | { type: "persist"; tunnelId: string; cluster?: string }
+            | { type: "clear" }
+        ) => void;
+      }
+    ).applyDashboardTunnelPersistence;
+
+    const config: ClimonConfig = {
+      version: 1 as const,
+      server: { host: "127.0.0.1", port: 3131 },
+      terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+      attention: { idleSeconds: 30 }
+    };
+
+    applyDashboardTunnelPersistence?.(config, { type: "clear" });
+
+    expect(config.remote).toBeUndefined();
+  });
+
+  test("clear removes only dashboard tunnel keys", () => {
+    const applyDashboardTunnelPersistence = (
+      serverModule as typeof serverModule & {
+        applyDashboardTunnelPersistence?: (
+          config: import("../src/types.js").ClimonConfig,
+          action:
+            | { type: "persist"; tunnelId: string; cluster?: string }
+            | { type: "clear" }
+        ) => void;
+      }
+    ).applyDashboardTunnelPersistence;
+
+    const config: ClimonConfig = {
+      version: 1 as const,
+      server: { host: "127.0.0.1", port: 3131 },
+      terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+      attention: { idleSeconds: 30 },
+      remote: {
+        enabled: true,
+        tunnelId: "uplink",
+        dashboardTunnelId: "dashboard-1",
+        dashboardTunnelCluster: "use1"
+      }
+    };
+
+    applyDashboardTunnelPersistence?.(config, { type: "clear" });
+
+    expect(config.remote).toEqual({
+      enabled: true,
+      tunnelId: "uplink"
+    });
   });
 });
 
