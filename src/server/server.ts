@@ -613,13 +613,51 @@ async function ensureIngestDaemon(): Promise<void> {
   child.unref();
 }
 
+export type DashboardTunnelPersistenceAction =
+  | { type: "persist"; tunnelId: string; cluster?: string }
+  | { type: "clear" };
+
+export function applyDashboardTunnelPersistence(
+  config: ClimonConfig,
+  action: DashboardTunnelPersistenceAction
+): void {
+  if (action.type === "persist") {
+    config.remote = {
+      ...config.remote,
+      dashboardTunnelId: action.tunnelId,
+      dashboardTunnelCluster: action.cluster
+    };
+    return;
+  }
+
+  if (!config.remote) return;
+  delete config.remote.dashboardTunnelId;
+  delete config.remote.dashboardTunnelCluster;
+}
+
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
   await ensureClimonHome();
   const config = await loadConfig();
   if (options.port !== undefined) {
     config.server.port = options.port;
   }
-  const dashboardTunnel = createDashboardTunnelManager({ port: config.server.port });
+  const dashboardTunnel = createDashboardTunnelManager({
+    port: config.server.port,
+    persisted: {
+      tunnelId: config.remote?.dashboardTunnelId,
+      cluster: config.remote?.dashboardTunnelCluster
+    },
+    onPersistTunnel: async ({ tunnelId, cluster }) => {
+      const latest = await loadConfig();
+      applyDashboardTunnelPersistence(latest, { type: "persist", tunnelId, cluster });
+      await saveConfig(latest);
+    },
+    onClearPersistedTunnel: async () => {
+      const latest = await loadConfig();
+      applyDashboardTunnelPersistence(latest, { type: "clear" });
+      await saveConfig(latest);
+    }
+  });
   config.server.host = "127.0.0.1";
   await saveConfig(config);
 
