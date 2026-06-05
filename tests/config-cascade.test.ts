@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   candidateConfigDirs,
   coerceConfigValue,
@@ -140,6 +140,19 @@ describe("listExistingConfigFiles", () => {
     mkdirSync(repo, { recursive: true });
 
     expect(listExistingConfigFiles(env(), repo)).toEqual([]);
+  });
+
+  test("does not list duplicate files when CLIMON_HOME aliases an ancestor .climon dir", () => {
+    const repo = join(root, "repo");
+    const configDir = join(repo, ".climon");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.jsonc"), "{}");
+    writeFileSync(join(configDir, "config.json"), "{}");
+
+    expect(listExistingConfigFiles({ CLIMON_HOME: `${configDir}${sep}` }, repo)).toEqual([
+      join(configDir, "config.jsonc"),
+      join(configDir, "config.json")
+    ]);
   });
 });
 
