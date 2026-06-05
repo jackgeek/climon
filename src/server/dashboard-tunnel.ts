@@ -151,6 +151,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   const watchdogMs = options.watchdogMs ?? 5000;
   let tunnelId: string | undefined = options.persisted?.tunnelId;
   let cluster: string | undefined = options.persisted?.cluster;
+  let persistedTunnelId: string | undefined = options.persisted?.tunnelId;
   let url: string | undefined;
   let host: HostProcess | undefined;
   let closing = false;
@@ -204,6 +205,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     ]);
     ensureOk(port, "devtunnel port create");
     await options.onPersistTunnel?.({ tunnelId, cluster });
+    persistedTunnelId = tunnelId;
   }
 
   async function startHost(): Promise<DashboardTunnelInfo> {
@@ -237,16 +239,18 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     }
     if (!url) {
       const startupOutput = `${startupStdout}\n${startupStderr}`.trim();
-      const usedPersistedTunnel = attemptedTunnelId === options.persisted?.tunnelId;
-      if (!startedHost.isAlive() && usedPersistedTunnel && isMissingTunnelError(startupOutput)) {
+      if (!startedHost.isAlive() && isMissingTunnelError(startupOutput)) {
         tunnelId = undefined;
         cluster = undefined;
         url = undefined;
-        await options.onClearPersistedTunnel?.();
+        if (persistedTunnelId === attemptedTunnelId) {
+          persistedTunnelId = undefined;
+          await options.onClearPersistedTunnel?.();
+        }
         await createTunnel();
         return startHost();
       }
-      if (cluster) {
+      if (startedHost.isAlive() && cluster) {
         url = buildDashboardTunnelUrl(tunnelId, options.port, cluster);
       } else {
         throw new Error("Could not determine dashboard tunnel URL from devtunnel host output.");

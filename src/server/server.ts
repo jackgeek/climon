@@ -626,14 +626,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       cluster: config.remote.dashboardTunnelCluster
     },
     onPersistTunnel: async ({ tunnelId, cluster }) => {
-      config.remote.dashboardTunnelId = tunnelId;
-      config.remote.dashboardTunnelCluster = cluster;
-      await saveConfig(config);
+      const latest = await loadConfig();
+      latest.remote.dashboardTunnelId = tunnelId;
+      latest.remote.dashboardTunnelCluster = cluster;
+      await saveConfig(latest);
     },
     onClearPersistedTunnel: async () => {
-      config.remote.dashboardTunnelId = undefined;
-      config.remote.dashboardTunnelCluster = undefined;
-      await saveConfig(config);
+      const latest = await loadConfig();
+      latest.remote.dashboardTunnelId = undefined;
+      latest.remote.dashboardTunnelCluster = undefined;
+      await saveConfig(latest);
     }
   });
   config.server.host = "127.0.0.1";

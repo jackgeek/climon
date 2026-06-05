@@ -303,6 +303,76 @@ describe("createDashboardTunnelManager", () => {
     expect(commands.filter((cmd) => cmd.startsWith("host"))).toHaveLength(2);
   });
 
+  test("recreates and persists replacement after close when reused tunnel is missing", async () => {
+    const persistedWrites: Array<{ tunnelId: string; cluster?: string }> = [];
+    const cleared: number[] = [];
+    let createCount = 0;
+    let failReusedTunnel = false;
+
+    const manager = createDashboardTunnelManager({
+      port: 3131,
+      onPersistTunnel: (value) => {
+        persistedWrites.push(value);
+      },
+      onClearPersistedTunnel: () => {
+        cleared.push(1);
+      },
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") {
+          createCount += 1;
+          if (createCount === 1) {
+            return {
+              status: 0,
+              stdout: JSON.stringify({ tunnelId: "reused-tunnel", clusterId: "eun1" }),
+              stderr: ""
+            };
+          }
+          return {
+            status: 0,
+            stdout: JSON.stringify({ tunnelId: "replacement-tunnel", clusterId: "use1" }),
+            stderr: ""
+          };
+        }
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, args, handlers) => {
+        let alive = true;
+        if (args[0] === "host" && args[1] === "reused-tunnel" && failReusedTunnel) {
+          handlers.onStderr("Tunnel reused-tunnel not found");
+          alive = false;
+          handlers.onExit(1);
+          return { stop: () => undefined, isAlive: () => alive };
+        }
+        if (args[0] === "host" && args[1] === "replacement-tunnel") {
+          handlers.onStdout("Ready: https://replacement-tunnel-3131.use1.devtunnels.ms/");
+        } else {
+          handlers.onStdout("Ready: https://reused-tunnel-3131.eun1.devtunnels.ms/");
+        }
+        return {
+          stop: () => {
+            alive = false;
+          },
+          isAlive: () => alive
+        };
+      }
+    });
+
+    await manager.ensure();
+    await manager.close();
+    failReusedTunnel = true;
+
+    await expect(manager.ensure()).resolves.toMatchObject({
+      url: "https://replacement-tunnel-3131.use1.devtunnels.ms/",
+      running: true
+    });
+
+    expect(cleared).toHaveLength(1);
+    expect(persistedWrites).toContainEqual({ tunnelId: "replacement-tunnel", cluster: "use1" });
+  });
+
   test("close does not permanently disable watchdog restarts", async () => {
     let latestBreak: (() => void) | undefined;
     let hostCount = 0;
