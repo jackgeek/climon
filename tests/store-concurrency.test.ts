@@ -636,7 +636,7 @@ describe("patchSessionMeta concurrency", () => {
     const resetHooks = setPatchLockTestHooksForTest(hooks);
     try {
       await expect(
-        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1 })
+        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1 })
       ).rejects.toThrow(/Timed out waiting for session metadata lock/);
     } finally {
       resetHooks();
@@ -707,13 +707,17 @@ describe("patchSessionMeta concurrency", () => {
           })
         );
         await mkdir(lockPath);
+        await writeFile(
+          join(lockPath, "owner.json"),
+          JSON.stringify({ ...(await lockOwner(process.pid)), token: "replacement-live-lock" })
+        );
         const liveStat = await stat(lockPath);
         liveIdentity = { dev: liveStat.dev, ino: liveStat.ino };
       }
     });
     try {
       await expect(
-        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 30, retryMs: 5, staleMs: 1000 })
+        acquireSessionMetaPatchLockForTest(id, env, { timeoutMs: 500, retryMs: 5, staleMs: 1000 })
       ).rejects.toThrow(/Timed out waiting for session metadata lock/);
     } finally {
       resetHooks();
@@ -725,6 +729,8 @@ describe("patchSessionMeta concurrency", () => {
     }
     const finalStat = await stat(lockPath);
     expect({ dev: finalStat.dev, ino: finalStat.ino }).toEqual(liveIdentity);
+    const finalOwner = JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"));
+    expect(finalOwner.token).toBe("replacement-live-lock");
   });
 
   test("release identity mismatch with the same owner token leaves the replacement live lock at the original path", async () => {
