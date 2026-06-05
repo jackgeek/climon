@@ -1,6 +1,6 @@
 {
   "name": "climon",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
   "type": "module",
   "bin": {
