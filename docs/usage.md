@@ -74,13 +74,17 @@ climon kill <id>          # terminate a session and remove its metadata
     visible status until you resume.
   - For **completed/failed** sessions, the terminal shows the captured final
     output (read-only).
-- **View mode**: open the hamburger menu and toggle **Clamp size**. When checked,
-  the browser and attached climon client stay on the same terminal grid. When
-  unchecked, the browser terminal resizes the PTY to the available browser space.
-  While the browser terminal is focused, **Ctrl-+** and **Ctrl--** change the
-  terminal font size instead of zooming the browser. If an unclamped browser size
-  makes the PTY too large for an attached climon client terminal, that local
-  terminal shows a warning and the restore shortcut.
+- **View mode**: each session row shows a **lock icon** next to the pause button
+  on the active session. A closed lock means **clamped** — the browser and the
+  attached climon client stay on the same terminal grid. An open lock means
+  **fill** — the browser terminal resizes the PTY to the available browser space.
+  Click the lock to toggle. On a narrow (mobile) viewport the active session is
+  forced to clamped and the lock is disabled; the previous mode is restored when
+  you return to a wider viewport. While the browser terminal is focused,
+  **Ctrl-+** and **Ctrl--** change the terminal font size instead of zooming the
+  browser. If an unclamped browser size makes the PTY too large for an attached
+  climon client terminal, that local terminal shows a warning and the restore
+  shortcut.
 - The list updates automatically as sessions change state (via Server-Sent
   Events).
 - When one or more sessions need attention, the browser tab title shows the
