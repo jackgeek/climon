@@ -273,6 +273,48 @@ describe("createDashboardTunnelManager", () => {
     expect(hostCommands).toHaveLength(2);
   });
 
+  test("does not treat stale URL as successful host restart and can recover", async () => {
+    let breakFirstHost: (() => void) | undefined;
+    let hostAttempt = 0;
+    const manager = createDashboardTunnelManager({
+      port: 3131,
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        throw new Error(`unexpected command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        hostAttempt += 1;
+        if (hostAttempt === 1) {
+          handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+          let alive = true;
+          breakFirstHost = () => {
+            alive = false;
+            handlers.onExit(1);
+          };
+          return { stop: () => { alive = false; }, isAlive: () => alive };
+        }
+        if (hostAttempt === 2) {
+          handlers.onExit(1);
+          return { stop: () => undefined, isAlive: () => false };
+        }
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await manager.ensure();
+    breakFirstHost?.();
+
+    await expect(manager.ensure()).rejects.toThrow("Could not determine dashboard tunnel URL");
+    await expect(manager.ensure()).resolves.toMatchObject({
+      url: "https://climon-test-3131.eun1.devtunnels.ms/",
+      running: true
+    });
+  });
+
   test("close stops the host process but keeps persisted tunnel metadata for reuse", async () => {
     const commands: string[] = [];
     let stopped = false;

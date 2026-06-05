@@ -216,6 +216,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
       throw new Error("Tunnel id was not initialized.");
     }
     const attemptedTunnelId = tunnelId;
+    url = undefined;
     let startupStdout = "";
     let startupStderr = "";
     const args = ["host", attemptedTunnelId];
