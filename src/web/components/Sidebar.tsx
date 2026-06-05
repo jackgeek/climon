@@ -22,7 +22,6 @@ import type { TerminalResizeMode } from "../../ipc/frame.js";
 import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
-import { clampSizeMenuLabel, toggleViewMode } from "../view-mode.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
 import {
   getStableSessionItemRef,
@@ -152,7 +151,9 @@ interface Props {
   onCloseTunnelLink: () => void;
   showRemotesMenu?: boolean;
   viewMode: TerminalResizeMode;
-  onViewModeChange: (mode: TerminalResizeMode) => void;
+  viewModeLocked?: boolean;
+  viewModeToggleable?: boolean;
+  onViewModeToggle?: () => void;
   onMaximize: (id: string) => void;
 }
 
@@ -177,7 +178,9 @@ export function Sidebar({
   onCloseTunnelLink,
   showRemotesMenu = false,
   viewMode,
-  onViewModeChange,
+  viewModeLocked = false,
+  viewModeToggleable = false,
+  onViewModeToggle,
   onMaximize
 }: Props) {
   const styles = useStyles();
@@ -216,10 +219,6 @@ export function Sidebar({
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
-                <MenuItem onClick={() => onViewModeChange(toggleViewMode(viewMode))}>
-                  {viewMode === "clamped" ? "✓ " : ""}
-                  {clampSizeMenuLabel}
-                </MenuItem>
                 <MenuItem onClick={onToggleNotifications}>{notificationsMenuLabel(notificationsEnabled)}</MenuItem>
                 {shouldShowTunnelLink(tunnelLinkStatus) && (
                   <MenuItem onClick={onTunnelLink}>{tunnelLinkMenuLabel}</MenuItem>
@@ -263,6 +262,10 @@ export function Sidebar({
                   onEdit={onEdit}
                   onPauseToggle={onPauseToggle}
                   onMaximize={onMaximize}
+                  viewMode={viewMode}
+                  viewModeLocked={viewModeLocked}
+                  viewModeToggleable={viewModeToggleable}
+                  onViewModeToggle={onViewModeToggle}
                 />
               </div>
             );
