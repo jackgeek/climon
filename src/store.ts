@@ -14,11 +14,53 @@ const USER_PAUSED_OVERLAY_STATUSES = new Set<SessionMeta["status"]>([
   "paused"
 ]);
 
+type AtomicWriteTestHooks = {
+  rename?: (from: string, to: string) => Promise<void>;
+};
+
+let atomicWriteTestHooks: AtomicWriteTestHooks = {};
+
+export function setAtomicWriteTestHooksForTest(hooks: AtomicWriteTestHooks): () => void {
+  atomicWriteTestHooks = hooks;
+  return () => {
+    atomicWriteTestHooks = {};
+  };
+}
+
+// Windows can transiently fail rename() with these codes when the destination
+// is briefly locked by another process (antivirus, the search indexer, or the
+// dashboard server reading session metadata). Retrying with a short backoff
+// resolves the contention instead of aborting the write.
+const RENAME_RETRY_CODES = new Set(["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"]);
+const RENAME_MAX_ATTEMPTS = 10;
+
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const doRename = atomicWriteTestHooks.rename ?? rename;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await doRename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const transient = code !== undefined && RENAME_RETRY_CODES.has(code);
+      if (!transient || attempt >= RENAME_MAX_ATTEMPTS - 1) {
+        throw error;
+      }
+      await sleep(Math.min(100, 10 * (attempt + 1)));
+    }
+  }
+}
+
 async function atomicWrite(path: string, data: Buffer | string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tempPath = `${path}.${process.pid}.${Date.now()}.${tempCounter++}.tmp`;
   await writeFile(tempPath, data);
-  await rename(tempPath, path);
+  try {
+    await renameWithRetry(tempPath, path);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function writeSessionMeta(meta: SessionMeta, env: NodeJS.ProcessEnv = process.env): Promise<void> {
