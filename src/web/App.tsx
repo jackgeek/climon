@@ -236,6 +236,26 @@ export function shouldDeleteSessionWithoutDialog(session: Pick<SessionMeta, "sta
   return session.status === "completed" || session.status === "failed" || session.status === "disconnected";
 }
 
+export interface KeyBarSwipeStart {
+  x: number;
+  y: number;
+  fromRightEdge: boolean;
+}
+
+// True once a right-edge touch has travelled far enough leftward (and stayed
+// mostly horizontal) to count as the "pull-in" gesture that reveals the key
+// bar. Evaluated continuously during touchmove so the bar opens before the
+// browser can reinterpret a right-edge drag as a system navigation gesture
+// (which, especially in landscape, fires touchcancel instead of touchend).
+export function isKeyBarRevealSwipe(start: KeyBarSwipeStart | null, x: number, y: number): boolean {
+  if (!start || !start.fromRightEdge) {
+    return false;
+  }
+  const dx = x - start.x;
+  const dy = y - start.y;
+  return dx <= -50 && Math.abs(dy) <= Math.abs(dx);
+}
+
 interface MainHeaderProps {
   activeSession: SessionMeta | null;
   hidden: boolean;
@@ -303,7 +323,7 @@ export function App() {
   const dismissSplash = useCallback(() => setShowSplash(false), []);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
-  const swipeStartRef = useRef<{ x: number; y: number; fromRightEdge: boolean } | null>(null);
+  const swipeStartRef = useRef<KeyBarSwipeStart | null>(null);
 
   useAttentionAlerts(sessions);
 
@@ -376,7 +396,11 @@ export function App() {
   // synthetic handlers on the terminal element) so the gesture is detected
   // reliably even though xterm.js owns the touch events inside the terminal.
   // Starting near the right edge makes it a deliberate "pull-in" gesture that
-  // does not clash with xterm's own touch scrolling in the body.
+  // does not clash with xterm's own touch scrolling in the body. The gesture is
+  // recognised during touchmove (not just touchend): in landscape the browser
+  // frequently claims a right-edge horizontal drag as a system navigation
+  // gesture and fires touchcancel instead of touchend, so waiting for touchend
+  // misses it. Opening the moment the threshold is crossed wins that race.
   useEffect(() => {
     if (!maximized) {
       return;
@@ -392,24 +416,36 @@ export function App() {
         fromRightEdge: t.clientX >= window.innerWidth - 40
       };
     };
+    const onMove = (e: TouchEvent): void => {
+      const t = e.touches[0];
+      if (!t) {
+        return;
+      }
+      if (isKeyBarRevealSwipe(swipeStartRef.current, t.clientX, t.clientY)) {
+        swipeStartRef.current = null;
+        setKeyBarOpen(true);
+      }
+    };
     const onEnd = (e: TouchEvent): void => {
       const start = swipeStartRef.current;
       swipeStartRef.current = null;
       const t = e.changedTouches[0];
-      if (!start || !t || !start.fromRightEdge) {
-        return;
-      }
-      const dx = t.clientX - start.x;
-      const dy = t.clientY - start.y;
-      if (dx <= -50 && Math.abs(dy) <= Math.abs(dx)) {
+      if (t && isKeyBarRevealSwipe(start, t.clientX, t.clientY)) {
         setKeyBarOpen(true);
       }
     };
+    const onCancel = (): void => {
+      swipeStartRef.current = null;
+    };
     window.addEventListener("touchstart", onStart, { passive: true, capture: true });
+    window.addEventListener("touchmove", onMove, { passive: true, capture: true });
     window.addEventListener("touchend", onEnd, { passive: true, capture: true });
+    window.addEventListener("touchcancel", onCancel, { passive: true, capture: true });
     return () => {
       window.removeEventListener("touchstart", onStart, { capture: true });
+      window.removeEventListener("touchmove", onMove, { capture: true });
       window.removeEventListener("touchend", onEnd, { capture: true });
+      window.removeEventListener("touchcancel", onCancel, { capture: true });
     };
   }, [maximized]);
 
