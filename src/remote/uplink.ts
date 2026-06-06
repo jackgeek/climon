@@ -179,7 +179,8 @@ interface ConnectChild {
 function spawnConnect(tunnelId: string, token: string): ConnectChild {
   const child = spawn("devtunnel", ["connect", tunnelId], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: devtunnelEnv({ ...process.env, DEVTUNNEL_ACCESS_TOKEN: token })
+    env: devtunnelEnv({ ...process.env, DEVTUNNEL_ACCESS_TOKEN: token }),
+    windowsHide: true
   });
   let authRejected = false;
   const scan = (buf: Buffer): void => {

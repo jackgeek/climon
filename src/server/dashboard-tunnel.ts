@@ -59,7 +59,8 @@ const defaultRunner: DashboardTunnelRunner = (cmd, args) =>
   new Promise((resolve) => {
     const child = spawn(cmd, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: cmd === "devtunnel" ? devtunnelEnv() : process.env
+      env: cmd === "devtunnel" ? devtunnelEnv() : process.env,
+      windowsHide: true
     });
     let stdout = "";
     let stderr = "";
@@ -72,7 +73,8 @@ const defaultRunner: DashboardTunnelRunner = (cmd, args) =>
 const defaultHostSpawner: HostSpawner = (cmd, args, handlers) => {
   const child = spawn(cmd, args, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: cmd === "devtunnel" ? devtunnelEnv() : process.env
+    env: cmd === "devtunnel" ? devtunnelEnv() : process.env,
+    windowsHide: true
   });
   let alive = true;
   child.stdout.on("data", (b: Buffer) => handlers.onStdout(b.toString("utf8")));

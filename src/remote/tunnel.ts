@@ -26,7 +26,8 @@ const defaultRunner: Runner = (cmd, args) =>
   new Promise((resolve) => {
     const child = spawn(cmd, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: cmd === "devtunnel" ? devtunnelEnv() : process.env
+      env: cmd === "devtunnel" ? devtunnelEnv() : process.env,
+      windowsHide: true
     });
     let stdout = "";
     let stderr = "";

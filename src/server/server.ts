@@ -463,7 +463,8 @@ function spawnHeadlessSession(
     const child = spawn(file, args, {
       cwd,
       env: { ...process.env, CLIMON_COLS: cols, CLIMON_ROWS: rows },
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
     });
     let stdout = "";
     let stderr = "";
@@ -609,7 +610,7 @@ async function ensureIngestDaemon(): Promise<void> {
   }
   if (alive) return;
   const inv = resolveIngestInvocation(process.env, process.execPath);
-  const child = spawn(inv.file, inv.args, { detached: true, stdio: "ignore" });
+  const child = spawn(inv.file, inv.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
 }
 

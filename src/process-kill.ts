@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 export type KillRunner = (cmd: string, args: string[]) => { status: number | null };
 
 const defaultRunner: KillRunner = (cmd, args) => {
-  const result = spawnSync(cmd, args, { stdio: "ignore" });
+  const result = spawnSync(cmd, args, { stdio: "ignore", windowsHide: true });
   return { status: result.error ? 1 : result.status };
 };
 

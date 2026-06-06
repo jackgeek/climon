@@ -279,7 +279,8 @@ export async function readRemoteHostState(env: NodeJS.ProcessEnv = process.env):
 function defaultSpawnHost(tunnelId: string): HostProcess {
   const child: ChildProcess = spawn("devtunnel", ["host", tunnelId], {
     stdio: ["ignore", "inherit", "inherit"],
-    env: devtunnelEnv()
+    env: devtunnelEnv(),
+    windowsHide: true
   });
   return {
     stop: () => {

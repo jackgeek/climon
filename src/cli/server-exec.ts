@@ -63,7 +63,8 @@ export function delegateToServer(
   const { file, args } = resolveServerInvocation(forwardArgs, env, execPath, devEntrypoint);
   const result = spawnSync(file, args, {
     stdio: "inherit",
-    env: resolveServerEnv(env, execPath, devEntrypoint)
+    env: resolveServerEnv(env, execPath, devEntrypoint),
+    windowsHide: true
   });
   if (result.error) {
     if ((result.error as NodeJS.ErrnoException).code === "ENOENT") {
