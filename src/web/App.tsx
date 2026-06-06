@@ -33,9 +33,10 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
-import { KeyBar } from "./components/KeyBar.js";
+import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
+import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import {
   browserNotificationPermissionMessage,
@@ -49,6 +50,8 @@ import {
 import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 import { toggleViewMode } from "./view-mode.js";
+
+type PanelView = TerminalPanelView | "closed";
 
 const useStyles = makeStyles({
   root: {
@@ -299,7 +302,8 @@ export function App() {
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
-  const [keyBarOpen, setKeyBarOpen] = useState(false);
+  const [panelView, setPanelView] = useState<PanelView>("closed");
+  const [fontSize, setFontSize] = useState(() => readFontSize());
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches
   );
@@ -321,6 +325,15 @@ export function App() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const dismissSplash = useCallback(() => setShowSplash(false), []);
+  const adjustFontSize = useCallback((delta: number) => {
+    setFontSize((prev) => {
+      const next = clampFontSize(prev + delta);
+      if (next !== prev) {
+        writeFontSize(next);
+      }
+      return next;
+    });
+  }, []);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
   const swipeStartRef = useRef<KeyBarSwipeStart | null>(null);
@@ -383,11 +396,11 @@ export function App() {
     }
   }, [sessions, activeId]);
 
-  // Leaving fullscreen always closes the special-key bar so re-entering
+  // Leaving fullscreen always closes the terminal panel so re-entering
   // fullscreen starts with it hidden.
   useEffect(() => {
     if (!maximized) {
-      setKeyBarOpen(false);
+      setPanelView("closed");
     }
   }, [maximized]);
 
@@ -423,7 +436,7 @@ export function App() {
       }
       if (isKeyBarRevealSwipe(swipeStartRef.current, t.clientX, t.clientY)) {
         swipeStartRef.current = null;
-        setKeyBarOpen(true);
+        setPanelView("chooser");
       }
     };
     const onEnd = (e: TouchEvent): void => {
@@ -431,7 +444,7 @@ export function App() {
       swipeStartRef.current = null;
       const t = e.changedTouches[0];
       if (t && isKeyBarRevealSwipe(start, t.clientX, t.clientY)) {
-        setKeyBarOpen(true);
+        setPanelView("chooser");
       }
     };
     const onCancel = (): void => {
@@ -469,12 +482,12 @@ export function App() {
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
-  // The KeyBar is a flex child that shrinks the terminal pane when shown. xterm
-  // does not reflow to the smaller pane on its own, so refit it whenever the
-  // KeyBar opens or closes to keep its bottom rows above the bar.
+  // The terminal panel is a flex child that shrinks the terminal pane when
+  // shown. xterm does not reflow to the smaller pane on its own, so refit it
+  // whenever the panel opens or closes to keep its bottom rows above the panel.
   useEffect(() => {
     scheduleTerminalRefit(terminalRef.current);
-  }, [keyBarOpen]);
+  }, [panelView]);
 
   // Mobile soft keyboards shrink the visual viewport without reliably changing
   // CSS vh/dvh units on every browser. Mirror the visual viewport into CSS so
@@ -737,19 +750,27 @@ export function App() {
               setActiveViewMode({ sessionId: activeId, mode });
             }
           }}
+          fontSize={fontSize}
+          onFontSizeChange={adjustFontSize}
         />
-        {keyBarOpen && maximized && activeSession && isLiveStatus(activeSession.status) && (
+        {panelView !== "closed" && maximized && activeSession && isLiveStatus(activeSession.status) && (
           <>
             <div
               className={styles.keyBarBackdrop}
-              onClick={() => setKeyBarOpen(false)}
+              onClick={() => setPanelView("closed")}
               onTouchStart={(e) => {
                 e.stopPropagation();
-                setKeyBarOpen(false);
+                setPanelView("closed");
               }}
             />
             <div className={styles.keyBarWrap}>
-              <KeyBar onSend={(d) => terminalRef.current?.sendInput(d)} />
+              <TerminalPanel
+                view={panelView}
+                fontSize={fontSize}
+                onSelect={setPanelView}
+                onAdjustFont={adjustFontSize}
+                onSend={(d) => terminalRef.current?.sendInput(d)}
+              />
             </div>
           </>
         )}

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Input, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
+import { Button, Input, makeStyles, tokens } from "@fluentui/react-components";
 import { encodeChar, encodeSpecial, type Mods, type SpecialKey } from "../keys.js";
 
 interface Props {

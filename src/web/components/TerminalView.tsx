@@ -16,6 +16,7 @@ import {
 import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
+import { DEFAULT_FONT_SIZE } from "../fontSize.js";
 
 interface FocusableTerminal {
   focus: () => void;
@@ -56,7 +57,7 @@ export const terminalOptions = {
   allowProposedApi: true,
   cursorBlink: true,
   fontFamily: "ui-monospace, monospace",
-  fontSize: 13,
+  fontSize: DEFAULT_FONT_SIZE,
   scrollback: TERMINAL_SCROLLBACK,
   theme: { background: "#0d1117" }
 } as const;
@@ -169,10 +170,12 @@ interface Props {
   visible: boolean;
   viewMode: TerminalResizeMode;
   onViewModeChange: (mode: TerminalResizeMode) => void;
+  fontSize: number;
+  onFontSizeChange: (delta: number) => void;
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { session, accentColor, maximized, visible, viewMode, onViewModeChange },
+  { session, accentColor, maximized, visible, viewMode, onViewModeChange, fontSize, onFontSizeChange },
   ref
 ) {
   const styles = useStyles();
@@ -183,7 +186,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const attachedSessionIdRef = useRef<string | null>(null);
   const viewModeRef = useRef<TerminalResizeMode>(viewMode);
   const onViewModeChangeRef = useRef(onViewModeChange);
-  const fontSizeRef = useRef(13);
+  const fontSizeRef = useRef(fontSize);
+  const onFontSizeChangeRef = useRef(onFontSizeChange);
   const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
   const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
   const selectedSessionRef = useRef<SessionMeta | null>(session);
@@ -203,6 +207,23 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   useEffect(() => {
     onViewModeChangeRef.current = onViewModeChange;
   }, [onViewModeChange]);
+
+  useEffect(() => {
+    onFontSizeChangeRef.current = onFontSizeChange;
+  }, [onFontSizeChange]);
+
+  // Apply font-size changes driven from App state (panel buttons or the
+  // Ctrl +/- shortcut, which both flow through App as the single source of
+  // truth). Refit so the grid reflows to the new cell size.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || fontSizeRef.current === fontSize) {
+      return;
+    }
+    fontSizeRef.current = fontSize;
+    applyTerminalFontSize(term, fontSize, refit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fontSize]);
 
   // A queued view-mode request belongs to the session that was attached when it
   // was queued. Drop it when the session changes so it can never flush to a
@@ -320,11 +341,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       }
       event.preventDefault();
       event.stopPropagation();
-      const next = Math.min(32, Math.max(8, fontSizeRef.current + delta));
-      if (next !== fontSizeRef.current) {
-        fontSizeRef.current = next;
-        applyTerminalFontSize(term, next, refit);
-      }
+      onFontSizeChangeRef.current(delta);
       return false;
     });
 

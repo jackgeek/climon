@@ -89,6 +89,11 @@ climon kill <id>          # terminate a session and remove its metadata
   browser. If an unclamped browser size makes the PTY too large for an attached
   climon client terminal, that local terminal shows a warning and the restore
   shortcut.
+  - On a maximized mobile session, swipe in from the right edge to open the
+    terminal panel. Choose **Keyboard** for the special-key bar (Esc, Tab,
+    arrows, F-keys, modifiers) or **Font size** to step the terminal font up or
+    down with **A−**/**A+**. The chosen font size is remembered across reloads.
+    Tap outside the panel to close it; swipe again to reopen the chooser.
 - The list updates automatically as sessions change state (via Server-Sent
   Events).
 - When one or more sessions need attention, the browser tab title shows the

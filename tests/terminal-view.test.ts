@@ -31,7 +31,9 @@ describe("TerminalView", () => {
         onViewModeChange: () => {},
         session: null,
         visible: false,
-        viewMode: "clamped"
+        viewMode: "clamped",
+        fontSize: 13,
+        onFontSizeChange: () => {}
       })
     );
 
