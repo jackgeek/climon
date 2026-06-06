@@ -50,7 +50,7 @@ const useStyles = makeStyles({
     gap: "4px"
   },
   field: {
-    width: "48px",
+    width: "40px",
     flex: "0 0 auto"
   },
   modActive: {
