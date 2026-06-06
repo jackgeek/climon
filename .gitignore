@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .worktrees/
+worktrees/
+.copilot-tmp/
 *.log
 .DS_Store
 
