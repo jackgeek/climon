@@ -40,7 +40,10 @@ const useStyles = makeStyles({
     boxSizing: "border-box",
     borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground2,
-    flex: "0 0 auto"
+    flex: "0 0 auto",
+    "& button": {
+      fontSize: "11px"
+    }
   },
   group: {
     display: "flex",
