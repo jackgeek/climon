@@ -33,9 +33,10 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
 import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
-import { KeyBar } from "./components/KeyBar.js";
+import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
+import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import {
   browserNotificationPermissionMessage,
@@ -48,18 +49,22 @@ import {
 } from "./attentionAlerts.js";
 import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
-import { resolveMobileViewMode, toggleViewMode, type MobileViewModeState } from "./view-mode.js";
+import { toggleViewMode } from "./view-mode.js";
+
+type PanelView = TerminalPanelView | "closed";
 
 const useStyles = makeStyles({
   root: {
     display: "flex",
     flexDirection: "row",
     height: "100%",
+    minHeight: 0,
+    overflow: "hidden",
     backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground1,
     "@media (max-width: 768px)": {
       flexDirection: "column",
-      height: "100dvh"
+      height: "var(--climon-visual-viewport-height, 100dvh)"
     }
   },
   sidebar: {
@@ -91,7 +96,10 @@ const useStyles = makeStyles({
   },
   mainMaximized: {
     position: "fixed",
-    inset: 0,
+    top: "var(--climon-visual-viewport-offset-top, 0px)",
+    left: "var(--climon-visual-viewport-offset-left, 0px)",
+    width: "var(--climon-visual-viewport-width, 100vw)",
+    height: "var(--climon-visual-viewport-height, 100dvh)",
     zIndex: 10,
     backgroundColor: tokens.colorNeutralBackground1
   },
@@ -169,11 +177,51 @@ const useStyles = makeStyles({
   },
   exitBtn: {
     position: "fixed",
-    top: "8px",
+    top: "calc(var(--climon-visual-viewport-offset-top, 0px) + 8px)",
     right: "8px",
     zIndex: 20
   }
 });
+
+const VISUAL_VIEWPORT_CSS_VARS = {
+  height: "--climon-visual-viewport-height",
+  width: "--climon-visual-viewport-width",
+  offsetTop: "--climon-visual-viewport-offset-top",
+  offsetLeft: "--climon-visual-viewport-offset-left"
+} as const;
+
+interface VisualViewportLayout {
+  height: number;
+  width: number;
+  offsetTop: number;
+  offsetLeft: number;
+}
+
+interface CssVariableStyle {
+  setProperty(name: string, value: string): void;
+  removeProperty(name: string): void;
+}
+
+function toCssPx(value: number): string {
+  return `${Math.max(0, value)}px`;
+}
+
+export function applyVisualViewportLayout(
+  viewport: VisualViewportLayout,
+  style: CssVariableStyle = document.documentElement.style
+): void {
+  style.setProperty(VISUAL_VIEWPORT_CSS_VARS.height, toCssPx(viewport.height));
+  style.setProperty(VISUAL_VIEWPORT_CSS_VARS.width, toCssPx(viewport.width));
+  style.setProperty(VISUAL_VIEWPORT_CSS_VARS.offsetTop, toCssPx(viewport.offsetTop));
+  style.setProperty(VISUAL_VIEWPORT_CSS_VARS.offsetLeft, toCssPx(viewport.offsetLeft));
+}
+
+export function clearVisualViewportLayout(style: CssVariableStyle = document.documentElement.style): void {
+  style.removeProperty(VISUAL_VIEWPORT_CSS_VARS.height);
+  style.removeProperty(VISUAL_VIEWPORT_CSS_VARS.width);
+  style.removeProperty(VISUAL_VIEWPORT_CSS_VARS.offsetTop);
+  style.removeProperty(VISUAL_VIEWPORT_CSS_VARS.offsetLeft);
+}
 
 export function scheduleTerminalRefit(
   terminal: Pick<TerminalHandle, "refit"> | null,
@@ -189,6 +237,26 @@ export function scheduleTerminalRefit(
 
 export function shouldDeleteSessionWithoutDialog(session: Pick<SessionMeta, "status">): boolean {
   return session.status === "completed" || session.status === "failed" || session.status === "disconnected";
+}
+
+export interface KeyBarSwipeStart {
+  x: number;
+  y: number;
+  fromRightEdge: boolean;
+}
+
+// True once a right-edge touch has travelled far enough leftward (and stayed
+// mostly horizontal) to count as the "pull-in" gesture that reveals the key
+// bar. Evaluated continuously during touchmove so the bar opens before the
+// browser can reinterpret a right-edge drag as a system navigation gesture
+// (which, especially in landscape, fires touchcancel instead of touchend).
+export function isKeyBarRevealSwipe(start: KeyBarSwipeStart | null, x: number, y: number): boolean {
+  if (!start || !start.fromRightEdge) {
+    return false;
+  }
+  const dx = x - start.x;
+  const dy = y - start.y;
+  return dx <= -50 && Math.abs(dy) <= Math.abs(dx);
 }
 
 interface MainHeaderProps {
@@ -234,7 +302,8 @@ export function App() {
   const [forceTarget, setForceTarget] = useState<SessionMeta | null>(null);
   const [maximized, setMaximized] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
-  const [keyBarOpen, setKeyBarOpen] = useState(false);
+  const [panelView, setPanelView] = useState<PanelView>("closed");
+  const [fontSize, setFontSize] = useState(() => readFontSize());
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches
   );
@@ -256,9 +325,18 @@ export function App() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const dismissSplash = useCallback(() => setShowSplash(false), []);
+  const adjustFontSize = useCallback((delta: number) => {
+    setFontSize((prev) => {
+      const next = clampFontSize(prev + delta);
+      if (next !== prev) {
+        writeFontSize(next);
+      }
+      return next;
+    });
+  }, []);
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
-  const swipeStartRef = useRef<{ x: number; y: number; fromRightEdge: boolean } | null>(null);
+  const swipeStartRef = useRef<KeyBarSwipeStart | null>(null);
 
   useAttentionAlerts(sessions);
 
@@ -318,22 +396,11 @@ export function App() {
     }
   }, [sessions, activeId]);
 
-  // Esc exits fullscreen.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape" && maximized) {
-        setMaximized(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [maximized]);
-
-  // Leaving fullscreen always closes the special-key bar so re-entering
+  // Leaving fullscreen always closes the terminal panel so re-entering
   // fullscreen starts with it hidden.
   useEffect(() => {
     if (!maximized) {
-      setKeyBarOpen(false);
+      setPanelView("closed");
     }
   }, [maximized]);
 
@@ -342,7 +409,11 @@ export function App() {
   // synthetic handlers on the terminal element) so the gesture is detected
   // reliably even though xterm.js owns the touch events inside the terminal.
   // Starting near the right edge makes it a deliberate "pull-in" gesture that
-  // does not clash with xterm's own touch scrolling in the body.
+  // does not clash with xterm's own touch scrolling in the body. The gesture is
+  // recognised during touchmove (not just touchend): in landscape the browser
+  // frequently claims a right-edge horizontal drag as a system navigation
+  // gesture and fires touchcancel instead of touchend, so waiting for touchend
+  // misses it. Opening the moment the threshold is crossed wins that race.
   useEffect(() => {
     if (!maximized) {
       return;
@@ -358,24 +429,36 @@ export function App() {
         fromRightEdge: t.clientX >= window.innerWidth - 40
       };
     };
+    const onMove = (e: TouchEvent): void => {
+      const t = e.touches[0];
+      if (!t) {
+        return;
+      }
+      if (isKeyBarRevealSwipe(swipeStartRef.current, t.clientX, t.clientY)) {
+        swipeStartRef.current = null;
+        setPanelView("chooser");
+      }
+    };
     const onEnd = (e: TouchEvent): void => {
       const start = swipeStartRef.current;
       swipeStartRef.current = null;
       const t = e.changedTouches[0];
-      if (!start || !t || !start.fromRightEdge) {
-        return;
-      }
-      const dx = t.clientX - start.x;
-      const dy = t.clientY - start.y;
-      if (dx <= -50 && Math.abs(dy) <= Math.abs(dx)) {
-        setKeyBarOpen(true);
+      if (t && isKeyBarRevealSwipe(start, t.clientX, t.clientY)) {
+        setPanelView("chooser");
       }
     };
+    const onCancel = (): void => {
+      swipeStartRef.current = null;
+    };
     window.addEventListener("touchstart", onStart, { passive: true, capture: true });
+    window.addEventListener("touchmove", onMove, { passive: true, capture: true });
     window.addEventListener("touchend", onEnd, { passive: true, capture: true });
+    window.addEventListener("touchcancel", onCancel, { passive: true, capture: true });
     return () => {
       window.removeEventListener("touchstart", onStart, { capture: true });
+      window.removeEventListener("touchmove", onMove, { capture: true });
       window.removeEventListener("touchend", onEnd, { capture: true });
+      window.removeEventListener("touchcancel", onCancel, { capture: true });
     };
   }, [maximized]);
 
@@ -397,6 +480,35 @@ export function App() {
     const onVisibility = (): void => setPageVisible(document.visibilityState !== "hidden");
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  // The terminal panel is a flex child that shrinks the terminal pane when
+  // shown. xterm does not reflow to the smaller pane on its own, so refit it
+  // whenever the panel opens or closes to keep its bottom rows above the panel.
+  useEffect(() => {
+    scheduleTerminalRefit(terminalRef.current);
+  }, [panelView]);
+
+  // Mobile soft keyboards shrink the visual viewport without reliably changing
+  // CSS vh/dvh units on every browser. Mirror the visual viewport into CSS so
+  // fixed/full-height UI and xterm fit inside the visible area while typing.
+  useEffect(() => {
+    const visualViewport = window.visualViewport;
+    if (!visualViewport) {
+      return;
+    }
+    const onVisualViewportChange = (): void => {
+      applyVisualViewportLayout(visualViewport);
+      scheduleTerminalRefit(terminalRef.current);
+    };
+    onVisualViewportChange();
+    visualViewport.addEventListener("resize", onVisualViewportChange);
+    visualViewport.addEventListener("scroll", onVisualViewportChange);
+    return () => {
+      visualViewport.removeEventListener("resize", onVisualViewportChange);
+      visualViewport.removeEventListener("scroll", onVisualViewportChange);
+      clearVisualViewportLayout();
+    };
   }, []);
 
   function removeFromList(id: string): void {
@@ -470,23 +582,6 @@ export function App() {
     },
     [activeId]
   );
-
-  // On mobile the active session's shared PTY should stay clamped so a narrow
-  // viewport doesn't shrink the terminal for every viewer. Remember the mode we
-  // clamp away from (per session) and restore it when leaving mobile.
-  const mobileViewModeRef = useRef<MobileViewModeState>({ wasMobile: isMobile, saved: null });
-  useEffect(() => {
-    const { requestMode, next } = resolveMobileViewMode(
-      isMobile,
-      activeId,
-      authoritativeViewMode,
-      mobileViewModeRef.current
-    );
-    mobileViewModeRef.current = next;
-    if (requestMode) {
-      requestViewMode(requestMode);
-    }
-  }, [isMobile, activeId, authoritativeViewMode, requestViewMode]);
 
   // Selecting a session on desktop moves keyboard focus into the terminal so
   // the user can start typing immediately. On mobile the terminal is offscreen
@@ -620,8 +715,8 @@ export function App() {
           onTunnelLink={() => void handleTunnelLink()}
           onCloseTunnelLink={() => void handleCloseTunnelLink()}
           showRemotesMenu={remotesEnabled}
-          viewMode={isMobile ? "clamped" : authoritativeViewMode ?? "clamped"}
-          viewModeLocked={isMobile}
+          viewMode={authoritativeViewMode ?? "clamped"}
+          viewModeLocked={false}
           viewModeToggleable={authoritativeViewMode !== null}
           onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "clamped"))}
           onMaximize={(id) => {
@@ -655,19 +750,27 @@ export function App() {
               setActiveViewMode({ sessionId: activeId, mode });
             }
           }}
+          fontSize={fontSize}
+          onFontSizeChange={adjustFontSize}
         />
-        {keyBarOpen && maximized && activeSession && isLiveStatus(activeSession.status) && (
+        {panelView !== "closed" && maximized && activeSession && isLiveStatus(activeSession.status) && (
           <>
             <div
               className={styles.keyBarBackdrop}
-              onClick={() => setKeyBarOpen(false)}
+              onClick={() => setPanelView("closed")}
               onTouchStart={(e) => {
                 e.stopPropagation();
-                setKeyBarOpen(false);
+                setPanelView("closed");
               }}
             />
             <div className={styles.keyBarWrap}>
-              <KeyBar onSend={(d) => terminalRef.current?.sendInput(d)} />
+              <TerminalPanel
+                view={panelView}
+                fontSize={fontSize}
+                onSelect={setPanelView}
+                onAdjustFont={adjustFontSize}
+                onSend={(d) => terminalRef.current?.sendInput(d)}
+              />
             </div>
           </>
         )}

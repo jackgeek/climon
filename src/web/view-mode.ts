@@ -43,38 +43,3 @@ export function flushQueuedViewMode(socket: ModeSocket, queue: QueuedViewMode): 
   queue.current = null;
   return mode;
 }
-
-export interface MobileViewModeState {
-  wasMobile: boolean;
-  saved: { sessionId: string; mode: TerminalResizeMode } | null;
-}
-
-export interface MobileViewModeTransition {
-  requestMode: TerminalResizeMode | null;
-  next: MobileViewModeState;
-}
-
-export function resolveMobileViewMode(
-  isMobile: boolean,
-  activeSessionId: string | null,
-  authoritativeMode: TerminalResizeMode | null,
-  state: MobileViewModeState
-): MobileViewModeTransition {
-  const saved = state.saved && state.saved.sessionId === activeSessionId ? state.saved : null;
-  if (isMobile) {
-    if (activeSessionId && authoritativeMode && authoritativeMode !== "clamped") {
-      return {
-        requestMode: "clamped",
-        next: { wasMobile: true, saved: saved ?? { sessionId: activeSessionId, mode: authoritativeMode } }
-      };
-    }
-    return { requestMode: null, next: { wasMobile: true, saved } };
-  }
-  if (state.wasMobile && saved) {
-    return {
-      requestMode: authoritativeMode === saved.mode ? null : saved.mode,
-      next: { wasMobile: false, saved: null }
-    };
-  }
-  return { requestMode: null, next: { wasMobile: false, saved } };
-}

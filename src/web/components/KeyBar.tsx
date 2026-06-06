@@ -12,15 +12,15 @@ const SPECIALS: { label: string; key: SpecialKey }[] = [
   { label: "Esc", key: "Esc" },
   { label: "Tab", key: "Tab" },
   { label: "Enter", key: "Enter" },
+  { label: "Del", key: "Delete" },
+  { label: "Home", key: "Home" },
+  { label: "End", key: "End" },
   { label: "←", key: "Left" },
   { label: "↑", key: "Up" },
   { label: "↓", key: "Down" },
   { label: "→", key: "Right" },
-  { label: "Home", key: "Home" },
-  { label: "End", key: "End" },
   { label: "PgUp", key: "PageUp" },
   { label: "PgDn", key: "PageDown" },
-  { label: "Del", key: "Delete" }
 ];
 
 const FKEYS: { label: string; key: SpecialKey }[] = Array.from({ length: 12 }, (_, i) => ({
@@ -40,14 +40,17 @@ const useStyles = makeStyles({
     boxSizing: "border-box",
     borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground2,
-    flex: "0 0 auto"
+    flex: "0 0 auto",
+    "& button": {
+      fontSize: "11px"
+    }
   },
   group: {
     display: "flex",
     flexWrap: "wrap",
     justifyContent: "center",
-    alignItems: "center",
-    gap: "4px"
+    alignItems: "center"
+
   },
   field: {
     width: "48px",
@@ -130,7 +133,6 @@ export function KeyBar({ onSend }: Props) {
           Send
         </Button>
       </div>
-      <div className={styles.divider} />
       <div className={styles.group}>
         {SPECIALS.map((s) => (
           <Button key={s.key} size="small" appearance="subtle" onClick={() => sendSpecial(s.key)}>
@@ -138,7 +140,6 @@ export function KeyBar({ onSend }: Props) {
           </Button>
         ))}
       </div>
-      <div className={styles.divider} />
       <div className={styles.group}>
         {FKEYS.map((s) => (
           <Button key={s.key} size="small" appearance="subtle" onClick={() => sendSpecial(s.key)}>

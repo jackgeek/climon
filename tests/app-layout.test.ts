@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionMeta } from "../src/types.js";
-import { scheduleTerminalRefit } from "../src/web/App.js";
+import { applyVisualViewportLayout, clearVisualViewportLayout, scheduleTerminalRefit } from "../src/web/App.js";
 import { MainHeader } from "../src/web/App.js";
 import { shouldDeleteSessionWithoutDialog } from "../src/web/App.js";
 
@@ -26,6 +26,22 @@ function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
 }
 
 describe("scheduleTerminalRefit", () => {
+  test("sizes the mobile app shell from visual viewport CSS variables", () => {
+    const source = readFileSync("src/web/App.tsx", "utf8");
+
+    expect(source).toContain('height: "var(--climon-visual-viewport-height, 100dvh)"');
+    expect(source).toContain('top: "var(--climon-visual-viewport-offset-top, 0px)"');
+    expect(source).toContain('width: "var(--climon-visual-viewport-width, 100vw)"');
+  });
+
+  test("does not force the active terminal into clamped mode on mobile", () => {
+    const source = readFileSync("src/web/App.tsx", "utf8");
+
+    expect(source).not.toContain("resolveMobileViewMode");
+    expect(source).not.toContain('viewMode={isMobile ? "clamped"');
+    expect(source).not.toContain("viewModeLocked={isMobile}");
+  });
+
   test("does not render a divider between the sidebar and main viewport", () => {
     const source = readFileSync("src/web/App.tsx", "utf8");
 
@@ -69,6 +85,35 @@ describe("scheduleTerminalRefit", () => {
     secondFrame(16);
 
     expect(calls).toBe(1);
+  });
+
+  test("mirrors visual viewport dimensions into CSS variables", () => {
+    const properties = new Map<string, string>();
+    const style = {
+      setProperty: (name: string, value: string) => properties.set(name, value),
+      removeProperty: (name: string) => {
+        properties.delete(name);
+      }
+    };
+
+    applyVisualViewportLayout(
+      {
+        height: 510.5,
+        width: 390,
+        offsetTop: 42,
+        offsetLeft: 0
+      },
+      style
+    );
+
+    expect(properties.get("--climon-visual-viewport-height")).toBe("510.5px");
+    expect(properties.get("--climon-visual-viewport-width")).toBe("390px");
+    expect(properties.get("--climon-visual-viewport-offset-top")).toBe("42px");
+    expect(properties.get("--climon-visual-viewport-offset-left")).toBe("0px");
+
+    clearVisualViewportLayout(style);
+
+    expect(properties.size).toBe(0);
   });
 
   describe("MainHeader", () => {
