@@ -12,15 +12,15 @@ const SPECIALS: { label: string; key: SpecialKey }[] = [
   { label: "Esc", key: "Esc" },
   { label: "Tab", key: "Tab" },
   { label: "Enter", key: "Enter" },
-  { label: "Del", key: "Delete" },
   { label: "Home", key: "Home" },
-  { label: "End", key: "End" },
+  { label: "Del", key: "Delete" },
   { label: "←", key: "Left" },
   { label: "↑", key: "Up" },
   { label: "↓", key: "Down" },
   { label: "→", key: "Right" },
+  { label: "End", key: "End" },
   { label: "PgUp", key: "PageUp" },
-  { label: "PgDn", key: "PageDown" },
+  { label: "PgDn", key: "PageDown" }
 ];
 
 const FKEYS: { label: string; key: SpecialKey }[] = Array.from({ length: 12 }, (_, i) => ({
