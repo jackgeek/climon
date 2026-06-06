@@ -1,5 +1,9 @@
 # Copilot instructions for climon
 
+## Workflow
+
+- Always start new work in a fresh git worktree under the `.worktrees/` folder, never directly on the main checkout. Create one per task with `git worktree add .worktrees/<branch-name> -b <branch-name>` (or check out an existing branch) and do all edits, builds, and tests there. The `.worktrees/` folder is gitignored.
+
 ## Build, test, and lint commands
 
 - Install dependencies with `bun install`. The project uses Bun (`packageManager: bun@1.3.10`) and TypeScript ESM.
