@@ -108,15 +108,7 @@ const useStyles = makeStyles({
     position: "absolute",
     top: "8px",
     right: "120px",
-    display: "none",
-    "@media (max-width: 768px)": {
-      display: "inline-flex"
-    }
-  },
-  activeCmd: {
-    "@media (max-width: 768px)": {
-      paddingRight: "148px"
-    }
+    display: "none"
   },
   maximize: {
     display: "none",
@@ -280,7 +272,7 @@ export function SessionItem({
       )}
       {!compact && (
         <Text
-          className={mergeClasses(styles.cmd, active && !compact && styles.activeCmd)}
+          className={styles.cmd}
           title={session.displayCommand}
         >
           {displayTitle}
