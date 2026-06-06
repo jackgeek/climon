@@ -48,18 +48,20 @@ import {
 } from "./attentionAlerts.js";
 import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
-import { resolveMobileViewMode, toggleViewMode, type MobileViewModeState } from "./view-mode.js";
+import { toggleViewMode } from "./view-mode.js";
 
 const useStyles = makeStyles({
   root: {
     display: "flex",
     flexDirection: "row",
     height: "100%",
+    minHeight: 0,
+    overflow: "hidden",
     backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground1,
     "@media (max-width: 768px)": {
       flexDirection: "column",
-      height: "100dvh"
+      height: "var(--climon-visual-viewport-height, 100dvh)"
     }
   },
   sidebar: {
@@ -91,7 +93,10 @@ const useStyles = makeStyles({
   },
   mainMaximized: {
     position: "fixed",
-    inset: 0,
+    top: "var(--climon-visual-viewport-offset-top, 0px)",
+    left: "var(--climon-visual-viewport-offset-left, 0px)",
+    width: "var(--climon-visual-viewport-width, 100vw)",
+    height: "var(--climon-visual-viewport-height, 100dvh)",
     zIndex: 10,
     backgroundColor: tokens.colorNeutralBackground1
   },
@@ -169,11 +174,51 @@ const useStyles = makeStyles({
   },
   exitBtn: {
     position: "fixed",
-    top: "8px",
+    top: "calc(var(--climon-visual-viewport-offset-top, 0px) + 8px)",
     right: "8px",
     zIndex: 20
   }
 });
+
+const VISUAL_VIEWPORT_CSS_VARS = {
+  height: "--climon-visual-viewport-height",
+  width: "--climon-visual-viewport-width",
+  offsetTop: "--climon-visual-viewport-offset-top",
+  offsetLeft: "--climon-visual-viewport-offset-left"
+} as const;
+
+interface VisualViewportLayout {
+  height: number;
+  width: number;
+  offsetTop: number;
+  offsetLeft: number;
+}
+
+interface CssVariableStyle {
+  setProperty(name: string, value: string): void;
+  removeProperty(name: string): void;
+}
+
+function toCssPx(value: number): string {
+  return `${Math.max(0, value)}px`;
+}
+
+export function applyVisualViewportLayout(
+  viewport: VisualViewportLayout,
+  style: CssVariableStyle = document.documentElement.style
+): void {
+  style.setProperty(VISUAL_VIEWPORT_CSS_VARS.height, toCssPx(viewport.height));
+  style.setProperty(VISUAL_VIEWPORT_CSS_VARS.width, toCssPx(viewport.width));
+  style.setProperty(VISUAL_VIEWPORT_CSS_VARS.offsetTop, toCssPx(viewport.offsetTop));
+  style.setProperty(VISUAL_VIEWPORT_CSS_VARS.offsetLeft, toCssPx(viewport.offsetLeft));
+}
+
+export function clearVisualViewportLayout(style: CssVariableStyle = document.documentElement.style): void {
+  style.removeProperty(VISUAL_VIEWPORT_CSS_VARS.height);
+  style.removeProperty(VISUAL_VIEWPORT_CSS_VARS.width);
+  style.removeProperty(VISUAL_VIEWPORT_CSS_VARS.offsetTop);
+  style.removeProperty(VISUAL_VIEWPORT_CSS_VARS.offsetLeft);
+}
 
 export function scheduleTerminalRefit(
   terminal: Pick<TerminalHandle, "refit"> | null,
@@ -318,17 +363,6 @@ export function App() {
     }
   }, [sessions, activeId]);
 
-  // Esc exits fullscreen.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape" && maximized) {
-        setMaximized(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [maximized]);
-
   // Leaving fullscreen always closes the special-key bar so re-entering
   // fullscreen starts with it hidden.
   useEffect(() => {
@@ -397,6 +431,35 @@ export function App() {
     const onVisibility = (): void => setPageVisible(document.visibilityState !== "hidden");
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  // The KeyBar is a flex child that shrinks the terminal pane when shown. xterm
+  // does not reflow to the smaller pane on its own, so refit it whenever the
+  // KeyBar opens or closes to keep its bottom rows above the bar.
+  useEffect(() => {
+    scheduleTerminalRefit(terminalRef.current);
+  }, [keyBarOpen]);
+
+  // Mobile soft keyboards shrink the visual viewport without reliably changing
+  // CSS vh/dvh units on every browser. Mirror the visual viewport into CSS so
+  // fixed/full-height UI and xterm fit inside the visible area while typing.
+  useEffect(() => {
+    const visualViewport = window.visualViewport;
+    if (!visualViewport) {
+      return;
+    }
+    const onVisualViewportChange = (): void => {
+      applyVisualViewportLayout(visualViewport);
+      scheduleTerminalRefit(terminalRef.current);
+    };
+    onVisualViewportChange();
+    visualViewport.addEventListener("resize", onVisualViewportChange);
+    visualViewport.addEventListener("scroll", onVisualViewportChange);
+    return () => {
+      visualViewport.removeEventListener("resize", onVisualViewportChange);
+      visualViewport.removeEventListener("scroll", onVisualViewportChange);
+      clearVisualViewportLayout();
+    };
   }, []);
 
   function removeFromList(id: string): void {
@@ -470,23 +533,6 @@ export function App() {
     },
     [activeId]
   );
-
-  // On mobile the active session's shared PTY should stay clamped so a narrow
-  // viewport doesn't shrink the terminal for every viewer. Remember the mode we
-  // clamp away from (per session) and restore it when leaving mobile.
-  const mobileViewModeRef = useRef<MobileViewModeState>({ wasMobile: isMobile, saved: null });
-  useEffect(() => {
-    const { requestMode, next } = resolveMobileViewMode(
-      isMobile,
-      activeId,
-      authoritativeViewMode,
-      mobileViewModeRef.current
-    );
-    mobileViewModeRef.current = next;
-    if (requestMode) {
-      requestViewMode(requestMode);
-    }
-  }, [isMobile, activeId, authoritativeViewMode, requestViewMode]);
 
   // Selecting a session on desktop moves keyboard focus into the terminal so
   // the user can start typing immediately. On mobile the terminal is offscreen
@@ -620,8 +666,8 @@ export function App() {
           onTunnelLink={() => void handleTunnelLink()}
           onCloseTunnelLink={() => void handleCloseTunnelLink()}
           showRemotesMenu={remotesEnabled}
-          viewMode={isMobile ? "clamped" : authoritativeViewMode ?? "clamped"}
-          viewModeLocked={isMobile}
+          viewMode={authoritativeViewMode ?? "clamped"}
+          viewModeLocked={false}
           viewModeToggleable={authoritativeViewMode !== null}
           onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "clamped"))}
           onMaximize={(id) => {

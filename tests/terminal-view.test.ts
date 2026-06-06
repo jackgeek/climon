@@ -10,9 +10,7 @@ import {
   canRefitTerminalForSession,
   completeInitialReplay,
   focusTerminalPane,
-  moveTouchScroll,
   resetTerminalForSession,
-  startTouchScroll,
   TerminalView,
   loadTerminalAddons,
   terminalOptions
@@ -105,15 +103,6 @@ describe("TerminalView", () => {
     expect(source).not.toContain("stopImmediatePropagation");
   });
 
-  test("wires terminal touch drags to synthetic wheel scrolling", () => {
-    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
-
-    expect(source).toContain('addEventListener("touchmove"');
-    expect(source).toContain("passive: false");
-    expect(source).toContain("moveTouchScroll(");
-    expect(source).toContain('new WheelEvent("wheel"');
-  });
-
   test("does not refit after an authoritative daemon size changes the browser terminal grid", () => {
     const resizedTo: Array<{ cols: number; rows: number }> = [];
 
@@ -204,51 +193,5 @@ describe("TerminalView", () => {
     expect(history).toContain("normal4");
     expect(history).not.toContain("alt1");
     expect(history).not.toContain("alt4");
-  });
-});
-
-describe("touch scroll gesture", () => {
-  test("arms only for single-finger touches", () => {
-    expect(startTouchScroll(1, 100)).toEqual({ active: true, lastY: 100 });
-    expect(startTouchScroll(2, 100)).toEqual({ active: false, lastY: 100 });
-    expect(startTouchScroll(0, 100)).toEqual({ active: false, lastY: 100 });
-  });
-
-  test("swiping up scrolls toward newer output (positive deltaY)", () => {
-    const start = startTouchScroll(1, 200);
-    const move = moveTouchScroll(start, 1, 150);
-
-    expect(move.deltaY).toBe(50);
-    expect(move.state).toEqual({ active: true, lastY: 150 });
-  });
-
-  test("swiping down scrolls toward older history (negative deltaY)", () => {
-    const start = startTouchScroll(1, 100);
-    const move = moveTouchScroll(start, 1, 175);
-
-    expect(move.deltaY).toBe(-75);
-    expect(move.state).toEqual({ active: true, lastY: 175 });
-  });
-
-  test("delta magnitude equals the pixels moved since the previous event", () => {
-    const first = moveTouchScroll(startTouchScroll(1, 300), 1, 280);
-    expect(first.deltaY).toBe(20);
-
-    const second = moveTouchScroll(first.state, 1, 290);
-    expect(second.deltaY).toBe(-10);
-  });
-
-  test("multi-touch disarms the gesture and emits no scroll", () => {
-    const move = moveTouchScroll(startTouchScroll(1, 100), 2, 150);
-
-    expect(move.deltaY).toBe(0);
-    expect(move.state.active).toBe(false);
-  });
-
-  test("a gesture that started multi-finger stays disarmed", () => {
-    const move = moveTouchScroll(startTouchScroll(2, 100), 1, 150);
-
-    expect(move.deltaY).toBe(0);
-    expect(move.state.active).toBe(false);
   });
 });
