@@ -391,6 +391,64 @@ describe("createDashboardTunnelManager", () => {
     expect(runnerCommands.some((cmd) => cmd.includes("--allow-anonymous"))).toBe(false);
   });
 
+  test("pings the dashboard health endpoint through the tunnel to keep the relay alive", async () => {
+    const pings: string[] = [];
+    const manager = createManager({
+      port: 3131,
+      keepAliveMs: 1,
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        throw new Error(`unexpected command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      },
+      pingTunnel: async (url) => {
+        pings.push(url);
+      }
+    });
+
+    await manager.ensure();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await manager.close();
+
+    expect(pings.length).toBeGreaterThan(0);
+    expect(pings[0]).toBe("https://climon-test-3131.eun1.devtunnels.ms/");
+  });
+
+  test("stops pinging the tunnel after close", async () => {
+    let pingCount = 0;
+    const manager = createManager({
+      port: 3131,
+      keepAliveMs: 1,
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        throw new Error(`unexpected command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      },
+      pingTunnel: async () => {
+        pingCount += 1;
+      }
+    });
+
+    await manager.ensure();
+    await manager.close();
+    const afterClose = pingCount;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(pingCount).toBe(afterClose);
+  });
+
   test("restarts the host process when the watchdog observes a break", async () => {
     const hostCommands: string[] = [];
     let firstStop: (() => void) | undefined;

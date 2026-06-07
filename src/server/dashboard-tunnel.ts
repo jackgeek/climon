@@ -41,7 +41,9 @@ interface DashboardTunnelManagerOptions {
   hostSpawner?: HostSpawner;
   watchdogMs?: number;
   hostUrlTimeoutMs?: number;
+  keepAliveMs?: number;
   verifyTunnel?: (url: string) => Promise<boolean>;
+  pingTunnel?: (url: string) => Promise<void>;
   persisted?: {
     tunnelId?: string;
     cluster?: string;
@@ -61,6 +63,31 @@ const VERIFY_TIMEOUT_MS = 8000;
 const VERIFY_ATTEMPTS = 3;
 const VERIFY_RETRY_DELAY_MS = 1000;
 const MAX_TUNNEL_RECREATIONS = 1;
+const KEEP_ALIVE_MS = 60000;
+const KEEP_ALIVE_TIMEOUT_MS = 8000;
+
+/**
+ * Pings the dashboard `health` endpoint through the public tunnel URL to keep the
+ * dev tunnels relay from idling out. The request travels the full relay path so the
+ * relay registers activity; the response status is irrelevant, only that traffic flowed.
+ */
+export async function defaultPingDashboardTunnel(url: string): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KEEP_ALIVE_TIMEOUT_MS);
+  try {
+    await fetch(`${url.replace(/\/?$/, "/")}health`, {
+      method: "GET",
+      redirect: "manual",
+      headers: { "X-Tunnel-Skip-AntiPhishing-Page": "true" },
+      signal: controller.signal
+    });
+  } catch {
+    // Network error / timeout — the watchdog handles a genuinely dead host; a missed
+    // keep-alive ping is harmless and will be retried on the next interval.
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Probes the public tunnel URL to confirm the relay is forwarding to the local
@@ -212,7 +239,9 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   const hostSpawner = options.hostSpawner ?? defaultHostSpawner;
   const watchdogMs = options.watchdogMs ?? 5000;
   const hostUrlTimeoutMs = options.hostUrlTimeoutMs ?? HOST_URL_TIMEOUT_MS;
+  const keepAliveMs = options.keepAliveMs ?? KEEP_ALIVE_MS;
   const verifyTunnel = options.verifyTunnel ?? defaultVerifyDashboardTunnel;
+  const pingTunnel = options.pingTunnel ?? defaultPingDashboardTunnel;
   let tunnelId: string | undefined = options.persisted?.tunnelId;
   let cluster: string | undefined = options.persisted?.cluster;
   let persistedTunnelId: string | undefined = options.persisted?.tunnelId;
@@ -221,6 +250,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   let closing = false;
   let starting: Promise<DashboardTunnelInfo> | undefined;
   let watchdog: ReturnType<typeof setInterval> | undefined;
+  let keepAlive: ReturnType<typeof setInterval> | undefined;
 
   async function detect(): Promise<{ devtunnelAvailable: boolean; authenticated: boolean; version?: string }> {
     const version = await runner("devtunnel", ["--version"]);
@@ -247,6 +277,14 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
         void startHost();
       }
     }, watchdogMs);
+  }
+
+  function startKeepAlive(): void {
+    if (keepAlive) return;
+    keepAlive = setInterval(() => {
+      if (closing || !url || !host?.isAlive()) return;
+      void pingTunnel(url);
+    }, keepAliveMs);
   }
 
   async function createTunnel(): Promise<void> {
@@ -359,6 +397,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
       return startHost(recreations + 1);
     }
     startWatchdog();
+    startKeepAlive();
     return {
       devtunnelAvailable: true,
       authenticated: true,
@@ -407,6 +446,10 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
         if (watchdog) {
           clearInterval(watchdog);
           watchdog = undefined;
+        }
+        if (keepAlive) {
+          clearInterval(keepAlive);
+          keepAlive = undefined;
         }
         host?.stop();
         host = undefined;
