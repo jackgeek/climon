@@ -56,6 +56,10 @@ interface WsData {
 
 export const DASHBOARD_IDLE_TIMEOUT_SECONDS = 255;
 
+// Bound the health probe so a process that holds the port but never answers
+// HTTP (a stuck previous server or an unrelated listener) cannot hang start-up.
+export const HEALTH_PROBE_TIMEOUT_MS = 2000;
+
 const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
@@ -108,7 +112,7 @@ export async function findExistingDashboardServer(
   const fetchFn = options.fetchFn ?? fetch;
   let healthy = false;
   try {
-    const res = await fetchFn(`${url}health`);
+    const res = await fetchFn(`${url}health`, { signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS) });
     if (res.ok) {
       const body = (await res.json()) as { ok?: unknown };
       healthy = body.ok === true;
