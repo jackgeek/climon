@@ -636,12 +636,22 @@ export function applyDashboardTunnelPersistence(
   delete config.remote.dashboardTunnelCluster;
 }
 
+function startupLog(message: string): void {
+  process.stderr.write(`[startup +${process.uptime().toFixed(3)}s] ${message}\n`);
+}
+
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
+  startupLog("startServer invoked");
+  startupLog("ensuring climon home directory");
   await ensureClimonHome();
+  startupLog("loading config");
   const config = await loadConfig();
+  startupLog(`config loaded (requested port ${config.server.port})`);
   if (options.port !== undefined) {
     config.server.port = options.port;
+    startupLog(`port overridden from options to ${config.server.port}`);
   }
+  startupLog("creating dashboard tunnel manager");
   const dashboardTunnel = createDashboardTunnelManager({
     port: config.server.port,
     persisted: {
@@ -660,28 +670,43 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }
   });
   config.server.host = "127.0.0.1";
+  startupLog("saving config (host pinned to 127.0.0.1)");
   await saveConfig(config);
 
+  startupLog(`checking for an existing dashboard server on port ${config.server.port}`);
   const existing = await findExistingDashboardServer(config.server.host, config.server.port);
   if (existing) {
+    startupLog(`existing dashboard server found at ${existing.url}; prompting for action`);
     const action = await handleExistingDashboardServer(existing);
-    if (action === "exit") return;
+    if (action === "exit") {
+      startupLog("leaving existing server running; exiting startup");
+      return;
+    }
+    startupLog("existing server handled; continuing startup");
+  } else {
+    startupLog("no existing dashboard server found");
   }
 
+  startupLog(`choosing an available port starting from ${config.server.port}`);
   const dashboardPort = await chooseAvailablePort(config.server.port, {
     canBind: (port) => canBindTcpPort(config.server.host, port)
   });
+  startupLog(`selected port ${dashboardPort.port}${dashboardPort.changed ? " (changed)" : ""}`);
   if (dashboardPort.changed) {
     process.stdout.write(
       `climon server port ${config.server.port} is busy; using ${dashboardPort.port} instead.\n`
     );
     config.server.port = dashboardPort.port;
+    startupLog("saving config with updated port");
     await saveConfig(config);
   }
 
   // Clean up stale sessions whose daemons are no longer responsive.
+  startupLog("cleaning up stale sessions");
   await cleanupStaleSessions();
+  startupLog("ensuring ingest daemon is running");
   await ensureIngestDaemon();
+  startupLog("ingest daemon ready");
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
@@ -703,6 +728,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   }
 
   let debounce: ReturnType<typeof setTimeout> | undefined;
+  startupLog(`setting up sessions directory watcher (${getSessionsDir()})`);
   const watcher = watch(getSessionsDir(), () => {
     if (debounce) {
       clearTimeout(debounce);
@@ -723,6 +749,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   let server: Bun.Server<WsData>;
   try {
+    startupLog(`starting Bun.serve on ${config.server.host}:${dashboardPort.port}`);
     server = Bun.serve<WsData>({
     hostname: config.server.host,
     port: dashboardPort.port,
@@ -1222,7 +1249,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     throw describeListenError(error, config.server.host, config.server.port);
   }
 
+  startupLog("Bun.serve started; writing server pid file");
   await writeFile(getServerPidPath(), `${process.pid}\n`, { mode: 0o600 });
+  startupLog("pid file written; advertising URL");
   printStartup(config, dashboardPort.port);
 
   await new Promise<void>((resolve) => {
