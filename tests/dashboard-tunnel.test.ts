@@ -338,6 +338,54 @@ describe("createDashboardTunnelManager", () => {
     expect(persistedWrites).toContainEqual({ tunnelId: "fresh-tunnel", cluster: "use1" });
   });
 
+  test("recreates the tunnel when port create reports the persisted tunnel is missing", async () => {
+    const persistedWrites: Array<{ tunnelId: string; cluster?: string }> = [];
+    const cleared: number[] = [];
+    const portCommands: string[] = [];
+    const manager = createManager({
+      port: 3131,
+      persisted: { tunnelId: "neat-field-091135c", cluster: "eun1" },
+      onPersistTunnel: (value) => {
+        persistedWrites.push(value);
+      },
+      onClearPersistedTunnel: () => {
+        cleared.push(1);
+      },
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") {
+          return {
+            status: 0,
+            stdout: JSON.stringify({ tunnelId: "fresh-tunnel", clusterId: "use1" }),
+            stderr: ""
+          };
+        }
+        if (args[0] === "port") {
+          portCommands.push(args.join(" "));
+          if (args.includes("neat-field-091135c")) {
+            return { status: 1, stdout: "", stderr: "Tunnel not found in eun1: neat-field-091135c" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://fresh-tunnel-3131.use1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await expect(manager.ensure()).resolves.toMatchObject({
+      url: "https://fresh-tunnel-3131.use1.devtunnels.ms/",
+      tunnelId: "fresh-tunnel",
+      running: true
+    });
+    expect(cleared).toHaveLength(1);
+    expect(persistedWrites).toContainEqual({ tunnelId: "fresh-tunnel", cluster: "use1" });
+    expect(portCommands).toContain("port create fresh-tunnel -p 3131 --protocol http");
+  });
+
   test("hosts the existing tunnel without passing port args after creating the port", async () => {
     const hostCommands: string[] = [];
     const manager = createManager({

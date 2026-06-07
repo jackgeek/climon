@@ -300,9 +300,9 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     persistedTunnelId = tunnelId;
   }
 
-  async function ensurePort(): Promise<void> {
-    if (!tunnelId) return;
-    const port = await runner("devtunnel", [
+  async function ensurePort(): Promise<RunResult | undefined> {
+    if (!tunnelId) return undefined;
+    return runner("devtunnel", [
       "port",
       "create",
       tunnelId,
@@ -311,8 +311,15 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
       "--protocol",
       "http"
     ]);
-    if (port.status !== 0 && !isExistingPortError(`${port.stderr}\n${port.stdout}`)) {
-      ensureOk(port, "devtunnel port create");
+  }
+
+  async function forgetTunnel(id: string): Promise<void> {
+    tunnelId = undefined;
+    cluster = undefined;
+    url = undefined;
+    if (persistedTunnelId === id) {
+      persistedTunnelId = undefined;
+      await options.onClearPersistedTunnel?.();
     }
   }
 
@@ -349,7 +356,18 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
         }
       }
     }
-    await ensurePort();
+    const portResult = await ensurePort();
+    if (portResult && portResult.status !== 0) {
+      const portOutput = `${portResult.stderr}\n${portResult.stdout}`;
+      if (!isExistingPortError(portOutput)) {
+        if (isMissingTunnelError(portOutput)) {
+          await forgetTunnel(tunnelId);
+          await createTunnel();
+          return startHost(recreations);
+        }
+        ensureOk(portResult, "devtunnel port create");
+      }
+    }
     const attemptedTunnelId = tunnelId;
     url = undefined;
     let startupStdout = "";
@@ -376,13 +394,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     if (!url) {
       const startupOutput = `${startupStdout}\n${startupStderr}`.trim();
       if (!startedHost.isAlive() && isMissingTunnelError(startupOutput)) {
-        tunnelId = undefined;
-        cluster = undefined;
-        url = undefined;
-        if (persistedTunnelId === attemptedTunnelId) {
-          persistedTunnelId = undefined;
-          await options.onClearPersistedTunnel?.();
-        }
+        await forgetTunnel(attemptedTunnelId);
         await createTunnel();
         return startHost();
       }
