@@ -491,6 +491,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (!term) {
         return;
       }
+      term.focus();
       const page = Math.max(1, term.rows - 1);
       term.scrollLines(direction === "down" ? page : -page);
     },
