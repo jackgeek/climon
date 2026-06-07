@@ -1,5 +1,5 @@
 import { Button, Text, makeStyles, tokens } from "@fluentui/react-components";
-import { Keyboard24Regular, TextFont24Regular } from "@fluentui/react-icons";
+import { ChevronDown24Regular, ChevronUp24Regular, Keyboard24Regular, TextFont24Regular } from "@fluentui/react-icons";
 import { KeyBar } from "./KeyBar.js";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "../fontSize.js";
 
@@ -11,6 +11,7 @@ interface Props {
   onSelect: (view: Exclude<TerminalPanelView, "chooser">) => void;
   onAdjustFont: (delta: number) => void;
   onSend: (data: string) => void;
+  onScroll: (direction: "up" | "down") => void;
 }
 
 const useStyles = makeStyles({
@@ -42,7 +43,7 @@ const useStyles = makeStyles({
   }
 });
 
-export function TerminalPanel({ view, fontSize, onSelect, onAdjustFont, onSend }: Props) {
+export function TerminalPanel({ view, fontSize, onSelect, onAdjustFont, onSend, onScroll }: Props) {
   const styles = useStyles();
 
   if (view === "keyboard") {
@@ -80,6 +81,12 @@ export function TerminalPanel({ view, fontSize, onSelect, onAdjustFont, onSend }
   return (
     <div className={styles.root} role="group" aria-label="Terminal tools">
       <Button
+        appearance="outline"
+        aria-label="Scroll terminal down"
+        icon={<ChevronDown24Regular />}
+        onClick={() => onScroll("down")}
+      />
+      <Button
         className={styles.chooserButton}
         appearance="outline"
         icon={<Keyboard24Regular />}
@@ -95,6 +102,12 @@ export function TerminalPanel({ view, fontSize, onSelect, onAdjustFont, onSend }
       >
         Font size
       </Button>
+      <Button
+        appearance="outline"
+        aria-label="Scroll terminal up"
+        icon={<ChevronUp24Regular />}
+        onClick={() => onScroll("up")}
+      />
     </div>
   );
 }
