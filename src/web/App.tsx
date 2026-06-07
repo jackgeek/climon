@@ -770,7 +770,6 @@ export function App() {
                 onSelect={setPanelView}
                 onAdjustFont={adjustFontSize}
                 onSend={(d) => terminalRef.current?.sendInput(d)}
-                onScroll={(direction) => terminalRef.current?.scroll(direction)}
               />
             </div>
           </>

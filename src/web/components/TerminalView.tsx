@@ -141,7 +141,6 @@ export function loadTerminalAddons(
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
   refit: () => void;
-  scroll: (direction: "up" | "down") => void;
   sendInput: (data: string) => void;
   setViewMode: (mode: TerminalResizeMode) => void;
   acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
@@ -486,14 +485,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       return term ? { cols: term.cols, rows: term.rows } : null;
     },
     refit,
-    scroll: (direction: "up" | "down") => {
-      const term = termRef.current;
-      if (!term) {
-        return;
-      }
-      const page = Math.max(1, term.rows - 1);
-      term.scrollLines(direction === "down" ? page : -page);
-    },
     sendInput: (data: string) => {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {

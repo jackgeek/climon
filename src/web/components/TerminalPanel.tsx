@@ -2,8 +2,10 @@ import { Button, Text, makeStyles, tokens } from "@fluentui/react-components";
 import { ChevronDown24Regular, ChevronUp24Regular, Keyboard24Regular, TextFont24Regular } from "@fluentui/react-icons";
 import { KeyBar } from "./KeyBar.js";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "../fontSize.js";
+import { encodeSpecial, type Mods } from "../keys.js";
 
 export type TerminalPanelView = "chooser" | "keyboard" | "font";
+export type TerminalPanelArrowDirection = "up" | "down";
 
 interface Props {
   view: TerminalPanelView;
@@ -11,7 +13,12 @@ interface Props {
   onSelect: (view: Exclude<TerminalPanelView, "chooser">) => void;
   onAdjustFont: (delta: number) => void;
   onSend: (data: string) => void;
-  onScroll: (direction: "up" | "down") => void;
+}
+
+const NO_MODS: Mods = { ctrl: false, alt: false, shift: false };
+
+export function terminalPanelArrowData(direction: TerminalPanelArrowDirection): string {
+  return encodeSpecial(direction === "down" ? "PageDown" : "PageUp", NO_MODS);
 }
 
 const useStyles = makeStyles({
@@ -43,7 +50,7 @@ const useStyles = makeStyles({
   }
 });
 
-export function TerminalPanel({ view, fontSize, onSelect, onAdjustFont, onSend, onScroll }: Props) {
+export function TerminalPanel({ view, fontSize, onSelect, onAdjustFont, onSend }: Props) {
   const styles = useStyles();
 
   if (view === "keyboard") {
@@ -82,9 +89,9 @@ export function TerminalPanel({ view, fontSize, onSelect, onAdjustFont, onSend, 
     <div className={styles.root} role="group" aria-label="Terminal tools">
       <Button
         appearance="outline"
-        aria-label="Scroll terminal down"
+        aria-label="Send PageDown"
         icon={<ChevronDown24Regular />}
-        onClick={() => onScroll("down")}
+        onClick={() => onSend(terminalPanelArrowData("down"))}
       />
       <Button
         className={styles.chooserButton}
@@ -104,9 +111,9 @@ export function TerminalPanel({ view, fontSize, onSelect, onAdjustFont, onSend, 
       </Button>
       <Button
         appearance="outline"
-        aria-label="Scroll terminal up"
+        aria-label="Send PageUp"
         icon={<ChevronUp24Regular />}
-        onClick={() => onScroll("up")}
+        onClick={() => onSend(terminalPanelArrowData("up"))}
       />
     </div>
   );

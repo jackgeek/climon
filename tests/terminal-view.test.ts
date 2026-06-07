@@ -97,15 +97,6 @@ describe("TerminalView", () => {
     expect(calls).toBe(1);
   });
 
-  test("does not focus xterm when the terminal panel scroll buttons are pressed", () => {
-    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
-    const scrollStart = source.indexOf('scroll: (direction: "up" | "down") => {');
-    const scrollHandler = source.slice(scrollStart, source.indexOf("sendInput:", scrollStart));
-
-    expect(scrollHandler).toContain("term.scrollLines");
-    expect(scrollHandler).not.toContain("term.focus()");
-  });
-
   test("does not capture wheel events so xterm can forward them to terminal mouse tracking", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
