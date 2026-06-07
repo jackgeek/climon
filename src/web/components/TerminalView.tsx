@@ -488,27 +488,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     refit,
     scroll: (direction: "up" | "down") => {
       const term = termRef.current;
-      const container = containerRef.current;
-      if (!term || !container) {
+      if (!term) {
         return;
       }
-      // Dispatch a real wheel event so xterm handles it the same as a mouse
-      // wheel: it scrolls the viewport in normal mode and translates to the
-      // application's wheel/arrow sequences while the alternate screen is active.
-      const viewport =
-        container.querySelector<HTMLElement>(".xterm-viewport") ??
-        term.element ??
-        container;
-      const lineHeight = viewport.clientHeight / Math.max(1, term.rows);
-      const page = lineHeight * Math.max(1, term.rows - 1);
-      viewport.dispatchEvent(
-        new WheelEvent("wheel", {
-          deltaY: direction === "down" ? page : -page,
-          deltaMode: 0,
-          bubbles: true,
-          cancelable: true
-        })
-      );
+      const page = Math.max(1, term.rows - 1);
+      term.scrollLines(direction === "down" ? page : -page);
     },
     sendInput: (data: string) => {
       const ws = wsRef.current;
