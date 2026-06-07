@@ -4,8 +4,17 @@ import {
   createDashboardTunnelManager,
   dashboardTunnelAuthMessage,
   parseDashboardTunnelUrl,
+  parseTunnelCreate,
+  splitTunnelId,
   type DashboardTunnelRunner
 } from "../src/server/dashboard-tunnel.js";
+
+type ManagerOptions = Parameters<typeof createDashboardTunnelManager>[0];
+
+/** Builds a manager with tunnel verification stubbed to succeed unless overridden. */
+function createManager(options: ManagerOptions) {
+  return createDashboardTunnelManager({ verifyTunnel: async () => true, ...options });
+}
 
 describe("parseDashboardTunnelUrl", () => {
   test("extracts the dashboard URL from devtunnel host output", () => {
@@ -15,17 +24,58 @@ describe("parseDashboardTunnelUrl", () => {
   });
 });
 
+describe("splitTunnelId", () => {
+  test("splits a cluster-suffixed tunnel id into base and cluster", () => {
+    expect(splitTunnelId("peaceful-dog-g5pzmr1.eun1")).toEqual({
+      base: "peaceful-dog-g5pzmr1",
+      cluster: "eun1"
+    });
+  });
+
+  test("returns the id as base when no cluster suffix is present", () => {
+    expect(splitTunnelId("climon-test")).toEqual({ base: "climon-test", cluster: undefined });
+  });
+});
+
+describe("parseTunnelCreate", () => {
+  test("derives the cluster from the tunnel id suffix when no explicit cluster field exists", () => {
+    expect(
+      parseTunnelCreate(JSON.stringify({ tunnel: { tunnelId: "peaceful-dog-g5pzmr1.eun1" } }))
+    ).toEqual({ tunnelId: "peaceful-dog-g5pzmr1.eun1", cluster: "eun1" });
+  });
+
+  test("ignores a leading welcome banner before the JSON payload", () => {
+    const stdout =
+      "Welcome to dev tunnels!\nCLI version: 1.0.0\n\n" +
+      JSON.stringify({ tunnel: { tunnelId: "brave-fox-abc123.use1" } });
+    expect(parseTunnelCreate(stdout)).toEqual({ tunnelId: "brave-fox-abc123.use1", cluster: "use1" });
+  });
+
+  test("prefers an explicit cluster field over the suffix", () => {
+    expect(parseTunnelCreate(JSON.stringify({ tunnelId: "fresh-tunnel", clusterId: "use1" }))).toEqual({
+      tunnelId: "fresh-tunnel",
+      cluster: "use1"
+    });
+  });
+});
+
 describe("buildDashboardTunnelUrl", () => {
   test("builds the browser URL from tunnel id, port, and cluster", () => {
     expect(buildDashboardTunnelUrl("climon-test", 3131, "eun1")).toBe(
       "https://climon-test-3131.eun1.devtunnels.ms/"
     );
   });
+
+  test("strips a cluster suffix from the tunnel id when building the URL", () => {
+    expect(buildDashboardTunnelUrl("peaceful-dog-g5pzmr1.eun1", 3131, "eun1")).toBe(
+      "https://peaceful-dog-g5pzmr1-3131.eun1.devtunnels.ms/"
+    );
+  });
 });
 
 describe("createDashboardTunnelManager", () => {
   test("reports unavailable when the devtunnel CLI cannot run", async () => {
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async () => ({ status: 127, stdout: "", stderr: "missing" })
     });
@@ -38,7 +88,7 @@ describe("createDashboardTunnelManager", () => {
   });
 
   test("asks the user to run devtunnel login user before hosting", async () => {
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
@@ -51,7 +101,7 @@ describe("createDashboardTunnelManager", () => {
   });
 
   test("treats devtunnel user show Not logged in JSON as unauthenticated", async () => {
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
@@ -68,7 +118,7 @@ describe("createDashboardTunnelManager", () => {
   });
 
   test("reports a controlled startup error if the host exits before a URL is available", async () => {
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
@@ -96,7 +146,7 @@ describe("createDashboardTunnelManager", () => {
       if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
       throw new Error(`unexpected runner command: ${args.join(" ")}`);
     };
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner,
       hostSpawner: (_cmd, args, handlers) => {
@@ -112,6 +162,7 @@ describe("createDashboardTunnelManager", () => {
     });
     await expect(manager.ensure()).resolves.toMatchObject({
       url: "https://climon-test-3131.eun1.devtunnels.ms/",
+      tunnelId: "climon-test",
       running: true
     });
 
@@ -121,13 +172,14 @@ describe("createDashboardTunnelManager", () => {
 
   test("uses persisted tunnel id without creating a new tunnel", async () => {
     const commands: string[] = [];
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       persisted: { tunnelId: "saved-tunnel", cluster: "eun1" },
       runner: async (_cmd, args) => {
         commands.push(args.join(" "));
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
         if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected runner command: ${args.join(" ")}`);
       },
       hostSpawner: (_cmd, args, handlers) => {
@@ -143,11 +195,110 @@ describe("createDashboardTunnelManager", () => {
     expect(commands).toContain("host saved-tunnel");
   });
 
+  test("builds a fallback URL when the host prints no browser link but the id carries a cluster", async () => {
+    const portCommands: string[] = [];
+    const manager = createManager({
+      port: 3131,
+      persisted: { tunnelId: "peaceful-dog-g5pzmr1.eun1" },
+      watchdogMs: 100000,
+      hostUrlTimeoutMs: 50,
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "port") {
+          portCommands.push(args.join(" "));
+          return { status: 1, stdout: "", stderr: "Conflict with existing entity" };
+        }
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Connection to host tunnel relay restored.\nHosting port: 3131\n");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await expect(manager.ensure()).resolves.toMatchObject({
+      url: "https://peaceful-dog-g5pzmr1-3131.eun1.devtunnels.ms/",
+      running: true
+    });
+    expect(portCommands).toContain("port create peaceful-dog-g5pzmr1.eun1 -p 3131 --protocol http");
+  });
+
+  test("deletes and recreates the dev tunnel when the link fails verification", async () => {
+    const commands: string[] = [];
+    let createCount = 0;
+    const manager = createManager({
+      port: 3131,
+      runner: async (_cmd, args) => {
+        commands.push(args.join(" "));
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") {
+          createCount += 1;
+          const id = createCount === 1 ? "broken-tunnel.eun1" : "working-tunnel.eun1";
+          return { status: 0, stdout: JSON.stringify({ tunnel: { tunnelId: id } }), stderr: "" };
+        }
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "delete") return { status: 0, stdout: "", stderr: "" };
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, args, handlers) => {
+        const id = args[1];
+        handlers.onStdout(`Connect via browser: https://${id.split(".")[0]}-3131.eun1.devtunnels.ms`);
+        return { stop: () => undefined, isAlive: () => true };
+      },
+      verifyTunnel: async (url) => url.includes("working-tunnel")
+    });
+
+    await expect(manager.ensure()).resolves.toMatchObject({
+      url: "https://working-tunnel-3131.eun1.devtunnels.ms",
+      tunnelId: "working-tunnel.eun1",
+      running: true
+    });
+    expect(commands).toContain("delete broken-tunnel.eun1 -f");
+    expect(commands.filter((cmd) => cmd.startsWith("create"))).toHaveLength(2);
+  });
+
+  test("returns the link as best effort when verification keeps failing after one recreate", async () => {
+    let createCount = 0;
+    const deletions: string[] = [];
+    const manager = createManager({
+      port: 3131,
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") {
+          createCount += 1;
+          return { status: 0, stdout: JSON.stringify({ tunnel: { tunnelId: `tunnel-${createCount}.eun1` } }), stderr: "" };
+        }
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "delete") {
+          deletions.push(args[1]);
+          return { status: 0, stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, args, handlers) => {
+        const id = args[1];
+        handlers.onStdout(`Connect via browser: https://${id.split(".")[0]}-3131.eun1.devtunnels.ms`);
+        return { stop: () => undefined, isAlive: () => true };
+      },
+      verifyTunnel: async () => false
+    });
+
+    await expect(manager.ensure()).resolves.toMatchObject({
+      url: "https://tunnel-2-3131.eun1.devtunnels.ms",
+      running: true
+    });
+    expect(deletions).toEqual(["tunnel-1.eun1"]);
+    expect(createCount).toBe(2);
+  });
+
   test("recreates and persists replacement when persisted tunnel no longer exists", async () => {
     const persistedWrites: Array<{ tunnelId: string; cluster?: string }> = [];
     const cleared: number[] = [];
     let firstHost = true;
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       persisted: { tunnelId: "stale-tunnel", cluster: "eun1" },
       onPersistTunnel: (value) => {
@@ -189,7 +340,7 @@ describe("createDashboardTunnelManager", () => {
 
   test("hosts the existing tunnel without passing port args after creating the port", async () => {
     const hostCommands: string[] = [];
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
@@ -218,7 +369,7 @@ describe("createDashboardTunnelManager", () => {
 
   test("creates an authenticated dashboard tunnel without anonymous browser access", async () => {
     const runnerCommands: string[] = [];
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         runnerCommands.push(args.join(" "));
@@ -243,7 +394,7 @@ describe("createDashboardTunnelManager", () => {
   test("restarts the host process when the watchdog observes a break", async () => {
     const hostCommands: string[] = [];
     let firstStop: (() => void) | undefined;
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
@@ -276,7 +427,7 @@ describe("createDashboardTunnelManager", () => {
   test("does not treat stale URL as successful host restart and can recover", async () => {
     let breakFirstHost: (() => void) | undefined;
     let hostAttempt = 0;
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
@@ -318,7 +469,7 @@ describe("createDashboardTunnelManager", () => {
   test("close stops the host process but keeps persisted tunnel metadata for reuse", async () => {
     const commands: string[] = [];
     let stopped = false;
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         commands.push(args.join(" "));
@@ -351,7 +502,7 @@ describe("createDashboardTunnelManager", () => {
     let createCount = 0;
     let failReusedTunnel = false;
 
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       onPersistTunnel: (value) => {
         persistedWrites.push(value);
@@ -418,7 +569,7 @@ describe("createDashboardTunnelManager", () => {
   test("close does not permanently disable watchdog restarts", async () => {
     let latestBreak: (() => void) | undefined;
     let hostCount = 0;
-    const manager = createDashboardTunnelManager({
+    const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
@@ -448,3 +599,4 @@ describe("createDashboardTunnelManager", () => {
     expect(hostCount).toBe(3);
   });
 });
+

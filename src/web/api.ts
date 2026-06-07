@@ -159,6 +159,7 @@ export interface DashboardTunnelStatus {
   authenticated: boolean;
   running: boolean;
   url?: string;
+  tunnelId?: string;
   version?: string;
 }
 

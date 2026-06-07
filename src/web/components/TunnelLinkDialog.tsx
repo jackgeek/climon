@@ -34,6 +34,12 @@ const useStyles = makeStyles({
     fontSize: "12px",
     display: "block",
     marginTop: "8px"
+  },
+  tunnelName: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: "12px",
+    display: "block",
+    marginTop: "12px"
   }
 });
 
@@ -49,6 +55,7 @@ interface Props {
 export function TunnelLinkDialog({ open, status, error, copied, onCopy, onClose }: Props) {
   const styles = useStyles();
   const url = status?.url ?? "";
+  const tunnelId = status?.tunnelId ?? "";
   return (
     <Dialog open={open} onOpenChange={(_, data) => !data.open && onClose()}>
       <DialogSurface>
@@ -71,6 +78,11 @@ export function TunnelLinkDialog({ open, status, error, copied, onCopy, onClose 
                   The tunnel is not anonymous. It stays running until you choose Close
                   Tunnel Link from the menu.
                 </Text>
+                {tunnelId && (
+                  <Text className={styles.tunnelName}>
+                    Dev tunnel: <strong>{tunnelId}</strong>
+                  </Text>
+                )}
               </>
             ) : (
               <Text>Starting Tunnel Link…</Text>
