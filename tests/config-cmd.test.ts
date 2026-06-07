@@ -184,6 +184,33 @@ describe("runConfigCommand", () => {
     );
   });
 
+  test("--debug prints values and redacts sensitive ones", () => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(
+      join(home, "config.jsonc"),
+      JSON.stringify({ remote: { enabled: true, port: 3132, tunnelToken: "super-secret-token" }, mystery: { apiKey: "leak-me" } })
+    );
+
+    const out: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk: string) => {
+      out.push(String(chunk));
+      return true;
+    };
+    try {
+      expect(runConfigCommand(["--debug"], env(), root)).toBe(0);
+    } finally {
+      process.stdout.write = original;
+    }
+    const printed = out.join("");
+    expect(printed).toContain("  remote.enabled = true");
+    expect(printed).toContain("  remote.port = 3132");
+    expect(printed).toContain("  remote.tunnelToken = <redacted>");
+    expect(printed).not.toContain("super-secret-token");
+    expect(printed).toContain("  mystery.apiKey = <redacted>");
+    expect(printed).not.toContain("leak-me");
+  });
+
   test("set migrates legacy config.json to config.jsonc with a backup", () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(

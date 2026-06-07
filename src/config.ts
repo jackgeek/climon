@@ -9,7 +9,8 @@ import {
   acceptedConfigKeys,
   buildDefaultConfigFromSettings,
   coerceConfigValueFromSettings,
-  CONFIG_VERSION
+  CONFIG_VERSION,
+  findConfigSetting
 } from "./config-settings.js";
 
 export const DEFAULT_DETACH_PREFIX = 0x1c; // Ctrl-\
@@ -299,23 +300,39 @@ export function resolveConfigSetting(
   return undefined;
 }
 
+export interface ConfigDebugKey {
+  key: string;
+  /** String representation of the value; redacted for sensitive settings. */
+  value: string;
+}
+
 export interface ConfigDebugEntry {
   path: string;
   exists: boolean;
-  keys: string[];
+  keys: ConfigDebugKey[];
   error?: string;
 }
 
-function collectDottedKeys(value: unknown, prefix = ""): string[] {
+function collectDottedEntries(value: unknown, prefix = ""): ConfigDebugKey[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return prefix ? [prefix] : [];
+    if (!prefix) return [];
+    return [{ key: prefix, value: formatDebugValue(prefix, value) }];
   }
-  const keys: string[] = [];
+  const entries: ConfigDebugKey[] = [];
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     const dotted = prefix ? `${prefix}.${key}` : key;
-    keys.push(...collectDottedKeys(child, dotted));
+    entries.push(...collectDottedEntries(child, dotted));
   }
-  return keys;
+  return entries;
+}
+
+function formatDebugValue(key: string, value: unknown): string {
+  const setting = findConfigSetting(key);
+  // Redact sensitive settings and any key absent from the registry, since an
+  // unknown key's value cannot be verified as safe to print.
+  if (!setting || setting.sensitive) return "<redacted>";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
 }
 
 export function listConfigDebugEntries(
@@ -329,7 +346,8 @@ export function listConfigDebugEntries(
     if (!configPath) return { path: reportedPath, exists: false, keys: [] };
     try {
       const parsed = parseJsoncConfig(readFileSync(configPath, "utf8"), configPath);
-      return { path: reportedPath, exists: true, keys: collectDottedKeys(parsed).sort() };
+      const keys = collectDottedEntries(parsed).sort((a, b) => a.key.localeCompare(b.key));
+      return { path: reportedPath, exists: true, keys };
     } catch (error) {
       return {
         path: reportedPath,

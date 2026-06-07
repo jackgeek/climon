@@ -35,7 +35,7 @@ Usage:
   climon config <key> <value>      Set a config setting
   climon config --unset <key>      Remove a config setting
   climon config --list             List all set configuration values
-  climon config --debug            Show config files and keys in resolution order
+  climon config --debug            Show config files, keys, and values (redacted) in resolution order
   climon config --purge            Delete config files from cwd ancestry and $CLIMON_HOME
   climon config --help             Show this help
 
@@ -169,7 +169,7 @@ export function runConfigCommand(
           } else if (entry.keys.length === 0) {
             lines.push("  (no keys)");
           } else {
-            for (const key of entry.keys) lines.push(`  ${key}`);
+            for (const { key, value } of entry.keys) lines.push(`  ${key} = ${value}`);
           }
         }
         commandIO.stdout(`${lines.join("\n")}\n`);

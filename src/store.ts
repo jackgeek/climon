@@ -51,7 +51,7 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
   }
 }
 
-async function atomicWrite(path: string, data: Buffer | string): Promise<void> {
+export async function atomicWrite(path: string, data: Buffer | string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tempPath = `${path}.${process.pid}.${Date.now()}.${tempCounter++}.tmp`;
   await writeFile(tempPath, data);

@@ -1,7 +1,7 @@
 import { existsSync, watch } from "node:fs";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -28,7 +28,7 @@ import {
   type TerminalResizeMode
 } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
-import { listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
+import { atomicWrite, listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionStatus } from "../types.js";
 import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
@@ -78,25 +78,63 @@ interface ExistingDashboardServer {
 
 type ServerConflictAction = "continue" | "exit";
 
-export function getServerPidPath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(getClimonHome(env), "server.pid");
+/**
+ * Single state file for the running dashboard server: `{ pid, port }`. Keeping
+ * the pid and bound port in one atomically-written file guarantees they can
+ * never skew (a stale pid paired with a fresh port, or vice versa). The port is
+ * recorded because it can differ from the configured one after an automatic
+ * bump; other processes read this to discover the live server.
+ */
+export function getServerStatePath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getClimonHome(env), "server.json");
+}
+
+export interface ServerState {
+  /** PID of the running dashboard server process. */
+  pid: number;
+  /** TCP port the dashboard server bound to. */
+  port: number;
+}
+
+/**
+ * Reads the dashboard server state file. Returns undefined when the file is
+ * absent, unreadable, malformed, or missing a valid pid/port.
+ */
+export async function readServerState(
+  env: NodeJS.ProcessEnv = process.env
+): Promise<ServerState | undefined> {
+  let raw: string;
+  try {
+    raw = await readFile(getServerStatePath(env), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<ServerState>;
+    const pidOk = typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0;
+    const portOk = typeof parsed.port === "number" && Number.isInteger(parsed.port) && parsed.port > 0;
+    return pidOk && portOk ? { pid: parsed.pid as number, port: parsed.port as number } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function dashboardUrl(host: string, port: number): string {
   return `http://${host}:${port}/`;
 }
 
-async function readLivePid(
-  path: string,
+/**
+ * Reads the recorded server pid from the state file and returns it only if that
+ * process is still alive.
+ */
+async function readLiveServerPid(
+  env: NodeJS.ProcessEnv = process.env,
   isAlive: (pid: number) => boolean = isProcessAlive
 ): Promise<number | undefined> {
-  try {
-    const pid = Number.parseInt((await readFile(path, "utf8")).trim(), 10);
-    return Number.isInteger(pid) && pid > 0 && isAlive(pid) ? pid : undefined;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
+  const state = await readServerState(env);
+  if (!state) return undefined;
+  return isAlive(state.pid) ? state.pid : undefined;
 }
 
 export async function findExistingDashboardServer(
@@ -122,7 +160,7 @@ export async function findExistingDashboardServer(
   }
   if (!healthy) return undefined;
 
-  const pid = await readLivePid(getServerPidPath(options.env), options.isProcessAliveFn);
+  const pid = await readLiveServerPid(options.env, options.isProcessAliveFn);
   return pid === undefined ? { url } : { url, pid };
 }
 
@@ -138,7 +176,7 @@ export async function stopDashboardServer(options: {
   const isAlive = options.isProcessAlive ?? isProcessAlive;
   const graceMs = options.graceMs ?? KILL_GRACE_MS;
   const pollMs = options.pollMs ?? 50;
-  const pid = await readLivePid(getServerPidPath(env), isAlive);
+  const pid = await readLiveServerPid(env, isAlive);
   if (pid === undefined) return false;
   if (!kill(pid, false)) return false;
   const waitForExit = async (): Promise<boolean> => {
@@ -599,20 +637,25 @@ export async function stopIngestDaemon(options: {
 }
 
 /**
+ * Returns whether the singleton ingest daemon is currently running, based on
+ * its pidfile.
+ */
+async function isIngestDaemonAlive(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  try {
+    const pid = Number.parseInt((await readFile(getIngestPidPath(env), "utf8")).trim(), 10);
+    return Number.isInteger(pid) && pid > 0 && isProcessAlive(pid);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Spawns the detached singleton ingest daemon if its pidfile is absent or dead.
  * Best-effort: the daemon itself re-checks the singleton, so a redundant spawn
  * is harmless.
  */
 async function ensureIngestDaemon(): Promise<void> {
-  const pidPath = getIngestPidPath();
-  let alive = false;
-  try {
-    const pid = Number.parseInt((await readFile(pidPath, "utf8")).trim(), 10);
-    alive = Number.isInteger(pid) && pid > 0 && isProcessAlive(pid);
-  } catch {
-    alive = false;
-  }
-  if (alive) return;
+  if (await isIngestDaemonAlive()) return;
   const inv = resolveIngestInvocation(process.env, process.execPath);
   const child = spawn(inv.file, inv.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
@@ -731,6 +774,32 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     return JSON.stringify({ sessions });
   }
 
+  interface ServerPorts {
+    /** Main dashboard HTTP port this server process binds. */
+    dashboard: number;
+    /** Ingest daemon port, when the remote ingest listener is running. */
+    ingest?: number;
+  }
+
+  /**
+   * Reports every TCP port opened on behalf of this server so the state is
+   * discoverable from `/health`. The dashboard port is always present; the
+   * ingest port is included only when the ingest daemon is running. Kept cheap
+   * (filesystem reads only) so it never slows or hangs the health probe.
+   */
+  async function collectServerPorts(): Promise<ServerPorts> {
+    const ports: ServerPorts = { dashboard: dashboardPort.port };
+    try {
+      if (await isIngestDaemonAlive()) {
+        const state = await readRemoteHostState();
+        ports.ingest = state?.ingestPort ?? DEFAULT_INGEST_PORT;
+      }
+    } catch {
+      // Best-effort: never let port discovery fail the health probe.
+    }
+    return ports;
+  }
+
   let debounce: ReturnType<typeof setTimeout> | undefined;
   startupLog(`setting up sessions directory watcher (${getSessionsDir()})`);
   const watcher = watch(getSessionsDir(), () => {
@@ -762,7 +831,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       const url = new URL(request.url);
 
       if (url.pathname === "/health") {
-        return Response.json({ ok: true, version: VERSION, remotesEnabled: options.enableRemotes === true });
+        return Response.json({
+          ok: true,
+          version: VERSION,
+          remotesEnabled: options.enableRemotes === true,
+          ports: await collectServerPorts()
+        });
       }
 
       const asset = await getStaticAsset(url.pathname);
@@ -1253,9 +1327,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     throw describeListenError(error, config.server.host, config.server.port);
   }
 
-  startupLog("Bun.serve started; writing server pid file");
-  await writeFile(getServerPidPath(), `${process.pid}\n`, { mode: 0o600 });
-  startupLog("pid file written; advertising URL");
+  startupLog("Bun.serve started; writing server state file");
+  await atomicWrite(
+    getServerStatePath(),
+    `${JSON.stringify({ pid: process.pid, port: dashboardPort.port })}\n`
+  );
+  startupLog("state file written; advertising URL");
   printStartup(config, dashboardPort.port);
 
   await new Promise<void>((resolve) => {
@@ -1263,11 +1340,46 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     const shutdown = (): void => {
       if (shuttingDown) return;
       shuttingDown = true;
+      startupLog("shutdown requested; releasing resources");
+      // Stop reacting to filesystem changes and drop the debounced broadcast.
       watcher.close();
-      server.stop();
-      void rm(getServerPidPath(), { force: true })
-        .then(() => stopIngestDaemon())
-        .finally(resolve);
+      if (debounce) {
+        clearTimeout(debounce);
+        debounce = undefined;
+      }
+      // Close any in-flight SSE streams so they do not keep the listener alive.
+      for (const controller of sseClients) {
+        try {
+          controller.close();
+        } catch {
+          // Already closed.
+        }
+      }
+      sseClients.clear();
+      void (async () => {
+        try {
+          // `true` force-closes active WebSocket/HTTP connections so the TCP
+          // port is released promptly instead of lingering until clients leave.
+          await server.stop(true);
+        } catch {
+          // Listener already stopped.
+        }
+        // Tear down the dashboard dev tunnel (if any) so its child process and
+        // forwarded port do not outlive the server.
+        try {
+          await dashboardTunnel.close();
+        } catch {
+          // No tunnel running or already closed.
+        }
+        await rm(getServerStatePath(), { force: true }).catch(() => {});
+        try {
+          await stopIngestDaemon();
+        } catch {
+          // Best-effort: the ingest daemon is a detached singleton.
+        }
+        startupLog("shutdown complete");
+        resolve();
+      })();
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);

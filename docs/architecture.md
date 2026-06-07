@@ -82,7 +82,10 @@ then attaches the local client. Also implements `attach`, `ls`, and `kill`.
 
 A `Bun.serve` server, stateless with respect to PTYs:
 
-- `GET /health` — unauthenticated `{ ok: true }` liveness probe.
+- `GET /health` — unauthenticated liveness probe returning
+  `{ ok: true, version, remotesEnabled, ports }`. `ports` lists every TCP port
+  this server process has opened: `ports.dashboard` (always) and `ports.ingest`
+  (only while the remote ingest daemon is running).
 - `GET /` — dashboard HTML shell that loads the React app bundle (localhost
   allowed; LAN requires a token).
 - `GET /api/sessions` — current sessions, priority-sorted.
@@ -138,6 +141,7 @@ and asset serving live in `src/server/assets.ts`.
 | Path | Purpose |
 |------|---------|
 | `config.json` | server host/port/lan/token, terminal clamp option |
+| `server.json` | running dashboard server state: `{ pid, port }` (discovery/stop) |
 | `sessions/<id>.json` | session metadata |
 | `sessions/<id>.scrollback` | final captured output |
 | `sessions/<id>.log` | daemon stdout/stderr (diagnostics) |

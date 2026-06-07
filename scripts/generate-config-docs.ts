@@ -12,7 +12,7 @@ export function renderConfigDocsSection(): string {
 - \`climon config remote.tunnelId <id>\` — set a value.
 - \`climon config remote.tunnelId\` — print a value (exit 1 if unset).
 - \`climon config --list\` — print all set user-facing values.
-- \`climon config --debug\` — print each candidate config file and the keys found in resolution order.
+- \`climon config --debug\` — print each candidate config file and the keys and values found in resolution order; sensitive and unknown values are redacted.
 - \`climon config --unset remote.tunnelId\` — remove a value.
 - \`climon config --help\` — print this settings reference in the terminal.
 - \`--global\` writes \`$CLIMON_HOME/config.jsonc\`; \`--local\` writes \`./.climon/config.jsonc\`.

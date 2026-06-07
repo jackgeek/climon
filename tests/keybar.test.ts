@@ -22,7 +22,7 @@ describe("KeyBar", () => {
 
   test("renders every special key in the curated order", () => {
     const markup = render();
-    const expectedOrder = ["Esc", "Tab", "Enter", "Del", "Home", "End", "←", "↑", "↓", "→", "PgUp", "PgDn"];
+    const expectedOrder = ["Esc", "Tab", "Enter", "Home", "Del", "←", "↑", "↓", "→", "End", "PgUp", "PgDn"];
 
     let cursor = -1;
     for (const label of expectedOrder) {
