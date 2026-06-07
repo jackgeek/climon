@@ -20,6 +20,8 @@ import { AUTO_COLOR_ORDER, ANSI_COLORS, DEFAULT_PRIORITY, parseColorMode } from 
 import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { isProcessAlive, killProcess } from "./process-kill.js";
 import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
+import { discoverDashboard } from "./remote/discovery.js";
+import { maybeAutoLink } from "./remote/link.js";
 import { formatSessionSocketRef, isResolvedSessionSocketRef, waitForSessionSocket } from "./session-socket.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
@@ -135,11 +137,31 @@ async function ensureUplink(): Promise<void> {
   const tunnelId = resolveConfigSetting("remote.tunnelId", process.env, process.cwd());
   const tunnelToken = resolveConfigSetting("remote.tunnelToken", process.env, process.cwd());
   const port = resolveConfigSetting("remote.port", process.env, process.cwd());
-  const needsTunnel = enabled && !host && tunnelId && tunnelToken && port;
-  const detect = needsTunnel ? await detectDevtunnel() : { available: false };
-  const plan = planUplinkStart({ enabled, host, tunnelId, tunnelToken, port }, detect);
-  if (plan.warning) process.stderr.write(plan.warning);
-  if (!plan.shouldSpawn) return;
+  const peerHome = resolveConfigSetting("remote.peerHome", process.env, process.cwd());
+
+  let shouldSpawn = false;
+
+  // Same-machine WSL<->Windows: if a dashboard is discovered on the peer OS,
+  // bridge this local session to it over the uplink/ingest mux.
+  if (typeof peerHome === "string" && peerHome.length > 0) {
+    const target = await discoverDashboard(process.env, process.cwd());
+    if (target?.location === "peer") {
+      shouldSpawn = true;
+      process.stdout.write(
+        `climon: dashboard detected on the peer OS; this session will appear at ${target.url}\r\n`
+      );
+    }
+  }
+
+  if (!shouldSpawn) {
+    const needsTunnel = enabled && !host && tunnelId && tunnelToken && port;
+    const detect = needsTunnel ? await detectDevtunnel() : { available: false };
+    const plan = planUplinkStart({ enabled, host, tunnelId, tunnelToken, port }, detect);
+    if (plan.warning) process.stderr.write(plan.warning);
+    shouldSpawn = plan.shouldSpawn;
+  }
+
+  if (!shouldSpawn) return;
   const child = spawn(process.execPath, selfSpawnArgs(["__uplink"]), {
     detached: true,
     stdio: "ignore",
@@ -279,6 +301,7 @@ export async function startMonitoredCommand(
 
   spawnDaemon(id, process.env);
 
+  await maybeAutoLink();
   await ensureUplink();
 
   meta.socketPath = await waitForSessionReady(id);

@@ -14,6 +14,7 @@ import { acquireSingleton } from "./singleton.js";
 import { encodeControl, encodeData, MuxDecoder } from "./mux.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
+import { discoverDashboard } from "./discovery.js";
 
 export interface UplinkConfig {
   enabled: boolean;
@@ -209,17 +210,38 @@ async function waitForPort(port: number, host = "127.0.0.1", timeoutMs = 15000):
 }
 
 /**
- * Devbox uplink supervisor. Singleton; opens a direct TCP channel when
- * `remote.host` is configured, otherwise spawns `devtunnel connect` and opens a
- * channel to the forwarded local port. Stops retrying on clear tunnel auth
- * rejection.
+ * Resolves a live peer-discovery uplink target from the peer's `server.json`
+ * beacon. Reading it here (rather than caching) means a collision-bumped ingest
+ * port on the dashboard side is always picked up on the next reconnect.
+ */
+async function resolvePeerUplinkTarget(
+  env: NodeJS.ProcessEnv,
+  cwd: string
+): Promise<{ host: string; port: number } | undefined> {
+  const peerHome = asString(resolveConfigSetting("remote.peerHome", env, cwd));
+  if (!peerHome) return undefined;
+  const target = await discoverDashboard(env, cwd);
+  if (target?.location === "peer" && target.ingest) {
+    return { host: target.host, port: target.ingest };
+  }
+  return undefined;
+}
+
+/**
+ * Devbox uplink supervisor. Singleton. Prefers a same-machine peer dashboard
+ * discovered via `remote.peerHome` (WSL<->Windows), connecting directly to its
+ * ingest port. Otherwise opens a direct TCP channel when `remote.host` is
+ * configured, or spawns `devtunnel connect` and opens a channel to the
+ * forwarded local port. Stops retrying on clear tunnel auth rejection.
  */
 export async function runUplink(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): Promise<number> {
-  const config = resolveUplinkConfig(env, cwd);
-  if (!config.enabled || !config.port) return 0;
+  const peerHome = asString(resolveConfigSetting("remote.peerHome", env, cwd));
+  const initialLegacy = resolveUplinkConfig(env, cwd);
+  // Nothing to do: no peer link configured and no legacy direct/tunnel target.
+  if (!peerHome && (!initialLegacy.enabled || !initialLegacy.port)) return 0;
 
   const pidFile = join(getClimonHome(env), "uplink.pid");
   if (!(await acquireSingleton(pidFile))) return 0;
@@ -229,25 +251,49 @@ export async function runUplink(
 
   for (;;) {
     const startedAt = Date.now();
-    const directHost = config.host;
-    const conn = directHost
-      ? undefined
-      : config.tunnelId && config.tunnelToken
-        ? spawnConnect(config.tunnelId, config.tunnelToken)
-        : undefined;
-    if (!directHost && !conn) return 0;
+
+    const peerTarget = peerHome ? await resolvePeerUplinkTarget(env, cwd) : undefined;
+    const config = resolveUplinkConfig(env, cwd);
+
+    let host: string | undefined;
+    let port: number | undefined;
+    let conn: ConnectChild | undefined;
+    if (peerTarget) {
+      host = peerTarget.host;
+      port = peerTarget.port;
+    } else if (config.enabled && config.port) {
+      if (config.host) {
+        host = config.host;
+        port = config.port;
+      } else if (config.tunnelId && config.tunnelToken) {
+        conn = spawnConnect(config.tunnelId, config.tunnelToken);
+        host = "127.0.0.1";
+        port = config.port;
+      }
+    }
+
+    if (!host || !port) {
+      // No reachable target yet. If a peer link is configured the dashboard may
+      // simply not be up yet, so back off and retry; otherwise there is nothing
+      // more to do.
+      conn?.child.kill();
+      if (!peerHome) return 0;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      backoffMs = Math.min(backoffMs * 2, 30_000);
+      continue;
+    }
+
     try {
-      const host = directHost ?? "127.0.0.1";
-      const reachable = await waitForPort(config.port, host);
+      const reachable = await waitForPort(port, host);
       if (!reachable) {
         if (conn?.authRejected()) {
           process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
           conn.child.kill();
           return 1;
         }
-        throw new Error(directHost ? "ingest port not reachable" : "forwarded port not reachable");
+        throw new Error(conn ? "forwarded port not reachable" : "ingest port not reachable");
       }
-      const channel = connect(config.port, host);
+      const channel = connect(port, host);
       await new Promise<void>((resolve, reject) => {
         channel.once("connect", resolve);
         channel.once("error", reject);
@@ -256,7 +302,7 @@ export async function runUplink(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EADDRINUSE") {
-        process.stderr.write(`climon uplink: local port ${config.port} already in use.\n`);
+        process.stderr.write(`climon uplink: local port ${port} already in use.\n`);
         conn?.child.kill();
         return 1;
       }

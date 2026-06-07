@@ -145,9 +145,30 @@ you want to stop.
 
 ## Windows/WSL same-machine bridge (no dev tunnel)
 
-Windows and WSL can share sessions without a dev tunnel by using climon's local
-ingest/uplink bridge directly. The dashboard side runs the ingest daemon; the
-client side runs an uplink that sends its local sessions to that ingest port.
+The easiest setup is automatic: install climon on **Windows**, run `climon
+server`, then run climon normally in **WSL**. The first WSL run detects the
+Windows climon and auto-links discovery in both directions (it prints how to
+disable this first), so WSL sessions show up on the Windows dashboard with no
+config. Link manually any time with:
+
+```bash
+climon link                                          # auto-detect Windows CLIMON_HOME
+climon link --peer-home /mnt/c/Users/<you>/.climon   # or specify it
+```
+
+Discovery reads the peer OS's `server.json` beacon (local first, then the peer
+at `remote.peerHome`), validates the peer with an HTTP `/health` probe, and
+reads the live dashboard/ingest ports from it — so a port bump on collision just
+works. Disable auto-linking with `climon config remote.autoLink false`, and
+override the peer host (if auto-detection picks the wrong one) with `climon
+config remote.peerHost <host>`. See
+[docs/usage.md](docs/usage.md#connecting-windows-and-wsl-on-the-same-machine).
+
+### Manual bridge
+
+You can still wire the ingest/uplink bridge by hand — the dashboard side runs
+the ingest daemon; the client side runs an uplink that sends its local sessions
+to that ingest port.
 
 Use the same port on both sides. `3132` is the default ingest port, but setting
 it explicitly makes the setup easier to inspect with `climon config --debug`.

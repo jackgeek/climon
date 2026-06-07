@@ -48,6 +48,20 @@ Direct mode has no dev tunnel token in front of the ingest port. Treat
 specific same-machine adapter where possible, not a broad LAN address, and rely
 on the OS firewall to keep that port scoped to the local Windows/WSL boundary.
 
+### Beacon-based discovery (`remote.peerHome`)
+
+`climon link` (and the lazy auto-link on the first WSL run) records the peer
+OS's `CLIMON_HOME` in `remote.peerHome`, and discovery reads the peer's
+`server.json` over the shared mount to find a dashboard on the other OS.
+`remote.peerHome` is only ever **read**, and only the small `server.json` beacon
+is parsed: pid/port/ingest are strictly validated as positive integers and no
+path from the peer is used to load or execute code. Liveness of a peer beacon is
+proven by an HTTP `/health` probe, never by trusting its (cross-namespace) PID.
+The same loopback/firewall guidance above applies, since the auto-wired uplink
+still terminates at the dashboard side's ingest port. Auto-link only acts from
+WSL, only when a Windows climon is already present, and can be disabled with
+`remote.autoLink false`.
+
 ## Secrets at rest
 
 - `remote.tunnelToken` — the devbox's connect token, stored in the devbox's

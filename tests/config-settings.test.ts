@@ -31,6 +31,9 @@ describe("config settings registry", () => {
       "remote.tunnelToken",
       "remote.port",
       "remote.clientId",
+      "remote.peerHome",
+      "remote.peerHost",
+      "remote.autoLink",
       "session.color",
       "session.priority"
     ]);
@@ -56,6 +59,7 @@ describe("config settings registry", () => {
         setTitle: true
       },
       attention: { idleSeconds: 10 },
+      remote: { autoLink: true },
       session: { color: "auto", priority: 500 }
     });
   });
@@ -89,6 +93,9 @@ describe("config settings registry", () => {
       "remote.tunnelId",
       "remote.tunnelToken",
       "remote.port",
+      "remote.peerHome",
+      "remote.peerHost",
+      "remote.autoLink",
       "session.color",
       "session.priority"
     ]);
@@ -96,7 +103,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(18);
+    expect(allConfigKeys().length).toBe(21);
   });
 
   test("coerces values through registry validators", () => {

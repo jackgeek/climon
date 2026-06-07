@@ -5,11 +5,9 @@ import { readFile, rm, stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
-import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import {
   ensureClimonHome,
-  getClimonHome,
   getSessionsDir,
   loadConfig,
   saveConfig
@@ -43,6 +41,12 @@ import { resolveSessionDefaults } from "../launcher.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
 import { canBindTcpPort, chooseAvailablePort, isAddressInUse, PORT_RETRY_ATTEMPTS } from "../port-choice.js";
+import {
+  getServerStatePath,
+  readServerState,
+  serializeServerState,
+  type ServerState
+} from "../server-state.js";
 
 interface StartServerOptions {
   port?: number;
@@ -77,48 +81,6 @@ interface ExistingDashboardServer {
 }
 
 type ServerConflictAction = "continue" | "exit";
-
-/**
- * Single state file for the running dashboard server: `{ pid, port }`. Keeping
- * the pid and bound port in one atomically-written file guarantees they can
- * never skew (a stale pid paired with a fresh port, or vice versa). The port is
- * recorded because it can differ from the configured one after an automatic
- * bump; other processes read this to discover the live server.
- */
-export function getServerStatePath(env: NodeJS.ProcessEnv = process.env): string {
-  return join(getClimonHome(env), "server.json");
-}
-
-export interface ServerState {
-  /** PID of the running dashboard server process. */
-  pid: number;
-  /** TCP port the dashboard server bound to. */
-  port: number;
-}
-
-/**
- * Reads the dashboard server state file. Returns undefined when the file is
- * absent, unreadable, malformed, or missing a valid pid/port.
- */
-export async function readServerState(
-  env: NodeJS.ProcessEnv = process.env
-): Promise<ServerState | undefined> {
-  let raw: string;
-  try {
-    raw = await readFile(getServerStatePath(env), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  try {
-    const parsed = JSON.parse(raw) as Partial<ServerState>;
-    const pidOk = typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0;
-    const portOk = typeof parsed.port === "number" && Number.isInteger(parsed.port) && parsed.port > 0;
-    return pidOk && portOk ? { pid: parsed.pid as number, port: parsed.port as number } : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 function dashboardUrl(host: string, port: number): string {
   return `http://${host}:${port}/`;
@@ -1328,10 +1290,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   }
 
   startupLog("Bun.serve started; writing server state file");
-  await atomicWrite(
-    getServerStatePath(),
-    `${JSON.stringify({ pid: process.pid, port: dashboardPort.port })}\n`
-  );
+  const recordedPorts = await collectServerPorts();
+  const serverState: ServerState = { pid: process.pid, port: dashboardPort.port };
+  if (recordedPorts.ingest !== undefined) serverState.ingest = recordedPorts.ingest;
+  await atomicWrite(getServerStatePath(), serializeServerState(serverState));
   startupLog("state file written; advertising URL");
   printStartup(config, dashboardPort.port);
 

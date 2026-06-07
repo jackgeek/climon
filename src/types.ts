@@ -74,6 +74,12 @@ export interface RemoteConfig {
   port?: number;
   /** Stable, non-secret client namespace; auto-generated once on the devbox. */
   clientId?: string;
+  /** CLIMON_HOME of the peer OS (e.g. Windows path from WSL) for same-machine discovery. */
+  peerHome?: string;
+  /** Optional host override used when connecting to a discovered peer dashboard. */
+  peerHost?: string;
+  /** Whether to lazily auto-link to a peer dashboard on first run (default true). */
+  autoLink?: boolean;
 }
 
 export interface SessionDefaultsConfig {

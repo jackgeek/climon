@@ -172,10 +172,54 @@ Revoke a devbox by deleting or rotating the dev tunnel (or its connect token).
 
 ## Connecting Windows and WSL on the same machine
 
-Windows and WSL can use the same remote ingest/uplink bridge without a dev
-tunnel. Configure the dashboard side to bind its ingest daemon on an address the
-other side can reach, then configure the session side to connect directly to
-that address:
+Windows and WSL each keep their own `CLIMON_HOME`, but the two filesystems are
+mutually visible, so climon discovers a dashboard running on the other OS by
+reading its `server.json` beacon — no dev tunnel required.
+
+### Quick setup (recommended)
+
+1. On **Windows**, install climon and start the dashboard: `climon server`.
+2. In **WSL**, just run climon normally — e.g. `climon copilot`. On the first run
+   it detects the Windows climon, announces that it is auto-linking (and how to
+   disable it), and configures discovery in **both** directions. Your WSL
+   sessions then appear on the Windows dashboard automatically.
+
+The auto-link prints how to opt out before it writes anything:
+
+```text
+climon: detected a Windows climon at /mnt/c/Users/<you>/.climon; attempting to auto-link…
+climon: to prevent this, run: climon config remote.autoLink false
+climon: auto-link successful — WSL<->Windows discovery configured on both sides.
+```
+
+To link manually (or to re-link), run `climon link`:
+
+```bash
+climon link                                   # auto-detect the Windows CLIMON_HOME
+climon link --peer-home /mnt/c/Users/<you>/.climon   # or specify it explicitly
+```
+
+`climon link` writes `remote.peerHome` on the WSL side and the reverse pointer
+(`\\wsl.localhost\<distro>\home\<you>\.climon`) into the Windows config, so both
+`WSL -> Windows` and `Windows -> WSL` discovery work from one command.
+
+How discovery resolves a dashboard, for any `climon` invocation:
+
+1. The local `CLIMON_HOME/server.json` (validated by process liveness) — a
+   dashboard on this OS.
+2. Otherwise the peer's `server.json` at `remote.peerHome`, validated by an HTTP
+   `/health` probe. The dashboard and ingest **ports are read live from the
+   beacon/health response**, so an automatic port bump on a collision is handled
+   transparently.
+
+The reachable host is auto-detected (`localhost`, or the WSL gateway IP under
+NAT networking). Override it with `climon config remote.peerHost <host>` if
+needed.
+
+### Manual bridge (advanced)
+
+If you prefer to wire the ingest/uplink bridge by hand (for example to bind the
+ingest daemon to a specific non-loopback address), configure it directly:
 
 ```bash
 # Dashboard side: choose an address reachable from the other side.
@@ -250,6 +294,9 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `remote.tunnelToken` | string | unset | client | Stores the dev tunnel connect token scoped to this tunnel. Supplied via DEVTUNNEL_ACCESS_TOKEN environment variable. (**sensitive**) |
 | `remote.port` | number | unset | client | Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set. |
 | `remote.clientId` | string | unset | client | Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client. (**internal**) |
+| `remote.peerHome` | string | unset | client | Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\wsl.localhost\<distro>\home\<you>\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`. |
+| `remote.peerHost` | string | unset | client | Optional host override used to reach the peer dashboard/ingest. Leave unset to auto-detect (localhost, or the WSL gateway IP under NAT networking). |
+| `remote.autoLink` | boolean | `true` | client | When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking. |
 | `session.color` | string | `auto` | client, daemon, server | Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment. |
 | `session.priority` | number | `500` | client, daemon, server | Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group. |
 <!-- END GENERATED CONFIG SETTINGS -->

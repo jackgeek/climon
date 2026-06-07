@@ -141,7 +141,7 @@ and asset serving live in `src/server/assets.ts`.
 | Path | Purpose |
 |------|---------|
 | `config.json` | server host/port/lan/token, terminal clamp option |
-| `server.json` | running dashboard server state: `{ pid, port }` (discovery/stop) |
+| `server.json` | running dashboard server state: `{ pid, port, ingest? }` (discovery/stop; read by a peer OS for WSL<->Windows discovery) |
 | `sessions/<id>.json` | session metadata |
 | `sessions/<id>.scrollback` | final captured output |
 | `sessions/<id>.log` | daemon stdout/stderr (diagnostics) |
@@ -188,3 +188,22 @@ WS ⇄ unix socket bridge) then works unchanged — it cannot tell local and rem
 sessions apart except for the origin tag. Attach is on demand: a browser
 connecting to the local socket triggers an `attach` control to the devbox, which
 connects to the real daemon socket (replaying scrollback) and bridges bytes back.
+
+## Same-machine WSL <-> Windows discovery (`src/remote/peer.ts`, `discovery.ts`, `link.ts`)
+
+WSL and Windows each keep their own `CLIMON_HOME`, but the filesystems are
+mutually visible (`/mnt/c/...` and `\\wsl.localhost\<distro>\...`). `climon link`
+(or a lazy auto-link on the first WSL run) records the peer OS's `CLIMON_HOME` in
+`remote.peerHome` on both sides. The auto-link only fires from WSL, only when a
+Windows climon is detected, and is suppressed by `remote.autoLink false`.
+
+`discoverDashboard` resolves a dashboard by reading `server.json`: the local one
+first (validated by PID liveness), then the peer's (validated by an HTTP
+`/health` probe — never by PID, since a peer-OS PID is meaningless and could
+collide). The dashboard and ingest ports always come from the live
+beacon/health response, so a collision-bumped port is handled transparently. The
+reachable host is auto-detected (`localhost`, or the WSL default-route gateway IP
+under NAT networking) and overridable via `remote.peerHost`. When a peer
+dashboard is found, the local session's uplink is auto-wired to the peer's
+ingest port — reusing the same mux bridge as the dev-tunnel path, just over a
+loopback/host-IP TCP connection instead of a tunnel.

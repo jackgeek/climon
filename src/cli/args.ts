@@ -13,6 +13,7 @@ export type ParsedCommand =
   | { command: "kill-all" }
   | { command: "run"; argv: string[]; headless: boolean; priority?: number; color?: SessionColorMode | null; name?: string }
   | { command: "config"; argv: string[] }
+  | { command: "link"; argv: string[] }
   | { command: "uplink" }
   | { command: "ingest" };
 
@@ -30,6 +31,7 @@ Usage:
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order
   climon config --purge         Prompt to delete config files in resolution order
+  climon link [--peer-home P]   Link WSL<->Windows dashboard discovery
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
   climon kill --all            Kill or remove all active sessions
@@ -164,6 +166,8 @@ export function parseArgs(argv: string[]): ParsedCommand {
     }
     case "config":
       return { command: "config", argv: rest };
+    case "link":
+      return { command: "link", argv: rest };
     case "__uplink":
       return { command: "uplink" };
     case "__ingest":

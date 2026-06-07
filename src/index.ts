@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { helpText, parseArgs } from "./cli/args.js";
 import { runConfigCommand } from "./cli/config-cmd.js";
+import { runLinkCommand } from "./cli/link-cmd.js";
 import { delegateToServer } from "./cli/server-exec.js";
 import { runUplink } from "./remote/uplink.js";
 import { runSessionDaemon } from "./daemon/daemon.js";
@@ -64,6 +65,8 @@ async function main(): Promise<number> {
       });
     case "config":
       return runConfigCommand(parsed.argv);
+    case "link":
+      return runLinkCommand(parsed.argv);
     case "uplink":
       return await runUplink();
     default:
