@@ -56,11 +56,38 @@ OS's `CLIMON_HOME` in `remote.peerHome`, and discovery reads the peer's
 `remote.peerHome` is only ever **read**, and only the small `server.json` beacon
 is parsed: pid/port/ingest are strictly validated as positive integers and no
 path from the peer is used to load or execute code. Liveness of a peer beacon is
-proven by an HTTP `/health` probe, never by trusting its (cross-namespace) PID.
+proven by a TCP probe of the peer ingest's published port, never by trusting its
+(cross-namespace) PID.
 The same loopback/firewall guidance above applies, since the auto-wired uplink
 still terminates at the dashboard side's ingest port. Auto-link only acts from
 WSL, only when a Windows climon is already present, and can be disabled with
 `remote.autoLink false`.
+
+### Same-machine handoff control channel (filesystem)
+
+Switching the dashboard host between WSL and Windows is coordinated entirely over
+the shared filesystem — there is **no** network shutdown channel and **no** token.
+To displace a peer host, the promoting OS writes a `shutdown-request.json`
+(`{requestedBy,ts}`) into the peer's `CLIMON_HOME` over the mount. The peer's
+durable ingest watches its own home and demotes on the next well-formed request.
+
+- **Authorized by the filesystem, not a token.** Writing the request already
+  requires same-user write access to the peer's home — that IS the authorization. A
+  token read from one same-user file (`ingest.json`) and copied into another adds
+  nothing the filesystem permissions don't already enforce, so PR #65's CSPRNG
+  `shutdownToken` is removed from both beacons.
+- **Replay-safe without a token:** the ingest clears any request present at startup
+  (it cannot be for this fresh instance) and consumes a request immediately after
+  acting, so a stale or leftover request cannot demote a later instance. The request
+  is length-bounded and allow-listed (`requestedBy ∈ {WSL, Windows}`, positive `ts`);
+  malformed or oversized files are ignored.
+- Removing PR #65's network shutdown channels (`DELETE /api/server` and the mux
+  `control:{op:"shutdown"}` frame) **shrinks** the surface: nothing privileged
+  travels over HTTP or the mux, all privileged dashboard APIs are loopback-gated with
+  no exemptions, and the mux accepts only `hello`-gated data frames.
+- **Data-plane exposure:** when Windows hosts, the ingest binds the host-only
+  `vEthernet (WSL)` adapter — reachable from the WSL VM and the Windows host, not
+  the LAN. When WSL hosts, the ingest binds loopback only.
 
 ## Secrets at rest
 

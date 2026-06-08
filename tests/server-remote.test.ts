@@ -420,4 +420,52 @@ describe("stopIngestDaemon", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("escalates to a forced kill when the graceful stop cannot be issued (Windows console process)", async () => {
+    const testTmp = join(process.cwd(), ".copilot-tmp");
+    mkdirSync(testTmp, { recursive: true });
+    const home = mkdtempSync(join(testTmp, "climon-server-remote-"));
+    try {
+      const env = { CLIMON_HOME: home };
+      writeFileSync(getIngestPidPath(env), "1234\n");
+      const kills: Array<[number, boolean]> = [];
+      let alive = true;
+      const stopIngestDaemon = (
+        serverModule as typeof serverModule & {
+          stopIngestDaemon?: (options: {
+            env: NodeJS.ProcessEnv;
+            killProcess: (pid: number, force: boolean) => boolean;
+            isProcessAlive: (pid: number) => boolean;
+            graceMs?: number;
+            pollMs?: number;
+          }) => Promise<boolean>;
+        }
+      ).stopIngestDaemon;
+
+      const stopped = await stopIngestDaemon?.({
+        env,
+        // Mirrors Windows `taskkill` without /F on a windowless console
+        // process: the graceful kill reports failure, but the forced kill works.
+        killProcess: (pid, force) => {
+          kills.push([pid, force]);
+          if (!force) return false;
+          alive = false;
+          return true;
+        },
+        isProcessAlive: () => alive,
+        graceMs: 1000,
+        pollMs: 1
+      });
+
+      expect(stopped).toBe(true);
+      // The graceful attempt is made and reported failed, then escalated to
+      // force WITHOUT waiting out the full grace window.
+      expect(kills).toEqual([
+        [1234, false],
+        [1234, true]
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

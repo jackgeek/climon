@@ -1,6 +1,6 @@
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
-import { watch, type FSWatcher } from "node:fs";
+import { rmSync, watch, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
@@ -12,6 +12,16 @@ import { acquireSingleton } from "./singleton.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { cleanupSessionSocket, formatSessionSocketRef, listenOnSessionSocket } from "../session-socket.js";
 import { canBindTcpPort, chooseAvailablePort } from "../port-choice.js";
+import { DEFAULT_INGEST_PORT } from "./ingest-port.js";
+import { getIngestStatePath, writeIngestState } from "./ingest-state.js";
+import type { IngestState } from "./ingest-state.js";
+import { demote } from "./demotion.js";
+import { spawnUplinkDetached } from "./uplink-spawn.js";
+import { resolveIngestBindHost } from "./ingest-bind-host.js";
+import { createShutdownRequestWatcher, type ShutdownRequestWatcher } from "./shutdown-watch.js";
+import { getShutdownRequestPath } from "./shutdown-request.js";
+import { getServerStatePath, readServerState } from "../server-state.js";
+import { isProcessAlive, killProcess } from "../process-kill.js";
 
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
@@ -332,9 +342,40 @@ export function getIngestPidPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(getClimonHome(env), "ingest.pid");
 }
 
-/** Default loopback port the ingest daemon listens on. */
-export const DEFAULT_INGEST_PORT = 3132;
-const INGEST_PORT_RETRY_ATTEMPTS = 20;
+export { DEFAULT_INGEST_PORT } from "./ingest-port.js";
+const INGEST_PORT_RETRY_ATTEMPTS = 100;
+
+/** Resolves the configured port-shift retry count, falling back to the default. */
+export function resolveIngestRetryAttempts(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = resolveConfigSetting("remote.ingestPortRetryAttempts", env);
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1) return raw;
+  return INGEST_PORT_RETRY_ATTEMPTS;
+}
+
+/**
+ * The interface this OS's ingest should bind, sharing one formula with the
+ * daemon: an explicit `remote.ingestHost` override, then the devtunnel
+ * `remote-host.json` host (cross-machine path, unchanged), then the same-machine
+ * `resolveIngestBindHost` (WSL→loopback / Windows→vEthernet / loopback).
+ */
+export async function resolveIngestBindAddress(
+  env: NodeJS.ProcessEnv = process.env,
+  state?: RemoteHostState
+): Promise<string> {
+  const s = state ?? (await readRemoteHostState(env));
+  const configIngestHost = asString(resolveConfigSetting("remote.ingestHost", env));
+  return configIngestHost ?? s?.ingestHost ?? resolveIngestBindHost(env, { configuredHost: () => undefined });
+}
+
+/**
+ * True when a live ingest must be recycled: it never published a beacon (the
+ * pre-feature singleton / migration bug) or it bound an interface that differs
+ * from what this OS should bind now (e.g. a changed vEthernet IP).
+ */
+export function ingestNeedsRecycle(beacon: IngestState | undefined, expectedHost: string): boolean {
+  if (!beacon || !beacon.host) return true;
+  return beacon.host !== expectedHost;
+}
 
 function asString(v: unknown): string | undefined {
   return typeof v === "string" && v.length > 0 ? v : undefined;
@@ -370,27 +411,28 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
 
   const state = await readRemoteHostState(env);
   const port = state?.ingestPort ?? asNumber(resolveConfigSetting("remote.port", env)) ?? DEFAULT_INGEST_PORT;
-  const host = asString(resolveConfigSetting("remote.ingestHost", env)) ?? state?.ingestHost ?? "127.0.0.1";
+  const host = await resolveIngestBindAddress(env, state);
   const ingestPort = await chooseAvailablePort(port, {
-    maxAttempts: INGEST_PORT_RETRY_ATTEMPTS,
+    maxAttempts: resolveIngestRetryAttempts(env),
     canBind: (candidate) => canBindTcpPort(host, candidate)
   });
   if (ingestPort.changed && !state) {
     writeConfigSetting("remote.port", String(ingestPort.port), "global", env);
   }
 
-  const server = createNetServer((socket) => {
-    void runIngestConnection(socket, { env });
-  });
+  // The handler is assigned after demoteAndExit is defined; the net server must
+  // exist first so both the handler and demotion can close over it.
+  let onConnection: (socket: Socket) => void = () => {};
+  const server = createNetServer((socket) => onConnection(socket));
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(ingestPort.port, host, resolve);
   });
 
   const supervisor = new TunnelHostSupervisor({ env });
-  await supervisor.reconcile();
 
   let watcher: FSWatcher | undefined;
+  let requestWatcher: ShutdownRequestWatcher | undefined;
   try {
     watcher = watch(getClimonHome(env), (_event, filename) => {
       if (!filename || String(filename) === "remote-host.json") void supervisor.reconcile();
@@ -400,13 +442,133 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   }
   const poll = setInterval(() => void supervisor.reconcile(), 5000);
 
+  const removeBeacons = (): void => {
+    rmSync(getIngestStatePath(env), { force: true });
+    rmSync(getIngestPidPath(env), { force: true });
+    rmSync(getShutdownRequestPath(env), { force: true });
+    // Also remove server.json: on Windows, taskkill may not deliver a signal
+    // that lets the server's handler clean up, so the demotion coordinator
+    // (this ingest) takes responsibility for full beacon removal.
+    rmSync(getServerStatePath(env), { force: true });
+  };
+
+  // Plain stop (SIGTERM/SIGINT): leave nothing behind.
   const shutdown = (): void => {
     clearInterval(poll);
     watcher?.close();
+    requestWatcher?.stop();
     supervisor.stop();
     server.close();
+    removeBeacons();
     process.exit(0);
   };
+
+  // Demotion (token-gated shutdown control frame): spawn an uplink so this OS's
+  // sessions migrate to the new host, then free the listener and beacons.
+  let demoting = false;
+  const demoteAndExit = async (): Promise<void> => {
+    if (demoting) return;
+    demoting = true;
+    clearInterval(poll);
+    watcher?.close();
+    requestWatcher?.stop();
+    supervisor.stop();
+    // Diagnostic debug log (temporary — same file as the watcher uses)
+    const { appendFileSync } = await import("node:fs");
+    const debugLogPath = join(getClimonHome(env), "shutdown-watcher-debug.log");
+    const dlog = (msg: string): void => {
+      try { appendFileSync(debugLogPath, `[${new Date().toISOString()}] DEMOTE: ${msg}\n`); } catch {}
+    };
+    dlog("demoteAndExit starting");
+    try {
+      await demote({
+        spawnUplink: () => {
+          dlog("spawnUplink starting");
+          spawnUplinkDetached(env);
+          dlog("spawnUplink done");
+        },
+        stopLocalServer: async () => {
+          dlog("stopLocalServer starting");
+          const local = await readServerState(env);
+          if (!local || !isProcessAlive(local.pid)) {
+            dlog("stopLocalServer: server not alive, skipping");
+            return;
+          }
+          // Try graceful shutdown via HTTP first (works cross-platform).
+          // The server's /__internal/shutdown endpoint triggers plainShutdown
+          // which exits 0 cleanly.
+          try {
+            dlog(`stopLocalServer: requesting graceful shutdown via HTTP (port ${local.port})`);
+            await fetch(`http://127.0.0.1:${local.port}/__internal/shutdown`, {
+              method: "POST",
+              signal: AbortSignal.timeout(1000),
+            }).catch(() => {/* response may be dropped as server shuts down */});
+            // Wait up to 2s for the server to exit
+            for (let i = 0; i < 40; i++) {
+              await new Promise((r) => setTimeout(r, 50));
+              if (!isProcessAlive(local.pid)) {
+                dlog("stopLocalServer: server exited gracefully");
+                return;
+              }
+            }
+            dlog("stopLocalServer: server did not exit after HTTP shutdown");
+          } catch (e) {
+            dlog(`stopLocalServer: HTTP shutdown failed: ${(e as Error).message}`);
+          }
+          // Fallback: force-kill
+          dlog(`stopLocalServer: force-killing pid ${local.pid}`);
+          // tree: false — the ingest is a child of the server on Windows (even
+          // though detached), so taskkill /T would kill us too.
+          killProcess(local.pid, true, process.platform, undefined, false);
+          // Wait briefly for the kill to take effect
+          for (let i = 0; i < 10; i++) {
+            await new Promise((r) => setTimeout(r, 50));
+            if (!isProcessAlive(local.pid)) break;
+          }
+          dlog("stopLocalServer done");
+        },
+        closeListener: () => new Promise<void>((resolve) => {
+          dlog("closeListener: closing server");
+          // server.close() immediately closes the listening socket (frees the
+          // port) and stops accepting new connections.  The callback fires when
+          // all existing connections end, but we resolve immediately because we
+          // only need the listen fd released so spawned children won't inherit it.
+          server.close(() => {/* drain complete */});
+          // Give the event loop one tick to process the close
+          setImmediate(resolve);
+        }),
+        removeBeacons: async () => {
+          dlog("removeBeacons starting");
+          removeBeacons();
+          dlog("removeBeacons done");
+        }
+      });
+      dlog("demote() completed successfully");
+    } catch (err: unknown) {
+      dlog(`demote() threw: ${(err as Error).message}`);
+      // Even if uplink spawn or listener close fails, exit so process death
+      // releases the contested port rather than leaving a half-demoted daemon.
+    }
+    dlog("calling process.exit(0)");
+    process.exit(0);
+  };
+
+  // Wire the real connection handler BEFORE publishing the beacon, with no
+  // awaits since listen(), so no inbound connection can hit the no-op
+  // placeholder once the bound port is advertised via ingest.json.
+  onConnection = (socket) => void runIngestConnection(socket, { env });
+
+  await supervisor.reconcile();
+  // Start the request watcher BEFORE publishing the beacon. The watcher clears
+  // any stale request on start; doing this before ingest.json exists guarantees
+  // a peer cannot have written a fresh request yet, so the start-clear can never
+  // drop a legitimate request meant for this instance.
+  requestWatcher = createShutdownRequestWatcher({
+    dir: getClimonHome(env),
+    onValid: () => void demoteAndExit()
+  });
+  await writeIngestState({ pid: process.pid, port: ingestPort.port, host }, env);
+
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 

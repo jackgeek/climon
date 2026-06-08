@@ -207,10 +207,11 @@ How discovery resolves a dashboard, for any `climon` invocation:
 
 1. The local `CLIMON_HOME/server.json` (validated by process liveness) — a
    dashboard on this OS.
-2. Otherwise the peer's `server.json` at `remote.peerHome`, validated by an HTTP
-   `/health` probe. The dashboard and ingest **ports are read live from the
-   beacon/health response**, so an automatic port bump on a collision is handled
-   transparently.
+2. Otherwise the peer at `remote.peerHome`, validated by reading its `ingest.json`
+   beacon and TCP-probing the published ingest host (the dashboard `/health` is
+   not used — under default WSL2 NAT a Windows-hosted dashboard binds loopback and
+   is unreachable from WSL). The dashboard and ingest **ports are read live from the
+   beacons**, so an automatic port bump on a collision is handled transparently.
 
 The reachable host is auto-detected (`localhost`, or the WSL gateway IP under
 NAT networking). Override it with `climon config remote.peerHost <host>` if
@@ -293,9 +294,10 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `remote.dashboardTunnelCluster` | string | unset | server | Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions. (**internal**) |
 | `remote.tunnelToken` | string | unset | client | Stores the dev tunnel connect token scoped to this tunnel. Supplied via DEVTUNNEL_ACCESS_TOKEN environment variable. (**sensitive**) |
 | `remote.port` | number | unset | client | Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set. |
+| `remote.ingestPortRetryAttempts` | number | `100` | server | How many consecutive ports the ingest daemon will try, starting at its preferred port, before giving up. Raise it if many ports near the default are already in use. |
 | `remote.clientId` | string | unset | client | Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client. (**internal**) |
-| `remote.peerHome` | string | unset | client | Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\wsl.localhost\<distro>\home\<you>\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`. |
-| `remote.peerHost` | string | unset | client | Optional host override used to reach the peer dashboard/ingest. Leave unset to auto-detect (localhost, or the WSL gateway IP under NAT networking). |
+| `remote.peerHome` | string | unset | client, server | Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\wsl.localhost\<distro>\home\<you>\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`. |
+| `remote.peerHost` | string | unset | client, server | Optional host override used to reach the peer dashboard/ingest. Leave unset to auto-detect (localhost, or the WSL gateway IP under NAT networking). |
 | `remote.autoLink` | boolean | `true` | client | When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking. |
 | `session.color` | string | `auto` | client, daemon, server | Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment. |
 | `session.priority` | number | `500` | client, daemon, server | Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group. |

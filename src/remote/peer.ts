@@ -120,3 +120,11 @@ export function peerHostCandidates(env: NodeJS.ProcessEnv = process.env): string
   }
   return candidates;
 }
+
+/**
+ * Human label for the peer OS, used in `climon cleanup` guidance. When this
+ * process runs on Windows the peer is WSL, and vice versa.
+ */
+export function peerOsLabel(_env: NodeJS.ProcessEnv = process.env): string {
+  return process.platform === "win32" ? "WSL" : "Windows";
+}

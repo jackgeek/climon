@@ -139,6 +139,18 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "remote.ingestPortRetryAttempts",
+    type: "number",
+    defaultValue: 100,
+    purpose: "How many consecutive ports the ingest daemon will try, starting at its preferred port, before giving up. Raise it if many ports near the default are already in use.",
+    scope: ["server"],
+    validate: (value: unknown) => {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+        throw new Error("remote.ingestPortRetryAttempts must be a positive integer (>= 1)");
+      }
+    }
+  },
+  {
     path: "remote.clientId",
     type: "string",
     purpose: "Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client.",
@@ -149,14 +161,14 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "remote.peerHome",
     type: "string",
     purpose: "Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\\\wsl.localhost\\<distro>\\home\\<you>\\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`.",
-    scope: ["client"],
+    scope: ["client", "server"],
     acceptInput: true
   },
   {
     path: "remote.peerHost",
     type: "string",
     purpose: "Optional host override used to reach the peer dashboard/ingest. Leave unset to auto-detect (localhost, or the WSL gateway IP under NAT networking).",
-    scope: ["client"],
+    scope: ["client", "server"],
     acceptInput: true
   },
   {

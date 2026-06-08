@@ -15,6 +15,7 @@ export type ParsedCommand =
   | { command: "config"; argv: string[] }
   | { command: "link"; argv: string[] }
   | { command: "uplink" }
+  | { command: "cleanup" }
   | { command: "ingest" };
 
 export const helpText = `climon v${VERSION} — web-based monitor for interactive CLI sessions
@@ -31,6 +32,7 @@ Usage:
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order
   climon config --purge         Prompt to delete config files in resolution order
+  climon cleanup                Stop this machine's dashboard, ingest, and uplink
   climon link [--peer-home P]   Link WSL<->Windows dashboard discovery
   climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
@@ -166,6 +168,8 @@ export function parseArgs(argv: string[]): ParsedCommand {
     }
     case "config":
       return { command: "config", argv: rest };
+    case "cleanup":
+      return { command: "cleanup" };
     case "link":
       return { command: "link", argv: rest };
     case "__uplink":

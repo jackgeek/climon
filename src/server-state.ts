@@ -26,7 +26,7 @@ export function getServerStatePath(env: NodeJS.ProcessEnv = process.env): string
   return join(getClimonHome(env), SERVER_STATE_BASENAME);
 }
 
-function parseServerState(raw: string): ServerState | undefined {
+export function parseServerState(raw: string): ServerState | undefined {
   let parsed: Partial<ServerState>;
   try {
     parsed = JSON.parse(raw) as Partial<ServerState>;

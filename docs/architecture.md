@@ -197,13 +197,46 @@ mutually visible (`/mnt/c/...` and `\\wsl.localhost\<distro>\...`). `climon link
 `remote.peerHome` on both sides. The auto-link only fires from WSL, only when a
 Windows climon is detected, and is suppressed by `remote.autoLink false`.
 
-`discoverDashboard` resolves a dashboard by reading `server.json`: the local one
-first (validated by PID liveness), then the peer's (validated by an HTTP
-`/health` probe — never by PID, since a peer-OS PID is meaningless and could
-collide). The dashboard and ingest ports always come from the live
-beacon/health response, so a collision-bumped port is handled transparently. The
-reachable host is auto-detected (`localhost`, or the WSL default-route gateway IP
-under NAT networking) and overridable via `remote.peerHost`. When a peer
-dashboard is found, the local session's uplink is auto-wired to the peer's
-ingest port — reusing the same mux bridge as the dev-tunnel path, just over a
-loopback/host-IP TCP connection instead of a tunnel.
+`discoverDashboard` resolves a dashboard by reading beacons: the local
+`server.json` first (validated by PID liveness), then the peer's by reading its
+`ingest.json` and TCP-probing the published ingest host (never the dashboard
+`/health` — under default WSL2 NAT a Windows-hosted dashboard binds loopback and
+is unreachable from WSL, whereas the ingest is bound to a peer-reachable, published
+interface). Ports come from the live beacons, so a collision-bumped port is handled
+transparently. The reachable host is the published ingest host, then the
+auto-detected candidates (`localhost`, or the WSL default-route gateway IP under
+NAT) overridable via `remote.peerHost`. When a peer is found, the local session's
+uplink is auto-wired to the peer's ingest port — reusing the same mux bridge as the
+dev-tunnel path, just over a loopback/host-IP TCP connection instead of a tunnel.
+
+### Cross-OS dashboard handoff (WSL ⇄ Windows)
+
+A machine with `remote.peerHome` set is, at any moment, either **host** (runs the
+dashboard server + ingest) or **client** (runs an uplink to the host). Switching
+OS moves the host role:
+
+- **Bind/publish**: the host's ingest binds a peer-reachable interface via
+  `resolveIngestBindHost` (loopback when WSL hosts; the `vEthernet (WSL)` IPv4 when
+  Windows hosts) and publishes it as `host` in `ingest.json`, so the client OS and
+  promote read the live address instead of a hardcoded one.
+- **Promote** (`bun run server`): reads the peer's `server.json` and `ingest.json`,
+  then displaces the peer host entirely over the shared filesystem — it TCP-probes
+  the peer ingest and, if it is listening, writes a token-free
+  `shutdown-request.json` into the peer's `CLIMON_HOME`. It proceeds when the peer
+  is gone (clearing stale beacons) and aborts (advising `climon cleanup`) rather
+  than running a second ingest past a live, un-clearable peer. The network carries
+  only the data plane.
+- **Demote**: the peer's durable **ingest** watches its own home (`fs.watch` + ~1s
+  poll); on a well-formed request it spawns an uplink toward the new host, stops the
+  co-located dashboard server, frees the ingest port, removes its beacons (and the
+  consumed request), and exits. The ingest is the single demotion anchor, so a
+  handoff works even when the peer's dashboard server has already been `Ctrl-C`'d.
+
+Two server shutdown modes: **plain** (Ctrl-C) leaves the ingest running when a
+peer is configured (so a same-OS restart reuses it and the cross-OS handoff has
+a surviving anchor); **handoff** demotion is driven by the ingest itself when it
+observes a `shutdown-request.json` in its home — it stops the co-located server,
+spawns an uplink toward the new host, frees its listener, and exits. The
+**ingest** is the durable control anchor: it owns `ingest.json`
+(`{pid,port,host}`) and survives both a server Ctrl-C and a crash. Every
+consumer reads the bound ingest port from `ingest.json` via `resolveIngestPort`.

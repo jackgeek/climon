@@ -30,6 +30,7 @@ describe("config settings registry", () => {
       "remote.dashboardTunnelCluster",
       "remote.tunnelToken",
       "remote.port",
+      "remote.ingestPortRetryAttempts",
       "remote.clientId",
       "remote.peerHome",
       "remote.peerHost",
@@ -59,7 +60,7 @@ describe("config settings registry", () => {
         setTitle: true
       },
       attention: { idleSeconds: 10 },
-      remote: { autoLink: true },
+      remote: { ingestPortRetryAttempts: 100, autoLink: true },
       session: { color: "auto", priority: 500 }
     });
   });
@@ -103,7 +104,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(21);
+    expect(allConfigKeys().length).toBe(22);
   });
 
   test("coerces values through registry validators", () => {
@@ -158,5 +159,20 @@ describe("config settings registry", () => {
     } finally {
       CONFIG_SETTINGS.pop();
     }
+  });
+
+  test("remote.ingestPortRetryAttempts defaults to 100 and is server-scoped", () => {
+    const setting = findConfigSetting("remote.ingestPortRetryAttempts");
+    expect(setting).toBeDefined();
+    expect(setting?.type).toBe("number");
+    expect(setting?.defaultValue).toBe(100);
+    expect(setting?.scope).toEqual(["server"]);
+  });
+
+  test("remote.ingestPortRetryAttempts rejects non-integers and values below 1", () => {
+    expect(() => coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "0")).toThrow();
+    expect(() => coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "-5")).toThrow();
+    expect(() => coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "1.5")).toThrow();
+    expect(coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "100")).toBe(100);
   });
 });

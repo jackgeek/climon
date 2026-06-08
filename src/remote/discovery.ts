@@ -1,71 +1,63 @@
+import { connect } from "node:net";
 import { resolveConfigSetting } from "../config.js";
 import { isProcessAlive } from "../process-kill.js";
 import { readServerState, readServerStateFromDir } from "../server-state.js";
+import { readIngestStateFromDir, resolveIngestPort } from "./ingest-state.js";
 import { peerHostCandidates } from "./peer.js";
 
 export interface DashboardTarget {
   /** Whether the dashboard runs on this machine's CLIMON_HOME or the peer's. */
   location: "local" | "peer";
-  /** Reachable host for both the dashboard HTTP server and ingest listener. */
+  /** Reachable host for the ingest (and, locally, the dashboard HTTP server). */
   host: string;
-  /** Dashboard HTTP port. */
+  /** Dashboard HTTP port (from the peer server.json; may be loopback-only cross-OS). */
   port: number;
-  /** Live ingest port for the uplink, when remotes are running on the dashboard side. */
+  /** Live ingest port for the uplink. */
   ingest?: number;
-  /** Dashboard URL to open in a browser. */
+  /** Dashboard URL to open in a browser (reachable for a local host). */
   url: string;
 }
 
-const HEALTH_TIMEOUT_MS = 1500;
-
-interface HealthPorts {
-  dashboard?: number;
-  ingest?: number;
-}
-
-async function probeHealth(
-  host: string,
-  port: number,
-  fetchFn: typeof fetch
-): Promise<HealthPorts | undefined> {
-  try {
-    const res = await fetchFn(`http://${host}:${port}/health`, {
-      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS)
-    });
-    if (!res.ok) return undefined;
-    const body = (await res.json()) as { ok?: unknown; ports?: HealthPorts };
-    if (body.ok !== true) return undefined;
-    return body.ports ?? {};
-  } catch {
-    return undefined;
-  }
-}
+const PROBE_TIMEOUT_MS = 1500;
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** Raw TCP liveness probe of the peer ingest (it speaks binary mux). */
+function probeTcpDefault(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host, port });
+    const done = (result: boolean): void => {
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.setTimeout(PROBE_TIMEOUT_MS, () => done(false));
+  });
 }
 
 /**
  * Discovers a running dashboard for `climon` to connect/uplink to.
  *
  * Order:
- *  1. Local CLIMON_HOME `server.json`, validated by PID liveness (same OS, cheap
- *     and trustworthy).
- *  2. Peer CLIMON_HOME `server.json` (`remote.peerHome`), validated by an HTTP
- *     `/health` probe — never by PID, because a peer-OS PID is meaningless here
- *     and could collide. The probe also self-heals a stale peer beacon and
- *     yields the live ingest port.
+ *  1. Local CLIMON_HOME `server.json`, validated by PID liveness (same OS).
+ *  2. Peer CLIMON_HOME (`remote.peerHome`), validated by the peer `ingest.json`
+ *     beacon plus a direct TCP probe of its PUBLISHED host (then the candidate
+ *     list). The dashboard `/health` is never probed: under default WSL2 NAT a
+ *     Windows-hosted dashboard binds loopback and is unreachable from WSL, while
+ *     the ingest is bound to a peer-reachable interface and published.
  *
- * The dashboard port (and ingest port) always come from the live beacon/health
- * response, so an automatic port bump on collision is handled transparently.
+ * Ports come from the live beacons, so an automatic port bump is handled.
  */
 export async function discoverDashboard(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
-  deps: { fetchFn?: typeof fetch; isAlive?: (pid: number) => boolean } = {}
+  deps: { probeTcp?: (host: string, port: number) => Promise<boolean>; isAlive?: (pid: number) => boolean } = {}
 ): Promise<DashboardTarget | undefined> {
-  const fetchFn = deps.fetchFn ?? fetch;
   const isAlive = deps.isAlive ?? isProcessAlive;
+  const probeTcp = deps.probeTcp ?? probeTcpDefault;
 
   const local = await readServerState(env);
   if (local && isAlive(local.pid)) {
@@ -73,27 +65,33 @@ export async function discoverDashboard(
       location: "local",
       host: "127.0.0.1",
       port: local.port,
-      ingest: local.ingest,
+      ingest: await resolveIngestPort(env, { isAlive }),
       url: `http://127.0.0.1:${local.port}/`
     };
   }
 
   const peerHome = asString(resolveConfigSetting("remote.peerHome", env, cwd));
   if (!peerHome) return undefined;
-  const peer = await readServerStateFromDir(peerHome);
-  if (!peer) return undefined;
+  const peerIngest = await readIngestStateFromDir(peerHome);
+  if (!peerIngest) return undefined;
 
   const override = asString(resolveConfigSetting("remote.peerHost", env, cwd));
-  const candidates = override ? [override] : peerHostCandidates(env);
+  const candidates: string[] = [];
+  if (peerIngest.host) candidates.push(peerIngest.host);
+  for (const host of override ? [override] : peerHostCandidates(env)) {
+    if (!candidates.includes(host)) candidates.push(host);
+  }
+
   for (const host of candidates) {
-    const ports = await probeHealth(host, peer.port, fetchFn);
-    if (ports) {
+    if (await probeTcp(host, peerIngest.port)) {
+      const peerServer = await readServerStateFromDir(peerHome);
+      const dashboardPort = peerServer?.port ?? peerIngest.port;
       return {
         location: "peer",
         host,
-        port: peer.port,
-        ingest: ports.ingest ?? peer.ingest,
-        url: `http://${host}:${peer.port}/`
+        port: dashboardPort,
+        ingest: peerIngest.port,
+        url: `http://${host}:${dashboardPort}/`
       };
     }
   }

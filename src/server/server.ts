@@ -8,8 +8,10 @@ import { createInterface } from "node:readline/promises";
 import type { ServerWebSocket } from "bun";
 import {
   ensureClimonHome,
+  getClimonHome,
   getSessionsDir,
   loadConfig,
+  resolveConfigSetting,
   saveConfig
 } from "../config.js";
 import {
@@ -28,13 +30,18 @@ import {
 import { sortSessionsByPriority } from "../priority.js";
 import { atomicWrite, listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionStatus } from "../types.js";
-import { getIngestPidPath, DEFAULT_INGEST_PORT, readRemoteHostState } from "../remote/ingest.js";
+import { getIngestPidPath, ingestNeedsRecycle, readRemoteHostState, resolveIngestBindAddress } from "../remote/ingest.js";
+import { readIngestState, resolveIngestPort } from "../remote/ingest-state.js";
+import { isWsl, peerOsLabel } from "../remote/peer.js";
+import { stopUplinkDaemon } from "../remote/teardown.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
+import { runPromote } from "./promote.js";
+import { buildPromoteDeps } from "./promote-probes.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 import { resolveServerInvocation } from "../cli/server-exec.js";
 import { resolveSessionDefaults } from "../launcher.js";
@@ -44,9 +51,13 @@ import { canBindTcpPort, chooseAvailablePort, isAddressInUse, PORT_RETRY_ATTEMPT
 import {
   getServerStatePath,
   readServerState,
+  readServerStateFromDir,
   serializeServerState,
   type ServerState
 } from "../server-state.js";
+import { writeShutdownRequestToDir } from "../remote/shutdown-request.js";
+import { tieBreakOutcome } from "./tie-break.js";
+
 
 interface StartServerOptions {
   port?: number;
@@ -126,6 +137,34 @@ export async function findExistingDashboardServer(
   return pid === undefined ? { url } : { url, pid };
 }
 
+/**
+ * Terminates a known-alive pid, escalating from a graceful stop to a forced
+ * kill. The graceful attempt is best-effort: if it cannot even be issued (e.g.
+ * Windows `taskkill` without /F on a windowless console process reports
+ * failure), we do not give up — we re-check liveness and force-kill rather than
+ * leaving the process running. Returns true once the process is gone.
+ */
+async function terminatePidWithEscalation(
+  pid: number,
+  kill: (pid: number, force: boolean) => boolean,
+  isAlive: (pid: number) => boolean,
+  graceMs: number,
+  pollMs: number
+): Promise<boolean> {
+  const waitForExit = async (): Promise<boolean> => {
+    const deadline = Date.now() + graceMs;
+    for (;;) {
+      if (!isAlive(pid)) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+  };
+  if (kill(pid, false) && (await waitForExit())) return true;
+  if (!isAlive(pid)) return true;
+  if (!kill(pid, true)) return false;
+  return waitForExit();
+}
+
 export async function stopDashboardServer(options: {
   env?: NodeJS.ProcessEnv;
   killProcess?: (pid: number, force: boolean) => boolean;
@@ -140,18 +179,7 @@ export async function stopDashboardServer(options: {
   const pollMs = options.pollMs ?? 50;
   const pid = await readLiveServerPid(env, isAlive);
   if (pid === undefined) return false;
-  if (!kill(pid, false)) return false;
-  const waitForExit = async (): Promise<boolean> => {
-    const deadline = Date.now() + graceMs;
-    for (;;) {
-      if (!isAlive(pid)) return true;
-      if (Date.now() >= deadline) return false;
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-    }
-  };
-  if (await waitForExit()) return true;
-  if (!kill(pid, true)) return false;
-  return waitForExit();
+  return terminatePidWithEscalation(pid, kill, isAlive, graceMs, pollMs);
 }
 
 async function askExistingServerTermination(question: string): Promise<string> {
@@ -584,18 +612,7 @@ export async function stopIngestDaemon(options: {
   }
   const pid = Number.parseInt(raw.trim(), 10);
   if (!Number.isInteger(pid) || pid <= 0 || !isAlive(pid)) return false;
-  if (!kill(pid, false)) return false;
-  const waitForExit = async (): Promise<boolean> => {
-    const deadline = Date.now() + graceMs;
-    for (;;) {
-      if (!isAlive(pid)) return true;
-      if (Date.now() >= deadline) return false;
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-    }
-  };
-  if (await waitForExit()) return true;
-  if (!kill(pid, true)) return false;
-  return waitForExit();
+  return terminatePidWithEscalation(pid, kill, isAlive, graceMs, pollMs);
 }
 
 /**
@@ -617,7 +634,17 @@ async function isIngestDaemonAlive(env: NodeJS.ProcessEnv = process.env): Promis
  * is harmless.
  */
 async function ensureIngestDaemon(): Promise<void> {
-  if (await isIngestDaemonAlive()) return;
+  if (await isIngestDaemonAlive()) {
+    const beacon = await readIngestState(process.env);
+    const expectedHost = await resolveIngestBindAddress(process.env);
+    if (!ingestNeedsRecycle(beacon, expectedHost)) return;
+    startupLog("recycling a stale or wrong-bound ingest singleton so it re-binds and publishes");
+    try {
+      await stopIngestDaemon();
+    } catch {
+      // Best-effort: the ingest is a detached singleton.
+    }
+  }
   const inv = resolveIngestInvocation(process.env, process.execPath);
   const child = spawn(inv.file, inv.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
@@ -649,6 +676,47 @@ function startupLog(message: string): void {
   process.stderr.write(`[startup +${process.uptime().toFixed(3)}s] ${message}\n`);
 }
 
+const TIE_BREAK_SETTLE_MS = 750;
+const TIE_BREAK_POLL_MS = 150;
+
+/**
+ * Dual-promote settle window: after this OS declares host (server.json written),
+ * watch the peer home briefly for a competing server.json. If the peer also
+ * promoted, apply the deterministic tie-break — WSL stays host and force-demotes
+ * the loser; Windows demotes itself by asking its OWN ingest to stand down. Both
+ * sides converge on the loser's ingest demoting, so the outcome is the same
+ * regardless of which re-checks first. The requests are token-free (authorized by
+ * same-user filesystem write access).
+ */
+async function settleDualPromote(peerHome: string): Promise<void> {
+  const localIsWsl = isWsl(process.env);
+  const localLabel = localIsWsl ? "WSL" : "Windows";
+  const deadline = Date.now() + TIE_BREAK_SETTLE_MS;
+  let peerServerPresent = false;
+  while (Date.now() < deadline) {
+    if (await readServerStateFromDir(peerHome)) {
+      peerServerPresent = true;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, TIE_BREAK_POLL_MS));
+  }
+  if (tieBreakOutcome({ localIsWsl, peerServerPresent }) === "stay-host") {
+    if (peerServerPresent) {
+      // Winner: belt-and-suspenders force-demote the loser by writing a request
+      // into its home; its ingest consumes it and stands down.
+      startupLog("dual-promote: winning the tie; force-demoting the peer");
+      await writeShutdownRequestToDir(peerHome, { requestedBy: localLabel, ts: Date.now() });
+    }
+    return;
+  }
+  // Loser: self-demote by writing a request into our OWN home. Our ingest stops
+  // this server (stopLocalServer), spawns our uplink toward the winner, and frees
+  // the ingest port — exactly the peer-initiated handoff path.
+  startupLog("dual-promote: losing the tie; self-demoting via the local ingest");
+  await writeShutdownRequestToDir(getClimonHome(process.env), { requestedBy: localLabel, ts: Date.now() });
+}
+
+
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
   startupLog("startServer invoked");
   startupLog("ensuring climon home directory");
@@ -660,6 +728,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     config.server.port = options.port;
     startupLog(`port overridden from options to ${config.server.port}`);
   }
+  const peerHome = ((value: unknown) => (typeof value === "string" && value.length > 0 ? value : undefined))(
+    resolveConfigSetting("remote.peerHome", process.env, process.cwd())
+  );
   startupLog("creating dashboard tunnel manager");
   const keepAliveSec = config.tunnelLink?.keepAlive ?? 60;
   const dashboardTunnel = createDashboardTunnelManager({
@@ -696,6 +767,35 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     startupLog("existing server handled; continuing startup");
   } else {
     startupLog("no existing dashboard server found");
+  }
+
+  // Cross-OS promote: when a peer OS is configured, displace any peer host
+  // before binding. Entirely skipped (zero cost) when remote.peerHome is unset.
+  if (peerHome) {
+    const peerLabel = peerOsLabel(process.env);
+    startupLog("peer configured; running cross-OS promote");
+    const outcome = await runPromote(
+      buildPromoteDeps(peerHome, process.env, peerLabel, (message) => startupLog(`promote: ${message}`))
+    );
+    if (outcome.kind === "aborted") {
+      process.stderr.write(
+        `climon: cannot take over the dashboard — ${outcome.reason}\n` +
+          `Run \`climon cleanup\` on ${outcome.cleanupOn}, then start the server again.\n`
+      );
+      return;
+    }
+    // Becoming host: stop our own now-redundant uplink (our sessions are local).
+    try {
+      await stopUplinkDaemon();
+    } catch {
+      // Best-effort: no uplink running.
+    }
+    const summary =
+      outcome.via === "graceful"
+        ? `displaced the ${peerLabel} host via the filesystem handoff`
+        : `found no live ${peerLabel} host — starting fresh`;
+    startupLog(`promote complete: ${summary}`);
+    process.stdout.write(`climon: ${summary}.\n`);
   }
 
   startupLog(`choosing an available port starting from ${config.server.port}`);
@@ -755,8 +855,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     const ports: ServerPorts = { dashboard: dashboardPort.port };
     try {
       if (await isIngestDaemonAlive()) {
-        const state = await readRemoteHostState();
-        ports.ingest = state?.ingestPort ?? DEFAULT_INGEST_PORT;
+        ports.ingest = await resolveIngestPort();
       }
     } catch {
       // Best-effort: never let port discovery fail the health probe.
@@ -784,6 +883,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     return isLocal(request, server);
   }
 
+  // Mutable reference assigned after Bun.serve() returns so the fetch handler
+  // can invoke the graceful shutdown path (defined later in the same scope).
+  let requestShutdown: (() => void) | undefined;
+
   let server: Bun.Server<WsData>;
   try {
     startupLog(`starting Bun.serve on ${config.server.host}:${dashboardPort.port}`);
@@ -801,6 +904,19 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           remotesEnabled: options.enableRemotes === true,
           ports: await collectServerPorts()
         });
+      }
+
+      // Internal graceful shutdown endpoint — loopback only, no auth token
+      // needed.  Used by the ingest daemon during cross-OS demotion so the
+      // server can exit 0 instead of being force-killed.
+      if (url.pathname === "/__internal/shutdown" && request.method === "POST") {
+        if (!isLocal(request, srv)) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        // Defer shutdown to next tick so the HTTP response is sent before
+        // closeListenerAndStreams() tears down Bun.serve.
+        setImmediate(() => requestShutdown?.());
+        return new Response("ok");
       }
 
       const asset = await getStaticAsset(url.pathname);
@@ -936,7 +1052,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         return Response.json({
           devtunnelAvailable: detect.available,
           version: detect.version,
-          ingestPort: state?.ingestPort ?? DEFAULT_INGEST_PORT,
+          ingestPort: await resolveIngestPort(),
           tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
           canHost: state?.canHost ?? detect.available
         });
@@ -997,7 +1113,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           return new Response("Invalid JSON body", { status: 400 });
         }
         const detect = await detectDevtunnel();
-        const ingestPort = (await readRemoteHostState())?.ingestPort ?? DEFAULT_INGEST_PORT;
+        const ingestPort = await resolveIngestPort();
         try {
           if (body.mode === "auto") {
             if (!detect.available) {
@@ -1021,7 +1137,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         return Response.json({
           devtunnelAvailable: detect.available,
           version: detect.version,
-          ingestPort: state?.ingestPort ?? DEFAULT_INGEST_PORT,
+          ingestPort: await resolveIngestPort(),
           tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
           // Returned ONLY from this mutating endpoint (loopback-only) so the
           // dialog can fold the secret into the generated script. The GET status
@@ -1301,17 +1417,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   await new Promise<void>((resolve) => {
     let shuttingDown = false;
-    const shutdown = (): void => {
-      if (shuttingDown) return;
-      shuttingDown = true;
-      startupLog("shutdown requested; releasing resources");
-      // Stop reacting to filesystem changes and drop the debounced broadcast.
+    // Closes the HTTP listener, SSE streams, watcher, and dashboard tunnel.
+    // Does NOT remove server.json (callers decide) and does NOT touch the ingest.
+    const closeListenerAndStreams = async (): Promise<void> => {
       watcher.close();
       if (debounce) {
         clearTimeout(debounce);
         debounce = undefined;
       }
-      // Close any in-flight SSE streams so they do not keep the listener alive.
       for (const controller of sseClients) {
         try {
           controller.close();
@@ -1320,33 +1433,48 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
       }
       sseClients.clear();
+      try {
+        await server.stop(true);
+      } catch {
+        // Listener already stopped.
+      }
+      try {
+        await dashboardTunnel.close();
+      } catch {
+        // No tunnel running or already closed.
+      }
+    };
+    // Plain shutdown (SIGINT/SIGTERM): this machine stays host. Leave the ingest
+    // running ONLY when a peer is configured, so a same-OS restart reuses it and
+    // the cross-OS fallback has a surviving anchor; otherwise stop it so a
+    // single-OS server leaves nothing behind.
+    const plainShutdown = (): void => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      startupLog("plain shutdown requested; releasing resources");
       void (async () => {
-        try {
-          // `true` force-closes active WebSocket/HTTP connections so the TCP
-          // port is released promptly instead of lingering until clients leave.
-          await server.stop(true);
-        } catch {
-          // Listener already stopped.
-        }
-        // Tear down the dashboard dev tunnel (if any) so its child process and
-        // forwarded port do not outlive the server.
-        try {
-          await dashboardTunnel.close();
-        } catch {
-          // No tunnel running or already closed.
-        }
+        await closeListenerAndStreams();
         await rm(getServerStatePath(), { force: true }).catch(() => {});
-        try {
-          await stopIngestDaemon();
-        } catch {
-          // Best-effort: the ingest daemon is a detached singleton.
+        if (!peerHome) {
+          try {
+            await stopIngestDaemon();
+          } catch {
+            // Best-effort: the ingest daemon is a detached singleton.
+          }
         }
-        startupLog("shutdown complete");
+        startupLog("plain shutdown complete");
         resolve();
       })();
     };
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
+    process.on("SIGINT", plainShutdown);
+    process.on("SIGTERM", plainShutdown);
+    requestShutdown = plainShutdown;
+    // Run the dual-promote settle window concurrently with serving, AFTER the
+    // shutdown handlers are registered: if this OS loses the tie, its own ingest
+    // SIGTERMs this server, so plainShutdown must already be installed to remove
+    // server.json cleanly. Running it concurrently (not awaited before serving)
+    // also keeps the settle window off every peer startup's critical path.
+    if (peerHome) void settleDualPromote(peerHome);
   });
 }
 

@@ -12,6 +12,7 @@ import {
   readServerStateFromDir,
   serializeServerState
 } from "../src/server-state.js";
+import { serializeIngestState } from "../src/remote/ingest-state.js";
 import { discoverDashboard } from "../src/remote/discovery.js";
 import { linkPeer, maybeAutoLink } from "../src/remote/link.js";
 
@@ -37,13 +38,10 @@ function writeServerJson(home: string, state: { pid: number; port: number; inges
   writeFileSync(join(home, "server.json"), serializeServerState(state));
 }
 
-function okHealth(ports: { dashboard?: number; ingest?: number }): typeof fetch {
-  return (async () =>
-    ({
-      ok: true,
-      json: async () => ({ ok: true, ports })
-    }) as unknown as Response) as unknown as typeof fetch;
+function writeIngestJson(home: string, state: { pid: number; port: number; host?: string }): void {
+  writeFileSync(join(home, "ingest.json"), serializeIngestState(state));
 }
+
 
 describe("peer helpers", () => {
   test("wslHomeUncPath builds a Windows UNC path from distro and HOME", () => {
@@ -110,6 +108,9 @@ describe("discoverDashboard", () => {
   test("returns a local target when the local beacon's pid is alive", async () => {
     const home = makeHome("local");
     writeServerJson(home, { pid: 999, port: 5000, ingest: 5001 });
+    // A live local dashboard also runs an ingest, which writes the authoritative
+    // bound port to ingest.json; discovery resolves the ingest port from there.
+    writeIngestJson(home, { pid: 999, port: 5001 });
     const target = await discoverDashboard({ CLIMON_HOME: home }, root, { isAlive: () => true });
     expect(target).toEqual({
       location: "local",
@@ -120,18 +121,19 @@ describe("discoverDashboard", () => {
     });
   });
 
-  test("falls through to the peer beacon validated by /health", async () => {
+  test("falls through to the peer host validated by the ingest beacon + TCP probe", async () => {
     const home = makeHome("client");
     const peer = makeHome("peer");
     writeServerJson(peer, { pid: 111, port: 6000 });
+    writeIngestJson(peer, { pid: 222, port: 6001, host: "localhost" });
     writeFileSync(
       join(home, "config.json"),
       JSON.stringify({ remote: { peerHome: peer, peerHost: "localhost" } })
     );
-    // Local pid is dead (no local server.json), so discovery probes the peer.
+    // Local pid is dead (no local server.json), so discovery probes the peer ingest.
     const target = await discoverDashboard({ CLIMON_HOME: home }, root, {
       isAlive: () => false,
-      fetchFn: okHealth({ dashboard: 6000, ingest: 6001 })
+      probeTcp: async (host, port) => host === "localhost" && port === 6001
     });
     expect(target).toMatchObject({
       location: "peer",
@@ -140,6 +142,19 @@ describe("discoverDashboard", () => {
       ingest: 6001,
       url: "http://localhost:6000/"
     });
+  });
+
+  test("ignores a peer with an ingest beacon that is not listening", async () => {
+    const home = makeHome("client2");
+    const peer = makeHome("peer2");
+    writeServerJson(peer, { pid: 111, port: 6000 });
+    writeIngestJson(peer, { pid: 222, port: 6001, host: "localhost" });
+    writeFileSync(join(home, "config.json"), JSON.stringify({ remote: { peerHome: peer, peerHost: "localhost" } }));
+    const target = await discoverDashboard({ CLIMON_HOME: home }, root, {
+      isAlive: () => false,
+      probeTcp: async () => false
+    });
+    expect(target).toBeUndefined();
   });
 
   test("returns undefined when nothing is discoverable", async () => {

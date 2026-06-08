@@ -72,6 +72,8 @@ export interface RemoteConfig {
   tunnelToken?: string;
   /** Local port the devbox forwards and the ingest daemon listens on. */
   port?: number;
+  /** Consecutive ingest daemon ports to try from the preferred port before giving up. */
+  ingestPortRetryAttempts?: number;
   /** Stable, non-secret client namespace; auto-generated once on the devbox. */
   clientId?: string;
   /** CLIMON_HOME of the peer OS (e.g. Windows path from WSL) for same-machine discovery. */

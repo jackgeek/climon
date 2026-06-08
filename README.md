@@ -156,10 +156,14 @@ climon link                                          # auto-detect Windows CLIMO
 climon link --peer-home /mnt/c/Users/<you>/.climon   # or specify it
 ```
 
-Discovery reads the peer OS's `server.json` beacon (local first, then the peer
-at `remote.peerHome`), validates the peer with an HTTP `/health` probe, and
-reads the live dashboard/ingest ports from it — so a port bump on collision just
-works. Disable auto-linking with `climon config remote.autoLink false`, and
+Discovery reads beacons (local `server.json` first, then the peer at
+`remote.peerHome`), validates the peer by TCP-probing its published `ingest.json`
+host (not the dashboard `/health`, which is unreachable from WSL under default
+NAT), and reads the live dashboard/ingest ports from the beacons — so a port bump
+on collision just works. Switching which OS hosts is automatic: run `climon server`
+on the other OS and it displaces the current host over the filesystem, migrating the
+previous host's sessions via an uplink. Disable auto-linking with `climon config
+remote.autoLink false`, and
 override the peer host (if auto-detection picks the wrong one) with `climon
 config remote.peerHost <host>`. See
 [docs/usage.md](docs/usage.md#connecting-windows-and-wsl-on-the-same-machine).
@@ -177,6 +181,11 @@ it explicitly makes the setup easier to inspect with `climon config --debug`.
 
 Use this when `climon server` runs in PowerShell or another Windows terminal,
 and WSL sessions should appear in that Windows dashboard.
+
+> Note: with `remote.peerHome` linked, the ingest now **auto-binds** the
+> `vEthernet (WSL)` address and publishes it in `ingest.json`, so the manual
+> `remote.ingestHost` steps below are only needed to *override* the auto-resolved
+> address.
 
 1. In PowerShell, find the Windows address that WSL can reach:
 
@@ -247,6 +256,31 @@ climon config --debug
 For direct Windows/WSL bridging, the client side must show
 `remote.enabled`, `remote.host`, and `remote.port`. The server side should show
 `remote.ingestHost` and `remote.port` when you use an explicit bind address.
+
+### Switching which OS hosts the dashboard
+
+You can run the dashboard from **either** WSL or Windows — one at a time — and
+switch at will. With `remote.peerHome` configured on both sides (usually by
+`climon link`), starting the dashboard on the other OS automatically takes over:
+
+```bash
+# On the OS that should now host the dashboard:
+bun run server
+```
+
+It cleanly shuts down the dashboard still running on the other OS (its server,
+ingest, and uplink), then **migrates** that OS's sessions over so they appear on
+the new dashboard. The previous host's sessions reconnect automatically as long
+as its ingest was still alive (the common case, including after a plain `Ctrl-C`
+or a crash).
+
+If a takeover cannot be confirmed, climon aborts and tells you which OS to run
+`climon cleanup` on:
+
+```bash
+# Full local teardown of this machine's dashboard, ingest, and uplink:
+climon cleanup
+```
 
 ## Remote clients (dev tunnels)
 

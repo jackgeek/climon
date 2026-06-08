@@ -13,18 +13,21 @@ const defaultRunner: KillRunner = (cmd, args) => {
  * (force) or SIGTERM (graceful). Returns whether the kill was issued
  * successfully; a process that is already gone reports false on POSIX (ESRCH)
  * and the caller should re-check liveness if it cares.
+ *
+ * Set `tree: false` on Windows to kill only the specific process without its
+ * descendants (e.g. when the caller is itself a child of the target).
  */
 export function killProcess(
   pid: number,
   force: boolean,
   platform: NodeJS.Platform = process.platform,
-  run: KillRunner = defaultRunner
+  run: KillRunner = defaultRunner,
+  tree: boolean = true
 ): boolean {
   if (platform === "win32") {
-    const args = ["/PID", String(pid), "/T"];
-    if (force) {
-      args.push("/F");
-    }
+    const args = ["/PID", String(pid)];
+    if (tree) args.push("/T");
+    if (force) args.push("/F");
     return run("taskkill", args).status === 0;
   }
   try {
