@@ -10,16 +10,30 @@ function isAlive(pid: number): boolean {
   }
 }
 
+export interface SingletonResult {
+  acquired: boolean;
+  /** PID of the existing holder when acquired is false. */
+  holder?: number;
+}
+
 /** Returns true if this process now owns the singleton, false if another live instance holds it. */
 export async function acquireSingleton(pidFile: string): Promise<boolean> {
+  const result = await acquireSingletonDetailed(pidFile);
+  return result.acquired;
+}
+
+/** Like acquireSingleton but returns the blocking PID for diagnostics. */
+export async function acquireSingletonDetailed(pidFile: string): Promise<SingletonResult> {
   try {
     const existing = await readFile(pidFile, "utf8");
     const pid = Number.parseInt(existing.trim(), 10);
-    if (Number.isInteger(pid) && pid > 0 && isAlive(pid)) return false;
+    if (Number.isInteger(pid) && pid > 0 && isAlive(pid)) {
+      return { acquired: false, holder: pid };
+    }
   } catch {
     // No (or unreadable) pidfile: we may proceed.
   }
   await mkdir(dirname(pidFile), { recursive: true, mode: 0o700 });
   await writeFile(pidFile, `${process.pid}\n`, { mode: 0o600 });
-  return true;
+  return { acquired: true };
 }

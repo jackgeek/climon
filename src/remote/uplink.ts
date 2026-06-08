@@ -10,7 +10,7 @@ import {
   writeConfigSetting
 } from "../config.js";
 import { listSessions, readSessionMeta } from "../store.js";
-import { acquireSingleton } from "./singleton.js";
+import { acquireSingletonDetailed } from "./singleton.js";
 import { encodeControl, encodeData, MuxDecoder } from "./mux.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
@@ -280,8 +280,9 @@ export async function runUplink(
   }
 
   const pidFile = join(getClimonHome(env), "uplink.pid");
-  if (!(await acquireSingleton(pidFile))) {
-    log("another uplink instance is already running, exiting");
+  const singleton = await acquireSingletonDetailed(pidFile);
+  if (!singleton.acquired) {
+    log(`another uplink instance is already running (pid=${singleton.holder}), exiting`);
     return 0;
   }
 

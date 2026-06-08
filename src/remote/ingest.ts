@@ -8,7 +8,7 @@ import { getClimonHome, getRemoteHostPath, resolveConfigSetting, writeConfigSett
 import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
-import { acquireSingleton } from "./singleton.js";
+import { acquireSingletonDetailed } from "./singleton.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { cleanupSessionSocket, formatSessionSocketRef, listenOnSessionSocket } from "../session-socket.js";
 import { canBindTcpPort, chooseAvailablePort } from "../port-choice.js";
@@ -436,8 +436,9 @@ async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<voi
  * and materializes inbound mux connections as remote sessions.
  */
 export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Promise<number> {
-  if (!(await acquireSingleton(getIngestPidPath(env)))) {
-    log("another ingest instance is already running, exiting");
+  const singleton = await acquireSingletonDetailed(getIngestPidPath(env));
+  if (!singleton.acquired) {
+    log(`another ingest instance is already running (pid=${singleton.holder}), exiting`);
     return 0;
   }
   log("singleton acquired, starting ingest daemon");

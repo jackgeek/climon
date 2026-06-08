@@ -648,6 +648,21 @@ async function ensureIngestDaemon(): Promise<void> {
   const inv = resolveIngestInvocation(process.env, process.execPath);
   const child = spawn(inv.file, inv.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
+
+  // Wait for the child to acquire the singleton and write its pidfile.
+  // If it silently exits (e.g. another ingest from a different worktree holds
+  // the lock), warn the user rather than falsely reporting success.
+  const pidPath = getIngestPidPath(process.env);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 200));
+    if (await isIngestDaemonAlive()) return;
+  }
+  process.stderr.write(
+    "climon: warning: ingest daemon did not start within 5 s. " +
+    "A stale ingest process from another worktree may hold the lock. " +
+    `Check ${pidPath} and kill the owning process.\n`
+  );
 }
 
 export type DashboardTunnelPersistenceAction =
