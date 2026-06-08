@@ -815,9 +815,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   // Clean up stale sessions whose daemons are no longer responsive.
   startupLog("cleaning up stale sessions");
   await cleanupStaleSessions();
-  startupLog("ensuring ingest daemon is running");
-  await ensureIngestDaemon();
-  startupLog("ingest daemon ready");
+  if (options.enableRemotes) {
+    startupLog("ensuring ingest daemon is running");
+    await ensureIngestDaemon();
+    startupLog("ingest daemon ready");
+  } else {
+    startupLog("remotes not enabled; skipping ingest daemon");
+  }
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();

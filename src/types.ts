@@ -76,6 +76,8 @@ export interface RemoteConfig {
   ingestPortRetryAttempts?: number;
   /** Stable, non-secret client namespace; auto-generated once on the devbox. */
   clientId?: string;
+  /** Interval in seconds between mux keepalive pings (default 60, 0 to disable). */
+  keepAlive?: number;
   /** CLIMON_HOME of the peer OS (e.g. Windows path from WSL) for same-machine discovery. */
   peerHome?: string;
   /** Optional host override used when connecting to a discovered peer dashboard. */
