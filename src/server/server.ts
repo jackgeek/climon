@@ -688,7 +688,9 @@ export function applyDashboardTunnelPersistence(
 }
 
 function startupLog(message: string): void {
-  process.stderr.write(`[startup +${process.uptime().toFixed(3)}s] ${message}\n`);
+  if (process.env.CLIMON_DEBUG === "1") {
+    process.stderr.write(`[startup +${process.uptime().toFixed(3)}s] ${message}\n`);
+  }
 }
 
 const TIE_BREAK_SETTLE_MS = 750;
