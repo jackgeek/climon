@@ -515,6 +515,16 @@ export async function runSessionDaemon(id: string): Promise<void> {
       warnedHosts.delete(socket);
       updateOvergrownWarning();
       if (viewers.delete(socket) && viewers.size === 0) {
+        // Reset the terminal mode to its initial value so the host terminal
+        // is no longer constrained by a viewer that is gone.  Without this,
+        // `terminalMode` would remain "fill" after an unclamp→disconnect
+        // sequence and the PTY would stay at the viewer's last viewport size
+        // instead of reverting to the host terminal's dimensions.
+        const initialMode: TerminalResizeMode = clampBrowserToHost ? "clamped" : "fill";
+        if (terminalMode !== initialMode) {
+          terminalMode = initialMode;
+          broadcastTerminalMode();
+        }
         revertToHostSize();
       }
     });

@@ -504,4 +504,72 @@ describe("fill window mode host warning and restore", () => {
     expect(host2Warnings.some((warning) => warning.kind === "overgrown")).toBe(true);
     expect(host2Frames.indexOf(FrameType.TerminalWarning)).toBeLessThan(host2Frames.indexOf(FrameType.Replay));
   }, 30000);
+
+  test("fill-mode viewer smaller than host reverts PTY and resets mode on disconnect", async () => {
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    const meta = await waitFor(async () => {
+      const m = await readMeta(id).catch(() => undefined);
+      return m?.socketPath && isResolvedSessionSocketRef(m.socketPath) ? m : undefined;
+    });
+
+    // Host connects at 120x40.
+    const host = open(meta.socketPath);
+    const hostDecoder = new FrameDecoder();
+    const hostSizes: PtySizePayload[] = [];
+    const hostModes: TerminalModePayload[] = [];
+    host.on("data", (chunk) => {
+      for (const frame of hostDecoder.push(chunk)) {
+        if (frame.type === FrameType.PtySize) {
+          hostSizes.push(parseJsonPayload<PtySizePayload>(frame.payload));
+        } else if (frame.type === FrameType.TerminalMode) {
+          hostModes.push(parseJsonPayload<TerminalModePayload>(frame.payload));
+        }
+      }
+    });
+    await new Promise((r) => host.once("connect", r));
+    host.write(encodeJsonFrame(FrameType.Resize, { cols: 120, rows: 40, source: "host" }));
+
+    // Viewer connects at 80x24 in clamped mode (smaller than host).
+    const viewer = open(meta.socketPath);
+    await new Promise((r) => viewer.once("connect", r));
+    viewer.write(encodeJsonFrame(FrameType.Resize, { cols: 80, rows: 24, source: "viewer" }));
+    await waitFor(async () =>
+      hostSizes.some((s) => s.cols === 80 && s.rows === 24) ? true : undefined
+    );
+
+    // Viewer switches to fill mode ("unclamp") and re-sends its viewport.
+    viewer.write(encodeJsonFrame(FrameType.TerminalMode, { mode: "fill" }));
+    await waitFor(async () => hostModes.some((m) => m.mode === "fill") ? true : undefined);
+    viewer.write(encodeJsonFrame(FrameType.Resize, { cols: 80, rows: 24, source: "viewer" }));
+
+    // Viewer disconnects: PTY should revert to host (120x40) and mode to clamped.
+    const sizesBeforeDisconnect = hostSizes.length;
+    const modesBeforeDisconnect = hostModes.length;
+    viewer.end();
+
+    await waitFor(async () =>
+      hostSizes.slice(sizesBeforeDisconnect).some((s) => s.cols === 120 && s.rows === 40) ? true : undefined
+    );
+    await waitFor(async () =>
+      hostModes.slice(modesBeforeDisconnect).some((m) => m.mode === "clamped") ? true : undefined
+    );
+
+    host.end();
+    const pid = (await readMeta(id)).daemonPid;
+    if (pid) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // already gone
+      }
+    }
+    proc.kill();
+    await proc.exited;
+    expect(hostSizes.slice(sizesBeforeDisconnect).some((s) => s.cols === 120 && s.rows === 40)).toBe(true);
+    expect(hostModes.slice(modesBeforeDisconnect).some((m) => m.mode === "clamped")).toBe(true);
+  }, 30000);
 });
