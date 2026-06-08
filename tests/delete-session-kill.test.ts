@@ -93,6 +93,7 @@ describe("applySessionKill", () => {
   });
 
   test("graceful mode reaps a process that exits on SIGTERM", async () => {
+    if (process.platform === "win32") return; // Windows taskkill has no graceful SIGTERM equivalent
     const pid = await spawnTerminable();
     const result = await applySessionKill(pid, "graceful", 300);
     expect(result.stillRunning).toBe(false);
@@ -100,6 +101,7 @@ describe("applySessionKill", () => {
   });
 
   test("graceful mode reports stillRunning when the process ignores SIGTERM", async () => {
+    if (process.platform === "win32") return; // Windows taskkill always terminates regardless of signal handlers
     const pid = await spawnStubborn();
     const result = await applySessionKill(pid, "graceful", 300);
     expect(result.stillRunning).toBe(true);

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join, sep, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import {
   candidateConfigDirs,
   coerceConfigValue,
@@ -147,7 +148,12 @@ describe("listExistingConfigFiles", () => {
     const configDir = join(repo, ".climon");
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, "config.json"), "{}");
-    symlinkSync(join(configDir, "config.json"), join(configDir, "config.jsonc"));
+    try {
+      symlinkSync(join(configDir, "config.json"), join(configDir, "config.jsonc"));
+    } catch (e: any) {
+      if (e.code === "EPERM") return; // symlinks require elevated privileges on Windows
+      throw e;
+    }
 
     expect(listExistingConfigFiles(env(), repo)).toEqual([
       join(configDir, "config.jsonc"),
@@ -175,7 +181,12 @@ describe("listExistingConfigFiles", () => {
     const symlinkHome = join(root, "home-link");
     mkdirSync(nested, { recursive: true });
     mkdirSync(configDir, { recursive: true });
-    symlinkSync(configDir, symlinkHome, "dir");
+    try {
+      symlinkSync(configDir, symlinkHome, "dir");
+    } catch (e: any) {
+      if (e.code === "EPERM") return; // symlinks require elevated privileges on Windows
+      throw e;
+    }
     writeFileSync(join(configDir, "config.jsonc"), "{}");
     writeFileSync(join(configDir, "config.json"), "{}");
 

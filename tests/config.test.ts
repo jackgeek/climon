@@ -211,7 +211,7 @@ describe("detach prefix config", () => {
 describe("config jsonc paths and migration", () => {
   test("getConfigPath points at config.jsonc", () => {
     const env = { CLIMON_HOME: "/tmp/test-home" } as NodeJS.ProcessEnv;
-    expect(getConfigPath(env)).toBe("/tmp/test-home/config.jsonc");
+    expect(getConfigPath(env)).toBe(join("/tmp/test-home", "config.jsonc"));
   });
 
   test("loadConfig creates config.jsonc with generated comments", async () => {

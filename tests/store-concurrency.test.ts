@@ -350,6 +350,7 @@ describe("patchSessionMeta concurrency", () => {
   });
 
   test("old same-scope locks with a reused pid identity are reclaimed", async () => {
+    if (process.platform !== "linux") return; // processStartTime detection requires /proc
     const id = "reused-pid-owner";
     await writeSessionMeta(baseMeta(id), env);
     const lockPath = `${getSessionMetaPath(id, env)}.lock`;

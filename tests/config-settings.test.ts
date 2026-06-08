@@ -36,7 +36,8 @@ describe("config settings registry", () => {
       "remote.peerHost",
       "remote.autoLink",
       "session.color",
-      "session.priority"
+      "session.priority",
+      "tunnelLink.keepAlive"
     ]);
 
     for (const setting of CONFIG_SETTINGS) {
@@ -61,7 +62,8 @@ describe("config settings registry", () => {
       },
       attention: { idleSeconds: 10 },
       remote: { ingestPortRetryAttempts: 100, autoLink: true },
-      session: { color: "auto", priority: 500 }
+      session: { color: "auto", priority: 500 },
+      tunnelLink: { keepAlive: 60 }
     });
   });
 
@@ -98,13 +100,14 @@ describe("config settings registry", () => {
       "remote.peerHost",
       "remote.autoLink",
       "session.color",
-      "session.priority"
+      "session.priority",
+      "tunnelLink.keepAlive"
     ]);
   });
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(22);
+    expect(allConfigKeys().length).toBe(23);
   });
 
   test("coerces values through registry validators", () => {
