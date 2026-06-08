@@ -280,7 +280,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   }
 
   function startKeepAlive(): void {
-    if (keepAlive) return;
+    if (keepAlive || keepAliveMs <= 0) return;
     keepAlive = setInterval(() => {
       if (closing || !url || !host?.isAlive()) return;
       void pingTunnel(url);

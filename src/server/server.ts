@@ -661,8 +661,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     startupLog(`port overridden from options to ${config.server.port}`);
   }
   startupLog("creating dashboard tunnel manager");
+  const keepAliveSec = config.tunnelLink?.keepAlive ?? 60;
   const dashboardTunnel = createDashboardTunnelManager({
     port: config.server.port,
+    keepAliveMs: keepAliveSec * 1000,
     persisted: {
       tunnelId: config.remote?.dashboardTunnelId,
       cluster: config.remote?.dashboardTunnelCluster

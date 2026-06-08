@@ -196,6 +196,19 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
         throw new Error("session.priority must be an integer between 0 and 1000");
       }
     }
+  },
+  {
+    path: "tunnelLink.keepAlive",
+    type: "number",
+    defaultValue: 60,
+    purpose: "Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel relay to prevent idle disconnection. Set to 0 to disable keep-alive pings.",
+    scope: ["server"],
+    acceptInput: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        throw new Error("tunnelLink.keepAlive must be a non-negative number");
+      }
+    }
   }
 ];
 

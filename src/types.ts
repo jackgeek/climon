@@ -89,6 +89,11 @@ export interface SessionDefaultsConfig {
   priority?: number;
 }
 
+export interface TunnelLinkConfig {
+  /** Interval in seconds between keep-alive pings to the dev tunnel relay. Set to 0 to disable. */
+  keepAlive?: number;
+}
+
 export interface AttentionConfig {
   /**
    * Number of seconds the rendered terminal grid must remain unchanged before
@@ -106,6 +111,7 @@ export interface ClimonConfig {
   attention: AttentionConfig;
   remote?: RemoteConfig;
   session?: SessionDefaultsConfig;
+  tunnelLink?: TunnelLinkConfig;
 }
 
 export interface SessionMeta {
