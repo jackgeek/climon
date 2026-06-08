@@ -1276,7 +1276,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       },
       close(ws: ServerWebSocket<WsData>) {
         const daemon = (ws.data as WsData & { daemon?: Socket }).daemon;
-        daemon?.end();
+        daemon?.destroy();
       }
     }
     });
