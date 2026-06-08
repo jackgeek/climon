@@ -148,6 +148,59 @@ export async function deleteTunnel(
   await rm(getRemoteHostPath(options.env ?? process.env), { force: true });
 }
 
+export interface ReconcileResult {
+  /** Whether the port mapping was updated. */
+  changed: boolean;
+  /** The port the tunnel now forwards to. */
+  port: number;
+  /** If reconciliation failed and the tunnel was recreated from scratch. */
+  recreated?: boolean;
+}
+
+/**
+ * Ensures the tunnel's port mapping matches the ingest's actual bound port.
+ * If the port in remote-host.json differs from the live ingest port, updates
+ * the devtunnel port mapping (delete old, create new). If the port update fails
+ * (e.g. the tunnel was deleted externally), falls back to full tunnel recreation.
+ * No-op if there is no configured tunnel or the ports already match.
+ */
+export async function reconcileTunnelPort(
+  actualPort: number,
+  options: { env?: NodeJS.ProcessEnv; runner?: Runner } = {}
+): Promise<ReconcileResult> {
+  const env = options.env ?? process.env;
+  const runner = options.runner ?? defaultRunner;
+  const { readRemoteHostState } = await import("./ingest.js");
+  const state = await readRemoteHostState(env);
+
+  if (!state) return { changed: false, port: actualPort };
+  if (state.ingestPort === actualPort) return { changed: false, port: actualPort };
+
+  // Port mismatch — update the tunnel's port mapping.
+  if (state.canHost) {
+    // Try to delete the old port and create the new one.
+    const delRes = await runner("devtunnel", ["port", "delete", state.tunnelId, "-p", String(state.ingestPort)]);
+    const addRes = await runner("devtunnel", ["port", "create", state.tunnelId, "-p", String(actualPort)]);
+    if (addRes.status !== 0) {
+      // Tunnel might have been deleted externally — try full recreation.
+      try {
+        const fresh = await createTunnel(actualPort, { env, runner });
+        return { changed: true, port: fresh.ingestPort, recreated: true };
+      } catch {
+        // If even recreation fails, just update the state file so the port
+        // is recorded correctly for `devtunnel host` next time.
+      }
+    } else if (delRes.status !== 0) {
+      // Old port didn't exist (maybe already deleted) but new port was added — fine.
+    }
+  }
+
+  // Update the persisted state to reflect the actual port.
+  const updated: RemoteHostState = { ...state, ingestPort: actualPort };
+  await writeRemoteHostState(updated, env);
+  return { changed: true, port: actualPort };
+}
+
 function parseTunnelId(stdout: string): string | undefined {
   try {
     const obj = JSON.parse(stdout) as { tunnelId?: string; tunnel?: { tunnelId?: string } };

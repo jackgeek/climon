@@ -130,9 +130,11 @@ export async function runUplinkBridge(
   const env = options.env ?? process.env;
   const keepAliveMs = (options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS) * 1000;
   log(`bridge connected, sending hello (clientId=${options.clientId}, keepAlive=${keepAliveMs}ms)`);
+  let bytesSent = 0;
+  let bytesReceived = 0;
   const bridge: Bridge = {
     write: (buf) => {
-      if (!channel.destroyed) channel.write(buf);
+      if (!channel.destroyed) { bytesSent += buf.length; channel.write(buf); }
     },
     attached: new Map(),
     advertised: new Set(),
@@ -142,7 +144,7 @@ export async function runUplinkBridge(
 
   bridge.write(encodeControl({ kind: "hello", clientId: options.clientId }));
   await reconcile(bridge);
-  log(`initial reconcile done, advertised ${bridge.advertised.size} session(s)`);
+  log(`initial reconcile done, advertised ${bridge.advertised.size} session(s), sent ${bytesSent} bytes`);
 
   let watcher: FSWatcher | undefined;
   try {
@@ -162,6 +164,7 @@ export async function runUplinkBridge(
   }
 
   channel.on("data", (chunk: Buffer) => {
+    bytesReceived += chunk.length;
     let messages;
     try {
       messages = decoder.push(chunk);
@@ -189,16 +192,16 @@ export async function runUplinkBridge(
   });
 
   await new Promise<void>((resolve) => {
-    const teardown = (): void => {
-      log("channel closed, tearing down bridge");
+    const teardown = (reason: string): void => {
+      log(`channel ${reason}, tearing down bridge (sent=${bytesSent} recv=${bytesReceived})`);
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       watcher?.close();
       for (const socket of bridge.attached.values()) socket.destroy();
       resolve();
     };
-    channel.on("close", teardown);
-    channel.on("end", teardown);
-    channel.on("error", () => {});
+    channel.on("close", (hadError: boolean) => teardown(`closed${hadError ? " (with error)" : ""}`));
+    channel.on("end", () => teardown("received FIN (remote end closed)"));
+    channel.on("error", (err: Error) => log(`channel error: ${err.message}`));
   });
 }
 

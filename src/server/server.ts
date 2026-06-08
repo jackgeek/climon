@@ -34,7 +34,7 @@ import { getIngestPidPath, ingestNeedsRecycle, readRemoteHostState, resolveInges
 import { readIngestState, resolveIngestPort } from "../remote/ingest-state.js";
 import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
-import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel } from "../remote/tunnel.js";
+import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
@@ -836,6 +836,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     startupLog("ensuring ingest daemon is running");
     await ensureIngestDaemon();
     startupLog("ingest daemon ready");
+    // Reconcile the tunnel port mapping with the ingest's actual bound port.
+    const livePort = await resolveIngestPort();
+    const reconcile = await reconcileTunnelPort(livePort);
+    if (reconcile.changed) {
+      startupLog(`reconciled tunnel port mapping → ${reconcile.port}${reconcile.recreated ? " (tunnel recreated)" : ""}`);
+    }
   } else {
     startupLog("remotes not enabled; skipping ingest daemon");
   }
@@ -1154,11 +1160,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           return new Response(error instanceof Error ? error.message : "Tunnel error", { status: 500 });
         }
         await ensureIngestDaemon();
+        // Reconcile port mapping in case the ingest bound to a different port.
+        const livePort = await resolveIngestPort();
+        await reconcileTunnelPort(livePort);
         const state = await readRemoteHostState();
         return Response.json({
           devtunnelAvailable: detect.available,
           version: detect.version,
-          ingestPort: await resolveIngestPort(),
+          ingestPort: livePort,
           tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
           // Returned ONLY from this mutating endpoint (loopback-only) so the
           // dialog can fold the secret into the generated script. The GET status
