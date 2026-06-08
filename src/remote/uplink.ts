@@ -128,8 +128,8 @@ export async function runUplinkBridge(
   options: { env?: NodeJS.ProcessEnv; clientId: string; keepAliveSeconds?: number }
 ): Promise<void> {
   const env = options.env ?? process.env;
-  log(`bridge connected, sending hello (clientId=${options.clientId}, keepAlive=${options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS}s)`);
   const keepAliveMs = (options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS) * 1000;
+  log(`bridge connected, sending hello (clientId=${options.clientId}, keepAlive=${keepAliveMs}ms)`);
   const bridge: Bridge = {
     write: (buf) => {
       if (!channel.destroyed) channel.write(buf);
