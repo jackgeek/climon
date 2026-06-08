@@ -22,6 +22,7 @@ import { createShutdownRequestWatcher, type ShutdownRequestWatcher } from "./shu
 import { getShutdownRequestPath } from "./shutdown-request.js";
 import { getServerStatePath, readServerState } from "../server-state.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
+import { debugIngest as log } from "./debug.js";
 
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
@@ -144,6 +145,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
   const sessions = new Map<string, RemoteSession>();
   const decoder = new MuxDecoder();
   let label: string | undefined;
+  log(`new inbound connection from ${channel.remoteAddress ?? "unknown"}:${channel.remotePort ?? "?"}`);
   // Control frames are processed strictly in order via this FIFO chain. The
   // devbox re-sends `session-added` for every session on each fs.watch tick, so
   // duplicate same-id adds are routine; serializing prevents two concurrent
@@ -202,17 +204,25 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
 
   async function handleControl(message: ControlMessage): Promise<void> {
     if (message.kind === "hello") {
-      if (!label && isValidRemoteId(message.clientId)) label = message.clientId;
+      if (!label && isValidRemoteId(message.clientId)) {
+        label = message.clientId;
+        log(`hello received, clientId=${label}`);
+      }
       return;
     }
     if (message.kind === "session-added") {
+      log(`session-added: ${message.meta.id} (${message.meta.displayCommand}) [${message.meta.status}]`);
       await addSession(message.meta);
     } else if (message.kind === "session-updated") {
       if (!isValidRemoteId(message.id)) return;
       const session = sessions.get(message.id);
-      if (session) await patchSessionMeta(session.localId, sanitizeRemotePatch(message.patch), env);
+      if (session) {
+        log(`session-updated: ${message.id} patch=${JSON.stringify(message.patch)}`);
+        await patchSessionMeta(session.localId, sanitizeRemotePatch(message.patch), env);
+      }
     } else if (message.kind === "session-removed") {
       if (!isValidRemoteId(message.id)) return;
+      log(`session-removed: ${message.id}`);
       await removeSession(message.id);
     }
     // attach/detach are devbox-bound only; never received here.
@@ -223,6 +233,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     try {
       messages = decoder.push(chunk);
     } catch {
+      log(`mux decode error from client ${label ?? "unknown"}, destroying channel`);
       channel.destroy();
       return;
     }
@@ -244,6 +255,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     const teardown = async (): Promise<void> => {
       if (tearingDown) return;
       tearingDown = true;
+      log(`client ${label ?? "unknown"} disconnected, cleaning up ${sessions.size} session(s)`);
       await controlChain;
       for (const remoteId of [...sessions.keys()]) await removeSession(remoteId);
       resolve();
@@ -406,18 +418,26 @@ async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<voi
  * and materializes inbound mux connections as remote sessions.
  */
 export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Promise<number> {
-  if (!(await acquireSingleton(getIngestPidPath(env)))) return 0;
+  if (!(await acquireSingleton(getIngestPidPath(env)))) {
+    log("another ingest instance is already running, exiting");
+    return 0;
+  }
+  log("singleton acquired, starting ingest daemon");
   await reconcileStaleRemoteSessions(env);
 
   const state = await readRemoteHostState(env);
   const port = state?.ingestPort ?? asNumber(resolveConfigSetting("remote.port", env)) ?? DEFAULT_INGEST_PORT;
   const host = await resolveIngestBindAddress(env, state);
+  log(`resolved bind address: ${host}:${port}`);
   const ingestPort = await chooseAvailablePort(port, {
     maxAttempts: resolveIngestRetryAttempts(env),
     canBind: (candidate) => canBindTcpPort(host, candidate)
   });
-  if (ingestPort.changed && !state) {
-    writeConfigSetting("remote.port", String(ingestPort.port), "global", env);
+  if (ingestPort.changed) {
+    log(`port ${port} unavailable, using ${ingestPort.port} instead`);
+    if (!state) {
+      writeConfigSetting("remote.port", String(ingestPort.port), "global", env);
+    }
   }
 
   // The handler is assigned after demoteAndExit is defined; the net server must
@@ -428,6 +448,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     server.once("error", reject);
     server.listen(ingestPort.port, host, resolve);
   });
+  log(`listening on ${host}:${ingestPort.port} (pid ${process.pid})`);
 
   const supervisor = new TunnelHostSupervisor({ env });
 

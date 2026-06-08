@@ -15,6 +15,7 @@ import { encodeControl, encodeData, MuxDecoder } from "./mux.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { discoverDashboard } from "./discovery.js";
+import { debugUplink as log } from "./debug.js";
 
 export interface UplinkConfig {
   enabled: boolean;
@@ -118,6 +119,7 @@ export async function runUplinkBridge(
   options: { env?: NodeJS.ProcessEnv; clientId: string }
 ): Promise<void> {
   const env = options.env ?? process.env;
+  log(`bridge connected, sending hello (clientId=${options.clientId})`);
   const bridge: Bridge = {
     write: (buf) => {
       if (!channel.destroyed) channel.write(buf);
@@ -130,6 +132,7 @@ export async function runUplinkBridge(
 
   bridge.write(encodeControl({ kind: "hello", clientId: options.clientId }));
   await reconcile(bridge);
+  log(`initial reconcile done, advertised ${bridge.advertised.size} session(s)`);
 
   let watcher: FSWatcher | undefined;
   try {
@@ -143,13 +146,19 @@ export async function runUplinkBridge(
     try {
       messages = decoder.push(chunk);
     } catch {
+      log("mux decode error, destroying channel");
       channel.destroy();
       return;
     }
     for (const msg of messages) {
       if (msg.type === "control") {
-        if (msg.message.kind === "attach") attach(bridge, msg.message.id);
-        else if (msg.message.kind === "detach") detach(bridge, msg.message.id);
+        if (msg.message.kind === "attach") {
+          log(`ingest requested attach for session ${msg.message.id}`);
+          attach(bridge, msg.message.id);
+        } else if (msg.message.kind === "detach") {
+          log(`ingest requested detach for session ${msg.message.id}`);
+          detach(bridge, msg.message.id);
+        }
       } else {
         const socket = bridge.attached.get(msg.sessionId);
         if (socket) socket.write(msg.data);
@@ -159,6 +168,7 @@ export async function runUplinkBridge(
 
   await new Promise<void>((resolve) => {
     const teardown = (): void => {
+      log("channel closed, tearing down bridge");
       watcher?.close();
       for (const socket of bridge.attached.values()) socket.destroy();
       resolve();
@@ -241,12 +251,20 @@ export async function runUplink(
   const peerHome = asString(resolveConfigSetting("remote.peerHome", env, cwd));
   const initialLegacy = resolveUplinkConfig(env, cwd);
   // Nothing to do: no peer link configured and no legacy direct/tunnel target.
-  if (!peerHome && (!initialLegacy.enabled || !initialLegacy.port)) return 0;
+  if (!peerHome && (!initialLegacy.enabled || !initialLegacy.port)) {
+    log("no remote target configured (no peerHome, no enabled tunnel/direct), exiting");
+    return 0;
+  }
 
   const pidFile = join(getClimonHome(env), "uplink.pid");
-  if (!(await acquireSingleton(pidFile))) return 0;
+  if (!(await acquireSingleton(pidFile))) {
+    log("another uplink instance is already running, exiting");
+    return 0;
+  }
 
+  log("singleton acquired, starting supervisor loop");
   const clientId = ensureClientId(env, cwd);
+  log(`clientId: ${clientId}`);
   let backoffMs = 1000;
 
   for (;;) {
@@ -259,13 +277,16 @@ export async function runUplink(
     let port: number | undefined;
     let conn: ConnectChild | undefined;
     if (peerTarget) {
+      log(`resolved peer target: ${peerTarget.host}:${peerTarget.port}`);
       host = peerTarget.host;
       port = peerTarget.port;
     } else if (config.enabled && config.port) {
       if (config.host) {
+        log(`direct target: ${config.host}:${config.port}`);
         host = config.host;
         port = config.port;
       } else if (config.tunnelId && config.tunnelToken) {
+        log(`spawning devtunnel connect for tunnel ${config.tunnelId}, forwarding port ${config.port}`);
         conn = spawnConnect(config.tunnelId, config.tunnelToken);
         host = "127.0.0.1";
         port = config.port;
@@ -276,6 +297,7 @@ export async function runUplink(
       // No reachable target yet. If a peer link is configured the dashboard may
       // simply not be up yet, so back off and retry; otherwise there is nothing
       // more to do.
+      log(`no reachable target resolved${peerHome ? ", peer may not be up yet — retrying" : ", exiting"}`);
       conn?.child.kill();
       if (!peerHome) return 0;
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
@@ -284,20 +306,26 @@ export async function runUplink(
     }
 
     try {
+      log(`waiting for port ${host}:${port} to become reachable...`);
       const reachable = await waitForPort(port, host);
       if (!reachable) {
         if (conn?.authRejected()) {
           process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
+          log("auth rejected during port wait, stopping");
           conn.child.kill();
           return 1;
         }
-        throw new Error(conn ? "forwarded port not reachable" : "ingest port not reachable");
+        const reason = conn ? "forwarded port not reachable (tunnel may not be hosted)" : "ingest port not reachable";
+        log(`port ${host}:${port} not reachable: ${reason}`);
+        throw new Error(reason);
       }
+      log(`port reachable, connecting to ${host}:${port}`);
       const channel = connect(port, host);
       await new Promise<void>((resolve, reject) => {
         channel.once("connect", resolve);
         channel.once("error", reject);
       });
+      log("TCP channel established, starting mux bridge");
       await runUplinkBridge(channel, { env, clientId });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -306,15 +334,18 @@ export async function runUplink(
         conn?.child.kill();
         return 1;
       }
+      log(`connection error: ${(error as Error).message} (code=${code ?? "none"})`);
       // transient: fall through to backoff
     } finally {
       conn?.child.kill();
     }
     if (conn?.authRejected()) {
       process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
+      log("auth rejected after bridge closed, stopping");
       return 1;
     }
     if (Date.now() - startedAt > 30_000) backoffMs = 1000;
+    log(`reconnecting in ${backoffMs}ms...`);
     await new Promise((resolve) => setTimeout(resolve, backoffMs));
     backoffMs = Math.min(backoffMs * 2, 30_000);
   }

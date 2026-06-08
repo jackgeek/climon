@@ -25,6 +25,7 @@ import { maybeAutoLink } from "./remote/link.js";
 import { formatSessionSocketRef, isResolvedSessionSocketRef, waitForSessionSocket } from "./session-socket.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
+import { debugUplink as log } from "./remote/debug.js";
 
 function generateSessionId(): string {
   return `${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
@@ -139,6 +140,8 @@ async function ensureUplink(): Promise<void> {
   const port = resolveConfigSetting("remote.port", process.env, process.cwd());
   const peerHome = resolveConfigSetting("remote.peerHome", process.env, process.cwd());
 
+  log(`ensureUplink: enabled=${enabled} host=${host ?? "unset"} tunnelId=${tunnelId ? "set" : "unset"} port=${port ?? "unset"} peerHome=${peerHome ? "set" : "unset"}`);
+
   let shouldSpawn = false;
 
   // Same-machine WSL<->Windows: if a dashboard is discovered on the peer OS,
@@ -159,9 +162,14 @@ async function ensureUplink(): Promise<void> {
     const plan = planUplinkStart({ enabled, host, tunnelId, tunnelToken, port }, detect);
     if (plan.warning) process.stderr.write(plan.warning);
     shouldSpawn = plan.shouldSpawn;
+    log(`ensureUplink: planUplinkStart → shouldSpawn=${shouldSpawn}${plan.warning ? " (with warning)" : ""}`);
   }
 
-  if (!shouldSpawn) return;
+  if (!shouldSpawn) {
+    log("ensureUplink: not spawning uplink");
+    return;
+  }
+  log("ensureUplink: spawning detached __uplink process");
   const child = spawn(process.execPath, selfSpawnArgs(["__uplink"]), {
     detached: true,
     stdio: "ignore",
