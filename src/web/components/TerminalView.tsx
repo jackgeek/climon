@@ -52,6 +52,9 @@ interface ScrollbackConfigurableTerminal {
 }
 
 const TERMINAL_SCROLLBACK = 10_000;
+const WHEEL_PIXEL_LINE_HEIGHT = 20;
+const DOM_DELTA_LINE = 1;
+const DOM_DELTA_PAGE = 2;
 
 export const terminalOptions = {
   allowProposedApi: true,
@@ -71,6 +74,20 @@ export function applyTerminalScrollbackForSession(
 
 export function focusTerminalPane(term: FocusableTerminal | null): void {
   term?.focus();
+}
+
+export function mapWheelToScrollLines(event: Pick<WheelEvent, "deltaY" | "deltaMode">, rows: number): number {
+  if (event.deltaY === 0) {
+    return 0;
+  }
+  const direction = Math.sign(event.deltaY);
+  const magnitude =
+    event.deltaMode === DOM_DELTA_PAGE
+      ? Math.max(1, rows - 1)
+      : event.deltaMode === DOM_DELTA_LINE
+        ? Math.max(1, Math.ceil(Math.abs(event.deltaY)))
+        : Math.max(1, Math.ceil(Math.abs(event.deltaY) / WHEEL_PIXEL_LINE_HEIGHT));
+  return direction * magnitude;
 }
 
 export function applyAuthoritativeTerminalSize(
@@ -342,6 +359,19 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       event.preventDefault();
       event.stopPropagation();
       onFontSizeChangeRef.current(delta);
+      return false;
+    });
+
+    term.attachCustomWheelEventHandler((event) => {
+      if (term.modes.mouseTrackingMode !== "none") {
+        return true;
+      }
+      const lines = mapWheelToScrollLines(event, term.rows);
+      if (lines === 0) {
+        return true;
+      }
+      event.preventDefault();
+      term.scrollLines(lines);
       return false;
     });
 
