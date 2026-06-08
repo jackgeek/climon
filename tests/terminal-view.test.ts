@@ -10,6 +10,7 @@ import {
   canRefitTerminalForSession,
   completeInitialReplay,
   focusTerminalPane,
+  mapWheelToScrollLines,
   resetTerminalForSession,
   TerminalView,
   loadTerminalAddons,
@@ -97,12 +98,26 @@ describe("TerminalView", () => {
     expect(calls).toBe(1);
   });
 
-  test("does not capture wheel events so xterm can forward them to terminal mouse tracking", () => {
+  test("leaves mouse-tracking wheel events for xterm to forward to the terminal", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
-    expect(source).not.toContain("addEventListener(\"wheel\"");
+    expect(source).toContain('term.modes.mouseTrackingMode !== "none"');
+    expect(source).toContain("return true;");
     expect(source).not.toContain("scrollTerminalViewportElementOnWheel");
     expect(source).not.toContain("stopImmediatePropagation");
+  });
+
+  test("maps wheel up to older scrollback lines in normal terminal mode", () => {
+    expect(mapWheelToScrollLines({ deltaY: -120, deltaMode: 0 }, 20)).toBe(-6);
+  });
+
+  test("maps wheel down to newer scrollback lines in normal terminal mode", () => {
+    expect(mapWheelToScrollLines({ deltaY: 120, deltaMode: 0 }, 20)).toBe(6);
+  });
+
+  test("maps page-mode wheel deltas to viewport-sized scrollback jumps", () => {
+    expect(mapWheelToScrollLines({ deltaY: -1, deltaMode: 2 }, 24)).toBe(-23);
+    expect(mapWheelToScrollLines({ deltaY: 1, deltaMode: 2 }, 24)).toBe(23);
   });
 
   test("does not refit after an authoritative daemon size changes the browser terminal grid", () => {
