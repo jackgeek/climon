@@ -90,6 +90,13 @@ export function mapWheelToScrollLines(event: Pick<WheelEvent, "deltaY" | "deltaM
   return direction * magnitude;
 }
 
+export function shouldHandleWheelAsScrollback(state: {
+  mouseTrackingMode: "none" | "x10" | "vt200" | "drag" | "any";
+  activeBufferBaseY: number;
+}): boolean {
+  return state.mouseTrackingMode === "none" && state.activeBufferBaseY > 0;
+}
+
 export function applyAuthoritativeTerminalSize(
   term: ResizableTerminal,
   cols: number,
@@ -363,7 +370,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     });
 
     term.attachCustomWheelEventHandler((event) => {
-      if (term.modes.mouseTrackingMode !== "none") {
+      if (
+        !shouldHandleWheelAsScrollback({
+          mouseTrackingMode: term.modes.mouseTrackingMode,
+          activeBufferBaseY: term.buffer.active.baseY
+        })
+      ) {
         return true;
       }
       const lines = mapWheelToScrollLines(event, term.rows);
