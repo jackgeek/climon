@@ -27,6 +27,7 @@ import { debugIngest as log } from "./debug.js";
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
 const DEFAULT_MAX_SESSIONS = 256;
+const DEFAULT_KEEPALIVE_SECONDS = 60;
 
 export function isValidRemoteId(id: unknown): id is string {
   return typeof id === "string" && REMOTE_ID.test(id);
@@ -131,6 +132,7 @@ interface RemoteSession {
 export interface IngestConnOptions {
   env?: NodeJS.ProcessEnv;
   maxSessions?: number;
+  keepAliveSeconds?: number;
 }
 
 /**
@@ -210,6 +212,11 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       }
       return;
     }
+    if (message.kind === "ping") {
+      send(encodeControl({ kind: "pong" }));
+      return;
+    }
+    if (message.kind === "pong") return;
     if (message.kind === "session-added") {
       log(`session-added: ${message.meta.id} (${message.meta.displayCommand}) [${message.meta.status}]`);
       await addSession(message.meta);
@@ -226,6 +233,16 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       await removeSession(message.id);
     }
     // attach/detach are devbox-bound only; never received here.
+  }
+
+  // Keepalive ping from the ingest side keeps the tunnel relay alive even before
+  // a devbox connects (the tunnel host process maintains the forwarded port).
+  const keepAliveMs = (options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS) * 1000;
+  let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  if (keepAliveMs > 0) {
+    keepAliveTimer = setInterval(() => {
+      send(encodeControl({ kind: "ping" }));
+    }, keepAliveMs);
   }
 
   channel.on("data", (chunk: Buffer) => {
@@ -256,6 +273,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       if (tearingDown) return;
       tearingDown = true;
       log(`client ${label ?? "unknown"} disconnected, cleaning up ${sessions.size} session(s)`);
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
       await controlChain;
       for (const remoteId of [...sessions.keys()]) await removeSession(remoteId);
       resolve();
@@ -440,6 +458,11 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     }
   }
 
+  const keepAliveValue = resolveConfigSetting("remote.keepAlive", env);
+  const keepAliveSeconds = typeof keepAliveValue === "number" && keepAliveValue >= 0
+    ? keepAliveValue
+    : DEFAULT_KEEPALIVE_SECONDS;
+
   // The handler is assigned after demoteAndExit is defined; the net server must
   // exist first so both the handler and demotion can close over it.
   let onConnection: (socket: Socket) => void = () => {};
@@ -577,7 +600,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   // Wire the real connection handler BEFORE publishing the beacon, with no
   // awaits since listen(), so no inbound connection can hit the no-op
   // placeholder once the bound port is advertised via ingest.json.
-  onConnection = (socket) => void runIngestConnection(socket, { env });
+  onConnection = (socket) => void runIngestConnection(socket, { env, keepAliveSeconds });
 
   await supervisor.reconcile();
   // Start the request watcher BEFORE publishing the beacon. The watcher clears

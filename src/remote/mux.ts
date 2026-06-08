@@ -15,7 +15,9 @@ export type ControlMessage =
   | { kind: "session-updated"; id: string; patch: SessionMetaPatch }
   | { kind: "session-removed"; id: string }
   | { kind: "attach"; id: string }
-  | { kind: "detach"; id: string };
+  | { kind: "detach"; id: string }
+  | { kind: "ping" }
+  | { kind: "pong" };
 
 export type MuxMessage =
   | { type: "control"; message: ControlMessage }

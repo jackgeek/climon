@@ -114,12 +114,22 @@ function detach(bridge: Bridge, sessionId: string): void {
  * Sends `hello` first, advertises local sessions, and bridges attach/detach/data
  * until the channel closes.
  */
+/** Default keepalive interval in seconds. */
+export const DEFAULT_KEEPALIVE_SECONDS = 60;
+
+function resolveKeepAlive(env: NodeJS.ProcessEnv, cwd: string): number {
+  const value = resolveConfigSetting("remote.keepAlive", env, cwd);
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  return DEFAULT_KEEPALIVE_SECONDS;
+}
+
 export async function runUplinkBridge(
   channel: Socket,
-  options: { env?: NodeJS.ProcessEnv; clientId: string }
+  options: { env?: NodeJS.ProcessEnv; clientId: string; keepAliveSeconds?: number }
 ): Promise<void> {
   const env = options.env ?? process.env;
-  log(`bridge connected, sending hello (clientId=${options.clientId})`);
+  log(`bridge connected, sending hello (clientId=${options.clientId}, keepAlive=${options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS}s)`);
+  const keepAliveMs = (options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS) * 1000;
   const bridge: Bridge = {
     write: (buf) => {
       if (!channel.destroyed) channel.write(buf);
@@ -141,6 +151,16 @@ export async function runUplinkBridge(
     // watch unsupported; sessions still advertised at connect time.
   }
 
+  // Periodic keepalive ping prevents the dev tunnel relay from dropping idle
+  // forwarded connections. Both sides send pings; a pong reply is not required
+  // but confirms the remote end is still processing frames.
+  let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  if (keepAliveMs > 0) {
+    keepAliveTimer = setInterval(() => {
+      bridge.write(encodeControl({ kind: "ping" }));
+    }, keepAliveMs);
+  }
+
   channel.on("data", (chunk: Buffer) => {
     let messages;
     try {
@@ -158,6 +178,8 @@ export async function runUplinkBridge(
         } else if (msg.message.kind === "detach") {
           log(`ingest requested detach for session ${msg.message.id}`);
           detach(bridge, msg.message.id);
+        } else if (msg.message.kind === "ping") {
+          bridge.write(encodeControl({ kind: "pong" }));
         }
       } else {
         const socket = bridge.attached.get(msg.sessionId);
@@ -169,6 +191,7 @@ export async function runUplinkBridge(
   await new Promise<void>((resolve) => {
     const teardown = (): void => {
       log("channel closed, tearing down bridge");
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
       watcher?.close();
       for (const socket of bridge.attached.values()) socket.destroy();
       resolve();
@@ -326,7 +349,7 @@ export async function runUplink(
         channel.once("error", reject);
       });
       log("TCP channel established, starting mux bridge");
-      await runUplinkBridge(channel, { env, clientId });
+      await runUplinkBridge(channel, { env, clientId, keepAliveSeconds: resolveKeepAlive(env, cwd) });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EADDRINUSE") {

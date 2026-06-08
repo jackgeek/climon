@@ -158,6 +158,19 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     internal: true
   },
   {
+    path: "remote.keepAlive",
+    type: "number",
+    defaultValue: 60,
+    purpose: "Interval in seconds between mux keepalive pings sent over the remote uplink/ingest connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0 to disable.",
+    scope: ["client"],
+    acceptInput: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+        throw new Error("remote.keepAlive must be a non-negative integer (seconds)");
+      }
+    }
+  },
+  {
     path: "remote.peerHome",
     type: "string",
     purpose: "Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\\\wsl.localhost\\<distro>\\home\\<you>\\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`.",
