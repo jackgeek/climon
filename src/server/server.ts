@@ -837,10 +837,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     await ensureIngestDaemon();
     startupLog("ingest daemon ready");
     // Reconcile the tunnel port mapping with the ingest's actual bound port.
-    const livePort = await resolveIngestPort();
+    // Read ingest.json directly — we just verified the daemon is alive, so its
+    // beacon is authoritative regardless of what isProcessAlive() returns for
+    // cross-session signal checks on Windows.
+    const beacon = await readIngestState();
+    const livePort = beacon?.port ?? await resolveIngestPort();
+    startupLog(`resolved ingest port: ${livePort} (source: ${beacon ? "ingest.json" : "fallback"})`);
     const reconcile = await reconcileTunnelPort(livePort);
     if (reconcile.changed) {
       startupLog(`reconciled tunnel port mapping → ${reconcile.port}${reconcile.recreated ? " (tunnel recreated)" : ""}`);
+    } else {
+      startupLog(`tunnel port mapping already correct (port ${reconcile.port})`);
     }
   } else {
     startupLog("remotes not enabled; skipping ingest daemon");
@@ -1161,7 +1168,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
         await ensureIngestDaemon();
         // Reconcile port mapping in case the ingest bound to a different port.
-        const livePort = await resolveIngestPort();
+        const beaconForReconcile = await readIngestState();
+        const livePort = beaconForReconcile?.port ?? await resolveIngestPort();
         await reconcileTunnelPort(livePort);
         const state = await readRemoteHostState();
         return Response.json({
