@@ -18,7 +18,8 @@ const distDir = resolve(projectRoot, "dist");
 const stageRoot = resolve(distDir, ".stage");
 const clientEntrypoint = resolve(projectRoot, "src/index.ts");
 const serverEntrypoint = resolve(projectRoot, "src/server.ts");
-const installerEntrypoint = resolve(projectRoot, "src/install/index.ts");
+const windowsInstallerEntrypoint = resolve(projectRoot, "src/install/index.ts");
+const macosInstallerEntrypoint = resolve(projectRoot, "src/install/macos-main.ts");
 const embeddedAssetsPath = resolve(projectRoot, "src/server/embedded-assets.ts");
 
 type BuildTarget = {
@@ -33,11 +34,14 @@ type ZipEntry = {
 
 export function zipEntryNamesForPlatform(platform: string): string[] {
   const isWindows = platform.startsWith("windows");
+  const isDarwin = platform.startsWith("darwin");
   const exe = isWindows ? ".exe" : "";
   const names = [`climon${exe}`, `climon-server${exe}`];
 
   if (isWindows) {
     names.push("Setup.exe");
+  } else if (isDarwin) {
+    names.push("install-climon");
   }
 
   return names;
@@ -63,21 +67,29 @@ async function main() {
   try {
     for (const { platform, target } of targets) {
       const isWindows = platform.startsWith("windows");
+      const isDarwin = platform.startsWith("darwin");
       const exe = isWindows ? ".exe" : "";
       const stageDir = resolve(stageRoot, platform);
       mkdirSync(stageDir, { recursive: true });
 
       const clientOut = resolve(stageDir, `climon${exe}`);
       const serverOut = resolve(stageDir, `climon-server${exe}`);
-      const installerOut = isWindows ? resolve(stageDir, "Setup.exe") : undefined;
+      const installerOut = isWindows
+        ? resolve(stageDir, "Setup.exe")
+        : isDarwin
+          ? resolve(stageDir, "install-climon")
+          : undefined;
 
       console.log(`→ Compiling climon (${target})...`);
       await $`bun build ${clientEntrypoint} --compile --target ${target} --outfile ${clientOut}`;
       console.log(`→ Compiling climon-server (${target})...`);
       await $`bun build ${serverEntrypoint} --compile --define __CLIMON_EMBEDDED__=true --target ${target} --outfile ${serverOut}`;
-      if (installerOut) {
+      if (installerOut && isWindows) {
         console.log(`→ Compiling Setup.exe (${target})...`);
-        await $`bun build ${installerEntrypoint} --compile --target ${target} --outfile ${installerOut}`;
+        await $`bun build ${windowsInstallerEntrypoint} --compile --target ${target} --outfile ${installerOut}`;
+      } else if (installerOut && isDarwin) {
+        console.log(`→ Compiling install-climon (${target})...`);
+        await $`bun build ${macosInstallerEntrypoint} --compile --target ${target} --outfile ${installerOut}`;
       }
 
       // Read the produced binaries back and zip them under bare names. On Unix,
@@ -92,7 +104,7 @@ async function main() {
       ];
 
       if (installerOut) {
-        zipFiles.push({ name: "Setup.exe", path: installerOut });
+        zipFiles.push({ name: isWindows ? "Setup.exe" : "install-climon", path: installerOut });
       }
 
       const zipEntries: Record<string, [Uint8Array, ZipOptions]> = {};

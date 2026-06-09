@@ -1,0 +1,56 @@
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+const REQUIRED_BINARIES = ["climon", "climon-server"] as const;
+const LOCKED_COPY_ERROR_CODES = new Set(["EBUSY", "EACCES", "EPERM", "ETXTBSY"]);
+
+export type CopyFile = (source: string, destination: string) => void;
+
+export type InstallBinariesOptions = {
+  copyFile?: CopyFile;
+  confirmKillAndRetry?: (error: unknown) => boolean | Promise<boolean>;
+  killRunningClimonProcesses?: () => void | Promise<void>;
+};
+
+export function isLockedBinaryCopyError(error: unknown): boolean {
+  return error instanceof Error
+    && "code" in error
+    && typeof error.code === "string"
+    && LOCKED_COPY_ERROR_CODES.has(error.code);
+}
+
+function copyRequiredBinaries(sourceDir: string, installDir: string, copyFile: CopyFile): void {
+  mkdirSync(installDir, { recursive: true });
+
+  for (const name of REQUIRED_BINARIES) {
+    const source = join(sourceDir, name);
+    if (!existsSync(source)) {
+      throw new Error(`Required installer sibling is missing: ${name}`);
+    }
+    copyFile(source, join(installDir, name));
+  }
+}
+
+export async function installBinaries(
+  sourceDir: string,
+  installDir: string,
+  options: InstallBinariesOptions = {}
+): Promise<void> {
+  const copyFile = options.copyFile ?? copyFileSync;
+
+  try {
+    copyRequiredBinaries(sourceDir, installDir, copyFile);
+    return;
+  } catch (error) {
+    if (!isLockedBinaryCopyError(error) || !options.confirmKillAndRetry || !options.killRunningClimonProcesses) {
+      throw error;
+    }
+
+    if (!(await options.confirmKillAndRetry(error))) {
+      throw error;
+    }
+
+    await options.killRunningClimonProcesses();
+    copyRequiredBinaries(sourceDir, installDir, copyFile);
+  }
+}

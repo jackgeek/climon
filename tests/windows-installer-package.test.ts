@@ -10,7 +10,21 @@ describe("zipEntryNamesForPlatform", () => {
     ]);
   });
 
-  test("does not include Setup.exe in non-Windows zips", () => {
+  test("includes install-climon in the macOS zip", () => {
+    expect(zipEntryNamesForPlatform("darwin-x64")).toEqual([
+      "climon",
+      "climon-server",
+      "install-climon"
+    ]);
+
+    expect(zipEntryNamesForPlatform("darwin-arm64")).toEqual([
+      "climon",
+      "climon-server",
+      "install-climon"
+    ]);
+  });
+
+  test("does not include installer in Linux zips", () => {
     expect(zipEntryNamesForPlatform("linux-x64")).toEqual([
       "climon",
       "climon-server"
