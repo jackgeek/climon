@@ -474,6 +474,26 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   });
   log(`listening on ${host}:${ingestPort.port} (pid ${process.pid})`);
 
+  // Dual-listen: when a tunnel is configured and the primary bind is not
+  // loopback, add a secondary loopback listener so `devtunnel host` (which
+  // forwards to 127.0.0.1) can reach the ingest without exposing to 0.0.0.0.
+  let loopbackServer: ReturnType<typeof createNetServer> | undefined;
+  const needsLoopback = state?.tunnelId && host !== "127.0.0.1" && host !== "::1";
+  if (needsLoopback) {
+    const lb = createNetServer((socket) => onConnection(socket));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        lb.once("error", reject);
+        lb.listen(ingestPort.port, "127.0.0.1", resolve);
+      });
+      loopbackServer = lb;
+      log(`loopback listener added on 127.0.0.1:${ingestPort.port} (for devtunnel)`);
+    } catch {
+      log(`warning: could not bind loopback 127.0.0.1:${ingestPort.port} — tunnel may not reach ingest`);
+      lb.close();
+    }
+  }
+
   const supervisor = new TunnelHostSupervisor({ env });
 
   let watcher: FSWatcher | undefined;
@@ -503,6 +523,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     watcher?.close();
     requestWatcher?.stop();
     supervisor.stop();
+    loopbackServer?.close();
     server.close();
     removeBeacons();
     process.exit(0);
@@ -578,6 +599,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
           // port) and stops accepting new connections.  The callback fires when
           // all existing connections end, but we resolve immediately because we
           // only need the listen fd released so spawned children won't inherit it.
+          loopbackServer?.close();
           server.close(() => {/* drain complete */});
           // Give the event loop one tick to process the close
           setImmediate(resolve);
