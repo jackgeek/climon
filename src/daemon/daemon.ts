@@ -2,7 +2,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { unwatchFile, watchFile } from "node:fs";
 import { Buffer } from "node:buffer";
 import { Terminal } from "@xterm/headless";
-import { ensureClimonHome, getSessionMetaPath, loadConfig, SESSION_ENV_VAR } from "../config.js";
+import { ensureClimonHome, getSessionMetaPath, loadConfig, NEST_LEVEL_ENV_VAR, SESSION_ENV_VAR } from "../config.js";
 import {
   encodeFrame,
   encodeJsonFrame,
@@ -362,7 +362,11 @@ export async function runSessionDaemon(id: string): Promise<void> {
       cwd: meta.cwd,
       cols: meta.cols,
       rows: meta.rows,
-      env: { ...process.env, [SESSION_ENV_VAR]: id }
+      env: {
+        ...process.env,
+        [SESSION_ENV_VAR]: id,
+        [NEST_LEVEL_ENV_VAR]: String((parseInt(process.env[NEST_LEVEL_ENV_VAR] ?? "0", 10) || 0) + 1)
+      }
     });
   } catch (error) {
     const now = new Date().toISOString();

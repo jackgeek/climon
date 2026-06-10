@@ -34,6 +34,12 @@ function normalizeDetachPrefix(value: unknown): number {
  */
 export const SESSION_ENV_VAR = "CLIMON_SESSION_ID";
 
+/**
+ * Environment variable tracking nesting depth of climon sessions. Incremented
+ * each time a daemon spawns a child process.
+ */
+export const NEST_LEVEL_ENV_VAR = "CLIMON_NEST_LEVEL";
+
 export function getClimonHome(env: NodeJS.ProcessEnv = process.env): string {
   return env.CLIMON_HOME ?? join(homedir(), ".climon");
 }

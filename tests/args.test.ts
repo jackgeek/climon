@@ -18,8 +18,8 @@ describe("helpText", () => {
 });
 
 describe("parseArgs", () => {
-  test("defaults to help with no args", () => {
-    expect(parseArgs([])).toEqual({ command: "help" });
+  test("defaults to shell with no args", () => {
+    expect(parseArgs([])).toEqual({ command: "shell" });
   });
 
   test("parses help flags", () => {
@@ -148,5 +148,17 @@ describe("parseArgs", () => {
 
   test("rejects an invalid color", () => {
     expect(() => parseArgs(["--color", "orange", "bash"])).toThrow(/must be one of/);
+  });
+
+  test("bare flags with no command defaults to shell", () => {
+    expect(parseArgs(["--name", "my session"])).toEqual({
+      command: "shell",
+      name: "my session"
+    });
+    expect(parseArgs(["--priority", "5", "--color", "blue"])).toEqual({
+      command: "shell",
+      priority: 5,
+      color: "blue"
+    });
   });
 });

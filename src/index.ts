@@ -6,6 +6,7 @@ import { runCleanupCommand } from "./cli/cleanup-cmd.js";
 import { runConfigCommand } from "./cli/config-cmd.js";
 import { runLinkCommand } from "./cli/link-cmd.js";
 import { delegateToServer } from "./cli/server-exec.js";
+import { detectParentShell, buildShellArgv } from "./detect-shell.js";
 import { runUplink } from "./remote/uplink.js";
 import { runSessionDaemon } from "./daemon/daemon.js";
 import {
@@ -51,6 +52,16 @@ async function main(): Promise<number> {
       return 0;
     case "attach":
       return reconnectSession(parsed.id);
+    case "shell": {
+      const shell = detectParentShell();
+      const argv = buildShellArgv(shell);
+      return startMonitoredCommand(argv, {
+        headless: false,
+        name: parsed.name,
+        priority: parsed.priority,
+        color: parsed.color
+      });
+    }
     case "ls":
       return listSessionsCommand();
     case "kill":

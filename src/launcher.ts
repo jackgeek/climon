@@ -5,6 +5,7 @@ import {
   ensureClimonHome,
   getClimonHome,
   loadConfig,
+  NEST_LEVEL_ENV_VAR,
   resolveConfigSetting,
   SESSION_ENV_VAR
 } from "./config.js";
@@ -17,7 +18,7 @@ import { sortSessionsByPriority } from "./priority.js";
 import { spawnDaemon } from "./spawn-daemon.js";
 import { selfSpawnArgs } from "./self-spawn.js";
 import { AUTO_COLOR_ORDER, ANSI_COLORS, DEFAULT_PRIORITY, parseColorMode } from "./session-meta.js";
-import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
+import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { isProcessAlive, killProcess } from "./process-kill.js";
 import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
 import { discoverDashboard } from "./remote/discovery.js";
@@ -246,14 +247,22 @@ export async function startMonitoredCommand(
   command: string[],
   options: { headless?: boolean; name?: string } & SessionDefaultFlags = {}
 ): Promise<number> {
+  // Warn about nested sessions immediately
+  const nestLevel = parseInt(process.env[NEST_LEVEL_ENV_VAR] ?? "0", 10) || 0;
+  if (nestLevel > 0) {
+    process.stderr.write(`\x1b[33mclimon: nested session (depth ${nestLevel + 1})\x1b[0m\n`);
+  }
+
   if (command.length === 0) {
     throw new Error("Provide a command to monitor, e.g. `climon copilot`.");
   }
-  if (!options.headless && process.env[SESSION_ENV_VAR]) {
-    process.stderr.write(
-      "climon: cannot start a nested session from inside an existing climon session.\n"
-    );
-    return 1;
+  // Verify the command exists before spawning a daemon. Skip check for paths
+  // (which might be scripts) — only validate bare command names via PATH lookup.
+  if (!command[0].includes("/") && !command[0].includes("\\")) {
+    const resolved = Bun.which(command[0]);
+    if (!resolved) {
+      throw new Error(`${command[0]}: command not found`);
+    }
   }
   await ensureClimonHome();
   const config = await loadConfig();
@@ -314,6 +323,20 @@ export async function startMonitoredCommand(
 
   meta.socketPath = await waitForSessionReady(id);
 
+  // If the command exited before we could attach, report its result directly.
+  const freshMeta = await readSessionMeta(id);
+  if (freshMeta && (freshMeta.status === "completed" || freshMeta.status === "failed")) {
+    const code = freshMeta.exitCode ?? (freshMeta.status === "failed" ? 1 : 0);
+    const scrollback = await readScrollback(id);
+    if (scrollback && scrollback.length > 0) {
+      process.stdout.write(scrollback);
+    }
+    if (nestLevel > 0) {
+      process.stderr.write(`\x1b[33mclimon: returning to session (depth ${nestLevel})\x1b[0m\n`);
+    }
+    return code;
+  }
+
   const detachKey = describeDetachKey(config.terminal.detachPrefix);
   process.stdout.write(launchBanner(VERSION, id));
   process.stdout.write(`Detach with ${detachKey} then d.\r\n`);
@@ -322,6 +345,9 @@ export async function startMonitoredCommand(
   if (result.detached) {
     process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
     return 0;
+  }
+  if (nestLevel > 0) {
+    process.stderr.write(`\x1b[33mclimon: returning to session (depth ${nestLevel})\x1b[0m\n`);
   }
   return result.exitCode;
 }

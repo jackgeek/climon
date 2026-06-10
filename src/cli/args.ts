@@ -5,6 +5,7 @@ import type { SessionColorMode } from "../types.js";
 export type ParsedCommand =
   | { command: "help" }
   | { command: "version" }
+  | { command: "shell"; priority?: number; color?: SessionColorMode | null; name?: string }
   | { command: "server"; port?: number; enableRemotes?: boolean }
   | { command: "session"; id: string }
   | { command: "attach"; id: string }
@@ -21,6 +22,8 @@ export type ParsedCommand =
 export const helpText = `climon v${VERSION} — web-based monitor for interactive CLI sessions
 
 Usage:
+  climon [--priority N] [--color C] [--name S]
+                               Start a monitored session for the current shell
   climon [--priority N] [--color C] [--name S] <command> [args...]
                                Run a command in a monitored PTY session
                                (priority 0-1000; color: auto|none|black|red|
@@ -38,10 +41,11 @@ Usage:
   climon kill <id>             Terminate a session
   climon kill --all            Kill or remove all active sessions
   climon --version             Show the climon version
-  climon help                  Show this help
+  climon --help                Show this help
 
 While attached, detach without stopping the command using: Ctrl-\\ then d
 `;
+
 
 interface SessionFlags {
   priority?: number;
@@ -91,7 +95,18 @@ function parseSessionFlags(tokens: string[]): { flags: SessionFlags; rest: strin
 
 export function parseArgs(argv: string[]): ParsedCommand {
   if (argv.length === 0) {
-    return { command: "help" };
+    return { command: "shell" };
+  }
+
+  // Handle bare flags that should trigger shell mode with session flags
+  // e.g. `climon --name "my session"` with no command after flags
+  if (argv[0].startsWith("--") && !["--help", "-h", "--version", "-v"].includes(argv[0])) {
+    const { flags, rest } = parseSessionFlags(argv);
+    if (rest.length === 0) {
+      return { command: "shell", ...flags };
+    }
+    // If there are remaining tokens, treat as `run`
+    return { command: "run", argv: rest, headless: false, ...flags };
   }
 
   const [first, ...rest] = argv;
