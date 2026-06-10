@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const REQUIRED_BINARIES = ["climon", "climon-server"] as const;
@@ -40,7 +40,6 @@ export async function installBinaries(
 
   try {
     copyRequiredBinaries(sourceDir, installDir, copyFile);
-    return;
   } catch (error) {
     if (!isLockedBinaryCopyError(error) || !options.confirmKillAndRetry || !options.killRunningClimonProcesses) {
       throw error;
@@ -53,4 +52,12 @@ export async function installBinaries(
     await options.killRunningClimonProcesses();
     copyRequiredBinaries(sourceDir, installDir, copyFile);
   }
+}
+
+/**
+ * Writes the currently-installed version to a `.version` file in the install
+ * directory so the next upgrade can detect what was previously installed.
+ */
+export function writeVersionFile(installDir: string, version: string): void {
+  writeFileSync(join(installDir, ".version"), version, "utf8");
 }

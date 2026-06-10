@@ -1,0 +1,242 @@
+[
+  {
+    "version": "0.9.1",
+    "changes": [
+      "Bare `climon` command starts a monitored session for the current shell",
+      "Add macOS installer for darwin release zips",
+      "Cross-OS dashboard handoff between WSL and Windows",
+      "Add tunnelLink.keepAlive config setting",
+      "Revert PTY to host size when last browser viewer disconnects",
+      "Add CLIMON_DEBUG=1 logging for remote connections"
+    ]
+  },
+  {
+    "version": "0.9.0",
+    "changes": [
+      "Promote remote dev tunnel support to stable"
+    ]
+  },
+  {
+    "version": "0.8.4",
+    "changes": [
+      "Fix terminal mousewheel scrollback",
+      "Send page keys from terminal panel arrows",
+      "Avoid focusing xterm on terminal panel scroll",
+      "Recover when persisted tunnel is missing on port create"
+    ]
+  },
+  {
+    "version": "0.8.3",
+    "changes": [
+      "Auto-discover WSL/Windows dashboard via server.json beacon",
+      "Show redacted values in `config --debug`",
+      "Add scroll up/down chevrons to mobile terminal toolbar",
+      "Keep dev tunnel alive via periodic health pings"
+    ]
+  },
+  {
+    "version": "0.8.2",
+    "changes": [
+      "Reliable dev tunnel URL detection, health check, and self-heal",
+      "Mobile swipe panel with keyboard and font-size chooser",
+      "Landscape reveal swipe for mobile key bar",
+      "Mobile visual viewport fit and KeyBar refit",
+      "Fix atomic-write rename on transient Windows lock errors"
+    ]
+  },
+  {
+    "version": "0.8.1",
+    "changes": [
+      "Hide background child processes on Windows",
+      "Touch-swipe terminal scrolling on mobile",
+      "Persist and reuse dashboard tunnel metadata across restarts"
+    ]
+  },
+  {
+    "version": "0.8.0",
+    "changes": [
+      "Dashboard tunnel persistence for stable remote URLs"
+    ]
+  },
+  {
+    "version": "0.7.0",
+    "changes": [
+      "Authenticated tunnel link support"
+    ]
+  },
+  {
+    "version": "0.6.0",
+    "changes": [
+      "Notification toggle in sidebar menu",
+      "Collapsible session sidebar with persistent state"
+    ]
+  },
+  {
+    "version": "0.5.0",
+    "changes": [
+      "Per-session clamp lock icon with mobile auto-clamp",
+      "Auto color selection for new sessions",
+      "Browser terminal clamp toggle",
+      "Reject nested climon sessions",
+      "Animated session list reordering",
+      "Hide xterm scrollbar and forward wheel events to terminal"
+    ]
+  },
+  {
+    "version": "0.4.1",
+    "changes": [
+      "Rename 'available' status and harden attention idle handling",
+      "Per-session clamp lock icon visible on mobile"
+    ]
+  },
+  {
+    "version": "0.4.0",
+    "changes": [
+      "Add paused session status controls",
+      "Interactive config file purge command",
+      "Reclaim stale metadata locks on recovery",
+      "Windows setup installer (Setup.exe) in release zips",
+      "Fix terminal corruption when switching sessions"
+    ]
+  },
+  {
+    "version": "0.3.1",
+    "changes": [
+      "Gate remotes menu behind server flag"
+    ]
+  },
+  {
+    "version": "0.3.0",
+    "changes": [
+      "Dashboard attention alerts with audio notification",
+      "Show session status in header",
+      "PowerShell remote diagnostics"
+    ]
+  },
+  {
+    "version": "0.2.0",
+    "changes": [
+      "Polish dashboard terminal edge cases"
+    ]
+  },
+  {
+    "version": "0.1.17",
+    "changes": [
+      "Config stored as JSONC with generated settings registry",
+      "Generate config help from registry",
+      "Fix terminal size sent before replay",
+      "Fix web terminal focus and refit"
+    ]
+  },
+  {
+    "version": "0.1.16",
+    "changes": [
+      "Dashboard attention alerts with audio",
+      "Show session status in header",
+      "PowerShell remote diagnostics"
+    ]
+  },
+  {
+    "version": "0.1.15",
+    "changes": [
+      "Collapsible session sidebar with persistent state",
+      "Compact status badge labels",
+      "Attention acknowledgement (available status)",
+      "Auto session color selection",
+      "Browser terminal clamp toggle"
+    ]
+  },
+  {
+    "version": "0.1.14",
+    "changes": [
+      "Windows setup installer (Setup.exe) in release zips",
+      "Animated session list reordering",
+      "Prompt before replacing locked setup binaries"
+    ]
+  },
+  {
+    "version": "0.1.13",
+    "changes": [
+      "Kill all local sessions command",
+      "Direct Windows/WSL bridge",
+      "Preserve starting sessions during kill all"
+    ]
+  },
+  {
+    "version": "0.1.12",
+    "changes": [
+      "Use loopback TCP session sockets"
+    ]
+  },
+  {
+    "version": "0.1.11",
+    "changes": [
+      "Bulk kill command for local sessions"
+    ]
+  },
+  {
+    "version": "0.1.10",
+    "changes": [
+      "Dev tunnel remote clients with auto-create and manual setup",
+      "Remotes dialog in dashboard",
+      "Per-platform release zip packaging",
+      "Configurable detach prefix (default Ctrl-\\)",
+      "Hierarchical config cascade",
+      "Native Windows (ConPTY) support"
+    ]
+  },
+  {
+    "version": "0.1.9",
+    "changes": [
+      "Default session name to the terminal title",
+      "Broadcast terminal title from session name",
+      "Add terminal.setTitle config flag"
+    ]
+  },
+  {
+    "version": "0.1.8",
+    "changes": [
+      "Invert priority order, accent on right, header color, true black theme"
+    ]
+  },
+  {
+    "version": "0.1.7",
+    "changes": [
+      "Session name, priority, and color metadata",
+      "Edit dialog for session settings with parent inheritance",
+      "Color accent on session items",
+      "Sort sessions by priority then status"
+    ]
+  },
+  {
+    "version": "0.1.6",
+    "changes": [
+      "Mobile key bar via right-to-left edge swipe",
+      "Fix periodic terminal flicker from idle status toggles"
+    ]
+  },
+  {
+    "version": "0.1.5",
+    "changes": [
+      "Mobile special-key bar component"
+    ]
+  },
+  {
+    "version": "0.1.4",
+    "changes": [
+      "Revert PTY to host size when last viewer disconnects",
+      "Hide terminal on mobile until maximized",
+      "Show climon version in help text and on startup",
+      "IPv4/IPv6 toggle for remote clients"
+    ]
+  },
+  {
+    "version": "0.1.3",
+    "changes": [
+      "Remote SSH client management UI",
+      "Devbox uplink agent with hardened SSH",
+      "Git-style `climon config` command",
+      "Dashboard is loopback-only (remove --lan and server token)"
+    ]
+  }
+]

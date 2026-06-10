@@ -8,7 +8,7 @@ import {
   ensureProfilePath,
   getDefaultInstallDir,
   killRunningClimonProcesses,
-} from "./macos.js";
+} from "./linux.js";
 import {
   formatChangelog,
   getChangesSince,
@@ -47,8 +47,8 @@ async function confirmKillAndRetry(error: unknown): Promise<boolean> {
 }
 
 export async function main(): Promise<void> {
-  if (process.platform !== "darwin") {
-    throw new Error("This installer can only install climon on macOS.");
+  if (process.platform !== "linux") {
+    throw new Error("This installer can only install climon on Linux.");
   }
 
   const installDir = getDefaultInstallDir();

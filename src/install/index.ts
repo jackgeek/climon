@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { installBinaries } from "./files.js";
+import { installBinaries, writeVersionFile } from "./files.js";
 import { ensurePathEntryFirst } from "./path.js";
 import { killRunningClimonProcesses } from "./processes.js";
 import {
@@ -11,6 +11,12 @@ import {
   readUserPath,
   writeUserPath
 } from "./windows.js";
+import {
+  formatChangelog,
+  getChangesSince,
+  loadChangelog,
+  readInstalledVersion,
+} from "./changelog.js";
 
 export type SetupCliRuntime = {
   main?: () => void | Promise<void>;
@@ -88,16 +94,29 @@ export async function main(): Promise<void> {
   }
 
   const installDir = join(getLocalAppData(), "Programs", "climon");
+  const previousVersion = readInstalledVersion(installDir);
+
   await installBinaries(installerSourceDir(), installDir, {
     confirmKillAndRetry,
     killRunningClimonProcesses
   });
+
+  const { VERSION } = await import("../version.js");
+  writeVersionFile(installDir, VERSION);
+
   const changedPath = updateUserPath(installDir);
 
-  console.log(`Installed climon to ${installDir}`);
+  console.log(`Installed climon ${VERSION} to ${installDir}`);
   console.log(changedPath
     ? "Updated your user PATH so climon resolves to this install first. Open a new terminal to use it."
     : "climon is already first on your user PATH.");
+
+  const changelog = loadChangelog();
+  const newEntries = getChangesSince(changelog, previousVersion);
+  const formatted = formatChangelog(newEntries);
+  if (formatted) {
+    console.log(formatted);
+  }
 }
 
 export async function runSetupCli(runtime: SetupCliRuntime = {}): Promise<void> {

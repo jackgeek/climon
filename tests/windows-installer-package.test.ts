@@ -24,10 +24,11 @@ describe("zipEntryNamesForPlatform", () => {
     ]);
   });
 
-  test("does not include installer in Linux zips", () => {
+  test("includes install-climon in Linux zips", () => {
     expect(zipEntryNamesForPlatform("linux-x64")).toEqual([
       "climon",
-      "climon-server"
+      "climon-server",
+      "install-climon"
     ]);
   });
 });
