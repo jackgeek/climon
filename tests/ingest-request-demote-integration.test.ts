@@ -47,7 +47,7 @@ describe("ingest filesystem shutdown-request (integration)", () => {
       });
       // The ingest publishes its bound interface; on a non-Windows runner this is loopback.
       expect(state.host).toBeTruthy();
-      expect(await tcpOpen(state.host, state.port)).toBe(true);
+      expect(await tcpOpen(state.host!, state.port)).toBe(true);
 
       await writeShutdownRequestToDir(home, { requestedBy: "Windows", ts: Date.now() });
 

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, sep, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { join, sep } from "node:path";
 import {
   candidateConfigDirs,
   coerceConfigValue,

@@ -4,7 +4,7 @@ import { devtunnelEnv, type Runner, type RunResult } from "../remote/tunnel.js";
 export type DashboardTunnelRunner = Runner;
 
 export const dashboardTunnelAuthMessage =
-  "Dev tunnels is not authenticated. Run `devtunnel login user` and try again.";
+  "devtunnel is not authenticated. Run `devtunnel user login` and try again.";
 
 export interface DashboardTunnelStatus {
   devtunnelAvailable: boolean;

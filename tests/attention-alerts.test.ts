@@ -155,6 +155,63 @@ describe("attention notification content", () => {
       expect(requested).toBe(0);
       expect(created).toBe(0);
     });
+
+    test("deduplicates notifications across multiple adapter instances (cross-tab)", async () => {
+      const originalNotification = globalThis.Notification;
+      const originalLocalStorage = (globalThis as Record<string, unknown>).localStorage;
+      let created = 0;
+      class FakeNotification {
+        static permission: NotificationPermission = "granted";
+        static requestPermission = async (): Promise<NotificationPermission> => "granted";
+        constructor() {
+          created++;
+        }
+      }
+      const store = new Map<string, string>();
+      const fakeStorage = {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => { store.set(key, value); },
+        removeItem: (key: string) => { store.delete(key); }
+      };
+      Object.defineProperty(globalThis, "Notification", {
+        configurable: true,
+        value: FakeNotification
+      });
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: fakeStorage
+      });
+      // Ensure notifications read as enabled.
+      fakeStorage.setItem("climon.notificationsEnabled", "true");
+
+      try {
+        const adapter1 = createBrowserNotificationAdapter();
+        const adapter2 = createBrowserNotificationAdapter();
+        const alert = {
+          title: "climon needs attention",
+          body: "Session needs attention",
+          sessionId: "sess-dedup",
+          key: "sess-dedup:token-1"
+        };
+        await adapter1.notify(alert);
+        await adapter2.notify(alert);
+        // Only the first adapter should have created a Notification.
+        expect(created).toBe(1);
+      } finally {
+        Object.defineProperty(globalThis, "Notification", {
+          configurable: true,
+          value: originalNotification
+        });
+        if (originalLocalStorage !== undefined) {
+          Object.defineProperty(globalThis, "localStorage", {
+            configurable: true,
+            value: originalLocalStorage
+          });
+        } else {
+          delete (globalThis as Record<string, unknown>).localStorage;
+        }
+      }
+    });
   });
 
   describe("notificationsEnabledFromState", () => {

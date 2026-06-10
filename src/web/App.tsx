@@ -562,6 +562,15 @@ export function App() {
     removeFromList(session.id);
   }
 
+  function handleRemoveDisconnected(): void {
+    const targets = sessions.filter(
+      (s) => s.status === "completed" || s.status === "failed" || s.status === "disconnected"
+    );
+    for (const s of targets) {
+      void deleteSession(s.id).then(() => removeFromList(s.id));
+    }
+  }
+
   function handleCreated(id: string): void {
     if (sessions.some((s) => s.id === id)) {
       setActiveId(id);
@@ -715,6 +724,7 @@ export function App() {
           onTunnelLink={() => void handleTunnelLink()}
           onCloseTunnelLink={() => void handleCloseTunnelLink()}
           showRemotesMenu={remotesEnabled}
+          onRemoveDisconnected={handleRemoveDisconnected}
           viewMode={authoritativeViewMode ?? "clamped"}
           viewModeLocked={false}
           viewModeToggleable={authoritativeViewMode !== null}

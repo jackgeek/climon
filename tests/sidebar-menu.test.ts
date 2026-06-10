@@ -151,7 +151,8 @@ describe("Sidebar menu", () => {
       viewModeLocked: false,
       viewModeToggleable: false,
       onViewModeToggle: () => {},
-      onMaximize: () => {}
+      onMaximize: () => {},
+      onRemoveDisconnected: () => {}
     };
 
     const disabled = renderToStaticMarkup(createElement(Sidebar, commonProps));
@@ -184,7 +185,8 @@ describe("Sidebar menu", () => {
       viewModeLocked: false,
       viewModeToggleable: false,
       onViewModeToggle: () => {},
-      onMaximize: () => {}
+      onMaximize: () => {},
+      onRemoveDisconnected: () => {}
     };
 
     const html = renderToStaticMarkup(createElement(Sidebar, commonProps));
@@ -215,7 +217,8 @@ describe("Sidebar menu", () => {
       viewModeLocked: false,
       viewModeToggleable: false,
       onViewModeToggle: () => {},
-      onMaximize: () => {}
+      onMaximize: () => {},
+      onRemoveDisconnected: () => {}
     };
 
     const expanded = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, collapsed: false }));

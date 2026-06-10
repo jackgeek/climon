@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { basename } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { helpText, parseArgs } from "./cli/args.js";
@@ -55,9 +56,10 @@ async function main(): Promise<number> {
     case "shell": {
       const shell = detectParentShell();
       const argv = buildShellArgv(shell);
+      const shellName = parsed.name ?? basename(shell).replace(/\.exe$/i, "");
       return startMonitoredCommand(argv, {
         headless: false,
-        name: parsed.name,
+        name: shellName,
         priority: parsed.priority,
         color: parsed.color
       });

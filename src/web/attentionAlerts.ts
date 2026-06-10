@@ -249,11 +249,49 @@ function createDocumentTitleAdapter(): TitleAdapter {
   };
 }
 
+/**
+ * Deduplication window (ms) for cross-tab notification coordination.
+ * If another tab already fired a notification for the same alert key within
+ * this window, this tab skips it.
+ */
+const NOTIFICATION_DEDUP_WINDOW_MS = 5000;
+const NOTIFICATION_DEDUP_PREFIX = "climon.notified:";
+
+/**
+ * Attempts to claim a notification so only one tab fires it. Returns true if
+ * this tab won the claim (i.e. should fire the notification).
+ */
+function claimNotification(alertKey: string): boolean {
+  const storageKey = `${NOTIFICATION_DEDUP_PREFIX}${alertKey}`;
+  const now = Date.now();
+  try {
+    const storage = typeof localStorage !== "undefined" ? localStorage : null;
+    if (!storage) {
+      return true;
+    }
+    const existing = storage.getItem(storageKey);
+    if (existing) {
+      const claimedAt = Number(existing);
+      if (now - claimedAt < NOTIFICATION_DEDUP_WINDOW_MS) {
+        return false;
+      }
+    }
+    storage.setItem(storageKey, String(now));
+    return true;
+  } catch {
+    // Storage unavailable — fire anyway to avoid silent failure.
+    return true;
+  }
+}
+
 export function createBrowserNotificationAdapter(): NotificationAdapter {
   return {
     notify: async (alert) => {
       const permission = browserNotificationPermission();
       if (!notificationsEnabledFromState(permission, readBrowserNotificationsEnabled())) {
+        return;
+      }
+      if (!claimNotification(alert.key)) {
         return;
       }
       new Notification(alert.title, { body: alert.body });

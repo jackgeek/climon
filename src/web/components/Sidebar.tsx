@@ -26,6 +26,7 @@ import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
 import {
   getStableSessionItemRef,
   notificationsMenuLabel,
+  removeDisconnectedMenuLabel,
   remotesMenuLabel,
   scrollActiveSessionIntoView,
   type StableSessionItemRefRegistry
@@ -150,6 +151,7 @@ interface Props {
   onTunnelLink: () => void;
   onCloseTunnelLink: () => void;
   showRemotesMenu?: boolean;
+  onRemoveDisconnected: () => void;
   viewMode: TerminalResizeMode;
   viewModeLocked?: boolean;
   viewModeToggleable?: boolean;
@@ -177,6 +179,7 @@ export function Sidebar({
   onTunnelLink,
   onCloseTunnelLink,
   showRemotesMenu = false,
+  onRemoveDisconnected,
   viewMode,
   viewModeLocked = false,
   viewModeToggleable = false,
@@ -227,6 +230,9 @@ export function Sidebar({
                   <MenuItem onClick={onCloseTunnelLink}>{closeTunnelLinkMenuLabel}</MenuItem>
                 )}
                 {showRemotesMenu && <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>}
+                {sessions.some((s) => s.status === "completed" || s.status === "failed" || s.status === "disconnected") && (
+                  <MenuItem onClick={onRemoveDisconnected}>{removeDisconnectedMenuLabel}</MenuItem>
+                )}
               </MenuList>
             </MenuPopover>
           </Menu>

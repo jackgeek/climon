@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
+import { basename } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
   ensureClimonHome,
   getClimonHome,
   loadConfig,
   NEST_LEVEL_ENV_VAR,
-  resolveConfigSetting,
-  SESSION_ENV_VAR
+  resolveConfigSetting
 } from "./config.js";
 import { connectToSession } from "./client/connect.js";
 import { describeDetachKey } from "./client/detach-key.js";
@@ -179,6 +179,20 @@ async function ensureUplink(): Promise<void> {
   child.unref();
 }
 
+/**
+ * Builds a user-friendly display command from the raw argv. If the first
+ * element is an absolute path, replaces it with just the executable name
+ * (stripping `.exe` on Windows) so "C:\...\powershell.exe" becomes "powershell".
+ */
+function buildDisplayCommand(command: string[]): string {
+  if (command.length === 0) return "";
+  const first = command[0];
+  const isAbsolute = first.startsWith("/") || /^[A-Za-z]:[/\\]/.test(first);
+  if (!isAbsolute) return command.join(" ");
+  const short = basename(first).replace(/\.exe$/i, "");
+  return [short, ...command.slice(1)].join(" ");
+}
+
 export interface SessionDefaultFlags {
   color?: SessionColorMode | null;
   priority?: number;
@@ -289,7 +303,7 @@ export async function startMonitoredCommand(
     // otherwise fall back to the command string.
     const queried = await queryTerminalTitle();
     const inferred = queried ? sanitizeTitle(queried).trim() : "";
-    options.name = inferred.length > 0 ? inferred : command.join(" ");
+    options.name = inferred.length > 0 ? inferred : buildDisplayCommand(command);
   }
 
   const id = generateSessionId();
@@ -298,7 +312,7 @@ export async function startMonitoredCommand(
   const meta: SessionMeta = {
     id,
     command,
-    displayCommand: command.join(" "),
+    displayCommand: buildDisplayCommand(command),
     name: options.name,
     priority: defaults.priority,
     color: defaults.color ?? undefined,

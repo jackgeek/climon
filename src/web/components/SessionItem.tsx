@@ -227,7 +227,7 @@ export function SessionItem({
           }}
         />
       )}
-      {active && !compact && (
+      {!compact && (
         <Button
           className={mergeClasses("climon-lock", styles.lockBtn)}
           appearance="subtle"
