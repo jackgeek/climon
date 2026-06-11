@@ -70,7 +70,7 @@ async function askYesNo(question: string): Promise<boolean> {
 
 async function confirmKillAndRetry(error: unknown): Promise<boolean> {
   console.error(`Failed to copy climon binaries: ${error instanceof Error ? error.message : String(error)}`);
-  return askYesNo("climon appears to be running. Kill climon processes and try again? [y/N] ");
+  return askYesNo("The file may be locked by climon or another program (antivirus, Explorer). Kill climon processes and retry? [y/N] ");
 }
 
 export async function pauseForExit(): Promise<void> {

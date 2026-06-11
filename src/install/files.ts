@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** Files in the source (zip) directory and their installed names. */
@@ -23,6 +23,24 @@ export function isLockedBinaryCopyError(error: unknown): boolean {
     && LOCKED_COPY_ERROR_CODES.has(error.code);
 }
 
+/**
+ * Try to move an existing destination file out of the way before overwriting.
+ * On Windows, antivirus or indexer can hold a handle that prevents overwrite
+ * but still allows rename within the same directory.
+ */
+function displaceExisting(destPath: string): void {
+  if (!existsSync(destPath)) return;
+  const displaced = `${destPath}.old`;
+  try {
+    renameSync(destPath, displaced);
+  } catch {
+    // If rename also fails, fall through and let the copy report the error.
+    return;
+  }
+  // Best-effort cleanup of the displaced file.
+  try { unlinkSync(displaced); } catch { /* will be cleaned up next install */ }
+}
+
 function copyRequiredBinaries(sourceDir: string, installDir: string, copyFile: CopyFile): void {
   mkdirSync(installDir, { recursive: true });
 
@@ -31,7 +49,9 @@ function copyRequiredBinaries(sourceDir: string, installDir: string, copyFile: C
     if (!existsSync(sourcePath)) {
       throw new Error(`Required installer sibling is missing: ${source}`);
     }
-    copyFile(sourcePath, join(installDir, dest));
+    const destPath = join(installDir, dest);
+    displaceExisting(destPath);
+    copyFile(sourcePath, destPath);
   }
 }
 
