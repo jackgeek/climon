@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { delegateToServer, resolveServerEnv, resolveServerInvocation } from "../src/cli/server-exec.js";
+import { delegateToServer, resolveServerBundle, resolveServerEnv, resolveServerInvocation } from "../src/cli/server-exec.js";
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), "climon-srvexec-"));
@@ -104,10 +104,34 @@ describe("resolveServerEnv", () => {
 });
 
 describe("delegateToServer", () => {
-  test("returns 127 and warns when the server binary is missing", () => {
+  test("returns 127 and warns when the server binary is missing", async () => {
     const env = {
       CLIMON_SERVER_BIN: "/nonexistent/climon-server-xyz"
     } as NodeJS.ProcessEnv;
-    expect(delegateToServer(["server"], env, "/usr/bin/climon")).toBe(127);
+    expect(await delegateToServer(["server"], env, "/usr/bin/climon")).toBe(127);
+  });
+});
+
+describe("resolveServerBundle", () => {
+  test("finds a sibling climon-server next to the executable", () => {
+    const dir = tmp();
+    const bundle = join(dir, "climon-server");
+    writeFileSync(bundle, "encrypted-content");
+    const execPath = join(dir, "climon");
+    expect(resolveServerBundle({} as NodeJS.ProcessEnv, execPath)).toBe(bundle);
+  });
+
+  test("honors CLIMON_SERVER_BUNDLE override", () => {
+    const dir = tmp();
+    const bundle = join(dir, "custom-server");
+    writeFileSync(bundle, "encrypted-content");
+    const env = { CLIMON_SERVER_BUNDLE: bundle } as NodeJS.ProcessEnv;
+    expect(resolveServerBundle(env, "/some/other/path/climon")).toBe(bundle);
+  });
+
+  test("returns undefined when no bundle exists", () => {
+    const dir = tmp();
+    const execPath = join(dir, "climon");
+    expect(resolveServerBundle({} as NodeJS.ProcessEnv, execPath)).toBeUndefined();
   });
 });

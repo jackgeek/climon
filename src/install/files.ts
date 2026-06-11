@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const REQUIRED_BINARIES = ["climon.exe", "climon-server.exe"] as const;
+const REQUIRED_BINARIES = ["climon.exe", "climon-server"] as const;
 const LOCKED_COPY_ERROR_CODES = new Set(["EBUSY", "EACCES", "EPERM"]);
 
 export type CopyFile = (source: string, destination: string) => void;

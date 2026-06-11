@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { helpText, parseArgs } from "./cli/args.js";
@@ -17,6 +17,8 @@ import {
 } from "./launcher.js";
 import { VERSION } from "./version.js";
 
+const INSTALLER_BUNDLE_NAME = "climon-installer";
+
 function resolveDevServerEntrypoint(): string | undefined {
   if (!import.meta.url.startsWith("file:")) {
     return undefined;
@@ -29,7 +31,32 @@ function resolveDevServerEntrypoint(): string | undefined {
   }
 }
 
+/**
+ * Checks if an installer bundle exists next to the executable.
+ * If so, imports and runs it (self-install mode).
+ */
+async function tryRunInstaller(): Promise<number | undefined> {
+  const installerPath = join(dirname(process.execPath), INSTALLER_BUNDLE_NAME);
+  if (!existsSync(installerPath)) return undefined;
+
+  const mod = await import(installerPath);
+  if (typeof mod.runSetupCli === "function") {
+    await mod.runSetupCli();
+    return 0;
+  }
+  if (typeof mod.main === "function") {
+    await mod.main();
+    return 0;
+  }
+  process.stderr.write("climon: installer bundle does not export runSetupCli() or main()\n");
+  return 1;
+}
+
 async function main(): Promise<number> {
+  // If an installer bundle is present next to the executable, run it.
+  const installerResult = await tryRunInstaller();
+  if (installerResult !== undefined) return installerResult;
+
   const parsed = parseArgs(process.argv.slice(2));
 
   switch (parsed.command) {
@@ -40,7 +67,7 @@ async function main(): Promise<number> {
       process.stdout.write(`climon v${VERSION}\n`);
       return 0;
     case "server":
-      return delegateToServer(
+      return await delegateToServer(
         process.argv.slice(2),
         process.env,
         process.execPath,

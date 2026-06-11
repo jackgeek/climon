@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const SERVER_BIN_NAME = "climon-server";
+const SERVER_BUNDLE_NAME = "climon-server";
 
 export interface ServerInvocation {
   file: string;
@@ -18,6 +19,23 @@ export function resolveServerEnv(
     return env;
   }
   return { ...env, CLIMON_CLIENT_BIN: execPath };
+}
+
+/**
+ * Resolves the path to a sibling encrypted server bundle that can be loaded
+ * in-process. Returns undefined if no bundle is found.
+ */
+export function resolveServerBundle(
+  env: NodeJS.ProcessEnv,
+  execPath: string
+): string | undefined {
+  const override = env.CLIMON_SERVER_BUNDLE?.trim();
+  if (override && existsSync(override)) return override;
+
+  const sibling = join(dirname(execPath), SERVER_BUNDLE_NAME);
+  if (existsSync(sibling)) return sibling;
+
+  return undefined;
 }
 
 /**
@@ -51,19 +69,71 @@ export function resolveServerInvocation(
 }
 
 /**
- * Resolves and runs the dashboard server with inherited stdio, returning its
- * exit code. Prints an actionable message when the server binary is missing.
+ * Runs the dashboard server in-process by importing the bundled server JS file.
+ * Returns its exit code (0 on success).
  */
-export function delegateToServer(
+async function runServerInProcess(
+  bundlePath: string,
+  port: number | undefined,
+  enableRemotes: boolean | undefined
+): Promise<number> {
+  const mod = await import(bundlePath);
+  if (typeof mod.startServer === "function") {
+    await mod.startServer({ port, enableRemotes });
+    return 0;
+  }
+  if (typeof mod.default?.startServer === "function") {
+    await mod.default.startServer({ port, enableRemotes });
+    return 0;
+  }
+  process.stderr.write(
+    `climon: server bundle at ${bundlePath} does not export startServer()\n`
+  );
+  return 1;
+}
+
+/**
+ * Resolves and runs the dashboard server. Prefers loading a sibling JS bundle
+ * in-process (single process) over spawning a separate server binary.
+ */
+export async function delegateToServer(
   forwardArgs: string[],
   env: NodeJS.ProcessEnv,
   execPath: string,
   devEntrypoint?: string
-): number {
+): Promise<number> {
+  // Set CLIMON_CLIENT_BIN before anything else so the server can reference it.
+  const resolvedEnv = resolveServerEnv(env, execPath, devEntrypoint);
+  Object.assign(process.env, resolvedEnv);
+
+  // In dev mode, just import the server source directly via a runtime path
+  // so the bundler doesn't pull server code into the client binary.
+  if (devEntrypoint && existsSync(devEntrypoint)) {
+    const { parseArgs } = await import("./args.js");
+    const parsed = parseArgs(forwardArgs);
+    if (parsed.command === "server") {
+      const serverModPath = join(dirname(devEntrypoint), "server", "server.js");
+      const mod = await import(serverModPath);
+      await mod.startServer({ port: parsed.port, enableRemotes: parsed.enableRemotes });
+      return 0;
+    }
+  }
+
+  // Try loading a sibling JS bundle in-process (avoids spawning a 2nd process).
+  const bundlePath = resolveServerBundle(env, execPath);
+  if (bundlePath) {
+    const { parseArgs } = await import("./args.js");
+    const parsed = parseArgs(forwardArgs);
+    if (parsed.command === "server") {
+      return runServerInProcess(bundlePath, parsed.port, parsed.enableRemotes);
+    }
+  }
+
+  // Fallback: spawn a separate server binary.
   const { file, args } = resolveServerInvocation(forwardArgs, env, execPath, devEntrypoint);
   const result = spawnSync(file, args, {
     stdio: "inherit",
-    env: resolveServerEnv(env, execPath, devEntrypoint),
+    env: resolvedEnv,
     windowsHide: true
   });
   if (result.error) {

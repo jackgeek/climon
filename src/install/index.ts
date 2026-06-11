@@ -1,6 +1,5 @@
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { fileURLToPath } from "node:url";
 import { installBinaries, writeVersionFile } from "./files.js";
 import { ensurePathEntryFirst } from "./path.js";
 import { killRunningClimonProcesses } from "./processes.js";
@@ -55,10 +54,8 @@ export function updateUserPath(installDir: string): boolean {
 }
 
 function installerSourceDir(): string {
-  if (process.execPath.toLowerCase().endsWith("setup.exe")) {
-    return dirname(process.execPath);
-  }
-  return dirname(fileURLToPath(import.meta.url));
+  // When loaded in-process by climon.exe, the files are next to the executable.
+  return dirname(process.execPath);
 }
 
 async function askYesNo(question: string): Promise<boolean> {

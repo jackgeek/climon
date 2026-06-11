@@ -9,18 +9,23 @@
  * Runs the asset-embedding step first, then `bun build --compile` per target.
  */
 import { $ } from "bun";
-import { mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
 import { resolve, dirname } from "node:path";
-import { zipSync, type ZipOptions } from "fflate";
+import { tmpdir } from "node:os";
+import { zipSync, unzipSync, type ZipOptions } from "fflate";
 
 const projectRoot = dirname(dirname(import.meta.path));
 const distDir = resolve(projectRoot, "dist");
 const stageRoot = resolve(distDir, ".stage");
 const clientEntrypoint = resolve(projectRoot, "src/index.ts");
-const serverEntrypoint = resolve(projectRoot, "src/server.ts");
-const windowsInstallerEntrypoint = resolve(projectRoot, "src/install/index.ts");
-const macosInstallerEntrypoint = resolve(projectRoot, "src/install/macos-main.ts");
-const linuxInstallerEntrypoint = resolve(projectRoot, "src/install/linux-main.ts");
+const serverBundleEntrypoint = resolve(projectRoot, "src/server-bundle-entry.ts");
+const installerBundleEntrypoint = resolve(projectRoot, "src/installer-bundle-entry.ts");
 const embeddedAssetsPath = resolve(projectRoot, "src/server/embedded-assets.ts");
 
 type BuildTarget = {
@@ -36,15 +41,7 @@ type ZipEntry = {
 export function zipEntryNamesForPlatform(platform: string): string[] {
   const isWindows = platform.startsWith("windows");
   const exe = isWindows ? ".exe" : "";
-  const names = [`climon${exe}`, `climon-server${exe}`];
-
-  if (isWindows) {
-    names.push("Setup.exe");
-  } else {
-    names.push("install-climon");
-  }
-
-  return names;
+  return [`climon${exe}`, "climon-server", "climon-installer"];
 }
 
 const targets: BuildTarget[] = [
@@ -54,6 +51,58 @@ const targets: BuildTarget[] = [
   { platform: "darwin-arm64", target: "bun-darwin-arm64" },
   { platform: "windows-x64", target: "bun-windows-x64" },
 ];
+
+// Map bun target names to their GitHub release archive names.
+// Bun's cross-compile download fails on Windows when the project is not on the
+// C: drive (https://github.com/oven-sh/bun/issues/25346). We work around this
+// by pre-downloading the base executables and passing --compile-executable-path.
+const targetToReleaseName: Record<string, string> = {
+  "bun-linux-x64": "bun-linux-x64",
+  "bun-linux-arm64": "bun-linux-aarch64",
+  "bun-darwin-x64": "bun-darwin-x64",
+  "bun-darwin-arm64": "bun-darwin-aarch64",
+};
+
+const bunVersion = Bun.version; // e.g. "1.3.14"
+const crossBinCache = resolve(tmpdir(), "climon-cross-compile-cache", bunVersion);
+
+/**
+ * Ensures a cross-compile base executable is available locally for the given
+ * target. Returns the path to the extracted bun binary, or undefined if the
+ * target is the native platform (no workaround needed).
+ */
+async function ensureCrossBinary(target: string): Promise<string | undefined> {
+  const releaseName = targetToReleaseName[target];
+  if (!releaseName) return undefined; // native target (e.g. bun-windows-x64)
+
+  const binPath = resolve(crossBinCache, releaseName, "bun");
+  if (existsSync(binPath)) return binPath;
+
+  const url = `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/${releaseName}.zip`;
+  console.log(`  ↓ Downloading ${releaseName} base executable...`);
+  mkdirSync(crossBinCache, { recursive: true });
+
+  const resp = await fetch(url, { redirect: "follow" });
+  if (!resp.ok) throw new Error(`Failed to download ${url}: ${resp.status}`);
+  const zipData = new Uint8Array(await resp.arrayBuffer());
+
+  // Extract using fflate
+  const extracted = unzipSync(zipData);
+  for (const [name, data] of Object.entries(extracted)) {
+    if (data.length === 0) continue; // skip directories
+    const outPath = resolve(crossBinCache, name);
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, data);
+  }
+
+  if (!existsSync(binPath)) {
+    throw new Error(
+      `Expected extracted binary at ${binPath} but it was not found`
+    );
+  }
+
+  return binPath;
+}
 
 async function main() {
   // Step 1: Embed assets so the server binary serves the dashboard bundle.
@@ -65,34 +114,35 @@ async function main() {
   mkdirSync(distDir, { recursive: true });
 
   try {
+    mkdirSync(stageRoot, { recursive: true });
+
+    // Build the server JS bundle once — it's platform-independent so the same
+    // minified bundle is shared across all platform zips.
+    const serverBundleOut = resolve(stageRoot, "climon-server");
+    console.log("→ Bundling climon-server...");
+    await $`bun build ${serverBundleEntrypoint} --define __CLIMON_EMBEDDED__=true --target bun --format esm --minify --outfile ${serverBundleOut}`;
+    console.log(`  ✓ climon-server (${(readFileSync(serverBundleOut).length / 1024).toFixed(0)} KB)`);
+
+    // Build the installer JS bundle once — also platform-independent.
+    const installerBundleOut = resolve(stageRoot, "climon-installer");
+    console.log("→ Bundling climon-installer...");
+    await $`bun build ${installerBundleEntrypoint} --target bun --format esm --minify --outfile ${installerBundleOut}`;
+    console.log(`  ✓ climon-installer (${(readFileSync(installerBundleOut).length / 1024).toFixed(0)} KB)`);
+
     for (const { platform, target } of targets) {
       const isWindows = platform.startsWith("windows");
-      const isDarwin = platform.startsWith("darwin");
-      const isLinux = platform.startsWith("linux");
       const exe = isWindows ? ".exe" : "";
       const stageDir = resolve(stageRoot, platform);
       mkdirSync(stageDir, { recursive: true });
 
       const clientOut = resolve(stageDir, `climon${exe}`);
-      const serverOut = resolve(stageDir, `climon-server${exe}`);
-      const installerOut = isWindows
-        ? resolve(stageDir, "Setup.exe")
-        : resolve(stageDir, "install-climon");
 
       console.log(`→ Compiling climon (${target})...`);
-      await $`bun build ${clientEntrypoint} --compile --target ${target} --outfile ${clientOut}`;
-      console.log(`→ Compiling climon-server (${target})...`);
-      await $`bun build ${serverEntrypoint} --compile --define __CLIMON_EMBEDDED__=true --target ${target} --outfile ${serverOut}`;
-      if (isWindows) {
-        console.log(`→ Compiling Setup.exe (${target})...`);
-        await $`bun build ${windowsInstallerEntrypoint} --compile --target ${target} --outfile ${installerOut}`;
-      } else if (isDarwin) {
-        console.log(`→ Compiling install-climon (${target})...`);
-        await $`bun build ${macosInstallerEntrypoint} --compile --target ${target} --outfile ${installerOut}`;
-      } else if (isLinux) {
-        console.log(`→ Compiling install-climon (${target})...`);
-        await $`bun build ${linuxInstallerEntrypoint} --compile --target ${target} --outfile ${installerOut}`;
-      }
+      const crossBin = await ensureCrossBinary(target);
+      const execPathArgs = crossBin
+        ? ["--compile-executable-path", crossBin]
+        : [];
+      await $`bun build ${clientEntrypoint} --compile --target ${target} ${execPathArgs} --outfile ${clientOut}`;
 
       // Read the produced binaries back and zip them under bare names. On Unix,
       // set os=3 + 0o755 perms so extracted binaries keep their executable bit.
@@ -102,12 +152,9 @@ async function main() {
 
       const zipFiles: ZipEntry[] = [
         { name: `climon${exe}`, path: clientOut },
-        { name: `climon-server${exe}`, path: serverOut },
+        { name: "climon-server", path: serverBundleOut },
+        { name: "climon-installer", path: installerBundleOut },
       ];
-
-      if (installerOut) {
-        zipFiles.push({ name: isWindows ? "Setup.exe" : "install-climon", path: installerOut });
-      }
 
       const zipEntries: Record<string, [Uint8Array, ZipOptions]> = {};
 
