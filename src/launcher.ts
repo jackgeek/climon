@@ -9,21 +9,18 @@ import {
   NEST_LEVEL_ENV_VAR,
   resolveConfigSetting
 } from "./config.js";
-import { connectToSession } from "./client/connect.js";
-import { describeDetachKey } from "./client/detach-key.js";
 import { queryTerminalTitle } from "./client/query-title.js";
 import { sanitizeTitle } from "./client/title.js";
-import { spawnHeadlessSession } from "./client/spawn-session.js";
 import { sortSessionsByPriority } from "./priority.js";
-import { spawnDaemon } from "./spawn-daemon.js";
 import { selfSpawnArgs } from "./self-spawn.js";
 import { AUTO_COLOR_ORDER, ANSI_COLORS, DEFAULT_PRIORITY, parseColorMode } from "./session-meta.js";
-import { listSessions, patchSessionMeta, readScrollback, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
+import { listSessions, patchSessionMeta, readSessionMeta, removeSessionMeta, writeSessionMeta } from "./store.js";
 import { isProcessAlive, killProcess } from "./process-kill.js";
 import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
 import { discoverDashboard } from "./remote/discovery.js";
 import { maybeAutoLink } from "./remote/link.js";
-import { formatSessionSocketRef, isResolvedSessionSocketRef, waitForSessionSocket } from "./session-socket.js";
+import { formatSessionSocketRef } from "./session-socket.js";
+import { runSessionHost } from "./session-host.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 import { debugUplink as log } from "./remote/debug.js";
@@ -52,53 +49,6 @@ export function launchBanner(version: string, id: string): string {
   return `climon v${version} monitoring session ${id}\r\n`;
 }
 
-async function waitForSessionReady(id: string, timeoutMs = 10000): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const meta = await readSessionMeta(id);
-    if (!meta) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      continue;
-    }
-    if (isResolvedSessionSocketRef(meta.socketPath)) {
-      if (meta.status === "completed" || meta.status === "failed") {
-        return meta.socketPath;
-      }
-      try {
-        await waitForSessionSocket(meta.socketPath, Math.min(1000, Math.max(deadline - Date.now(), 0)));
-        return meta.socketPath;
-      } catch {
-        // The daemon may still be starting; retry until timeout.
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error("Timed out waiting for session socket to become ready");
-}
-
-async function waitForHeadlessReady(id: string, timeoutMs = 10000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const meta = await readSessionMeta(id);
-    if (!meta) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      continue;
-    }
-    if (meta.status === "completed" || meta.status === "failed") {
-      return;
-    }
-    if (isResolvedSessionSocketRef(meta.socketPath)) {
-      try {
-        await waitForSessionSocket(meta.socketPath, Math.min(1000, Math.max(deadline - Date.now(), 0)));
-        return;
-      } catch {
-        // The daemon may still be starting; retry until timeout.
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error("Timed out waiting for session socket to become ready");
-}
 
 interface UplinkStartConfig {
   enabled: boolean;
@@ -270,7 +220,7 @@ export async function startMonitoredCommand(
   if (command.length === 0) {
     throw new Error("Provide a command to monitor, e.g. `climon copilot`.");
   }
-  // Verify the command exists before spawning a daemon. Skip check for paths
+  // Verify the command exists before starting. Skip check for paths
   // (which might be scripts) — only validate bare command names via PATH lookup.
   if (!command[0].includes("/") && !command[0].includes("\\")) {
     const resolved = Bun.which(command[0]);
@@ -286,28 +236,16 @@ export async function startMonitoredCommand(
     process.cwd()
   );
 
-  if (options.headless) {
-    const size = resolveLaunchSize(process.env);
-    const id = await spawnHeadlessSession(command, process.cwd(), size, {
-      name: options.name,
-      priority: defaults.priority,
-      color: defaults.color
-    });
-    await waitForHeadlessReady(id);
-    process.stdout.write(`${id}\n`);
-    return 0;
-  }
-
-  if (options.name === undefined && config.terminal.setTitle) {
-    // No explicit --name: adopt the terminal's current title if we can read it,
-    // otherwise fall back to the command string.
+  if (options.name === undefined && !options.headless && config.terminal.setTitle) {
     const queried = await queryTerminalTitle();
     const inferred = queried ? sanitizeTitle(queried).trim() : "";
     options.name = inferred.length > 0 ? inferred : buildDisplayCommand(command);
   }
 
   const id = generateSessionId();
-  const { cols, rows } = terminalSize();
+  const { cols, rows } = options.headless
+    ? resolveLaunchSize(process.env)
+    : terminalSize();
   const now = new Date().toISOString();
   const meta: SessionMeta = {
     id,
@@ -322,7 +260,7 @@ export async function startMonitoredCommand(
     socketPath: formatSessionSocketRef("127.0.0.1", 0),
     cols,
     rows,
-    headless: false,
+    headless: options.headless ?? false,
     clientVersion: VERSION,
     createdAt: now,
     updatedAt: now,
@@ -330,63 +268,19 @@ export async function startMonitoredCommand(
   };
   await writeSessionMeta(meta);
 
-  spawnDaemon(id, process.env);
-
   await maybeAutoLink();
   await ensureUplink();
 
-  meta.socketPath = await waitForSessionReady(id);
-
-  // If the command exited before we could attach, report its result directly.
-  const freshMeta = await readSessionMeta(id);
-  if (freshMeta && (freshMeta.status === "completed" || freshMeta.status === "failed")) {
-    const code = freshMeta.exitCode ?? (freshMeta.status === "failed" ? 1 : 0);
-    const scrollback = await readScrollback(id);
-    if (scrollback && scrollback.length > 0) {
-      process.stdout.write(scrollback);
-    }
-    if (nestLevel > 0) {
-      process.stderr.write(`\x1b[33mclimon: returning to session (depth ${nestLevel})\x1b[0m\n`);
-    }
-    return code;
+  if (!options.headless) {
+    process.stdout.write(launchBanner(VERSION, id));
   }
 
-  const detachKey = describeDetachKey(config.terminal.detachPrefix);
-  process.stdout.write(launchBanner(VERSION, id));
-  process.stdout.write(`Detach with ${detachKey} then d.\r\n`);
+  const exitCode = await runSessionHost(id, meta, { headless: options.headless });
 
-  const result = await connectToSession(meta.socketPath, config.terminal.detachPrefix);
-  if (result.detached) {
-    process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
-    return 0;
-  }
   if (nestLevel > 0) {
     process.stderr.write(`\x1b[33mclimon: returning to session (depth ${nestLevel})\x1b[0m\n`);
   }
-  return result.exitCode;
-}
-
-export async function reconnectSession(id: string): Promise<number> {
-  const meta = await readSessionMeta(id);
-  if (!meta) {
-    throw new Error(`No session found with id '${id}'.`);
-  }
-  if (meta.status === "completed" || meta.status === "failed") {
-    process.stdout.write(`Session ${id} already ${meta.status} (exit code ${meta.exitCode ?? 0}).\r\n`);
-    return meta.exitCode ?? 0;
-  }
-  const config = await loadConfig();
-  process.stdout.write(reconnectBanner(id));
-  const result = await connectToSession(meta.socketPath, config.terminal.detachPrefix);
-  if (result.detached) {
-    process.stdout.write(`\r\nDetached. Reattach with: climon attach ${id}\r\n`);
-    return 0;
-  }
-  return result.exitCode;
-}
-
-export function reconnectBanner(id: string): string {
-  return `climon v${VERSION} connecting to session ${id}\r\n`;
+  return exitCode;
 }
 
 export async function listSessionsCommand(): Promise<number> {

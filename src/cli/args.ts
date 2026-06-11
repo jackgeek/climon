@@ -7,8 +7,6 @@ export type ParsedCommand =
   | { command: "version" }
   | { command: "shell"; priority?: number; color?: SessionColorMode | null; name?: string }
   | { command: "server"; port?: number; enableRemotes?: boolean }
-  | { command: "session"; id: string }
-  | { command: "attach"; id: string }
   | { command: "ls" }
   | { command: "kill"; id: string }
   | { command: "kill-all" }
@@ -37,13 +35,10 @@ Usage:
   climon config --purge         Prompt to delete config files in resolution order
   climon cleanup                Stop this machine's dashboard, ingest, and uplink
   climon link [--peer-home P]   Link WSL<->Windows dashboard discovery
-  climon attach <id>           Reattach to a running session
   climon kill <id>             Terminate a session
   climon kill --all            Kill or remove all active sessions
   climon --version             Show the climon version
   climon --help                Show this help
-
-While attached, detach without stopping the command using: Ctrl-\\ then d
 `;
 
 
@@ -134,21 +129,6 @@ export function parseArgs(argv: string[]): ParsedCommand {
         }
       }
       return { command: "server", port, ...(enableRemotes ? { enableRemotes } : {}) };
-    }
-    case "__session": {
-      const id = rest[0];
-      if (!id) {
-        throw new Error("Internal: __session requires a session id.");
-      }
-      return { command: "session", id };
-    }
-    case "attach":
-    case "reconnect": {
-      const id = rest[0];
-      if (!id) {
-        throw new Error("Provide a session id, e.g. `climon attach <id>`.");
-      }
-      return { command: "attach", id };
     }
     case "ls":
     case "list":

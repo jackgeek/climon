@@ -9,12 +9,10 @@ import { runLinkCommand } from "./cli/link-cmd.js";
 import { delegateToServer } from "./cli/server-exec.js";
 import { detectParentShell, buildShellArgv } from "./detect-shell.js";
 import { runUplink } from "./remote/uplink.js";
-import { runSessionDaemon } from "./daemon/daemon.js";
 import {
   killAllSessions,
   killSession,
   listSessionsCommand,
-  reconnectSession,
   startMonitoredCommand
 } from "./launcher.js";
 import { VERSION } from "./version.js";
@@ -48,11 +46,6 @@ async function main(): Promise<number> {
         process.execPath,
         resolveDevServerEntrypoint()
       );
-    case "session":
-      await runSessionDaemon(parsed.id);
-      return 0;
-    case "attach":
-      return reconnectSession(parsed.id);
     case "shell": {
       const shell = detectParentShell();
       const argv = buildShellArgv(shell);

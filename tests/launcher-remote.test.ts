@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { planUplinkStart, reconnectBanner } from "../src/launcher.js";
-import { VERSION } from "../src/version.js";
+import { planUplinkStart } from "../src/launcher.js";
 
 describe("planUplinkStart", () => {
   const remoteConfig = {
@@ -32,11 +31,5 @@ describe("planUplinkStart", () => {
 
   test("does nothing when remote config is incomplete", () => {
     expect(planUplinkStart({ enabled: false }, { available: false })).toEqual({ shouldSpawn: false });
-  });
-});
-
-describe("reconnectBanner", () => {
-  test("includes the climon version when attaching to an existing session", () => {
-    expect(reconnectBanner("abc123")).toBe(`climon v${VERSION} connecting to session abc123\r\n`);
   });
 });

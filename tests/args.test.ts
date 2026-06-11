@@ -54,15 +54,6 @@ describe("parseArgs", () => {
     });
   });
 
-  test("parses internal session entrypoint", () => {
-    expect(parseArgs(["__session", "abc"])).toEqual({ command: "session", id: "abc" });
-  });
-
-  test("parses attach and reconnect aliases", () => {
-    expect(parseArgs(["attach", "abc"])).toEqual({ command: "attach", id: "abc" });
-    expect(parseArgs(["reconnect", "xyz"])).toEqual({ command: "attach", id: "xyz" });
-  });
-
   test("parses ls and kill", () => {
     expect(parseArgs(["ls"])).toEqual({ command: "ls" });
     expect(parseArgs(["kill", "abc"])).toEqual({ command: "kill", id: "abc" });
@@ -98,9 +89,7 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["run", "--headless"])).toThrow();
   });
 
-  test("throws when session id missing", () => {
-    expect(() => parseArgs(["__session"])).toThrow();
-    expect(() => parseArgs(["attach"])).toThrow();
+  test("throws when kill id missing", () => {
     expect(() => parseArgs(["kill"])).toThrow();
   });
 
