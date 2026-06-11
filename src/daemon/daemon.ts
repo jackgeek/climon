@@ -445,7 +445,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
     }).catch(() => undefined);
     broadcast(encodeJsonFrame(FrameType.Exit, { exitCode }));
     for (const client of clients) {
-      client.end();
+      client.destroy();
     }
     resolveExit?.();
   });
@@ -578,8 +578,17 @@ export async function runSessionDaemon(id: string): Promise<void> {
   if (setTitle) {
     unwatchFile(metaPath);
   }
+  // Force-destroy any sockets that survived the onExit handler (e.g., clients
+  // that connected after exit was broadcast but before the server closed).
+  for (const client of clients) {
+    client.destroy();
+  }
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await cleanupSocket(meta.socketPath);
+
+  // Safety net: force-exit after a short grace period in case leaked handles
+  // (e.g., Bun's ConPTY internals on Windows) keep the event loop alive.
+  setTimeout(() => process.exit(0), 2000).unref();
 }
 
 async function listen(server: Server, socketPath: string): Promise<string> {
