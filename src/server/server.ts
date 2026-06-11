@@ -735,6 +735,7 @@ async function settleDualPromote(peerHome: string): Promise<void> {
 
 
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
+  process.stdout.write("climon server starting...\n");
   startupLog("startServer invoked");
   startupLog("ensuring climon home directory");
   await ensureClimonHome();
