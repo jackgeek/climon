@@ -41,7 +41,7 @@ type ZipEntry = {
 export function zipEntryNamesForPlatform(platform: string): string[] {
   const isWindows = platform.startsWith("windows");
   const exe = isWindows ? ".exe" : "";
-  return [`climon${exe}`, "climon-server", "climon-installer"];
+  return [`install${exe}`, "climon-beta", "climon-alpha"];
 }
 
 const targets: BuildTarget[] = [
@@ -118,16 +118,16 @@ async function main() {
 
     // Build the server JS bundle once — it's platform-independent so the same
     // minified bundle is shared across all platform zips.
-    const serverBundleOut = resolve(stageRoot, "climon-server");
-    console.log("→ Bundling climon-server...");
+    const serverBundleOut = resolve(stageRoot, "climon-beta");
+    console.log("→ Bundling climon-beta...");
     await $`bun build ${serverBundleEntrypoint} --define __CLIMON_EMBEDDED__=true --target bun --format esm --minify --outfile ${serverBundleOut}`;
-    console.log(`  ✓ climon-server (${(readFileSync(serverBundleOut).length / 1024).toFixed(0)} KB)`);
+    console.log(`  ✓ climon-beta (${(readFileSync(serverBundleOut).length / 1024).toFixed(0)} KB)`);
 
     // Build the installer JS bundle once — also platform-independent.
-    const installerBundleOut = resolve(stageRoot, "climon-installer");
-    console.log("→ Bundling climon-installer...");
+    const installerBundleOut = resolve(stageRoot, "climon-alpha");
+    console.log("→ Bundling climon-alpha...");
     await $`bun build ${installerBundleEntrypoint} --target bun --format esm --minify --outfile ${installerBundleOut}`;
-    console.log(`  ✓ climon-installer (${(readFileSync(installerBundleOut).length / 1024).toFixed(0)} KB)`);
+    console.log(`  ✓ climon-alpha (${(readFileSync(installerBundleOut).length / 1024).toFixed(0)} KB)`);
 
     for (const { platform, target } of targets) {
       const isWindows = platform.startsWith("windows");
@@ -135,9 +135,9 @@ async function main() {
       const stageDir = resolve(stageRoot, platform);
       mkdirSync(stageDir, { recursive: true });
 
-      const clientOut = resolve(stageDir, `climon${exe}`);
+      const clientOut = resolve(stageDir, `install${exe}`);
 
-      console.log(`→ Compiling climon (${target})...`);
+      console.log(`→ Compiling install (${target})...`);
       const crossBin = await ensureCrossBinary(target);
       const execPathArgs = crossBin
         ? ["--compile-executable-path", crossBin]
@@ -151,9 +151,9 @@ async function main() {
         : { level: 6, os: 3, attrs: 0o755 << 16 };
 
       const zipFiles: ZipEntry[] = [
-        { name: `climon${exe}`, path: clientOut },
-        { name: "climon-server", path: serverBundleOut },
-        { name: "climon-installer", path: installerBundleOut },
+        { name: `install${exe}`, path: clientOut },
+        { name: "climon-beta", path: serverBundleOut },
+        { name: "climon-alpha", path: installerBundleOut },
       ];
 
       const zipEntries: Record<string, [Uint8Array, ZipOptions]> = {};

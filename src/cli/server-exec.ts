@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const SERVER_BIN_NAME = "climon-server";
-const SERVER_BUNDLE_NAME = "climon-server";
+const SERVER_BUNDLE_NAME = "climon-beta";
 
 export interface ServerInvocation {
   file: string;
@@ -140,7 +140,7 @@ export async function delegateToServer(
     if ((result.error as NodeJS.ErrnoException).code === "ENOENT") {
       process.stderr.write(
         `climon: the dashboard server (${SERVER_BIN_NAME}) is not installed.\n` +
-          `Install the climon-server binary alongside climon, or set CLIMON_SERVER_BIN to its path.\n`
+          `Install the server binary alongside climon, or set CLIMON_SERVER_BIN to its path.\n`
       );
       return 127;
     }

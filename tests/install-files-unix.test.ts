@@ -21,25 +21,25 @@ afterEach(() => {
 });
 
 describe("installBinaries (Unix)", () => {
-  test("copies climon and climon-server into the install directory", async () => {
+  test("copies install as climon and climon-beta into the install directory", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), ".local", "bin");
-    writeFileSync(join(sourceDir, "climon"), "client");
-    writeFileSync(join(sourceDir, "climon-server"), "server");
+    writeFileSync(join(sourceDir, "install"), "client");
+    writeFileSync(join(sourceDir, "climon-beta"), "server");
 
     await installBinaries(sourceDir, installDir);
 
     expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("client");
-    expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("server");
+    expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 
   test("throws when a required sibling binary is missing", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), ".local", "bin");
-    writeFileSync(join(sourceDir, "climon"), "client");
+    writeFileSync(join(sourceDir, "install"), "client");
 
     await expect(installBinaries(sourceDir, installDir))
-      .rejects.toThrow("Required installer sibling is missing: climon-server");
+      .rejects.toThrow("Required installer sibling is missing: climon-beta");
   });
 
   test("identifies Unix locked-file copy errors including ETXTBSY", () => {
@@ -53,15 +53,15 @@ describe("installBinaries (Unix)", () => {
   test("prompts to kill processes and retries on locked binary", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), ".local", "bin");
-    writeFileSync(join(sourceDir, "climon"), "client");
-    writeFileSync(join(sourceDir, "climon-server"), "server");
+    writeFileSync(join(sourceDir, "install"), "client");
+    writeFileSync(join(sourceDir, "climon-beta"), "server");
     let climonAttempts = 0;
     let prompted = 0;
     let killed = 0;
 
     await installBinaries(sourceDir, installDir, {
       copyFile(source, destination) {
-        if (destination.endsWith("climon") && !destination.endsWith("climon-server") && climonAttempts++ === 0) {
+        if (destination.endsWith("climon") && !destination.endsWith("climon-beta") && climonAttempts++ === 0) {
           throw Object.assign(new Error("text busy"), { code: "ETXTBSY" });
         }
         writeFileSync(destination, readFileSync(source));
@@ -78,6 +78,6 @@ describe("installBinaries (Unix)", () => {
     expect(prompted).toBe(1);
     expect(killed).toBe(1);
     expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("client");
-    expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("server");
+    expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 });

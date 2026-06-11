@@ -60,7 +60,7 @@ export async function main(): Promise<void> {
   });
 
   // Ensure installed binaries are executable
-  const binaries = ["climon", "climon-server"];
+  const binaries = ["climon", "climon-beta"];
   for (const name of binaries) {
     const binPath = join(installDir, name);
     if (existsSync(binPath)) {

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { powershellArgsForScript } from "./windows.js";
 
 export const killRunningClimonProcessesScript = [
-  "$processes = Get-Process -Name 'climon','climon-server' -ErrorAction SilentlyContinue",
+  "$processes = Get-Process -Name 'climon' -ErrorAction SilentlyContinue",
   "if ($null -ne $processes) { $processes | Stop-Process -Force -ErrorAction Stop }"
 ].join("; ");
 

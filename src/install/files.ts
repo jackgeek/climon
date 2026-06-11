@@ -1,7 +1,11 @@
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const REQUIRED_BINARIES = ["climon.exe", "climon-server"] as const;
+/** Files in the source (zip) directory and their installed names. */
+const INSTALL_FILES: { source: string; dest: string }[] = [
+  { source: "install.exe", dest: "climon.exe" },
+  { source: "climon-beta", dest: "climon-beta" },
+];
 const LOCKED_COPY_ERROR_CODES = new Set(["EBUSY", "EACCES", "EPERM"]);
 
 export type CopyFile = (source: string, destination: string) => void;
@@ -22,12 +26,12 @@ export function isLockedBinaryCopyError(error: unknown): boolean {
 function copyRequiredBinaries(sourceDir: string, installDir: string, copyFile: CopyFile): void {
   mkdirSync(installDir, { recursive: true });
 
-  for (const name of REQUIRED_BINARIES) {
-    const source = join(sourceDir, name);
-    if (!existsSync(source)) {
-      throw new Error(`Required installer sibling is missing: ${name}`);
+  for (const { source, dest } of INSTALL_FILES) {
+    const sourcePath = join(sourceDir, source);
+    if (!existsSync(sourcePath)) {
+      throw new Error(`Required installer sibling is missing: ${source}`);
     }
-    copyFile(source, join(installDir, name));
+    copyFile(sourcePath, join(installDir, dest));
   }
 }
 

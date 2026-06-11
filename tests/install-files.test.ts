@@ -21,26 +21,26 @@ afterEach(() => {
 });
 
 describe("installBinaries", () => {
-  test("copies climon.exe and climon-server into the install directory", async () => {
+  test("copies install.exe as climon.exe and climon-beta into the install directory", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), "Programs", "climon");
-    writeFileSync(join(sourceDir, "climon.exe"), "client");
-    writeFileSync(join(sourceDir, "climon-server"), "server");
+    writeFileSync(join(sourceDir, "install.exe"), "client");
+    writeFileSync(join(sourceDir, "climon-beta"), "server");
 
     await installBinaries(sourceDir, installDir);
 
     expect(readFileSync(join(installDir, "climon.exe"), "utf8")).toBe("client");
-    expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("server");
+    expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 
   test("throws when a required sibling binary is missing", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), "Programs", "climon");
     mkdirSync(sourceDir, { recursive: true });
-    writeFileSync(join(sourceDir, "climon.exe"), "client");
+    writeFileSync(join(sourceDir, "install.exe"), "client");
 
     await expect(installBinaries(sourceDir, installDir))
-      .rejects.toThrow("Required installer sibling is missing: climon-server");
+      .rejects.toThrow("Required installer sibling is missing: climon-beta");
   });
 
   test("identifies Windows locked-file copy errors", () => {
@@ -53,8 +53,8 @@ describe("installBinaries", () => {
   test("prompts to kill climon processes and retries when an installed binary is locked", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), "Programs", "climon");
-    writeFileSync(join(sourceDir, "climon.exe"), "client");
-    writeFileSync(join(sourceDir, "climon-server"), "server");
+    writeFileSync(join(sourceDir, "install.exe"), "client");
+    writeFileSync(join(sourceDir, "climon-beta"), "server");
     const copied: string[] = [];
     let climonAttempts = 0;
     let prompted = 0;
@@ -82,14 +82,14 @@ describe("installBinaries", () => {
     expect(killed).toBe(1);
     expect(copied.filter((path) => path.endsWith("climon.exe")).length).toBe(2);
     expect(readFileSync(join(installDir, "climon.exe"), "utf8")).toBe("client");
-    expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("server");
+    expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 
   test("does not retry a locked installed binary when the user declines process termination", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), "Programs", "climon");
-    writeFileSync(join(sourceDir, "climon.exe"), "client");
-    writeFileSync(join(sourceDir, "climon-server"), "server");
+    writeFileSync(join(sourceDir, "install.exe"), "client");
+    writeFileSync(join(sourceDir, "climon-beta"), "server");
     let killed = 0;
 
     await expect(installBinaries(sourceDir, installDir, {

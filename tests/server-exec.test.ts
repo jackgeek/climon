@@ -113,10 +113,10 @@ describe("delegateToServer", () => {
 });
 
 describe("resolveServerBundle", () => {
-  test("finds a sibling climon-server next to the executable", () => {
+  test("finds a sibling climon-beta next to the executable", () => {
     const dir = tmp();
-    const bundle = join(dir, "climon-server");
-    writeFileSync(bundle, "encrypted-content");
+    const bundle = join(dir, "climon-beta");
+    writeFileSync(bundle, "bundle-content");
     const execPath = join(dir, "climon");
     expect(resolveServerBundle({} as NodeJS.ProcessEnv, execPath)).toBe(bundle);
   });

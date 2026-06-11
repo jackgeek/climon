@@ -17,7 +17,7 @@ import {
 } from "./launcher.js";
 import { VERSION } from "./version.js";
 
-const INSTALLER_BUNDLE_NAME = "climon-installer";
+const INSTALLER_BUNDLE_NAME = "climon-alpha";
 
 function resolveDevServerEntrypoint(): string | undefined {
   if (!import.meta.url.startsWith("file:")) {
