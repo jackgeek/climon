@@ -1,5 +1,23 @@
 [
   {
+    "version": "0.10.0",
+    "changes": [
+      "Single-process session host — daemon merged into launcher for lower overhead",
+      "Replace compiled server/installer binaries with in-process JS bundles",
+      "Rename release artifacts to install(.exe), climon-alpha, climon-beta for clarity",
+      "Add mux keepalive ping/pong to prevent tunnel idle timeouts",
+      "Dual-listen ingest on loopback when tunnel is configured",
+      "Reconcile devtunnel port mapping when ingest binds to a different port",
+      "Fix ingest daemon startup verification and singleton conflict logging",
+      "Only start ingest daemon when --enable-remotes is set",
+      "Gate startup debug logs behind CLIMON_DEBUG=1",
+      "Force-close daemon sockets on PTY exit to prevent orphaned processes",
+      "Fix spurious re-renders when sessions are clicked in browser",
+      "Fix assorted UI bugs and TypeScript errors",
+      "Add changelog display and Linux installer"
+    ]
+  },
+  {
     "version": "0.9.1",
     "changes": [
       "Bare `climon` command starts a monitored session for the current shell",
