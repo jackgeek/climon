@@ -11,6 +11,7 @@ import {
   completeInitialReplay,
   focusTerminalPane,
   mapWheelToScrollLines,
+  refreshTerminalRender,
   resetTerminalForSession,
   shouldHandleWheelAsScrollback,
   TerminalView,
@@ -47,6 +48,12 @@ describe("TerminalView", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);");
+  });
+
+  test("refreshes the renderer when a hidden terminal becomes visible", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("if (visible) {\n      refreshTerminalRender(term);\n    }");
   });
 
   test("keeps browser-side scrollback for live terminal mouse wheel history", () => {
@@ -91,12 +98,28 @@ describe("TerminalView", () => {
     expect(loaded).toEqual(["fit", "web-links"]);
   });
 
-  test("focuses xterm when the terminal pane is clicked", () => {
-    let calls = 0;
+  test("focuses and refreshes xterm when the terminal pane is focused", () => {
+    let focusCalls = 0;
+    let refreshCalls = 0;
 
-    focusTerminalPane({ focus: () => calls++ });
+    focusTerminalPane({ focus: () => focusCalls++ }, () => refreshCalls++);
 
-    expect(calls).toBe(1);
+    expect(focusCalls).toBe(1);
+    expect(refreshCalls).toBe(1);
+  });
+
+  test("repaints visible terminal rows without resetting the buffer", () => {
+    const refreshed: Array<{ start: number; end: number }> = [];
+    let cleared = 0;
+
+    refreshTerminalRender({
+      rows: 24,
+      clearTextureAtlas: () => cleared++,
+      refresh: (start: number, end: number) => refreshed.push({ start, end })
+    });
+
+    expect(cleared).toBe(1);
+    expect(refreshed).toEqual([{ start: 0, end: 23 }]);
   });
 
   test("leaves mouse-tracking wheel events for xterm to forward to the terminal", () => {
