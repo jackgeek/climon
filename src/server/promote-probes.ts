@@ -129,28 +129,44 @@ export function buildPromoteDeps(
       }
     },
     requestPeerShutdown: async (port) => {
-      // The peer dashboard is on localhost (WSL and Windows share the loopback).
-      const baseUrl = `http://127.0.0.1:${port}/`;
-      try {
-        const res = await fetch(`${baseUrl}__internal/shutdown`, {
-          method: "POST",
-          signal: AbortSignal.timeout(5000)
-        });
-        if (!res.ok) return false;
-      } catch {
-        return false;
-      }
-      // Wait for the server to stop responding.
-      const deadline = Date.now() + 5000;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 200));
+      // Try each peer host candidate (localhost, then WSL gateway IP on NAT).
+      const hosts = override ? [override] : peerHostCandidates(env);
+      for (const host of hosts) {
+        const baseUrl = `http://${host}:${port}/`;
+        // First check if the server is even reachable.
+        let reachable = false;
         try {
-          const probe = await fetch(`${baseUrl}health`, { signal: AbortSignal.timeout(500) });
-          if (!probe.ok) return true;
+          const probe = await fetch(`${baseUrl}health`, { signal: AbortSignal.timeout(2000) });
+          reachable = probe.ok;
         } catch {
-          return true;
+          continue; // Not reachable on this host, try next.
         }
+        if (!reachable) continue;
+
+        // Server is reachable — request shutdown.
+        try {
+          const res = await fetch(`${baseUrl}__internal/shutdown`, {
+            method: "POST",
+            signal: AbortSignal.timeout(5000)
+          });
+          if (!res.ok) continue;
+        } catch {
+          continue;
+        }
+        // Wait for the server to stop responding.
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 200));
+          try {
+            const probe = await fetch(`${baseUrl}health`, { signal: AbortSignal.timeout(500) });
+            if (!probe.ok) return true;
+          } catch {
+            return true;
+          }
+        }
+        return true;
       }
+      // No host could reach the peer — treat as unreachable (stale beacon).
       return false;
     }
   };

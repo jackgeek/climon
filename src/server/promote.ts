@@ -102,7 +102,16 @@ export async function runPromote(deps: PromoteDeps): Promise<PromoteOutcome> {
       await deps.clearPeerBeacons();
       return { kind: "proceed", via: "graceful" };
     }
-    log("HTTP shutdown failed or timed out");
+    // HTTP shutdown failed — the peer server may already be dead (stale beacon).
+    // Probe the health endpoint to confirm.
+    log("HTTP shutdown failed; probing peer server health to detect stale beacon");
+    const peerAlive = await deps.probeIngestListening({ port: peerServer.port });
+    if (!peerAlive) {
+      log("peer server is not responding; clearing stale beacons and proceeding");
+      await deps.clearPeerBeacons();
+      return { kind: "proceed", via: "no-live-peer" };
+    }
+    log("peer server is still alive but refused shutdown");
   } else {
     log("peer dashboard beacon present but no ingest beacon; cannot author a shutdown-request");
   }

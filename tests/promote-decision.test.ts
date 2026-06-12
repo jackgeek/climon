@@ -106,12 +106,26 @@ describe("runPromote (filesystem matrix)", () => {
     expect(shutdownPort).toBe(3131);
   });
 
-  test("peer server.json present, no ingest, HTTP shutdown fails → abort", async () => {
+  test("peer server.json present, no ingest, HTTP shutdown fails and server unreachable → proceed (stale beacon)", async () => {
     const out = await runPromote(
       baseDeps({
         readPeerServer: async () => ({ port: 3131 }),
         readPeerIngest: async () => undefined,
-        requestPeerShutdown: async () => false
+        requestPeerShutdown: async () => false,
+        probeIngestListening: async () => false
+      })
+    );
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") expect(out.via).toBe("no-live-peer");
+  });
+
+  test("peer server.json present, no ingest, HTTP shutdown fails but server is alive → abort", async () => {
+    const out = await runPromote(
+      baseDeps({
+        readPeerServer: async () => ({ port: 3131 }),
+        readPeerIngest: async () => undefined,
+        requestPeerShutdown: async () => false,
+        probeIngestListening: async () => true
       })
     );
     expect(out.kind).toBe("aborted");
