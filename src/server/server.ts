@@ -1571,11 +1571,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // running ONLY when a peer is configured, so a same-OS restart reuses it and
     // the cross-OS fallback has a surviving anchor; otherwise stop it so a
     // single-OS server leaves nothing behind.
-    const plainShutdown = (): void => {
+    const plainShutdown = (reason?: string): void => {
       if (shuttingDown) return;
       shuttingDown = true;
-      serverLog(`plainShutdown triggered (pid=${process.pid}); removing ${getServerStatePath()}`);
+      const why = reason ?? "signal received";
+      serverLog(`plainShutdown triggered (pid=${process.pid}, reason=${why}); removing ${getServerStatePath()}`);
       startupLog("plain shutdown requested; releasing resources");
+      process.stdout.write(`climon server shutting down (${why}).\n`);
       // Remove server.json synchronously so it is guaranteed to be cleaned up
       // even if the process is force-killed shortly after Ctrl+C on Windows.
       try { rmSync(getServerStatePath(), { force: true }); } catch { /* best-effort */ }
@@ -1595,9 +1597,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         process.exit(0);
       })();
     };
-    process.on("SIGINT", plainShutdown);
-    process.on("SIGTERM", plainShutdown);
-    requestShutdown = plainShutdown;
+    process.on("SIGINT", () => plainShutdown("SIGINT"));
+    process.on("SIGTERM", () => plainShutdown("SIGTERM"));
+    requestShutdown = () => plainShutdown("HTTP /__internal/shutdown request");
     // When a peer is configured but no ingest daemon is running, the server
     // itself must watch for shutdown-request.json. Without this, a peer that
     // wins the dual-promote tie-break writes a request that nobody consumes.
@@ -1607,19 +1609,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         onValid: (req) => {
           serverLog(`shutdown-request watcher: received valid request from ${req.requestedBy}; invoking shutdown`);
           shutdownWatcher.stop();
-          plainShutdown();
+          plainShutdown(`peer ${req.requestedBy} won the dual-promote tie-break`);
         }
       });
-      const origShutdown = plainShutdown;
-      const wrappedShutdown = (): void => {
-        shutdownWatcher.stop();
-        origShutdown();
-      };
-      process.removeListener("SIGINT", plainShutdown);
-      process.removeListener("SIGTERM", plainShutdown);
-      process.on("SIGINT", wrappedShutdown);
-      process.on("SIGTERM", wrappedShutdown);
-      requestShutdown = wrappedShutdown;
+      // Ensure the watcher is cleaned up on any shutdown path.
+      const origRequestShutdown = requestShutdown;
+      requestShutdown = () => { shutdownWatcher.stop(); origRequestShutdown?.(); };
       serverLog("shutdown-request watcher started (no ingest, peer configured)");
     }
     // Run the dual-promote settle window concurrently with serving, AFTER the
