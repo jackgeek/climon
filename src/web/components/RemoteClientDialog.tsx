@@ -44,7 +44,8 @@ const useStyles = makeStyles({
   section: { marginTop: "16px" },
   content: { overflowX: "visible" as const },
   row: { display: "flex", gap: "12px", marginTop: "8px", alignItems: "start" },
-  field: { flex: 1, overflow: "hidden" },
+  field: { flex: "1 1 0", minWidth: 0 },
+  control: { width: "100%", minWidth: 0 },
   swatch: {
     width: "12px",
     height: "12px",
@@ -212,6 +213,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                 validationMessage={clientIdValid ? undefined : "1–64 chars: letters, digits, dots, hyphens, underscores."}
               >
                 <Input
+                  className={styles.control}
                   value={clientId}
                   placeholder="my-devbox"
                   autoComplete="off"
@@ -221,7 +223,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
               </Field>
               <Field label="Color" className={styles.field}>
                 <Dropdown
-                  style={{ width: "100%" }}
+                  className={styles.control}
                   value={color}
                   selectedOptions={[color]}
                   onOptionSelect={(_, d) => setColor((d.optionValue as SessionColorMode | undefined) ?? "auto")}
@@ -241,6 +243,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                 validationMessage={priorityValid ? undefined : "0–1000"}
               >
                 <Input
+                  className={styles.control}
                   value={priority}
                   placeholder="500"
                   inputMode="numeric"
