@@ -44,18 +44,42 @@ function getIngestPidPathLocal(env: NodeJS.ProcessEnv): string {
   return join(getClimonHome(env), "ingest.pid");
 }
 
+export interface KillFailure {
+  component: string;
+  pid: number;
+  reason: string;
+  advice?: string;
+}
+
+export interface StaleFile {
+  path: string;
+  pid: number;
+}
+
 export interface TeardownReport {
   serverStopped: boolean;
   ingestStopped: boolean;
   uplinkStopped: boolean;
   removed: string[];
+  failures: KillFailure[];
+  staleFiles: StaleFile[];
+}
+
+/** Wait a short time for a process to die after being signalled. */
+async function waitForDeath(pid: number, isAlive: (pid: number) => boolean, timeoutMs = 3000, pollMs = 100): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return true;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return !isAlive(pid);
 }
 
 /**
  * Full local teardown of the dashboard stack: SIGTERM the server (pid from
  * server.json), terminate the ingest and uplink via their pidfiles, and remove
- * all beacons. Idempotent — already-dead daemons and absent files are fine. All
- * effects injected for testability.
+ * beacons only after confirming processes are dead. Reports failures with
+ * remediation advice.
  */
 export async function teardownLocalServerStack(
   options: {
@@ -63,34 +87,151 @@ export async function teardownLocalServerStack(
     isProcessAlive?: (pid: number) => boolean;
     killProcess?: (pid: number, force: boolean) => boolean;
     removeFile?: (path: string) => Promise<void>;
+    /** How long to wait for a process to die after kill signal (ms). Default 3000. */
+    waitTimeoutMs?: number;
   } = {}
 ): Promise<TeardownReport> {
   const env = options.env ?? process.env;
   const isAlive = options.isProcessAlive ?? isProcessAlive;
   const kill = options.killProcess ?? killProcess;
   const removeFile = options.removeFile ?? ((path: string) => rm(path, { force: true }).then(() => {}));
+  const waitTimeout = options.waitTimeoutMs ?? 3000;
 
+  const failures: KillFailure[] = [];
+  const staleFiles: StaleFile[] = [];
+
+  // --- Kill processes ---
   const serverState = await readServerState(env);
-  const serverStopped =
-    serverState !== undefined && isAlive(serverState.pid) ? kill(serverState.pid, false) : false;
-  const ingestPid = await readPid(getIngestPidPathLocal(env));
-  const ingestStopped = ingestPid !== undefined && isAlive(ingestPid) ? kill(ingestPid, false) : false;
-  const uplinkStopped = await stopUplinkDaemon({ env, isProcessAlive: isAlive, killProcess: kill });
+  let serverStopped = false;
+  let serverDead = true;
+  if (serverState && isAlive(serverState.pid)) {
+    const killed = kill(serverState.pid, false);
+    if (killed) {
+      serverDead = await waitForDeath(serverState.pid, isAlive, waitTimeout);
+      if (serverDead) {
+        serverStopped = true;
+      } else {
+        kill(serverState.pid, true);
+        serverDead = await waitForDeath(serverState.pid, isAlive, Math.min(waitTimeout, 2000));
+        if (serverDead) {
+          serverStopped = true;
+        } else {
+          failures.push({
+            component: "dashboard server",
+            pid: serverState.pid,
+            reason: "process did not terminate after SIGTERM + force kill",
+            advice: process.platform === "win32"
+              ? `Stop-Process -Id ${serverState.pid} -Force`
+              : `kill -9 ${serverState.pid}`
+          });
+        }
+      }
+    } else {
+      failures.push({
+        component: "dashboard server",
+        pid: serverState.pid,
+        reason: "kill signal could not be sent",
+        advice: process.platform === "win32"
+          ? `Stop-Process -Id ${serverState.pid} -Force`
+          : `kill -9 ${serverState.pid}`
+      });
+    }
+  }
 
+  const ingestPid = await readPid(getIngestPidPathLocal(env));
+  let ingestStopped = false;
+  let ingestDead = true;
+  if (ingestPid !== undefined && isAlive(ingestPid)) {
+    const killed = kill(ingestPid, false);
+    if (killed) {
+      ingestDead = await waitForDeath(ingestPid, isAlive, waitTimeout);
+      if (ingestDead) {
+        ingestStopped = true;
+      } else {
+        kill(ingestPid, true);
+        ingestDead = await waitForDeath(ingestPid, isAlive, Math.min(waitTimeout, 2000));
+        if (ingestDead) {
+          ingestStopped = true;
+        } else {
+          failures.push({
+            component: "ingest daemon",
+            pid: ingestPid,
+            reason: "process did not terminate after SIGTERM + force kill",
+            advice: process.platform === "win32"
+              ? `Stop-Process -Id ${ingestPid} -Force`
+              : `kill -9 ${ingestPid}`
+          });
+        }
+      }
+    } else {
+      failures.push({
+        component: "ingest daemon",
+        pid: ingestPid,
+        reason: "kill signal could not be sent",
+        advice: process.platform === "win32"
+          ? `Stop-Process -Id ${ingestPid} -Force`
+          : `kill -9 ${ingestPid}`
+      });
+    }
+  }
+
+  const uplinkPid = await readPid(getUplinkPidPath(env));
+  let uplinkStopped = false;
+  let uplinkDead = true;
+  if (uplinkPid !== undefined && isAlive(uplinkPid)) {
+    const killed = kill(uplinkPid, false);
+    if (killed) {
+      uplinkDead = await waitForDeath(uplinkPid, isAlive, waitTimeout);
+      if (uplinkDead) {
+        uplinkStopped = true;
+      } else {
+        kill(uplinkPid, true);
+        uplinkDead = await waitForDeath(uplinkPid, isAlive, Math.min(waitTimeout, 2000));
+        if (uplinkDead) {
+          uplinkStopped = true;
+        } else {
+          failures.push({
+            component: "uplink daemon",
+            pid: uplinkPid,
+            reason: "process did not terminate after SIGTERM + force kill",
+            advice: process.platform === "win32"
+              ? `Stop-Process -Id ${uplinkPid} -Force`
+              : `kill -9 ${uplinkPid}`
+          });
+        }
+      }
+    } else {
+      failures.push({
+        component: "uplink daemon",
+        pid: uplinkPid,
+        reason: "kill signal could not be sent",
+        advice: process.platform === "win32"
+          ? `Stop-Process -Id ${uplinkPid} -Force`
+          : `kill -9 ${uplinkPid}`
+      });
+    }
+  }
+
+  // --- Remove beacon files (only if owning process is confirmed dead) ---
   const removed: string[] = [];
-  for (const path of [
-    getServerStatePath(env),
-    getIngestStatePath(env),
-    getIngestPidPathLocal(env),
-    getUplinkPidPath(env),
-    getShutdownRequestPath(env)
-  ]) {
+  const beaconOwners: Array<{ path: string; pid?: number; dead: boolean }> = [
+    { path: getServerStatePath(env), pid: serverState?.pid, dead: serverDead },
+    { path: getIngestStatePath(env), pid: ingestPid, dead: ingestDead },
+    { path: getIngestPidPathLocal(env), pid: ingestPid, dead: ingestDead },
+    { path: getUplinkPidPath(env), pid: uplinkPid, dead: uplinkDead },
+    { path: getShutdownRequestPath(env), pid: undefined, dead: true }
+  ];
+
+  for (const { path, pid, dead } of beaconOwners) {
     const exists = await stat(path).then(() => true, () => false);
-    if (exists) {
+    if (!exists) continue;
+    if (!dead && pid !== undefined) {
+      staleFiles.push({ path, pid });
+    } else {
       await removeFile(path);
       removed.push(path);
     }
   }
 
-  return { serverStopped, ingestStopped, uplinkStopped, removed };
+  return { serverStopped, ingestStopped, uplinkStopped, removed, failures, staleFiles };
 }
