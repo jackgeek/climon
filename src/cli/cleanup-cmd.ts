@@ -24,11 +24,16 @@ export async function runCleanupCommand(options: CleanupCommandOptions = {}): Pr
   if (report.ingestStopped) lines.push("Stopped ingest daemon.");
   if (report.uplinkStopped) lines.push("Stopped uplink daemon.");
 
+  if (report.removed.length > 0) {
+    for (const path of report.removed) {
+      lines.push(`Removed ${path}`);
+    }
+  }
+
   if (lines.length === 0) {
     write("Nothing to clean up — no local climon daemons were running.\n");
     return 0;
   }
   for (const line of lines) write(`${line}\n`);
-  write("Removed local server.json, ingest.json, and pidfiles.\n");
   return 0;
 }

@@ -60,6 +60,7 @@ describe("teardownLocalServerStack", () => {
     expect(report.serverStopped).toBe(false);
     expect(report.ingestStopped).toBe(false);
     expect(report.uplinkStopped).toBe(false);
+    expect(report.removed).toEqual([]);
   });
 });
 
@@ -78,9 +79,27 @@ describe("runCleanupCommand", () => {
     expect(text).toContain("Stopped dashboard server");
     expect(text).toContain("Stopped ingest");
     expect(text).toContain("Stopped uplink");
+    expect(text).toContain("Removed");
+    expect(text).toContain("server.json");
   });
 
-  test("succeeds and reports a clean state when nothing is running", async () => {
+  test("reports removed stale files when no daemons are running", async () => {
+    writeFileSync(join(home, "server.json"), serializeServerState({ pid: 111, port: 3131, ingest: 3132 }));
+    const out: string[] = [];
+    const code = await runCleanupCommand({
+      env,
+      isProcessAlive: () => false,
+      killProcess: () => false,
+      stdout: (chunk) => out.push(chunk)
+    });
+    expect(code).toBe(0);
+    const text = out.join("");
+    expect(text).toContain("Removed");
+    expect(text).toContain("server.json");
+    expect(text).not.toContain("Nothing to clean up");
+  });
+
+  test("succeeds and reports a clean state when nothing is running and no stale files", async () => {
     const out: string[] = [];
     const code = await runCleanupCommand({
       env,

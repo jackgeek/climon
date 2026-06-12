@@ -1,4 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getClimonHome } from "../config.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
@@ -85,8 +85,11 @@ export async function teardownLocalServerStack(
     getUplinkPidPath(env),
     getShutdownRequestPath(env)
   ]) {
-    await removeFile(path);
-    removed.push(path);
+    const exists = await stat(path).then(() => true, () => false);
+    if (exists) {
+      await removeFile(path);
+      removed.push(path);
+    }
   }
 
   return { serverStopped, ingestStopped, uplinkStopped, removed };
