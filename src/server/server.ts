@@ -71,7 +71,13 @@ interface WsData {
   socketPath: string;
 }
 
+interface ServerShutdownOptions {
+  reason?: string;
+  stopIngest?: boolean;
+}
+
 export const DASHBOARD_IDLE_TIMEOUT_SECONDS = 255;
+const INGEST_DEMOTION_SHUTDOWN_SOURCE = "ingest-demotion";
 
 // Bound the health probe so a process that holds the port but never answers
 // HTTP (a stuck previous server or an unrelated listener) cannot hang start-up.
@@ -688,6 +694,10 @@ export async function stopIngestDaemon(options: {
   return terminatePidWithEscalation(pid, kill, isAlive, graceMs, pollMs);
 }
 
+export function shouldStopIngestForShutdown(source: string | null): boolean {
+  return source !== INGEST_DEMOTION_SHUTDOWN_SOURCE;
+}
+
 /**
  * Returns whether the singleton ingest daemon is currently running, based on
  * its pidfile.
@@ -999,7 +1009,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   // Mutable reference assigned after Bun.serve() returns so the fetch handler
   // can invoke the graceful shutdown path (defined later in the same scope).
-  let requestShutdown: (() => void) | undefined;
+  let requestShutdown: ((options?: ServerShutdownOptions) => void) | undefined;
 
   let server: Bun.Server<WsData>;
   try {
@@ -1028,10 +1038,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           serverLog(`/__internal/shutdown: rejected non-local request from ${srv.requestIP(request)?.address}`);
           return new Response("Forbidden", { status: 403 });
         }
+        const source = url.searchParams.get("source");
         serverLog(`/__internal/shutdown: accepted from ${srv.requestIP(request)?.address}; scheduling shutdown`);
         // Defer shutdown to next tick so the HTTP response is sent before
         // closeListenerAndStreams() tears down Bun.serve.
-        setImmediate(() => requestShutdown?.());
+        setImmediate(() => requestShutdown?.({
+          reason: "HTTP /__internal/shutdown request",
+          stopIngest: shouldStopIngestForShutdown(source)
+        }));
         return new Response("ok");
       }
 
@@ -1562,14 +1576,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         // No tunnel running or already closed.
       }
     };
-    // Plain shutdown (SIGINT/SIGTERM): this machine stays host. Leave the ingest
-    // running ONLY when a peer is configured, so a same-OS restart reuses it and
-    // the cross-OS fallback has a surviving anchor; otherwise stop it so a
-    // single-OS server leaves nothing behind.
-    const plainShutdown = (reason?: string): void => {
+    // Plain shutdown (SIGINT/SIGTERM/internal HTTP): close the co-located ingest
+    // too. The one exception is an ingest-initiated demotion request; that daemon
+    // is already running its own graceful exit path after it stops this server.
+    const plainShutdown = (reason?: string, options: { stopIngest?: boolean } = {}): void => {
       if (shuttingDown) return;
       shuttingDown = true;
       const why = reason ?? "signal received";
+      const shouldStopIngest = options.stopIngest ?? true;
       serverLog(`plainShutdown triggered (pid=${process.pid}, reason=${why}); removing ${getServerStatePath()}`);
       startupLog("plain shutdown requested; releasing resources");
       process.stdout.write(`climon server shutting down (${why}).\n`);
@@ -1578,12 +1592,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       try { rmSync(getServerStatePath(), { force: true }); } catch { /* best-effort */ }
       void (async () => {
         await closeListenerAndStreams();
-        if (!peerHome) {
+        if (shouldStopIngest) {
           try {
-            await stopIngestDaemon();
-          } catch {
-            // Best-effort: the ingest daemon is a detached singleton.
+            const stopped = await stopIngestDaemon();
+            serverLog(`plainShutdown: stopIngestDaemon returned ${stopped}`);
+          } catch (error) {
+            serverLog(`plainShutdown: stopIngestDaemon failed: ${error instanceof Error ? error.message : String(error)}`);
           }
+        } else {
+          serverLog("plainShutdown: leaving ingest shutdown to its demotion path");
         }
         serverLog("plainShutdown: shutdown complete");
         startupLog("plain shutdown complete");
@@ -1594,7 +1611,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     };
     process.on("SIGINT", () => plainShutdown("SIGINT"));
     process.on("SIGTERM", () => plainShutdown("SIGTERM"));
-    requestShutdown = () => plainShutdown("HTTP /__internal/shutdown request");
+    requestShutdown = (options?: ServerShutdownOptions) =>
+      plainShutdown(options?.reason ?? "HTTP /__internal/shutdown request", { stopIngest: options?.stopIngest });
     // When a peer is configured but no ingest daemon is running, the server
     // itself must watch for shutdown-request.json. Without this, a peer that
     // wins the dual-promote tie-break writes a request that nobody consumes.
@@ -1609,7 +1627,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       });
       // Ensure the watcher is cleaned up on any shutdown path.
       const origRequestShutdown = requestShutdown;
-      requestShutdown = () => { shutdownWatcher.stop(); origRequestShutdown?.(); };
+      requestShutdown = (options?: ServerShutdownOptions) => { shutdownWatcher.stop(); origRequestShutdown?.(options); };
       serverLog("shutdown-request watcher started (no ingest, peer configured)");
     }
     // Run the dual-promote settle window concurrently with serving, AFTER the
