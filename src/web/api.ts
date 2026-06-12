@@ -316,8 +316,7 @@ export function buildSetupScript(params: SetupScriptParams): string {
   }
   const lines = [
     "climon config remote.enabled true",
-    `climon config remote.tunnelId ${arg(params.tunnelId)}`,
-    `climon config remote.port ${params.ingestPort}`
+    `climon config remote.tunnelId ${arg(params.tunnelId)}`
   ];
   if (params.color) {
     lines.push(`climon config session.color ${params.color}`);

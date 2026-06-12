@@ -63,10 +63,10 @@ interface UplinkStartPlan {
 }
 
 export function planUplinkStart(config: UplinkStartConfig, detect: DetectResult): UplinkStartPlan {
-  if (!config.enabled || !config.port) {
+  if (!config.enabled) {
     return { shouldSpawn: false };
   }
-  if (config.host) {
+  if (config.host && config.port) {
     return { shouldSpawn: true };
   }
   if (!config.tunnelId) {
@@ -106,7 +106,7 @@ async function ensureUplink(): Promise<void> {
   }
 
   if (!shouldSpawn) {
-    const needsTunnel = enabled && !host && tunnelId && port;
+    const needsTunnel = enabled && !host && tunnelId;
     const detect = needsTunnel ? await detectDevtunnel() : { available: false };
     const plan = planUplinkStart({ enabled, host, tunnelId, port }, detect);
     if (plan.warning) process.stderr.write(plan.warning);

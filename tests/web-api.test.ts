@@ -122,11 +122,11 @@ describe("buildSetupScript", () => {
     ingestPort: 3132
   };
 
-  test("emits the three required remote settings", () => {
+  test("emits the two required remote settings", () => {
     const script = buildSetupScript(BASE);
     expect(script).toContain("climon config remote.enabled true");
     expect(script).toContain("climon config remote.tunnelId abc123");
-    expect(script).toContain("climon config remote.port 3132");
+    expect(script).not.toContain("remote.port");
   });
 
   test("omits color and priority when not chosen", () => {

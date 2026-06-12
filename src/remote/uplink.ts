@@ -26,8 +26,8 @@ export interface UplinkConfig {
 
 /**
  * Resolves the devbox uplink config from the cascade. Remote is only considered
- * enabled when a direct host+port or tunnel id+port are present. This
- * defends against stale SSH-era `remote.enabled: true` files.
+ * enabled when a direct host+port or tunnel id are present. The port is
+ * optional for tunnel mode (discovered from the tunnel's port mapping).
  */
 export function resolveUplinkConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -38,7 +38,7 @@ export function resolveUplinkConfig(
   const tunnelId = asString(resolveConfigSetting("remote.tunnelId", env, cwd));
   const port = asNumber(resolveConfigSetting("remote.port", env, cwd));
   const hasDirectTarget = !!host && !!port;
-  const hasTunnelTarget = !!tunnelId && !!port;
+  const hasTunnelTarget = !!tunnelId;
   return {
     enabled: enabledFlag && (hasDirectTarget || hasTunnelTarget),
     host,
@@ -225,6 +225,41 @@ function spawnConnect(tunnelId: string): ConnectChild {
   return { child, authRejected: () => authRejected };
 }
 
+/**
+ * Discovers the forwarded port for a tunnel by querying `devtunnel port list`.
+ * Returns the first port number found, or undefined if the query fails or
+ * no ports are mapped.
+ */
+async function discoverTunnelPort(tunnelId: string): Promise<number | undefined> {
+  const result = await new Promise<{ status: number; stdout: string }>((resolve) => {
+    const child = spawn("devtunnel", ["port", "list", tunnelId, "--json"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: devtunnelEnv(),
+      windowsHide: true
+    });
+    let stdout = "";
+    child.stdout.on("data", (b: Buffer) => (stdout += b.toString("utf8")));
+    child.on("error", () => resolve({ status: 127, stdout: "" }));
+    child.on("close", (code) => resolve({ status: code ?? 1, stdout }));
+  });
+  if (result.status !== 0) return undefined;
+  try {
+    const parsed = JSON.parse(result.stdout);
+    // devtunnel port list --json returns an array of port entries with a portNumber field,
+    // or an object with a ports array.
+    const ports = Array.isArray(parsed) ? parsed : (parsed.ports ?? parsed.value ?? []);
+    for (const entry of ports) {
+      const p = entry.portNumber ?? entry.port ?? entry.Port;
+      if (typeof p === "number" && p > 0) return p;
+    }
+  } catch {
+    // Try a line-based fallback: look for a number in the output.
+    const match = result.stdout.match(/\b(\d{2,5})\b/);
+    if (match) return Number(match[1]);
+  }
+  return undefined;
+}
+
 async function waitForPort(port: number, host = "127.0.0.1", timeoutMs = 15000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -274,7 +309,7 @@ export async function runUplink(
   const peerHome = asString(resolveConfigSetting("remote.peerHome", env, cwd));
   const initialLegacy = resolveUplinkConfig(env, cwd);
   // Nothing to do: no peer link configured and no legacy direct/tunnel target.
-  if (!peerHome && (!initialLegacy.enabled || !initialLegacy.port)) {
+  if (!peerHome && !initialLegacy.enabled) {
     log("no remote target configured (no peerHome, no enabled tunnel/direct), exiting");
     return 0;
   }
@@ -304,16 +339,22 @@ export async function runUplink(
       log(`resolved peer target: ${peerTarget.host}:${peerTarget.port}`);
       host = peerTarget.host;
       port = peerTarget.port;
-    } else if (config.enabled && config.port) {
-      if (config.host) {
+    } else if (config.enabled) {
+      if (config.host && config.port) {
         log(`direct target: ${config.host}:${config.port}`);
         host = config.host;
         port = config.port;
       } else if (config.tunnelId) {
-        log(`spawning devtunnel connect for tunnel ${config.tunnelId}, forwarding port ${config.port}`);
-        conn = spawnConnect(config.tunnelId);
-        host = "127.0.0.1";
-        port = config.port;
+        // Discover the port from the tunnel's port mapping if not explicitly configured.
+        const tunnelPort = config.port ?? await discoverTunnelPort(config.tunnelId);
+        if (!tunnelPort) {
+          log(`could not discover port for tunnel ${config.tunnelId} (no port mapping found)`);
+        } else {
+          log(`spawning devtunnel connect for tunnel ${config.tunnelId}, forwarding port ${tunnelPort}`);
+          conn = spawnConnect(config.tunnelId);
+          host = "127.0.0.1";
+          port = tunnelPort;
+        }
       }
     }
 
