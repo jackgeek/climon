@@ -1,12 +1,46 @@
 import type { AnsiColor, SessionColorMode, SessionMeta } from "../types.js";
 
+const DEV_TUNNELS_HOST_SUFFIX = ".devtunnels.ms";
+export const TUNNEL_SKIP_ANTI_PHISHING_PARAM = "X-Tunnel-Skip-AntiPhishing-Page";
+
+interface DashboardLocationState {
+  hostname: string;
+  search: string;
+}
+
+interface AttachLocationState extends DashboardLocationState {
+  protocol: string;
+  host: string;
+}
+
+export function isDevTunnelHost(hostname: string): boolean {
+  const normalized = hostname.replace(/\.$/, "").toLowerCase();
+  return normalized === "devtunnels.ms" || normalized.endsWith(DEV_TUNNELS_HOST_SUFFIX);
+}
+
+function currentDashboardLocation(): DashboardLocationState {
+  if (typeof location === "undefined") {
+    return { hostname: "", search: "" };
+  }
+  return { hostname: location.hostname, search: location.search };
+}
+
 /**
- * The dashboard is loopback-only and unauthenticated at the HTTP layer, so API
- * paths need no query credentials. Kept as a thin indirection so call sites stay
- * stable if a query suffix is ever reintroduced.
+ * Dev tunnels can show an anti-phishing interstitial on programmatic requests.
+ * Browser WebSocket/EventSource cannot set the bypass header, but they can carry
+ * the equivalent query parameter on same-origin dashboard URLs.
  */
-export function withQuery(path: string): string {
-  return path;
+export function withQuery(path: string, current: DashboardLocationState = currentDashboardLocation()): string {
+  const params = new URLSearchParams(current.search);
+  const devTunnelHost = isDevTunnelHost(current.hostname);
+  if (!devTunnelHost && !params.has(TUNNEL_SKIP_ANTI_PHISHING_PARAM)) {
+    return path;
+  }
+  if (devTunnelHost) {
+    params.set(TUNNEL_SKIP_ANTI_PHISHING_PARAM, "true");
+  }
+  const query = params.toString();
+  return query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path;
 }
 
 export interface CreateSessionBody {
@@ -95,12 +129,12 @@ export async function deleteSession(
   opts?: { kill?: "graceful" | "force" }
 ): Promise<DeleteSessionResult> {
   try {
-    const params = new URLSearchParams(location.search);
+    const params = new URLSearchParams();
     if (opts?.kill) {
       params.set("kill", opts.kill);
     }
     const query = params.toString();
-    const path = `/api/sessions/${id}${query ? `?${query}` : ""}`;
+    const path = withQuery(`/api/sessions/${id}${query ? `?${query}` : ""}`);
     const res = await fetch(path, { method: "DELETE" });
     if (res.status === 200) {
       const data = (await res.json().catch(() => null)) as { stillRunning?: boolean } | null;
@@ -146,8 +180,12 @@ export async function fetchHealth(): Promise<{ version: string | null; remotesEn
 }
 
 export function attachSocketUrl(id: string): string {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.host}/api/sessions/${id}/attach${location.search || ""}`;
+  return attachSocketUrlForLocation(id, location);
+}
+
+export function attachSocketUrlForLocation(id: string, current: AttachLocationState): string {
+  const proto = current.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${current.host}${withQuery(`/api/sessions/${id}/attach`, current)}`;
 }
 
 export function isLiveStatus(status: SessionMeta["status"]): boolean {
