@@ -2,10 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { browserAttentionPayload } from "../src/server/server.js";
 import {
   attachKey,
+  attachSocketUrlForLocation,
   attentionAckMessage,
   buildSetupScript,
   canSendAttentionAck,
-  isLiveStatus
+  isDevTunnelHost,
+  isLiveStatus,
+  TUNNEL_SKIP_ANTI_PHISHING_PARAM,
+  withQuery
 } from "../src/web/api.js";
 import type { SessionMeta } from "../src/types.js";
 
@@ -113,6 +117,54 @@ describe("canSendAttentionAck", () => {
     expect(canSendAttentionAck("old-session", "new-session", true)).toBe(false);
     expect(canSendAttentionAck(null, "new-session", true)).toBe(false);
     expect(canSendAttentionAck("new-session", "new-session", false)).toBe(false);
+  });
+});
+
+describe("Tunnel Link dashboard URLs", () => {
+  test("detects Microsoft dev tunnel dashboard hosts", () => {
+    expect(isDevTunnelHost("climon-test-3131.eun1.devtunnels.ms")).toBe(true);
+    expect(isDevTunnelHost("devtunnels.ms")).toBe(true);
+    expect(isDevTunnelHost("localhost")).toBe(false);
+  });
+
+  test("adds the anti-phishing bypass query to tunneled API URLs", () => {
+    expect(
+      withQuery("/api/events", {
+        hostname: "climon-test-3131.eun1.devtunnels.ms",
+        search: ""
+      })
+    ).toBe(`/api/events?${TUNNEL_SKIP_ANTI_PHISHING_PARAM}=true`);
+  });
+
+  test("preserves path and tunnel query params for DELETE requests", () => {
+    expect(
+      withQuery("/api/sessions/s1?kill=force", {
+        hostname: "climon-test-3131.eun1.devtunnels.ms",
+        search: "?existing=1"
+      })
+    ).toBe(`/api/sessions/s1?kill=force&existing=1&${TUNNEL_SKIP_ANTI_PHISHING_PARAM}=true`);
+  });
+
+  test("leaves ordinary loopback API URLs query-free", () => {
+    expect(
+      withQuery("/api/events", {
+        hostname: "localhost",
+        search: "?ignored=1"
+      })
+    ).toBe("/api/events");
+  });
+
+  test("adds the anti-phishing bypass query to tunneled WebSocket attach URLs", () => {
+    expect(
+      attachSocketUrlForLocation("s1", {
+        protocol: "https:",
+        host: "climon-test-3131.eun1.devtunnels.ms",
+        hostname: "climon-test-3131.eun1.devtunnels.ms",
+        search: ""
+      })
+    ).toBe(
+      `wss://climon-test-3131.eun1.devtunnels.ms/api/sessions/s1/attach?${TUNNEL_SKIP_ANTI_PHISHING_PARAM}=true`
+    );
   });
 });
 
