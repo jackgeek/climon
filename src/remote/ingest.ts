@@ -1,10 +1,10 @@
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
-import { rmSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, rmSync, watch, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
-import { getClimonHome, getRemoteHostPath, resolveConfigSetting, writeConfigSetting } from "../config.js";
+import { getClimonHome, getRemoteHostPath, getSessionsDir, resolveConfigSetting, writeConfigSetting } from "../config.js";
 import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
@@ -129,10 +129,64 @@ interface RemoteSession {
   sockets: Set<Socket>;
 }
 
+/**
+ * Shared state across connections within the ingest daemon lifetime.
+ * Tracks active connections per clientId to prevent races on reconnect,
+ * and dismissed sessions that should not be re-materialized.
+ */
+export class IngestConnectionRegistry {
+  /** Active connection per clientId — new hellos evict the previous. */
+  private active = new Map<string, { channel: Socket; teardown: Promise<void>; resolve: () => void }>();
+  /** Sessions explicitly removed by the user (localId set). Cleared on daemon restart. */
+  private dismissed = new Set<string>();
+
+  /** Returns true if the session has been dismissed and should not be re-materialized. */
+  isDismissed(localId: string): boolean {
+    return this.dismissed.has(localId);
+  }
+
+  /** Marks a session as dismissed (user explicitly removed it from the dashboard). */
+  dismiss(localId: string): void {
+    this.dismissed.add(localId);
+  }
+
+  /** Removes the dismissed flag (e.g. if the user re-starts a session with the same id on the devbox). */
+  undismiss(localId: string): void {
+    this.dismissed.delete(localId);
+  }
+
+  /**
+   * Registers a new connection for a clientId. If an existing connection is
+   * active for this clientId, forcibly closes it and awaits its teardown to
+   * prevent races between the old connection's cleanup and the new one's setup.
+   */
+  async evictAndRegister(clientId: string, channel: Socket): Promise<void> {
+    const existing = this.active.get(clientId);
+    if (existing) {
+      log(`evicting previous connection for clientId=${clientId}`);
+      existing.channel.destroy();
+      await existing.teardown;
+    }
+    let resolve!: () => void;
+    const teardown = new Promise<void>((r) => { resolve = r; });
+    this.active.set(clientId, { channel, teardown, resolve });
+  }
+
+  /** Signals that the connection for this clientId has fully torn down. */
+  markTornDown(clientId: string, channel: Socket): void {
+    const entry = this.active.get(clientId);
+    if (entry && entry.channel === channel) {
+      entry.resolve();
+      this.active.delete(clientId);
+    }
+  }
+}
+
 export interface IngestConnOptions {
   env?: NodeJS.ProcessEnv;
   maxSessions?: number;
   keepAliveSeconds?: number;
+  registry?: IngestConnectionRegistry;
 }
 
 /**
@@ -144,6 +198,7 @@ export interface IngestConnOptions {
 export async function runIngestConnection(channel: Socket, options: IngestConnOptions = {}): Promise<void> {
   const env = options.env ?? process.env;
   const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+  const registry = options.registry;
   const sessions = new Map<string, RemoteSession>();
   const decoder = new MuxDecoder();
   let label: string | undefined;
@@ -170,6 +225,11 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     }
     if (sessions.size >= maxSessions) return;
     const localId = namespacedId(label, meta.id);
+    // Skip sessions the user explicitly removed from the dashboard.
+    if (registry?.isDismissed(localId)) {
+      log(`session-added: skipping dismissed session ${localId}`);
+      return;
+    }
     const socketPath = formatSessionSocketRef("127.0.0.1", 0);
     await writeSessionMeta(toLocalMeta(meta, label, localId, socketPath, env), env);
     const sockets = new Set<Socket>();
@@ -209,6 +269,11 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       if (!label && isValidRemoteId(message.clientId)) {
         label = message.clientId;
         log(`hello received, clientId=${label}`);
+        // Evict any previous connection for this clientId and wait for its
+        // teardown to complete, preventing races between old cleanup and new setup.
+        if (registry) {
+          await registry.evictAndRegister(label, channel);
+        }
       }
       return;
     }
@@ -276,6 +341,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       await controlChain;
       for (const remoteId of [...sessions.keys()]) await removeSession(remoteId);
+      if (label && registry) registry.markTornDown(label, channel);
       resolve();
     };
     channel.on("end", () => void teardown());
@@ -415,15 +481,21 @@ function asNumber(v: unknown): number | undefined {
 
 /** Marks any leftover running remote sessions from a previous daemon as disconnected. */
 async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<void> {
+  const { removeSessionMeta } = await import("../store.js");
   for (const meta of await listSessions(env)) {
+    if (meta.origin !== "remote") continue;
     if (
-      meta.origin === "remote" &&
-      (meta.status === "running" ||
-        meta.status === "acknowledged" ||
-        meta.status === "needs-attention" ||
-        meta.status === "paused")
+      meta.status === "running" ||
+      meta.status === "acknowledged" ||
+      meta.status === "needs-attention" ||
+      meta.status === "paused"
     ) {
       await patchSessionMeta(meta.id, { status: "disconnected", priorityReason: "disconnected" }, env);
+    } else if (meta.status === "disconnected") {
+      // Remove stale disconnected remote sessions from previous daemon runs.
+      // They will be re-materialized if the uplink reconnects and re-advertises them.
+      // This prevents duplicates when the clientId changes between runs.
+      await removeSessionMeta(meta.id, env);
     }
   }
 }
@@ -537,6 +609,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   const shutdown = (): void => {
     clearInterval(poll);
     watcher?.close();
+    sessionsWatcher?.close();
     requestWatcher?.stop();
     supervisor.stop();
     loopbackServer?.close();
@@ -553,6 +626,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     demoting = true;
     clearInterval(poll);
     watcher?.close();
+    sessionsWatcher?.close();
     requestWatcher?.stop();
     supervisor.stop();
     // Diagnostic debug log (temporary — same file as the watcher uses)
@@ -639,7 +713,31 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   // Wire the real connection handler BEFORE publishing the beacon, with no
   // awaits since listen(), so no inbound connection can hit the no-op
   // placeholder once the bound port is advertised via ingest.json.
-  onConnection = (socket) => void runIngestConnection(socket, { env, keepAliveSeconds });
+  const registry = new IngestConnectionRegistry();
+  onConnection = (socket) => void runIngestConnection(socket, { env, keepAliveSeconds, registry });
+
+  // Watch the sessions directory for file deletions. When a remote session file
+  // (matching the `<clientId>~<remoteId>.json` pattern) is removed externally
+  // (e.g. the dashboard DELETE API), mark it as dismissed so the uplink won't
+  // re-materialize it on reconnect.
+  const sessionsDir = getSessionsDir(env);
+  let sessionsWatcher: FSWatcher | undefined;
+  const NAMESPACED_RE = /^([A-Za-z0-9._-]+~[A-Za-z0-9._-]+)\.json$/;
+  try {
+    sessionsWatcher = watch(sessionsDir, (_event, filename) => {
+      if (!filename) return;
+      const match = NAMESPACED_RE.exec(String(filename));
+      if (!match) return;
+      const localId = match[1];
+      // Only dismiss if the file is actually gone (not a rename/write event).
+      if (!existsSync(join(sessionsDir, String(filename)))) {
+        log(`sessions watcher: remote session file deleted externally: ${localId}`);
+        registry.dismiss(localId);
+      }
+    });
+  } catch {
+    // fs.watch unsupported; user-dismissed sessions may reappear on reconnect.
+  }
 
   await supervisor.reconcile();
   // Start the request watcher BEFORE publishing the beacon. The watcher clears
