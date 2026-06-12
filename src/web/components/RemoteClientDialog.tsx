@@ -68,6 +68,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
   });
   const [color, setColor] = useState<SessionColorMode>("auto");
   const [priority, setPriority] = useState("");
+  const [clientId, setClientId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -100,11 +101,16 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     parsedPriority === undefined ||
     (Number.isInteger(parsedPriority) && parsedPriority >= 0 && parsedPriority <= 1000);
 
+  const clientIdTrimmed = clientId.trim() || undefined;
+  const clientIdValid =
+    clientIdTrimmed === undefined || /^[A-Za-z0-9._-]{1,64}$/.test(clientIdTrimmed);
+
   const script = buildSetupScript({
     tunnelId: status?.tunnel?.id ?? "",
     ingestPort: status?.ingestPort ?? 3132,
     color,
-    priority: priorityValid ? parsedPriority : undefined
+    priority: priorityValid ? parsedPriority : undefined,
+    clientId: clientIdValid ? clientIdTrimmed : undefined
   });
 
   async function autoCreate(): Promise<void> {
@@ -223,6 +229,19 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                   placeholder="500"
                   inputMode="numeric"
                   onChange={(_, d) => setPriority(d.value)}
+                />
+              </Field>
+              <Field
+                label="Client ID"
+                validationState={clientIdValid ? "none" : "error"}
+                validationMessage={clientIdValid ? undefined : "1–64 chars: letters, digits, dots, hyphens, underscores."}
+              >
+                <Input
+                  value={clientId}
+                  placeholder="my-devbox"
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(_, d) => setClientId(d.value)}
                 />
               </Field>
             </div>

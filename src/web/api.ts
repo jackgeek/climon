@@ -288,6 +288,7 @@ export interface SetupScriptParams {
   ingestPort: number;
   color?: SessionColorMode;
   priority?: number;
+  clientId?: string;
 }
 
 /** A single-quoted shell literal (handles embedded single quotes safely). */
@@ -318,6 +319,9 @@ export function buildSetupScript(params: SetupScriptParams): string {
     "climon config remote.enabled true",
     `climon config remote.tunnelId ${arg(params.tunnelId)}`
   ];
+  if (params.clientId) {
+    lines.push(`climon config remote.clientId ${arg(params.clientId)}`);
+  }
   if (params.color) {
     lines.push(`climon config session.color ${params.color}`);
   }

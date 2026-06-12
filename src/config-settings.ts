@@ -145,9 +145,14 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "remote.clientId",
     type: "string",
-    purpose: "Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client.",
+    purpose: "Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client. Can be set manually to use a human-readable name.",
     scope: ["client"],
-    internal: true
+    acceptInput: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
+        throw new Error("remote.clientId must be 1–64 characters using only letters, digits, dots, hyphens, or underscores.");
+      }
+    }
   },
   {
     path: "remote.keepAlive",
