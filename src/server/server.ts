@@ -56,6 +56,7 @@ import {
   type ServerState
 } from "../server-state.js";
 import { writeShutdownRequestToDir } from "../remote/shutdown-request.js";
+import { createShutdownRequestWatcher } from "../remote/shutdown-watch.js";
 import { tieBreakOutcome } from "./tie-break.js";
 import { serverLog } from "./server-log.js";
 
@@ -1590,11 +1591,37 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         serverLog("plainShutdown: shutdown complete");
         startupLog("plain shutdown complete");
         resolve();
+        // Ensure the process exits even if stale handles keep the event loop alive.
+        process.exit(0);
       })();
     };
     process.on("SIGINT", plainShutdown);
     process.on("SIGTERM", plainShutdown);
     requestShutdown = plainShutdown;
+    // When a peer is configured but no ingest daemon is running, the server
+    // itself must watch for shutdown-request.json. Without this, a peer that
+    // wins the dual-promote tie-break writes a request that nobody consumes.
+    if (peerHome && !options.enableRemotes) {
+      const shutdownWatcher = createShutdownRequestWatcher({
+        dir: getClimonHome(),
+        onValid: (req) => {
+          serverLog(`shutdown-request watcher: received valid request from ${req.requestedBy}; invoking shutdown`);
+          shutdownWatcher.stop();
+          plainShutdown();
+        }
+      });
+      const origShutdown = plainShutdown;
+      const wrappedShutdown = (): void => {
+        shutdownWatcher.stop();
+        origShutdown();
+      };
+      process.removeListener("SIGINT", plainShutdown);
+      process.removeListener("SIGTERM", plainShutdown);
+      process.on("SIGINT", wrappedShutdown);
+      process.on("SIGTERM", wrappedShutdown);
+      requestShutdown = wrappedShutdown;
+      serverLog("shutdown-request watcher started (no ingest, peer configured)");
+    }
     // Run the dual-promote settle window concurrently with serving, AFTER the
     // shutdown handlers are registered: if this OS loses the tie, its own ingest
     // SIGTERMs this server, so plainShutdown must already be installed to remove
