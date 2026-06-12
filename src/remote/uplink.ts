@@ -9,12 +9,13 @@ import {
   resolveConfigSetting,
   writeConfigSetting
 } from "../config.js";
-import { listSessions, readSessionMeta } from "../store.js";
+import { listSessions, patchSessionMeta, readSessionMeta } from "../store.js";
 import { acquireSingletonDetailed } from "./singleton.js";
 import { encodeControl, encodeData, MuxDecoder } from "./mux.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { discoverDashboard } from "./discovery.js";
+import { isProcessAlive } from "../process-kill.js";
 import { debugUplink as log } from "./debug.js";
 
 export interface UplinkConfig {
@@ -70,11 +71,22 @@ interface Bridge {
   env: NodeJS.ProcessEnv;
 }
 
+const LIVE_STATUSES = new Set(["running", "acknowledged", "needs-attention", "paused"]);
+
 async function reconcile(bridge: Bridge): Promise<void> {
   const current = new Set<string>();
   for (const meta of await listSessions(bridge.env)) {
     if (meta.origin === "remote") continue;
     current.add(meta.id);
+    // Check daemon liveness for sessions that claim to be running.
+    // If the daemon is dead, advertise as disconnected so the dashboard
+    // doesn't show an unresponsive session. Also persist the update locally
+    // so a future reconcile doesn't repeat the check.
+    if (LIVE_STATUSES.has(meta.status) && meta.daemonPid && !isProcessAlive(meta.daemonPid)) {
+      meta.status = "disconnected";
+      meta.priorityReason = "disconnected";
+      void patchSessionMeta(meta.id, { status: "disconnected", priorityReason: "disconnected" }, bridge.env);
+    }
     bridge.write(encodeControl({ kind: "session-added", meta }));
   }
   for (const id of bridge.advertised) {
