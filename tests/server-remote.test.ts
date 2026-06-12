@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
+import { isProcessAlive, killProcess } from "../src/process-kill.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
-const { shouldMarkDisconnected } = serverModule;
+const { shouldMarkDisconnected, shouldStopIngestForShutdown } = serverModule;
 
 function meta(over: Partial<SessionMeta>): SessionMeta {
   const now = new Date().toISOString();
@@ -24,6 +27,61 @@ function meta(over: Partial<SessionMeta>): SessionMeta {
     lastActivityAt: now,
     ...over
   };
+}
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function waitFor<T>(fn: () => Promise<T | undefined> | T | undefined, ms = 5000): Promise<T> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const value = await Promise.resolve(fn()).catch(() => undefined);
+    if (value !== undefined) return value;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("timed out");
+}
+
+async function waitForExit(proc: Bun.Subprocess, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve(false);
+    }, ms);
+    void proc.exited.finally(() => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+async function readPid(path: string): Promise<number | undefined> {
+  const raw = await readFile(path, "utf8").catch(() => undefined);
+  if (raw === undefined) return undefined;
+  const pid = Number.parseInt(raw.trim(), 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+async function stopPid(pid: number): Promise<void> {
+  if (!isProcessAlive(pid)) return;
+  killProcess(pid, false);
+  const stopped = await waitFor(() => (!isProcessAlive(pid) ? true : undefined), 3000).catch(() => false);
+  if (!stopped) {
+    killProcess(pid, true);
+  }
 }
 
 describe("shouldMarkDisconnected", () => {
@@ -51,6 +109,73 @@ describe("shouldMarkDisconnected", () => {
     const probe = async () => false;
     expect(await shouldMarkDisconnected(meta({ status: "completed" }), probe)).toBe(false);
   });
+});
+
+describe("shouldStopIngestForShutdown", () => {
+  test("stops ingest on ordinary shutdown requests", () => {
+    expect(shouldStopIngestForShutdown(null)).toBe(true);
+    expect(shouldStopIngestForShutdown("cleanup")).toBe(true);
+  });
+
+  test("lets ingest finish its own demotion shutdown path", () => {
+    expect(shouldStopIngestForShutdown("ingest-demotion")).toBe(false);
+  });
+});
+
+describe("server shutdown ingest lifecycle", () => {
+  test("stops the ingest daemon on graceful shutdown even with a peer home configured", async () => {
+    const testTmp = join(process.cwd(), ".copilot-tmp");
+    mkdirSync(testTmp, { recursive: true });
+    const home = mkdtempSync(join(testTmp, "climon-server-shutdown-"));
+    const peerHome = mkdtempSync(join(testTmp, "climon-server-shutdown-peer-"));
+    const dashboardPort = await freePort();
+    const ingestPort = await freePort();
+    const env = { ...process.env, CLIMON_HOME: home };
+    writeFileSync(
+      join(home, "config.json"),
+      JSON.stringify({
+        remote: {
+          peerHome,
+          ingestHost: "127.0.0.1",
+          port: ingestPort,
+          ingestPortRetryAttempts: 5
+        }
+      })
+    );
+
+    const server = Bun.spawn(
+      [process.execPath, "src/server.ts", "server", "--port", String(dashboardPort), "--enable-remotes"],
+      { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
+    );
+    let serverExited = false;
+    let ingestPid: number | undefined;
+    const base = `http://127.0.0.1:${dashboardPort}`;
+    try {
+      await waitFor(async () => {
+        const res = await fetch(`${base}/health`).catch(() => undefined);
+        return res?.ok ? true : undefined;
+      }, 20_000);
+      ingestPid = await waitFor(() => readPid(getIngestPidPath(env)), 10_000);
+      expect(isProcessAlive(ingestPid)).toBe(true);
+
+      const shutdown = await fetch(`${base}/__internal/shutdown`, { method: "POST" });
+      expect(shutdown.ok).toBe(true);
+      serverExited = await waitForExit(server, 10_000);
+      expect(serverExited).toBe(true);
+      await waitFor(() => (ingestPid && !isProcessAlive(ingestPid) ? true : undefined), 10_000);
+      expect(isProcessAlive(ingestPid)).toBe(false);
+    } finally {
+      if (!serverExited) {
+        server.kill();
+        await waitForExit(server, 2000);
+      }
+      if (ingestPid) {
+        await stopPid(ingestPid);
+      }
+      rmSync(home, { recursive: true, force: true });
+      rmSync(peerHome, { recursive: true, force: true });
+    }
+  }, 45_000);
 });
 
 describe("resolveIngestInvocation", () => {

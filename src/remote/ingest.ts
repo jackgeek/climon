@@ -663,7 +663,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
           // which exits 0 cleanly.
           try {
             dlog(`stopLocalServer: requesting graceful shutdown via HTTP (port ${local.port})`);
-            await fetch(`http://127.0.0.1:${local.port}/__internal/shutdown`, {
+            await fetch(`http://127.0.0.1:${local.port}/__internal/shutdown?source=ingest-demotion`, {
               method: "POST",
               signal: AbortSignal.timeout(1000),
             }).catch(() => {/* response may be dropped as server shuts down */});
