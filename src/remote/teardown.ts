@@ -105,37 +105,53 @@ export async function teardownLocalServerStack(
   let serverStopped = false;
   let serverDead = true;
   if (serverState && isAlive(serverState.pid)) {
-    const killed = kill(serverState.pid, false);
-    if (killed) {
+    // Try graceful HTTP shutdown first (cross-platform, no signal issues).
+    try {
+      await fetch(`http://127.0.0.1:${serverState.port}/__internal/shutdown`, {
+        method: "POST",
+        signal: AbortSignal.timeout(1000),
+      }).catch(() => {});
       serverDead = await waitForDeath(serverState.pid, isAlive, waitTimeout);
-      if (serverDead) {
-        serverStopped = true;
-      } else {
-        kill(serverState.pid, true);
-        serverDead = await waitForDeath(serverState.pid, isAlive, Math.min(waitTimeout, 2000));
+    } catch {
+      serverDead = false;
+    }
+    if (serverDead) {
+      serverStopped = true;
+    } else {
+      // Fall back to force kill on Windows (taskkill without /F fails for
+      // headless console processes that have no message loop).
+      const killed = kill(serverState.pid, process.platform === "win32");
+      if (killed) {
+        serverDead = await waitForDeath(serverState.pid, isAlive, waitTimeout);
         if (serverDead) {
           serverStopped = true;
         } else {
-          failures.push({
-            component: "dashboard server",
-            pid: serverState.pid,
-            reason: "process did not terminate after SIGTERM + force kill",
-            advice: process.platform === "win32"
-              ? `Stop-Process -Id ${serverState.pid} -Force`
-              : `kill -9 ${serverState.pid}`
-          });
+          kill(serverState.pid, true);
+          serverDead = await waitForDeath(serverState.pid, isAlive, Math.min(waitTimeout, 2000));
+          if (serverDead) {
+            serverStopped = true;
+          } else {
+            failures.push({
+              component: "dashboard server",
+              pid: serverState.pid,
+              reason: "process did not terminate after force kill",
+              advice: process.platform === "win32"
+                ? `Stop-Process -Id ${serverState.pid} -Force`
+                : `kill -9 ${serverState.pid}`
+            });
+          }
         }
+      } else {
+        serverDead = false;
+        failures.push({
+          component: "dashboard server",
+          pid: serverState.pid,
+          reason: "kill signal could not be sent",
+          advice: process.platform === "win32"
+            ? `Stop-Process -Id ${serverState.pid} -Force`
+            : `kill -9 ${serverState.pid}`
+        });
       }
-    } else {
-      serverDead = false;
-      failures.push({
-        component: "dashboard server",
-        pid: serverState.pid,
-        reason: "kill signal could not be sent",
-        advice: process.platform === "win32"
-          ? `Stop-Process -Id ${serverState.pid} -Force`
-          : `kill -9 ${serverState.pid}`
-      });
     }
   }
 
@@ -143,13 +159,16 @@ export async function teardownLocalServerStack(
   let ingestStopped = false;
   let ingestDead = true;
   if (ingestPid !== undefined && isAlive(ingestPid)) {
-    const killed = kill(ingestPid, false);
+    // On Windows, headless daemon processes (no message loop) ignore taskkill
+    // without /F. Skip the graceful attempt and force-kill directly.
+    const forceFirst = process.platform === "win32";
+    const killed = kill(ingestPid, forceFirst);
     if (killed) {
       ingestDead = await waitForDeath(ingestPid, isAlive, waitTimeout);
       if (ingestDead) {
         ingestStopped = true;
       } else {
-        kill(ingestPid, true);
+        if (!forceFirst) kill(ingestPid, true);
         ingestDead = await waitForDeath(ingestPid, isAlive, Math.min(waitTimeout, 2000));
         if (ingestDead) {
           ingestStopped = true;
@@ -157,7 +176,7 @@ export async function teardownLocalServerStack(
           failures.push({
             component: "ingest daemon",
             pid: ingestPid,
-            reason: "process did not terminate after SIGTERM + force kill",
+            reason: "process did not terminate after force kill",
             advice: process.platform === "win32"
               ? `Stop-Process -Id ${ingestPid} -Force`
               : `kill -9 ${ingestPid}`
@@ -181,13 +200,14 @@ export async function teardownLocalServerStack(
   let uplinkStopped = false;
   let uplinkDead = true;
   if (uplinkPid !== undefined && isAlive(uplinkPid)) {
-    const killed = kill(uplinkPid, false);
+    const forceFirstUplink = process.platform === "win32";
+    const killed = kill(uplinkPid, forceFirstUplink);
     if (killed) {
       uplinkDead = await waitForDeath(uplinkPid, isAlive, waitTimeout);
       if (uplinkDead) {
         uplinkStopped = true;
       } else {
-        kill(uplinkPid, true);
+        if (!forceFirstUplink) kill(uplinkPid, true);
         uplinkDead = await waitForDeath(uplinkPid, isAlive, Math.min(waitTimeout, 2000));
         if (uplinkDead) {
           uplinkStopped = true;
@@ -195,7 +215,7 @@ export async function teardownLocalServerStack(
           failures.push({
             component: "uplink daemon",
             pid: uplinkPid,
-            reason: "process did not terminate after SIGTERM + force kill",
+            reason: "process did not terminate after force kill",
             advice: process.platform === "win32"
               ? `Stop-Process -Id ${uplinkPid} -Force`
               : `kill -9 ${uplinkPid}`
