@@ -127,6 +127,7 @@ export async function teardownLocalServerStack(
         }
       }
     } else {
+      serverDead = false;
       failures.push({
         component: "dashboard server",
         pid: serverState.pid,
@@ -164,6 +165,7 @@ export async function teardownLocalServerStack(
         }
       }
     } else {
+      ingestDead = false;
       failures.push({
         component: "ingest daemon",
         pid: ingestPid,
@@ -201,6 +203,7 @@ export async function teardownLocalServerStack(
         }
       }
     } else {
+      uplinkDead = false;
       failures.push({
         component: "uplink daemon",
         pid: uplinkPid,

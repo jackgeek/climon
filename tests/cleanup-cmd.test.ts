@@ -94,6 +94,26 @@ describe("teardownLocalServerStack", () => {
     expect(report.staleFiles.length).toBeGreaterThan(0);
     expect(existsSync(join(home, "server.json"))).toBe(true);
   });
+
+  test("does not remove beacon when kill signal cannot be sent", async () => {
+    seedStack();
+    // killProcess returns false (signal cannot be sent) but process is alive
+    const report = await teardownLocalServerStack({
+      env,
+      isProcessAlive: () => true,
+      killProcess: () => false,
+      waitTimeoutMs: 200
+    });
+    expect(report.serverStopped).toBe(false);
+    expect(report.ingestStopped).toBe(false);
+    expect(report.uplinkStopped).toBe(false);
+    expect(report.failures.length).toBe(3);
+    // All beacon files should still exist
+    expect(existsSync(join(home, "server.json"))).toBe(true);
+    expect(existsSync(join(home, "ingest.pid"))).toBe(true);
+    expect(existsSync(join(home, "uplink.pid"))).toBe(true);
+    expect(report.staleFiles.length).toBeGreaterThan(0);
+  });
 });
 
 describe("runCleanupCommand", () => {
