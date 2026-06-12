@@ -216,6 +216,20 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
   async function addSession(meta: SessionMeta): Promise<void> {
     if (!label) return; // hello not yet received; ignore.
     if (!isValidRemoteId(meta.id)) return;
+    const localId = namespacedId(label, meta.id);
+    // Check dismissal first — if the user deleted this session from the
+    // dashboard, don't re-materialize or patch it (which would recreate the file).
+    if (registry?.isDismissed(localId)) {
+      const existing = sessions.get(meta.id);
+      if (existing) {
+        // Tear down the in-memory entry so we stop bridging data for it.
+        for (const socket of existing.sockets) socket.destroy();
+        try { existing.server.close(); } catch {}
+        await cleanupSessionSocket(existing.socketPath);
+        sessions.delete(meta.id);
+      }
+      return;
+    }
     const existing = sessions.get(meta.id);
     if (existing) {
       const patch = sanitizeRemotePatch({ status: meta.status, priorityReason: meta.priorityReason });
@@ -224,12 +238,6 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       return;
     }
     if (sessions.size >= maxSessions) return;
-    const localId = namespacedId(label, meta.id);
-    // Skip sessions the user explicitly removed from the dashboard.
-    if (registry?.isDismissed(localId)) {
-      log(`session-added: skipping dismissed session ${localId}`);
-      return;
-    }
     const socketPath = formatSessionSocketRef("127.0.0.1", 0);
     await writeSessionMeta(toLocalMeta(meta, label, localId, socketPath, env), env);
     const sockets = new Set<Socket>();
