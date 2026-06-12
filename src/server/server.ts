@@ -188,7 +188,7 @@ export async function stopDashboardServer(options: {
  * deleted) but the server is reachable on localhost.
  */
 async function requestServerShutdownViaHttp(url: string): Promise<boolean> {
-  const shutdownUrl = `${url.replace(/\/?$/, "")}__internal/shutdown`;
+  const shutdownUrl = `${url.replace(/\/?$/, "")}/__internal/shutdown`;
   try {
     const res = await fetch(shutdownUrl, {
       method: "POST",
