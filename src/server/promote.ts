@@ -102,13 +102,19 @@ export async function runPromote(deps: PromoteDeps): Promise<PromoteOutcome> {
       await deps.clearPeerBeacons();
       return { kind: "proceed", via: "graceful" };
     }
-    // HTTP shutdown failed — the peer server may already be dead (stale beacon).
-    // Probe the health endpoint to confirm.
+    // HTTP shutdown failed — the peer server may already be dead (stale beacon),
+    // or it may be alive but unreachable (e.g. WSL2 NAT mode where the peer
+    // binds to its own loopback). Probe the health endpoint to disambiguate.
     log("HTTP shutdown failed; probing peer server health to detect stale beacon");
     const peerAlive = await deps.probeIngestListening({ port: peerServer.port });
     if (!peerAlive) {
-      log("peer server is not responding; clearing stale beacons and proceeding");
-      await deps.clearPeerBeacons();
+      // We cannot reach the peer on any candidate host. This could mean:
+      //   a) The peer truly crashed (stale beacon) — safe to clear.
+      //   b) The peer is alive but unreachable (NAT loopback isolation).
+      // To avoid destroying a live peer's beacon in case (b), proceed WITHOUT
+      // clearing beacons. The settleDualPromote tie-break still reads the peer's
+      // server.json over the filesystem mount and handles coordination correctly.
+      log("peer server is not responding; proceeding without clearing beacons (may be NAT-isolated)");
       return { kind: "proceed", via: "no-live-peer" };
     }
     log("peer server is still alive but refused shutdown");
