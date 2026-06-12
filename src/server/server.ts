@@ -1,7 +1,7 @@
-import { existsSync, watch } from "node:fs";
+import { existsSync, rmSync, watch } from "node:fs";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
-import { readFile, rm, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -1529,9 +1529,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       if (shuttingDown) return;
       shuttingDown = true;
       startupLog("plain shutdown requested; releasing resources");
+      // Remove server.json synchronously so it is guaranteed to be cleaned up
+      // even if the process is force-killed shortly after Ctrl+C on Windows.
+      try { rmSync(getServerStatePath(), { force: true }); } catch { /* best-effort */ }
       void (async () => {
         await closeListenerAndStreams();
-        await rm(getServerStatePath(), { force: true }).catch(() => {});
         if (!peerHome) {
           try {
             await stopIngestDaemon();
