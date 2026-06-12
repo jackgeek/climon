@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.11.0",
+    "changes": [
+      "Print startup message immediately when the server starts",
+      "Installer works on Linux and macOS (previously only Windows)",
+      "Displace locked binaries during install instead of failing",
+      "Suppress PowerShell CLIXML noise in installer error messages",
+      "Cleanup command reports which stale files it removed",
+      "Fall back to HTTP shutdown when server PID is unavailable",
+      "Remove server.json reliably on Ctrl+C (Windows)",
+      "Cross-OS promote gracefully shuts down the peer server via HTTP",
+      "Promote clears stale peer server.json when server is unreachable"
+    ]
+  },
+  {
     "version": "0.10.0",
     "changes": [
       "Single-process session host — daemon merged into launcher for lower overhead",
