@@ -475,20 +475,38 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   // Dual-listen: when a tunnel is configured and the primary bind is not
   // loopback, add a secondary loopback listener so `devtunnel host` (which
   // forwards to 127.0.0.1) can reach the ingest without exposing to 0.0.0.0.
+  // Retry a few times with a delay to handle stale listeners from a previous
+  // ingest that hasn't fully released the port yet (common on Windows after
+  // force-kill or crash).
   let loopbackServer: ReturnType<typeof createNetServer> | undefined;
   const needsLoopback = state?.tunnelId && host !== "127.0.0.1" && host !== "::1";
   if (needsLoopback) {
-    const lb = createNetServer((socket) => onConnection(socket));
-    try {
-      await new Promise<void>((resolve, reject) => {
-        lb.once("error", reject);
-        lb.listen(ingestPort.port, "127.0.0.1", resolve);
-      });
-      loopbackServer = lb;
-      log(`loopback listener added on 127.0.0.1:${ingestPort.port} (for devtunnel)`);
-    } catch {
-      log(`warning: could not bind loopback 127.0.0.1:${ingestPort.port} — tunnel may not reach ingest`);
-      lb.close();
+    const LOOPBACK_RETRIES = 5;
+    const LOOPBACK_RETRY_DELAY_MS = 500;
+    for (let attempt = 1; attempt <= LOOPBACK_RETRIES; attempt++) {
+      const lb = createNetServer((socket) => onConnection(socket));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          lb.once("error", reject);
+          lb.listen(ingestPort.port, "127.0.0.1", resolve);
+        });
+        loopbackServer = lb;
+        log(`loopback listener added on 127.0.0.1:${ingestPort.port} (for devtunnel)`);
+        break;
+      } catch (err: unknown) {
+        lb.close();
+        const code = (err as NodeJS.ErrnoException).code;
+        if (attempt < LOOPBACK_RETRIES) {
+          log(`loopback bind attempt ${attempt}/${LOOPBACK_RETRIES} failed (${code}), retrying in ${LOOPBACK_RETRY_DELAY_MS}ms...`);
+          await new Promise((r) => setTimeout(r, LOOPBACK_RETRY_DELAY_MS));
+        } else {
+          log(`warning: could not bind loopback 127.0.0.1:${ingestPort.port} after ${LOOPBACK_RETRIES} attempts (${code})`);
+          process.stderr.write(
+            `climon: warning: ingest could not bind loopback 127.0.0.1:${ingestPort.port} (${code}). ` +
+            `Dev tunnel connections will fail. Check for stale processes on that port.\n`
+          );
+        }
+      }
     }
   }
 
