@@ -42,7 +42,9 @@ const useStyles = makeStyles({
     marginTop: "8px"
   },
   section: { marginTop: "16px" },
-  row: { display: "flex", gap: "12px", marginTop: "8px" },
+  content: { overflowX: "visible" as const },
+  row: { display: "flex", gap: "12px", marginTop: "8px", alignItems: "start" },
+  field: { flex: 1, overflow: "hidden" },
   swatch: {
     width: "12px",
     height: "12px",
@@ -161,11 +163,9 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
       <DialogSurface>
         <DialogBody>
           <DialogTitle>Remotes</DialogTitle>
-          <DialogContent>
+          <DialogContent className={styles.content}>
             <Text>
-              Expose this dashboard to a devbox over a Microsoft dev tunnel. Forward
-              the ingest port ({status?.ingestPort ?? 3132}) and connect your devbox
-              with the generated script.
+              Connect Climon sessions from remote machines via a Microsoft dev tunnel. 
             </Text>
 
             {status?.devtunnelAvailable ? (
@@ -205,8 +205,23 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
             </div>
 
             <div className={styles.row}>
-              <Field label="Default color">
+              <Field
+                label="Client ID"
+                className={styles.field}
+                validationState={clientIdValid ? "none" : "error"}
+                validationMessage={clientIdValid ? undefined : "1–64 chars: letters, digits, dots, hyphens, underscores."}
+              >
+                <Input
+                  value={clientId}
+                  placeholder="my-devbox"
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(_, d) => setClientId(d.value)}
+                />
+              </Field>
+              <Field label="Color" className={styles.field}>
                 <Dropdown
+                  style={{ width: "100%" }}
                   value={color}
                   selectedOptions={[color]}
                   onOptionSelect={(_, d) => setColor((d.optionValue as SessionColorMode | undefined) ?? "auto")}
@@ -220,28 +235,16 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                 </Dropdown>
               </Field>
               <Field
-                label="Default priority (0–1000)"
+                label="Priority"
+                className={styles.field}
                 validationState={priorityValid ? "none" : "error"}
-                validationMessage={priorityValid ? undefined : "Enter an integer 0–1000."}
+                validationMessage={priorityValid ? undefined : "0–1000"}
               >
                 <Input
                   value={priority}
                   placeholder="500"
                   inputMode="numeric"
                   onChange={(_, d) => setPriority(d.value)}
-                />
-              </Field>
-              <Field
-                label="Client ID"
-                validationState={clientIdValid ? "none" : "error"}
-                validationMessage={clientIdValid ? undefined : "1–64 chars: letters, digits, dots, hyphens, underscores."}
-              >
-                <Input
-                  value={clientId}
-                  placeholder="my-devbox"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(_, d) => setClientId(d.value)}
                 />
               </Field>
             </div>
