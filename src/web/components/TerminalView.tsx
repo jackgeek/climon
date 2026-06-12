@@ -22,6 +22,12 @@ interface FocusableTerminal {
   focus: () => void;
 }
 
+interface RefreshableTerminal {
+  rows: number;
+  clearTextureAtlas: () => void;
+  refresh: (start: number, end: number) => void;
+}
+
 interface ResizableTerminal {
   cols: number;
   rows: number;
@@ -36,13 +42,10 @@ interface RefitSessionState {
   status: SessionMeta["status"];
 }
 
-interface FontResizableTerminal {
+interface FontResizableTerminal extends RefreshableTerminal {
   options: {
     fontSize?: number;
   };
-  rows: number;
-  clearTextureAtlas: () => void;
-  refresh: (start: number, end: number) => void;
 }
 
 interface ScrollbackConfigurableTerminal {
@@ -72,8 +75,20 @@ export function applyTerminalScrollbackForSession(
   term.options.scrollback = TERMINAL_SCROLLBACK;
 }
 
-export function focusTerminalPane(term: FocusableTerminal | null): void {
-  term?.focus();
+export function refreshTerminalRender(term: RefreshableTerminal | null): void {
+  if (!term) {
+    return;
+  }
+  term.clearTextureAtlas();
+  term.refresh(0, Math.max(term.rows - 1, 0));
+}
+
+export function focusTerminalPane(term: FocusableTerminal | null, onFocused?: () => void): void {
+  if (!term) {
+    return;
+  }
+  term.focus();
+  onFocused?.();
 }
 
 export function mapWheelToScrollLines(event: Pick<WheelEvent, "deltaY" | "deltaMode">, rows: number): number {
@@ -148,8 +163,7 @@ export function completeInitialReplay(
 
 export function applyTerminalFontSize(term: FontResizableTerminal, fontSize: number, refit: () => void): void {
   term.options.fontSize = fontSize;
-  term.clearTextureAtlas();
-  term.refresh(0, Math.max(term.rows - 1, 0));
+  refreshTerminalRender(term);
   refit();
 }
 
@@ -314,6 +328,15 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     requestAnimationFrame(() => {
       requestAnimationFrame(fitNow);
     });
+  }
+
+  function refreshActiveTerminal(): void {
+    refreshTerminalRender(termRef.current);
+    refit();
+  }
+
+  function focusActiveTerminal(): void {
+    focusTerminalPane(termRef.current, refreshActiveTerminal);
   }
 
   function closeWs(): void {
@@ -481,7 +504,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
                 () => {
                   initialReplayCompleteRef.current = true;
                 },
-                refit
+                refreshActiveTerminal
               );
             });
           }
@@ -494,11 +517,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         }
         if (buf) {
           term.write(buf, () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refit);
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
           });
         } else {
           term.write("\x1b[90m[no output captured]\x1b[0m\r\n", () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refit);
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
           });
         }
       });
@@ -516,6 +539,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   // Refit when the selected session or layout-affecting terminal chrome changes
   // so xterm re-measures before sending geometry back to the daemon.
   useEffect(() => {
+    const term = termRef.current;
+    if (visible) {
+      refreshTerminalRender(term);
+    }
     if (canRefitTerminalForSession(session, initialReplayCompleteRef.current, visible)) {
       refit();
     }
@@ -538,7 +565,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       refit();
     },
     acknowledgeAttention: sendAttentionAck,
-    focus: () => termRef.current?.focus()
+    focus: focusActiveTerminal
   }));
 
   return (
@@ -550,7 +577,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
           ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
           : undefined
       }
-      onClick={() => focusTerminalPane(termRef.current)}
+      onClick={focusActiveTerminal}
+      onFocusCapture={refreshActiveTerminal}
     />
   );
 });
