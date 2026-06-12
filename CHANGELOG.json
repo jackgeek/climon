@@ -1,5 +1,20 @@
 [
   {
+    "version": "0.12.0",
+    "changes": [
+      "Refresh terminal rendering when sessions are focused or shown on mobile",
+      "Fix Remotes dialog field clipping and menu labels",
+      "Remove dev tunnel connect-token setup in favor of identity access",
+      "Auto-discover remote tunnel ports for devbox clients",
+      "Add remote client ID configuration in the Remotes dialog",
+      "Prevent remote session duplicates and stale re-materialization",
+      "Improve tunnel and uplink reliability for remote sessions",
+      "Make cleanup verify and force-kill stale daemons before removing beacons",
+      "Add persistent server logs under CLIMON_HOME/logs/server",
+      "Fix shutdown signaling when peers or ingest are unavailable"
+    ]
+  },
+  {
     "version": "0.11.0",
     "changes": [
       "Print startup message immediately when the server starts",
