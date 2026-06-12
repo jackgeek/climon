@@ -182,6 +182,39 @@ describe("handleExistingDashboardServer", () => {
     expect(action).toBe("exit");
     expect(output).toContain("Existing server left running at http://127.0.0.1:3131/");
   });
+  test("interactive launch uses HTTP shutdown when PID is unknown", async () => {
+    let output = "";
+    let httpShutdownRequested = false;
+    const handleExistingDashboardServer = (
+      serverModule as typeof serverModule & {
+        handleExistingDashboardServer?: (
+          existing: { url: string; pid?: number },
+          options: {
+            stdinIsTTY: boolean;
+            write: (text: string) => void;
+            ask: (question: string) => Promise<string>;
+            stopServer: (pid: number) => Promise<boolean>;
+            requestShutdown: (url: string) => Promise<boolean>;
+          }
+        ) => Promise<"continue" | "exit">;
+      }
+    ).handleExistingDashboardServer;
+
+    const action = await handleExistingDashboardServer?.(
+      { url: "http://127.0.0.1:3131/" },
+      {
+        stdinIsTTY: true,
+        write: (text) => { output += text; },
+        ask: async () => "y",
+        stopServer: async () => { throw new Error("should not be called without pid"); },
+        requestShutdown: async () => { httpShutdownRequested = true; return true; }
+      }
+    );
+
+    expect(action).toBe("continue");
+    expect(httpShutdownRequested).toBe(true);
+    expect(output).toContain("terminated");
+  });
 });
 
 describe("applyDashboardTunnelPersistence", () => {

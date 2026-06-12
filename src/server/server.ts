@@ -182,6 +182,36 @@ export async function stopDashboardServer(options: {
   return terminatePidWithEscalation(pid, kill, isAlive, graceMs, pollMs);
 }
 
+/**
+ * Requests graceful shutdown via the server's internal HTTP endpoint.
+ * Used when the PID is unknown (e.g. server running in WSL, server.json
+ * deleted) but the server is reachable on localhost.
+ */
+async function requestServerShutdownViaHttp(url: string): Promise<boolean> {
+  const shutdownUrl = `${url.replace(/\/?$/, "")}__internal/shutdown`;
+  try {
+    const res = await fetch(shutdownUrl, {
+      method: "POST",
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) return false;
+  } catch {
+    return false;
+  }
+  // Wait for the server to actually stop responding.
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    try {
+      const probe = await fetch(`${url}health`, { signal: AbortSignal.timeout(500) });
+      if (!probe.ok) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function askExistingServerTermination(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -198,6 +228,7 @@ export async function handleExistingDashboardServer(
     write?: (text: string) => void;
     ask?: (question: string) => Promise<string>;
     stopServer?: (pid: number) => Promise<boolean>;
+    requestShutdown?: (url: string) => Promise<boolean>;
   } = {}
 ): Promise<ServerConflictAction> {
   const write = options.write ?? ((text: string) => process.stdout.write(text));
@@ -207,6 +238,7 @@ export async function handleExistingDashboardServer(
     (async () => {
       return await stopDashboardServer();
     });
+  const requestHttpShutdown = options.requestShutdown ?? requestServerShutdownViaHttp;
 
   if (!stdinIsTTY) {
     write(`climon server is already running at ${existing.url}\n`);
@@ -221,16 +253,22 @@ export async function handleExistingDashboardServer(
     write(`Existing server left running at ${existing.url}\n`);
     return "exit";
   }
-  if (existing.pid === undefined) {
-    write(`Unable to determine the existing server process id. Existing server is at ${existing.url}\n`);
-    return "exit";
+
+  if (existing.pid !== undefined) {
+    if (await stopServer(existing.pid)) {
+      write("Existing climon server terminated. Starting a new server...\n");
+      return "continue";
+    }
   }
-  if (!(await stopServer(existing.pid))) {
-    write(`Unable to terminate the existing server. Existing server is at ${existing.url}\n`);
-    return "exit";
+
+  // PID unknown or kill failed — request graceful shutdown via HTTP.
+  if (await requestHttpShutdown(existing.url)) {
+    write("Existing climon server terminated. Starting a new server...\n");
+    return "continue";
   }
-  write("Existing climon server terminated. Starting a new server...\n");
-  return "continue";
+
+  write(`Unable to terminate the existing server at ${existing.url}\n`);
+  return "exit";
 }
 
 /**
