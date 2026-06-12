@@ -91,4 +91,29 @@ describe("runPromote (filesystem matrix)", () => {
     expect(text).toContain("shutdown-request");
     expect(text).toContain("demoted");
   });
+
+  test("peer server.json present, no ingest, HTTP shutdown succeeds → proceed (graceful)", async () => {
+    let shutdownPort: number | undefined;
+    const out = await runPromote(
+      baseDeps({
+        readPeerServer: async () => ({ port: 3131 }),
+        readPeerIngest: async () => undefined,
+        requestPeerShutdown: async (port) => { shutdownPort = port; return true; }
+      })
+    );
+    expect(out.kind).toBe("proceed");
+    if (out.kind === "proceed") expect(out.via).toBe("graceful");
+    expect(shutdownPort).toBe(3131);
+  });
+
+  test("peer server.json present, no ingest, HTTP shutdown fails → abort", async () => {
+    const out = await runPromote(
+      baseDeps({
+        readPeerServer: async () => ({ port: 3131 }),
+        readPeerIngest: async () => undefined,
+        requestPeerShutdown: async () => false
+      })
+    );
+    expect(out.kind).toBe("aborted");
+  });
 });

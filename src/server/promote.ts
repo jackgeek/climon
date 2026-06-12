@@ -35,6 +35,12 @@ export interface PromoteDeps {
   confirmDemoted: (target: IngestTarget) => Promise<boolean>;
   /** Remove the peer's stale beacons (server.json/ingest.json/pid/request). */
   clearPeerBeacons: () => Promise<void>;
+  /**
+   * Request graceful shutdown of the peer dashboard via its HTTP endpoint.
+   * Used when there's no ingest to coordinate through. Optional — if absent
+   * the promote falls back to abort.
+   */
+  requestPeerShutdown?: (port: number) => Promise<boolean>;
 }
 
 /** How a successful promote displaced (or didn't need to displace) the peer. */
@@ -84,9 +90,22 @@ export async function runPromote(deps: PromoteDeps): Promise<PromoteOutcome> {
     };
   }
 
-  // 3. Peer dashboard beacon present but no ingest beacon: no watcher to author a
-  //    request for, and a peer process cannot be killed across the OS boundary.
-  log("peer dashboard beacon present but no ingest beacon; cannot author a shutdown-request");
+  // 3. Peer dashboard beacon present but no ingest beacon: try a direct HTTP
+  //    shutdown of the peer server. This handles the common case where the peer
+  //    server is running without an ingest (e.g. Windows server started without
+  //    remotes, or ingest crashed).
+  if (deps.requestPeerShutdown && peerServer) {
+    log("peer dashboard beacon present but no ingest; attempting HTTP shutdown");
+    const stopped = await deps.requestPeerShutdown(peerServer.port);
+    if (stopped) {
+      log("peer server shut down via HTTP; clearing stale beacons");
+      await deps.clearPeerBeacons();
+      return { kind: "proceed", via: "graceful" };
+    }
+    log("HTTP shutdown failed or timed out");
+  } else {
+    log("peer dashboard beacon present but no ingest beacon; cannot author a shutdown-request");
+  }
   return {
     kind: "aborted",
     reason: "The peer dashboard left a server.json but no ingest beacon to coordinate a clean handoff.",
