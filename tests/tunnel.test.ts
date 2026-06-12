@@ -44,7 +44,7 @@ describe("parseTunnelInput", () => {
 describe("useManualTunnel", () => {
   test("persists remote-host.json with canHost from availability", async () => {
     await useManualTunnel(
-      { tunnelId: "abc123", connectToken: "tok", ingestPort: 3132 },
+      { tunnelId: "abc123", ingestPort: 3132 },
       { devtunnelAvailable: false, env }
     );
     const raw = JSON.parse(readFileSync(getRemoteHostPath(env), "utf8"));
@@ -55,7 +55,7 @@ describe("useManualTunnel", () => {
 
   test("deleteTunnel removes remote-host.json", async () => {
     await useManualTunnel(
-      { tunnelId: "abc123", connectToken: "tok", ingestPort: 3132 },
+      { tunnelId: "abc123", ingestPort: 3132 },
       { devtunnelAvailable: true, env, runner: async () => ({ status: 0, stdout: "", stderr: "" }) }
     );
     await deleteTunnel({ env, runner: async () => ({ status: 0, stdout: "", stderr: "" }) });

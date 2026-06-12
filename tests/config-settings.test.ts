@@ -28,7 +28,6 @@ describe("config settings registry", () => {
       "remote.tunnelId",
       "remote.dashboardTunnelId",
       "remote.dashboardTunnelCluster",
-      "remote.tunnelToken",
       "remote.port",
       "remote.ingestPortRetryAttempts",
       "remote.clientId",
@@ -68,8 +67,7 @@ describe("config settings registry", () => {
     });
   });
 
-  test("marks sensitive and internal settings", () => {
-    expect(findConfigSetting("remote.tunnelToken")?.sensitive).toBe(true);
+  test("marks internal settings", () => {
     expect(findConfigSetting("remote.clientId")?.internal).toBe(true);
     expect(findConfigSetting("version")?.internal).toBe(true);
   });
@@ -95,7 +93,6 @@ describe("config settings registry", () => {
       "remote.host",
       "remote.ingestHost",
       "remote.tunnelId",
-      "remote.tunnelToken",
       "remote.port",
       "remote.keepAlive",
       "remote.peerHome",
@@ -109,7 +106,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(24);
+    expect(allConfigKeys().length).toBe(23);
   });
 
   test("coerces values through registry validators", () => {
@@ -141,8 +138,6 @@ describe("config settings registry", () => {
     const table = renderConfigSettingsTable();
 
     expect(table).toContain("| `session.color` | string | `auto` | client, daemon, server | Specifies the default accent color");
-    expect(table).toContain("| `remote.tunnelToken` | string | unset | client | Stores the dev tunnel connect token");
-    expect(table).toContain("sensitive");
     expect(table).toContain("internal");
   });
 

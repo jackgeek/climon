@@ -73,9 +73,7 @@ async function writeRemoteHostState(state: RemoteHostState, env: NodeJS.ProcessE
 
 export interface ManualTunnelInput {
   tunnelId: string;
-  connectToken: string;
   ingestPort: number;
-  tokenExpiresAt?: string;
 }
 
 /** Records a user-supplied tunnel as the desired hosting state. */
@@ -85,9 +83,7 @@ export async function useManualTunnel(
 ): Promise<RemoteHostState> {
   const state: RemoteHostState = {
     tunnelId: input.tunnelId,
-    connectToken: input.connectToken,
     ingestPort: input.ingestPort,
-    tokenExpiresAt: input.tokenExpiresAt,
     canHost: options.devtunnelAvailable
   };
   await writeRemoteHostState(state, options.env);
@@ -95,8 +91,9 @@ export async function useManualTunnel(
 }
 
 /**
- * Auto-creates a tunnel and a port mapping for the ingest port, issues a
- * connect-scoped token, and records it as the desired hosting state.
+ * Auto-creates a tunnel and a port mapping for the ingest port, then records
+ * it as the desired hosting state. The tunnel uses identity-based access
+ * (the connecting side must be logged into `devtunnel` with an authorized identity).
  *
  * VERIFY the exact devtunnel subcommands/flags below against the installed CLI.
  */
@@ -117,18 +114,9 @@ export async function createTunnel(
     throw new Error(`devtunnel port create failed: ${portRes.stderr.trim() || portRes.status}`);
   }
 
-  const tokenRes = await runner("devtunnel", ["token", tunnelId, "--scopes", "connect", "--json"]);
-  if (tokenRes.status !== 0) {
-    throw new Error(`devtunnel token failed: ${tokenRes.stderr.trim() || tokenRes.status}`);
-  }
-  const { token, expiresAt } = parseToken(tokenRes.stdout);
-  if (!token) throw new Error("Could not parse connect token from `devtunnel token` output.");
-
   const state: RemoteHostState = {
     tunnelId,
-    connectToken: token,
     ingestPort,
-    tokenExpiresAt: expiresAt,
     canHost: true
   };
   await writeRemoteHostState(state, options.env);
@@ -211,11 +199,3 @@ function parseTunnelId(stdout: string): string | undefined {
   }
 }
 
-function parseToken(stdout: string): { token?: string; expiresAt?: string } {
-  try {
-    const obj = JSON.parse(stdout) as { token?: string; expiration?: string; expiresAt?: string };
-    return { token: obj.token, expiresAt: obj.expiration ?? obj.expiresAt };
-  } catch {
-    return { token: stdout.trim() || undefined };
-  }
-}

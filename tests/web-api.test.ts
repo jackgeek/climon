@@ -119,15 +119,13 @@ describe("canSendAttentionAck", () => {
 describe("buildSetupScript", () => {
   const BASE = {
     tunnelId: "abc123",
-    connectToken: "tok-xyz",
     ingestPort: 3132
   };
 
-  test("emits the four required remote settings", () => {
+  test("emits the three required remote settings", () => {
     const script = buildSetupScript(BASE);
     expect(script).toContain("climon config remote.enabled true");
     expect(script).toContain("climon config remote.tunnelId abc123");
-    expect(script).toContain("climon config remote.tunnelToken tok-xyz");
     expect(script).toContain("climon config remote.port 3132");
   });
 
@@ -159,8 +157,8 @@ describe("buildSetupScript", () => {
     expect(script).not.toContain("remote.enabled true");
   });
 
-  test("quotes the token so shell metacharacters are safe", () => {
-    const script = buildSetupScript({ ...BASE, connectToken: "a b$c" });
-    expect(script).toContain("climon config remote.tunnelToken 'a b$c'");
+  test("quotes the tunnel id so shell metacharacters are safe", () => {
+    const script = buildSetupScript({ ...BASE, tunnelId: "a b$c" });
+    expect(script).toContain("climon config remote.tunnelId 'a b$c'");
   });
 });

@@ -5,7 +5,6 @@ describe("planUplinkStart", () => {
   const remoteConfig = {
     enabled: true,
     tunnelId: "spiffy-chair-c2lj709.eun1",
-    tunnelToken: "token",
     port: 3132
   };
 

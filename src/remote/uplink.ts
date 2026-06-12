@@ -21,13 +21,12 @@ export interface UplinkConfig {
   enabled: boolean;
   host?: string;
   tunnelId?: string;
-  tunnelToken?: string;
   port?: number;
 }
 
 /**
  * Resolves the devbox uplink config from the cascade. Remote is only considered
- * enabled when a direct host+port or tunnel id+token+port are present. This
+ * enabled when a direct host+port or tunnel id+port are present. This
  * defends against stale SSH-era `remote.enabled: true` files.
  */
 export function resolveUplinkConfig(
@@ -37,15 +36,13 @@ export function resolveUplinkConfig(
   const enabledFlag = resolveConfigSetting("remote.enabled", env, cwd) === true;
   const host = asString(resolveConfigSetting("remote.host", env, cwd));
   const tunnelId = asString(resolveConfigSetting("remote.tunnelId", env, cwd));
-  const tunnelToken = asString(resolveConfigSetting("remote.tunnelToken", env, cwd));
   const port = asNumber(resolveConfigSetting("remote.port", env, cwd));
   const hasDirectTarget = !!host && !!port;
-  const hasTunnelTarget = !!tunnelId && !!tunnelToken && !!port;
+  const hasTunnelTarget = !!tunnelId && !!port;
   return {
     enabled: enabledFlag && (hasDirectTarget || hasTunnelTarget),
     host,
     tunnelId,
-    tunnelToken,
     port
   };
 }
@@ -212,11 +209,11 @@ interface ConnectChild {
   authRejected: () => boolean;
 }
 
-/** Spawns `devtunnel connect`, watching stderr for auth-rejection signatures. */
-function spawnConnect(tunnelId: string, token: string): ConnectChild {
+/** Spawns `devtunnel connect` using the caller's logged-in devtunnel identity. */
+function spawnConnect(tunnelId: string): ConnectChild {
   const child = spawn("devtunnel", ["connect", tunnelId], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: devtunnelEnv({ ...process.env, DEVTUNNEL_ACCESS_TOKEN: token }),
+    env: devtunnelEnv(),
     windowsHide: true
   });
   let authRejected = false;
@@ -312,9 +309,9 @@ export async function runUplink(
         log(`direct target: ${config.host}:${config.port}`);
         host = config.host;
         port = config.port;
-      } else if (config.tunnelId && config.tunnelToken) {
+      } else if (config.tunnelId) {
         log(`spawning devtunnel connect for tunnel ${config.tunnelId}, forwarding port ${config.port}`);
-        conn = spawnConnect(config.tunnelId, config.tunnelToken);
+        conn = spawnConnect(config.tunnelId);
         host = "127.0.0.1";
         port = config.port;
       }
@@ -337,7 +334,7 @@ export async function runUplink(
       const reachable = await waitForPort(port, host);
       if (!reachable) {
         if (conn?.authRejected()) {
-          process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
+          process.stderr.write("climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping.\n");
           log("auth rejected during port wait, stopping");
           conn.child.kill();
           return 1;
@@ -367,7 +364,7 @@ export async function runUplink(
       conn?.child.kill();
     }
     if (conn?.authRejected()) {
-      process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
+      process.stderr.write("climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping.\n");
       log("auth rejected after bridge closed, stopping");
       return 1;
     }

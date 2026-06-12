@@ -23,8 +23,6 @@ describe("PowerShell diagnostics scripts", () => {
     expect(script).toContain("devtunnel --version");
     expect(script).toContain("devtunnel list");
     expect(script).toContain("devtunnel port list");
-    expect(script).toContain("connectToken");
-    expect(script).toContain("<redacted>");
   });
 
   test("devbox diagnostics collect uplink, config, and tunnel-forward evidence", () => {
@@ -35,10 +33,8 @@ describe("PowerShell diagnostics scripts", () => {
     expect(script).toContain("uplink.pid");
     expect(script).toContain("remote.enabled");
     expect(script).toContain("remote.tunnelId");
-    expect(script).toContain("remote.tunnelToken");
     expect(script).toContain("remote.port");
     expect(script).toContain("Test-TcpPort");
     expect(script).toContain("devtunnel --version");
-    expect(script).toContain("<redacted>");
   });
 });

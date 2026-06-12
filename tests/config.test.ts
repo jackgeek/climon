@@ -152,7 +152,6 @@ describe("config migration", () => {
         remote: {
           enabled: true,
           tunnelId: "abc123",
-          tunnelToken: "tok-xyz",
           port: 3132
         }
       })

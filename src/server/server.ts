@@ -1169,7 +1169,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           devtunnelAvailable: detect.available,
           version: detect.version,
           ingestPort: await resolveIngestPort(),
-          tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
+          tunnel: state ? { id: state.tunnelId } : undefined,
           canHost: state?.canHost ?? detect.available
         });
       }
@@ -1222,7 +1222,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let body: { mode?: unknown; tunnelInput?: unknown; connectToken?: unknown };
+        let body: { mode?: unknown; tunnelInput?: unknown };
         try {
           body = (await request.json()) as typeof body;
         } catch {
@@ -1238,10 +1238,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             await createTunnel(ingestPort);
           } else {
             const tunnelId = parseTunnelInput(typeof body.tunnelInput === "string" ? body.tunnelInput : "");
-            const token = typeof body.connectToken === "string" ? body.connectToken : "";
             if (!tunnelId) return new Response("Invalid tunnel id or URL.", { status: 400 });
             await useManualTunnel(
-              { tunnelId, connectToken: token, ingestPort },
+              { tunnelId, ingestPort },
               { devtunnelAvailable: detect.available }
             );
           }
@@ -1258,11 +1257,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           devtunnelAvailable: detect.available,
           version: detect.version,
           ingestPort: livePort,
-          tunnel: state ? { id: state.tunnelId, tokenExpiresAt: state.tokenExpiresAt } : undefined,
-          // Returned ONLY from this mutating endpoint (loopback-only) so the
-          // dialog can fold the secret into the generated script. The GET status
-          // endpoint never returns the token.
-          connectToken: state?.connectToken,
+          tunnel: state ? { id: state.tunnelId } : undefined,
           canHost: state?.canHost ?? detect.available
         });
       }

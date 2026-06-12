@@ -287,10 +287,8 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
 
 export interface RemoteHostState {
   tunnelId: string;
-  connectToken?: string;
   ingestPort: number;
   ingestHost?: string;
-  tokenExpiresAt?: string;
   canHost?: boolean;
 }
 

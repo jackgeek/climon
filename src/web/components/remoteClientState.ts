@@ -3,7 +3,6 @@ import type { RemoteStatus } from "../api.js";
 export interface RemoteClientDraftState {
   status: RemoteStatus | null;
   tunnelInput: string;
-  connectToken: string;
 }
 
 export function applyRemoteStatusToDraft(
@@ -13,7 +12,6 @@ export function applyRemoteStatusToDraft(
   return {
     ...state,
     status,
-    tunnelInput: status.tunnel?.id ?? state.tunnelInput,
-    connectToken: status.connectToken ?? state.connectToken
+    tunnelInput: status.tunnel?.id ?? state.tunnelInput
   };
 }

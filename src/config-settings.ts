@@ -119,14 +119,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     internal: true
   },
   {
-    path: "remote.tunnelToken",
-    type: "string",
-    purpose: "Stores the dev tunnel connect token scoped to this tunnel. Supplied via DEVTUNNEL_ACCESS_TOKEN environment variable.",
-    scope: ["client"],
-    sensitive: true,
-    acceptInput: true
-  },
-  {
     path: "remote.port",
     type: "number",
     purpose: "Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set.",

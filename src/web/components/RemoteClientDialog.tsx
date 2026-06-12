@@ -64,15 +64,14 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const styles = useStyles();
   const [draft, setDraft] = useState<RemoteClientDraftState>({
     status: null,
-    tunnelInput: "",
-    connectToken: ""
+    tunnelInput: ""
   });
   const [color, setColor] = useState<SessionColorMode>("auto");
   const [priority, setPriority] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const { status, tunnelInput, connectToken } = draft;
+  const { status, tunnelInput } = draft;
 
   function applyStatus(s: RemoteStatus): void {
     setDraft((prev) => applyRemoteStatusToDraft(prev, s));
@@ -103,7 +102,6 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
 
   const script = buildSetupScript({
     tunnelId: status?.tunnel?.id ?? "",
-    connectToken,
     ingestPort: status?.ingestPort ?? 3132,
     color,
     priority: priorityValid ? parsedPriority : undefined
@@ -127,15 +125,11 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
       setError("Enter a dev tunnel id or URL.");
       return;
     }
-    if (!connectToken.trim()) {
-      setError("Enter the tunnel connect token.");
-      return;
-    }
     setBusy(true);
     setError("");
     setCopied(false);
     try {
-      applyStatus(await recordManualTunnel(tunnelInput.trim(), connectToken.trim()));
+      applyStatus(await recordManualTunnel(tunnelInput.trim()));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to record tunnel.");
     } finally {
@@ -147,7 +141,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     setBusy(true);
     try {
       await deleteRemoteTunnel();
-      setDraft((prev) => ({ ...prev, tunnelInput: "", connectToken: "" }));
+      setDraft((prev) => ({ ...prev, tunnelInput: "" }));
       await refresh();
     } finally {
       setBusy(false);
@@ -194,16 +188,6 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                   onChange={(_, d) => setDraft((prev) => ({ ...prev, tunnelInput: d.value }))}
                 />
               </Field>
-              <Field label="Connect token" style={{ marginTop: "8px" }}>
-                <Input
-                  value={connectToken}
-                  type="password"
-                  placeholder="connect-scoped access token"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(_, d) => setDraft((prev) => ({ ...prev, connectToken: d.value }))}
-                />
-              </Field>
               <Button
                 appearance="secondary"
                 style={{ marginTop: "8px" }}
@@ -244,19 +228,6 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
             </div>
 
             <Text className={styles.error}>{error}</Text>
-            {status && hasTunnel && status.tunnel?.tokenExpiresAt && (
-              <Text className={styles.hint}>
-                Token expires {new Date(status.tunnel.tokenExpiresAt).toLocaleString()}.
-                Recreate the tunnel to refresh it.
-              </Text>
-            )}
-            {status && hasTunnel && !connectToken && (
-              <Text className={styles.hint}>
-                The connect token is only shown once when the tunnel is created or
-                recorded. Recreate the tunnel or paste the token above to regenerate
-                the script.
-              </Text>
-            )}
 
             <Text weight="semibold" style={{ display: "block", marginTop: "16px" }}>
               Run this on the devbox:
@@ -265,7 +236,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
             <Button
               appearance="primary"
               style={{ marginTop: "8px" }}
-              disabled={!hasTunnel || !connectToken}
+              disabled={!hasTunnel}
               onClick={async () => setCopied(await copyToClipboard(script))}
             >
               {copied ? "Copied!" : "Copy script"}
