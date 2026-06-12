@@ -1,4 +1,4 @@
-export const remotesMenuLabel = "Remotes (experimental)…";
+export const remotesMenuLabel = "Remotes";
 export const removeDisconnectedMenuLabel = "Remove disconnected";
 export function notificationsMenuLabel(enabled: boolean): string {
   return enabled ? "Disable notifications" : "Enable notifications";

@@ -119,14 +119,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     internal: true
   },
   {
-    path: "remote.tunnelToken",
-    type: "string",
-    purpose: "Stores the dev tunnel connect token scoped to this tunnel. Supplied via DEVTUNNEL_ACCESS_TOKEN environment variable.",
-    scope: ["client"],
-    sensitive: true,
-    acceptInput: true
-  },
-  {
     path: "remote.port",
     type: "number",
     purpose: "Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set.",
@@ -153,9 +145,14 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "remote.clientId",
     type: "string",
-    purpose: "Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client.",
+    purpose: "Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client. Can be set manually to use a human-readable name.",
     scope: ["client"],
-    internal: true
+    acceptInput: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
+        throw new Error("remote.clientId must be 1–64 characters using only letters, digits, dots, hyphens, or underscores.");
+      }
+    }
   },
   {
     path: "remote.keepAlive",

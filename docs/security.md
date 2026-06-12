@@ -17,21 +17,21 @@ networks. We assume:
 - Input arriving over the wire (mux frames, session metadata, labels) is
   untrusted.
 
-## Transport: connect-scoped dev tunnels
+## Transport: identity-based dev tunnels
 
 Remote traffic rides a Microsoft **dev tunnel** rather than SSH. The home
 machine runs a loopback-only ingest listener (`__ingest`); a dev tunnel exposes
-that single port to the devbox. The access boundary is the **connect-scoped dev
-tunnel token**, not an SSH key:
+that single port to the devbox. The access boundary is the **dev tunnel's
+identity-based ACL** — only authenticated users with access to the tunnel can
+connect:
 
 - The home `__ingest` daemon binds `127.0.0.1` only. It is never bound to a
   public interface directly — the tunnel host process is the only thing that
   fronts it.
-- Anyone who possesses both the **tunnel id** and a valid **connect token** can
-  reach the ingest port. Connect tokens are scoped to the tunnel and temporary;
-  the dialog surfaces expiry and the devbox uplink stops retrying once the host
-  rejects its token (auth failure is terminal, not retried as a transient
-  network error).
+- The connecting devbox must be logged into `devtunnel` with a Microsoft/GitHub
+  identity that has access to the tunnel. The uplink stops retrying once the
+  host rejects the connection (auth failure is terminal, not retried as a
+  transient network error).
 - When climon auto-creates the tunnel, it also opens a keep-alive TCP port so
   the tunnel stays up and never presents an interactive confirmation page to a
   browser.
@@ -43,7 +43,7 @@ directly to the dashboard side's ingest daemon without `devtunnel`. The dashboar
 side can set `remote.ingestHost` to bind that ingest daemon on a host address the
 other side can reach.
 
-Direct mode has no dev tunnel token in front of the ingest port. Treat
+Direct mode has no dev tunnel in front of the ingest port. Treat
 `remote.ingestHost:remote.port` as trusted-local infrastructure: bind to the
 specific same-machine adapter where possible, not a broad LAN address, and rely
 on the OS firewall to keep that port scoped to the local Windows/WSL boundary.
@@ -91,9 +91,6 @@ durable ingest watches its own home and demotes on the next well-formed request.
 
 ## Secrets at rest
 
-- `remote.tunnelToken` — the devbox's connect token, stored in the devbox's
-  hierarchical climon config (`config.json`). It is written `0600` inside a
-  `0700` `.climon` directory.
 - `~/.climon/remote-host.json` — the home machine's tunnel-host state. Written
   atomically (temp file + `rename`, so the ingest watcher never observes a torn
   or empty file) with `0600` permissions inside a `0700` directory.
@@ -124,15 +121,15 @@ local paths. The ingest connection handler enforces this:
   FIFO chain), so the routine duplicate `session-added` frames the devbox emits
   on every file-watch tick cannot race two concurrent binds onto one socket.
 
-### Limitation: shared-token namespaces are self-asserted
+### Limitation: shared-identity namespaces are self-asserted
 
-The only credential is the shared dev-tunnel connect token; there is **no
-per-client authentication**. The `clientId` that selects a session namespace is
-self-asserted in the `hello` frame, so any holder of the connect token can claim
+The tunnel ACL authenticates each connection, but there is **no per-client
+authentication** beyond that. The `clientId` that selects a session namespace is
+self-asserted in the `hello` frame, so any user with tunnel access can claim
 another devbox's `clientId` and overwrite the *dashboard metadata* (status, name,
 color, command label) it advertises. It cannot inject into another client's PTY
-(per-connection sockets) or read its keystrokes. Treat the connect token as a
-shared secret among mutually-trusting devboxes; rotate the tunnel to revoke.
+(per-connection sockets) or read its keystrokes. Revoke access by deleting
+the tunnel or removing the user's identity from its ACL.
 
 ## Dashboard server: loopback only
 
@@ -174,12 +171,12 @@ never reads a partially-written file.
 | Receive keystrokes the user types into its sessions | Yes (by design) |
 | Inject arbitrary local paths or server-controlled fields | **No** (`isValidRemoteId` + `toLocalMeta` sanitization) |
 | Read another client's keystrokes or inject into its PTY | **No** (per-connection sockets) |
-| Spoof another client's *dashboard metadata* | Yes, if it holds the shared connect token (see limitation above) |
+| Spoof another client's *dashboard metadata* | Yes, if it has tunnel access (see limitation above) |
 | Reach the dashboard HTTP server | **No** (loopback only) |
-| Keep connecting after its token is revoked/expired | **No** (auth rejection is terminal) |
+| Keep connecting after access is revoked | **No** (auth rejection is terminal) |
 
 ## Revocation
 
-Revoking a client is done by deleting or rotating the dev tunnel (or its connect
-token) from the home machine. Once the host rejects the devbox's token, the
+Revoking a client is done by deleting the dev tunnel or removing the user's
+identity from its access list. Once the host rejects the connection, the
 uplink stops retrying, immediately ending its ability to connect.

@@ -226,7 +226,6 @@ export function attachKey(
 
 export interface RemoteTunnelInfo {
   id: string;
-  tokenExpiresAt?: string;
 }
 
 export interface RemoteStatus {
@@ -234,8 +233,6 @@ export interface RemoteStatus {
   version?: string;
   ingestPort: number;
   tunnel?: RemoteTunnelInfo;
-  /** Present only in the response to a create/record action, never in GET status. */
-  connectToken?: string;
   canHost: boolean;
 }
 
@@ -260,15 +257,14 @@ export async function createRemoteTunnel(): Promise<RemoteStatus> {
   return (await res.json()) as RemoteStatus;
 }
 
-/** Records a manually-created tunnel (id or devtunnels.ms URL) plus its connect token. */
+/** Records a manually-created tunnel (id or devtunnels.ms URL). */
 export async function recordManualTunnel(
-  tunnelInput: string,
-  connectToken: string
+  tunnelInput: string
 ): Promise<RemoteStatus> {
   const res = await fetch(withQuery("/api/remote/tunnel"), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode: "manual", tunnelInput, connectToken })
+    body: JSON.stringify({ mode: "manual", tunnelInput })
   });
   if (!res.ok) {
     throw new Error((await res.text()) || `Failed to record tunnel (${res.status})`);
@@ -289,10 +285,10 @@ export async function deleteRemoteTunnel(): Promise<void> {
 
 export interface SetupScriptParams {
   tunnelId: string;
-  connectToken: string;
   ingestPort: number;
   color?: SessionColorMode;
   priority?: number;
+  clientId?: string;
 }
 
 /** A single-quoted shell literal (handles embedded single quotes safely). */
@@ -321,10 +317,11 @@ export function buildSetupScript(params: SetupScriptParams): string {
   }
   const lines = [
     "climon config remote.enabled true",
-    `climon config remote.tunnelId ${arg(params.tunnelId)}`,
-    `climon config remote.tunnelToken ${arg(params.connectToken)}`,
-    `climon config remote.port ${params.ingestPort}`
+    `climon config remote.tunnelId ${arg(params.tunnelId)}`
   ];
+  if (params.clientId) {
+    lines.push(`climon config remote.clientId ${arg(params.clientId)}`);
+  }
   if (params.color) {
     lines.push(`climon config session.color ${params.color}`);
   }

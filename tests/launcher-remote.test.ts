@@ -4,9 +4,7 @@ import { planUplinkStart } from "../src/launcher.js";
 describe("planUplinkStart", () => {
   const remoteConfig = {
     enabled: true,
-    tunnelId: "spiffy-chair-c2lj709.eun1",
-    tunnelToken: "token",
-    port: 3132
+    tunnelId: "spiffy-chair-c2lj709.eun1"
   };
 
   test("warns and skips detached uplink when devtunnel is unavailable", () => {
@@ -31,5 +29,9 @@ describe("planUplinkStart", () => {
 
   test("does nothing when remote config is incomplete", () => {
     expect(planUplinkStart({ enabled: false }, { available: false })).toEqual({ shouldSpawn: false });
+  });
+
+  test("does nothing when only enabled but no tunnel or host", () => {
+    expect(planUplinkStart({ enabled: true }, { available: true })).toEqual({ shouldSpawn: false });
   });
 });

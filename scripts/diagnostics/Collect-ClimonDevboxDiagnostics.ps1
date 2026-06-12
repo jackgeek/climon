@@ -85,9 +85,6 @@ function Get-ClimonConfigValue {
   param([string]$Key)
   $result = Invoke-DiagnosticCommand "climon config $Key" "climon" @("config", $Key)
   $value = if ($result.exitCode -eq 0) { $result.output } else { $null }
-  if ($Key -eq "remote.tunnelToken") {
-    $value = Redact-Secret $value
-  }
   [pscustomobject]@{
     key = $Key
     value = $value
@@ -158,7 +155,6 @@ $configKeys = @(
   "remote.enabled",
   "remote.host",
   "remote.tunnelId",
-  "remote.tunnelToken",
   "remote.port",
   "remote.clientId",
   "session.color",

@@ -5,21 +5,28 @@ export interface CleanupCommandOptions {
   isProcessAlive?: (pid: number) => boolean;
   killProcess?: (pid: number, force: boolean) => boolean;
   stdout?: (chunk: string) => void;
+  stderr?: (chunk: string) => void;
+  waitTimeoutMs?: number;
 }
 
 /**
  * `climon cleanup`: stop this OS's dashboard server, ingest, and uplink, and
- * remove their beacons. Local-only — it cannot stop the peer OS's processes.
+ * remove their beacons. Verifies each process is actually dead before removing
+ * its beacon, and reports problems with manual remediation advice.
  */
 export async function runCleanupCommand(options: CleanupCommandOptions = {}): Promise<number> {
   const write = options.stdout ?? ((chunk: string) => process.stdout.write(chunk));
+  const writeErr = options.stderr ?? ((chunk: string) => process.stderr.write(chunk));
   const report = await teardownLocalServerStack({
     env: options.env,
     isProcessAlive: options.isProcessAlive,
-    killProcess: options.killProcess
+    killProcess: options.killProcess,
+    waitTimeoutMs: options.waitTimeoutMs
   });
 
+  let hadProblems = false;
   const lines: string[] = [];
+
   if (report.serverStopped) lines.push("Stopped dashboard server.");
   if (report.ingestStopped) lines.push("Stopped ingest daemon.");
   if (report.uplinkStopped) lines.push("Stopped uplink daemon.");
@@ -30,10 +37,31 @@ export async function runCleanupCommand(options: CleanupCommandOptions = {}): Pr
     }
   }
 
-  if (lines.length === 0) {
+  // Report failures
+  for (const failure of report.failures) {
+    hadProblems = true;
+    writeErr(`WARNING: ${failure.component} (pid ${failure.pid}): ${failure.reason}\n`);
+    if (failure.advice) writeErr(`  → ${failure.advice}\n`);
+  }
+
+  // Report files that could not be removed because the process is still alive
+  for (const stale of report.staleFiles) {
+    hadProblems = true;
+    writeErr(`WARNING: Cannot remove ${stale.path} — process ${stale.pid} is still running.\n`);
+    writeErr(`  → Kill it manually: ${platformKillAdvice(stale.pid)}\n`);
+  }
+
+  if (lines.length === 0 && !hadProblems) {
     write("Nothing to clean up — no local climon daemons were running.\n");
     return 0;
   }
   for (const line of lines) write(`${line}\n`);
-  return 0;
+  return hadProblems ? 1 : 0;
+}
+
+function platformKillAdvice(pid: number): string {
+  if (process.platform === "win32") {
+    return `Stop-Process -Id ${pid} -Force`;
+  }
+  return `kill -9 ${pid}`;
 }

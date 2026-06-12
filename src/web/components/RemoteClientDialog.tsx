@@ -42,7 +42,10 @@ const useStyles = makeStyles({
     marginTop: "8px"
   },
   section: { marginTop: "16px" },
-  row: { display: "flex", gap: "12px", marginTop: "8px" },
+  content: { overflowX: "visible" as const },
+  row: { display: "flex", gap: "12px", marginTop: "8px", alignItems: "start" },
+  field: { flex: "1 1 0", minWidth: 0 },
+  control: { width: "100%", minWidth: 0 },
   swatch: {
     width: "12px",
     height: "12px",
@@ -64,15 +67,15 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const styles = useStyles();
   const [draft, setDraft] = useState<RemoteClientDraftState>({
     status: null,
-    tunnelInput: "",
-    connectToken: ""
+    tunnelInput: ""
   });
   const [color, setColor] = useState<SessionColorMode>("auto");
   const [priority, setPriority] = useState("");
+  const [clientId, setClientId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const { status, tunnelInput, connectToken } = draft;
+  const { status, tunnelInput } = draft;
 
   function applyStatus(s: RemoteStatus): void {
     setDraft((prev) => applyRemoteStatusToDraft(prev, s));
@@ -101,12 +104,16 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     parsedPriority === undefined ||
     (Number.isInteger(parsedPriority) && parsedPriority >= 0 && parsedPriority <= 1000);
 
+  const clientIdTrimmed = clientId.trim() || undefined;
+  const clientIdValid =
+    clientIdTrimmed === undefined || /^[A-Za-z0-9._-]{1,64}$/.test(clientIdTrimmed);
+
   const script = buildSetupScript({
     tunnelId: status?.tunnel?.id ?? "",
-    connectToken,
     ingestPort: status?.ingestPort ?? 3132,
     color,
-    priority: priorityValid ? parsedPriority : undefined
+    priority: priorityValid ? parsedPriority : undefined,
+    clientId: clientIdValid ? clientIdTrimmed : undefined
   });
 
   async function autoCreate(): Promise<void> {
@@ -127,15 +134,11 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
       setError("Enter a dev tunnel id or URL.");
       return;
     }
-    if (!connectToken.trim()) {
-      setError("Enter the tunnel connect token.");
-      return;
-    }
     setBusy(true);
     setError("");
     setCopied(false);
     try {
-      applyStatus(await recordManualTunnel(tunnelInput.trim(), connectToken.trim()));
+      applyStatus(await recordManualTunnel(tunnelInput.trim()));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to record tunnel.");
     } finally {
@@ -147,7 +150,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     setBusy(true);
     try {
       await deleteRemoteTunnel();
-      setDraft((prev) => ({ ...prev, tunnelInput: "", connectToken: "" }));
+      setDraft((prev) => ({ ...prev, tunnelInput: "" }));
       await refresh();
     } finally {
       setBusy(false);
@@ -161,11 +164,9 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
       <DialogSurface>
         <DialogBody>
           <DialogTitle>Remotes</DialogTitle>
-          <DialogContent>
+          <DialogContent className={styles.content}>
             <Text>
-              Expose this dashboard to a devbox over a Microsoft dev tunnel. Forward
-              the ingest port ({status?.ingestPort ?? 3132}) and connect your devbox
-              with the generated script.
+              Connect Climon sessions from remote machines via a Microsoft dev tunnel. 
             </Text>
 
             {status?.devtunnelAvailable ? (
@@ -194,16 +195,6 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                   onChange={(_, d) => setDraft((prev) => ({ ...prev, tunnelInput: d.value }))}
                 />
               </Field>
-              <Field label="Connect token" style={{ marginTop: "8px" }}>
-                <Input
-                  value={connectToken}
-                  type="password"
-                  placeholder="connect-scoped access token"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(_, d) => setDraft((prev) => ({ ...prev, connectToken: d.value }))}
-                />
-              </Field>
               <Button
                 appearance="secondary"
                 style={{ marginTop: "8px" }}
@@ -215,8 +206,24 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
             </div>
 
             <div className={styles.row}>
-              <Field label="Default color">
+              <Field
+                label="Client ID"
+                className={styles.field}
+                validationState={clientIdValid ? "none" : "error"}
+                validationMessage={clientIdValid ? undefined : "1–64 chars: letters, digits, dots, hyphens, underscores."}
+              >
+                <Input
+                  className={styles.control}
+                  value={clientId}
+                  placeholder="my-devbox"
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(_, d) => setClientId(d.value)}
+                />
+              </Field>
+              <Field label="Color" className={styles.field}>
                 <Dropdown
+                  className={styles.control}
                   value={color}
                   selectedOptions={[color]}
                   onOptionSelect={(_, d) => setColor((d.optionValue as SessionColorMode | undefined) ?? "auto")}
@@ -230,11 +237,13 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                 </Dropdown>
               </Field>
               <Field
-                label="Default priority (0–1000)"
+                label="Priority"
+                className={styles.field}
                 validationState={priorityValid ? "none" : "error"}
-                validationMessage={priorityValid ? undefined : "Enter an integer 0–1000."}
+                validationMessage={priorityValid ? undefined : "0–1000"}
               >
                 <Input
+                  className={styles.control}
                   value={priority}
                   placeholder="500"
                   inputMode="numeric"
@@ -244,19 +253,6 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
             </div>
 
             <Text className={styles.error}>{error}</Text>
-            {status && hasTunnel && status.tunnel?.tokenExpiresAt && (
-              <Text className={styles.hint}>
-                Token expires {new Date(status.tunnel.tokenExpiresAt).toLocaleString()}.
-                Recreate the tunnel to refresh it.
-              </Text>
-            )}
-            {status && hasTunnel && !connectToken && (
-              <Text className={styles.hint}>
-                The connect token is only shown once when the tunnel is created or
-                recorded. Recreate the tunnel or paste the token above to regenerate
-                the script.
-              </Text>
-            )}
 
             <Text weight="semibold" style={{ display: "block", marginTop: "16px" }}>
               Run this on the devbox:
@@ -265,7 +261,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
             <Button
               appearance="primary"
               style={{ marginTop: "8px" }}
-              disabled={!hasTunnel || !connectToken}
+              disabled={!hasTunnel}
               onClick={async () => setCopied(await copyToClipboard(script))}
             >
               {copied ? "Copied!" : "Copy script"}

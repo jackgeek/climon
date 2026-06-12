@@ -159,16 +159,17 @@ dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port �
    hamburger menu, and choose **Remotes…**.
 2. If the `devtunnel` CLI is installed on the server machine, let climon create
    and host the tunnel for you. Otherwise create a dev tunnel manually and paste
-   its id or URL plus connect token into the dialog.
+   its id or URL into the dialog.
 3. Optionally choose the default color and priority for that devbox's sessions,
    then copy the generated config script.
 4. Run the script on the devbox. It records `remote.tunnelId`,
-   `remote.tunnelToken`, `remote.port`, and any chosen session defaults with
+   `remote.port`, and any chosen session defaults with
    `climon config`.
 5. Run any command on the devbox with `climon <cmd>`. The session appears on your
    dashboard under the devbox's stable client id.
 
-Revoke a devbox by deleting or rotating the dev tunnel (or its connect token).
+Revoke a devbox by deleting the dev tunnel or removing its identity from the
+tunnel's access list.
 
 ## Connecting Windows and WSL on the same machine
 
@@ -251,16 +252,13 @@ devtunnel user login
 # Use any valid lowercase tunnel id, or omit the id argument and copy the generated id.
 devtunnel create climon-tunnel
 devtunnel port create climon-tunnel -p 8080
-
-# Copy the emitted token into the Remotes dialog.
-devtunnel token climon-tunnel --scopes connect
 ```
 
-Paste the tunnel id (or the printed `devtunnels.ms` URL) and the connect token
-into **Remotes…**. climon will host the recorded tunnel if the `devtunnel` CLI is
-available on the home machine; otherwise keep `devtunnel host climon-tunnel`
-running yourself. Then copy the generated climon config script from the dialog
-and run it on the devbox.
+Paste the tunnel id (or the printed `devtunnels.ms` URL) into **Remotes…**.
+climon will host the recorded tunnel if the `devtunnel` CLI is available on the
+home machine; otherwise keep `devtunnel host climon-tunnel` running yourself.
+Then copy the generated climon config script from the dialog and run it on the
+devbox. Ensure the devbox is also logged in (`devtunnel user login`).
 
 <!-- BEGIN GENERATED CONFIG SETTINGS -->
 ### `climon config`
@@ -292,7 +290,6 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `remote.tunnelId` | string | unset | client | Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward local climon traffic to a remote dashboard. |
 | `remote.dashboardTunnelId` | string | unset | server | Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions. (**internal**) |
 | `remote.dashboardTunnelCluster` | string | unset | server | Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions. (**internal**) |
-| `remote.tunnelToken` | string | unset | client | Stores the dev tunnel connect token scoped to this tunnel. Supplied via DEVTUNNEL_ACCESS_TOKEN environment variable. (**sensitive**) |
 | `remote.port` | number | unset | client | Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set. |
 | `remote.ingestPortRetryAttempts` | number | `100` | server | How many consecutive ports the ingest daemon will try, starting at its preferred port, before giving up. Raise it if many ports near the default are already in use. |
 | `remote.clientId` | string | unset | client | Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client. (**internal**) |

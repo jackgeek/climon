@@ -100,12 +100,12 @@ Open http://127.0.0.1:3131 — you should see the session and its output.
 
 ## Remote clients
 
-The remote-client feature uses Microsoft dev tunnels. Install the `devtunnel`
-CLI on the home machine if you want the dashboard to auto-create and host the
-tunnel; install it on each devbox so `climon __uplink` can connect through the
-tunnel. You can also create the tunnel manually and paste its id/URL plus
-connect token into the dashboard's **Remotes…** dialog. See
-[security.md](./security.md) for the threat model.
+The remote-client feature uses Microsoft dev tunnels with identity-based access.
+Install the `devtunnel` CLI on the home machine if you want the dashboard to
+auto-create and host the tunnel; install it on each devbox so `climon __uplink`
+can connect through the tunnel. The devbox must be logged into `devtunnel` with
+the same identity that owns the tunnel. See [security.md](./security.md) for the
+threat model.
 
 Manual tunnel creation on the home machine:
 
@@ -113,8 +113,7 @@ Manual tunnel creation on the home machine:
 devtunnel user login
 devtunnel create climon-tunnel
 devtunnel port create climon-tunnel -p 8080
-devtunnel token climon-tunnel --scopes connect
 ```
 
-Paste the tunnel id and emitted connect token into **Remotes…**, then run the
-dialog's generated config script on the devbox.
+Paste the tunnel id into **Remotes…**, then run the dialog's generated config
+script on the devbox. Ensure the devbox is also logged in (`devtunnel user login`).

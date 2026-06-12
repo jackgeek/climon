@@ -73,8 +73,8 @@ mock.module("../src/web/hooks/useAnimatedListReorder.js", () => ({
 const { Sidebar } = await import("../src/web/components/Sidebar.js");
 
 describe("Sidebar menu", () => {
-  test("labels remotes as experimental", () => {
-    expect(remotesMenuLabel).toBe("Remotes (experimental)…");
+  test("labels the remotes action", () => {
+    expect(remotesMenuLabel).toBe("Remotes");
   });
 
   test("labels the notification permission action", () => {

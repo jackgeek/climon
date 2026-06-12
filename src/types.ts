@@ -68,8 +68,6 @@ export interface RemoteConfig {
   dashboardTunnelId?: string;
   /** Server-owned persisted dashboard tunnel cluster reused for tunnel link sessions. */
   dashboardTunnelCluster?: string;
-  /** `connect`-scoped dev tunnel access token, supplied via DEVTUNNEL_ACCESS_TOKEN. */
-  tunnelToken?: string;
   /** Local port the devbox forwards and the ingest daemon listens on. */
   port?: number;
   /** Consecutive ingest daemon ports to try from the preferred port before giving up. */

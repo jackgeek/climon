@@ -296,8 +296,7 @@ Setup:
    - If the `devtunnel` CLI is installed on the home machine, climon can
      **auto-create** the tunnel for you (it also opens a keep-alive TCP port so
      the tunnel stays up and never shows a browser confirmation page).
-   - Otherwise, create the tunnel manually and paste its id/URL plus connect
-     token into the dialog.
+   - Otherwise, create the tunnel manually and paste its id/URL into the dialog.
 3. Optionally pick a default accent **color** and sort **priority** for that
    devbox's sessions, then **copy the config script**.
 4. Run the copied script in a terminal on the **devbox**. It writes the server
@@ -307,7 +306,8 @@ Setup:
 Notes:
 
 - The `devtunnel` CLI is required on **both** the home machine (to host the
-  tunnel) and the devbox (to connect through it).
+  tunnel) and the devbox (to connect through it). Both sides must be logged in
+  (`devtunnel user login`) with the same identity.
 - **Restarting the webserver preserves sessions.** Local sessions are
   reconstructed from `~/.climon/sessions`, and the ingest daemon re-materializes
   remote sessions as devboxes reconnect, so a restart does not lose state.
@@ -332,16 +332,14 @@ devtunnel user login
 # Choose a stable lowercase id; or omit the id argument and copy the generated id.
 devtunnel create climon-tunnel
 devtunnel port create climon-tunnel -p 8080
-
-# Copy this token into the Remotes dialog.
-devtunnel token climon-tunnel --scopes connect
 ```
 
-Paste `climon-tunnel` (or a devtunnels.ms URL for that tunnel) and the connect
-token into **Remotes…**. If the `devtunnel` CLI is available on the home machine,
+Paste `climon-tunnel` (or a devtunnels.ms URL for that tunnel) into
+**Remotes…**. If the `devtunnel` CLI is available on the home machine,
 climon will host the recorded tunnel for you; otherwise keep
 `devtunnel host climon-tunnel` running yourself. After that, copy the generated
-climon config script from the dialog and run it on the devbox.
+climon config script from the dialog and run it on the devbox. Ensure the devbox
+is also logged in (`devtunnel user login`).
 
 Official reference:
 [Create and host a tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/get-started) and

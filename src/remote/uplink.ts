@@ -9,26 +9,26 @@ import {
   resolveConfigSetting,
   writeConfigSetting
 } from "../config.js";
-import { listSessions, readSessionMeta } from "../store.js";
+import { listSessions, patchSessionMeta, readSessionMeta } from "../store.js";
 import { acquireSingletonDetailed } from "./singleton.js";
 import { encodeControl, encodeData, MuxDecoder } from "./mux.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { discoverDashboard } from "./discovery.js";
+import { isProcessAlive } from "../process-kill.js";
 import { debugUplink as log } from "./debug.js";
 
 export interface UplinkConfig {
   enabled: boolean;
   host?: string;
   tunnelId?: string;
-  tunnelToken?: string;
   port?: number;
 }
 
 /**
  * Resolves the devbox uplink config from the cascade. Remote is only considered
- * enabled when a direct host+port or tunnel id+token+port are present. This
- * defends against stale SSH-era `remote.enabled: true` files.
+ * enabled when a direct host+port or tunnel id are present. The port is
+ * optional for tunnel mode (discovered from the tunnel's port mapping).
  */
 export function resolveUplinkConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -37,15 +37,13 @@ export function resolveUplinkConfig(
   const enabledFlag = resolveConfigSetting("remote.enabled", env, cwd) === true;
   const host = asString(resolveConfigSetting("remote.host", env, cwd));
   const tunnelId = asString(resolveConfigSetting("remote.tunnelId", env, cwd));
-  const tunnelToken = asString(resolveConfigSetting("remote.tunnelToken", env, cwd));
   const port = asNumber(resolveConfigSetting("remote.port", env, cwd));
   const hasDirectTarget = !!host && !!port;
-  const hasTunnelTarget = !!tunnelId && !!tunnelToken && !!port;
+  const hasTunnelTarget = !!tunnelId;
   return {
     enabled: enabledFlag && (hasDirectTarget || hasTunnelTarget),
     host,
     tunnelId,
-    tunnelToken,
     port
   };
 }
@@ -73,11 +71,22 @@ interface Bridge {
   env: NodeJS.ProcessEnv;
 }
 
+const LIVE_STATUSES = new Set(["running", "acknowledged", "needs-attention", "paused"]);
+
 async function reconcile(bridge: Bridge): Promise<void> {
   const current = new Set<string>();
   for (const meta of await listSessions(bridge.env)) {
     if (meta.origin === "remote") continue;
     current.add(meta.id);
+    // Check daemon liveness for sessions that claim to be running.
+    // If the daemon is dead, advertise as disconnected so the dashboard
+    // doesn't show an unresponsive session. Also persist the update locally
+    // so a future reconcile doesn't repeat the check.
+    if (LIVE_STATUSES.has(meta.status) && meta.daemonPid && !isProcessAlive(meta.daemonPid)) {
+      meta.status = "disconnected";
+      meta.priorityReason = "disconnected";
+      void patchSessionMeta(meta.id, { status: "disconnected", priorityReason: "disconnected" }, bridge.env);
+    }
     bridge.write(encodeControl({ kind: "session-added", meta }));
   }
   for (const id of bridge.advertised) {
@@ -212,11 +221,11 @@ interface ConnectChild {
   authRejected: () => boolean;
 }
 
-/** Spawns `devtunnel connect`, watching stderr for auth-rejection signatures. */
-function spawnConnect(tunnelId: string, token: string): ConnectChild {
+/** Spawns `devtunnel connect` using the caller's logged-in devtunnel identity. */
+function spawnConnect(tunnelId: string): ConnectChild {
   const child = spawn("devtunnel", ["connect", tunnelId], {
     stdio: ["ignore", "pipe", "pipe"],
-    env: devtunnelEnv({ ...process.env, DEVTUNNEL_ACCESS_TOKEN: token }),
+    env: devtunnelEnv(),
     windowsHide: true
   });
   let authRejected = false;
@@ -226,6 +235,41 @@ function spawnConnect(tunnelId: string, token: string): ConnectChild {
   child.stdout?.on("data", scan);
   child.stderr?.on("data", scan);
   return { child, authRejected: () => authRejected };
+}
+
+/**
+ * Discovers the forwarded port for a tunnel by querying `devtunnel port list`.
+ * Returns the first port number found, or undefined if the query fails or
+ * no ports are mapped.
+ */
+async function discoverTunnelPort(tunnelId: string): Promise<number | undefined> {
+  const result = await new Promise<{ status: number; stdout: string }>((resolve) => {
+    const child = spawn("devtunnel", ["port", "list", tunnelId, "--json"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: devtunnelEnv(),
+      windowsHide: true
+    });
+    let stdout = "";
+    child.stdout.on("data", (b: Buffer) => (stdout += b.toString("utf8")));
+    child.on("error", () => resolve({ status: 127, stdout: "" }));
+    child.on("close", (code) => resolve({ status: code ?? 1, stdout }));
+  });
+  if (result.status !== 0) return undefined;
+  try {
+    const parsed = JSON.parse(result.stdout);
+    // devtunnel port list --json returns an array of port entries with a portNumber field,
+    // or an object with a ports array.
+    const ports = Array.isArray(parsed) ? parsed : (parsed.ports ?? parsed.value ?? []);
+    for (const entry of ports) {
+      const p = entry.portNumber ?? entry.port ?? entry.Port;
+      if (typeof p === "number" && p > 0) return p;
+    }
+  } catch {
+    // Try a line-based fallback: look for a number in the output.
+    const match = result.stdout.match(/\b(\d{2,5})\b/);
+    if (match) return Number(match[1]);
+  }
+  return undefined;
 }
 
 async function waitForPort(port: number, host = "127.0.0.1", timeoutMs = 15000): Promise<boolean> {
@@ -277,7 +321,7 @@ export async function runUplink(
   const peerHome = asString(resolveConfigSetting("remote.peerHome", env, cwd));
   const initialLegacy = resolveUplinkConfig(env, cwd);
   // Nothing to do: no peer link configured and no legacy direct/tunnel target.
-  if (!peerHome && (!initialLegacy.enabled || !initialLegacy.port)) {
+  if (!peerHome && !initialLegacy.enabled) {
     log("no remote target configured (no peerHome, no enabled tunnel/direct), exiting");
     return 0;
   }
@@ -307,16 +351,22 @@ export async function runUplink(
       log(`resolved peer target: ${peerTarget.host}:${peerTarget.port}`);
       host = peerTarget.host;
       port = peerTarget.port;
-    } else if (config.enabled && config.port) {
-      if (config.host) {
+    } else if (config.enabled) {
+      if (config.host && config.port) {
         log(`direct target: ${config.host}:${config.port}`);
         host = config.host;
         port = config.port;
-      } else if (config.tunnelId && config.tunnelToken) {
-        log(`spawning devtunnel connect for tunnel ${config.tunnelId}, forwarding port ${config.port}`);
-        conn = spawnConnect(config.tunnelId, config.tunnelToken);
-        host = "127.0.0.1";
-        port = config.port;
+      } else if (config.tunnelId) {
+        // Discover the port from the tunnel's port mapping if not explicitly configured.
+        const tunnelPort = config.port ?? await discoverTunnelPort(config.tunnelId);
+        if (!tunnelPort) {
+          log(`could not discover port for tunnel ${config.tunnelId} (no port mapping found)`);
+        } else {
+          log(`spawning devtunnel connect for tunnel ${config.tunnelId}, forwarding port ${tunnelPort}`);
+          conn = spawnConnect(config.tunnelId);
+          host = "127.0.0.1";
+          port = tunnelPort;
+        }
       }
     }
 
@@ -337,7 +387,7 @@ export async function runUplink(
       const reachable = await waitForPort(port, host);
       if (!reachable) {
         if (conn?.authRejected()) {
-          process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
+          process.stderr.write("climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping.\n");
           log("auth rejected during port wait, stopping");
           conn.child.kill();
           return 1;
@@ -367,7 +417,7 @@ export async function runUplink(
       conn?.child.kill();
     }
     if (conn?.authRejected()) {
-      process.stderr.write("climon uplink: dev tunnel token rejected (expired/invalid). Stopping.\n");
+      process.stderr.write("climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping.\n");
       log("auth rejected after bridge closed, stopping");
       return 1;
     }

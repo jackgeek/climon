@@ -160,10 +160,8 @@ $redactedRemoteHost = $null
 if ($remoteHostData) {
   $redactedRemoteHost = [pscustomobject]@{
     tunnelId = $remoteHostData.tunnelId
-    connectToken = Redact-Secret $remoteHostData.connectToken
     ingestPort = $remoteHostData.ingestPort
     ingestHost = $remoteHostData.ingestHost
-    tokenExpiresAt = $remoteHostData.tokenExpiresAt
     canHost = $remoteHostData.canHost
   }
 }

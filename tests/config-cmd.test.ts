@@ -188,7 +188,7 @@ describe("runConfigCommand", () => {
     mkdirSync(home, { recursive: true });
     writeFileSync(
       join(home, "config.jsonc"),
-      JSON.stringify({ remote: { enabled: true, port: 3132, tunnelToken: "super-secret-token" }, mystery: { apiKey: "leak-me" } })
+      JSON.stringify({ remote: { enabled: true, port: 3132 }, mystery: { apiKey: "leak-me" } })
     );
 
     const out: string[] = [];
@@ -205,8 +205,6 @@ describe("runConfigCommand", () => {
     const printed = out.join("");
     expect(printed).toContain("  remote.enabled = true");
     expect(printed).toContain("  remote.port = 3132");
-    expect(printed).toContain("  remote.tunnelToken = <redacted>");
-    expect(printed).not.toContain("super-secret-token");
     expect(printed).toContain("  mystery.apiKey = <redacted>");
     expect(printed).not.toContain("leak-me");
   });
@@ -308,8 +306,8 @@ describe("runConfigCommand", () => {
     expect(printed).toContain("  session.color");
     expect(printed).toContain("    Type: string; Default: auto; Scope: client, daemon, server");
     expect(printed).toContain("    Specifies the default accent color");
-    expect(printed).toContain("  remote.tunnelToken");
-    expect(printed).toContain("    Type: string; Default: unset; Scope: client; sensitive");
+    expect(printed).toContain("  remote.tunnelId");
+    expect(printed).toContain("    Type: string; Default: unset; Scope: client");
     expect(printed).toContain("  version");
     expect(printed).toContain("    Type: number; Default: 1; Scope: client, daemon, server; internal");
     expect(printed).toContain("Delete config files from cwd ancestry and $CLIMON_HOME");

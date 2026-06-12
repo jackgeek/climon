@@ -54,7 +54,6 @@ interface UplinkStartConfig {
   enabled: boolean;
   host?: unknown;
   tunnelId?: unknown;
-  tunnelToken?: unknown;
   port?: unknown;
 }
 
@@ -64,13 +63,13 @@ interface UplinkStartPlan {
 }
 
 export function planUplinkStart(config: UplinkStartConfig, detect: DetectResult): UplinkStartPlan {
-  if (!config.enabled || !config.port) {
+  if (!config.enabled) {
     return { shouldSpawn: false };
   }
-  if (config.host) {
+  if (config.host && config.port) {
     return { shouldSpawn: true };
   }
-  if (!config.tunnelId || !config.tunnelToken) {
+  if (!config.tunnelId) {
     return { shouldSpawn: false };
   }
   if (!detect.available) {
@@ -87,7 +86,6 @@ async function ensureUplink(): Promise<void> {
   const enabled = resolveConfigSetting("remote.enabled", process.env, process.cwd()) === true;
   const host = resolveConfigSetting("remote.host", process.env, process.cwd());
   const tunnelId = resolveConfigSetting("remote.tunnelId", process.env, process.cwd());
-  const tunnelToken = resolveConfigSetting("remote.tunnelToken", process.env, process.cwd());
   const port = resolveConfigSetting("remote.port", process.env, process.cwd());
   const peerHome = resolveConfigSetting("remote.peerHome", process.env, process.cwd());
 
@@ -108,9 +106,9 @@ async function ensureUplink(): Promise<void> {
   }
 
   if (!shouldSpawn) {
-    const needsTunnel = enabled && !host && tunnelId && tunnelToken && port;
+    const needsTunnel = enabled && !host && tunnelId;
     const detect = needsTunnel ? await detectDevtunnel() : { available: false };
-    const plan = planUplinkStart({ enabled, host, tunnelId, tunnelToken, port }, detect);
+    const plan = planUplinkStart({ enabled, host, tunnelId, port }, detect);
     if (plan.warning) process.stderr.write(plan.warning);
     shouldSpawn = plan.shouldSpawn;
     log(`ensureUplink: planUplinkStart → shouldSpawn=${shouldSpawn}${plan.warning ? " (with warning)" : ""}`);
