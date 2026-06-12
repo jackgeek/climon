@@ -12,6 +12,7 @@ import {
 import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
+import { isLiveStatus } from "../api.js";
 import { clampSizeMenuLabel } from "../view-mode.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
@@ -168,6 +169,7 @@ export function SessionItem({
   const styles = useStyles();
   const displayTitle = sessionDisplayTitle(session);
   const pauseTitle = session.status === "paused" ? "Resume session" : "Pause session";
+  const showLiveControls = !compact && isLiveStatus(session.status);
   return (
     <div
       className={mergeClasses(styles.root, compact && styles.compactRoot, active && styles.active)}
@@ -199,7 +201,7 @@ export function SessionItem({
           aria-hidden="true"
         />
       )}
-      {!compact && ["running", "acknowledged", "needs-attention", "paused", "disconnected"].includes(session.status) && (
+      {showLiveControls && (
         <Button
           className={mergeClasses("climon-new", styles.newBtn)}
           appearance="subtle"
@@ -213,7 +215,7 @@ export function SessionItem({
           }}
         />
       )}
-      {!compact && (
+      {showLiveControls && (
         <Button
           className={mergeClasses("climon-edit", styles.editBtn)}
           appearance="subtle"
@@ -227,7 +229,7 @@ export function SessionItem({
           }}
         />
       )}
-      {!compact && (
+      {showLiveControls && (
         <Button
           className={mergeClasses("climon-lock", styles.lockBtn)}
           appearance="subtle"
@@ -242,7 +244,7 @@ export function SessionItem({
           }}
         />
       )}
-      {!compact && (
+      {showLiveControls && (
         <Button
           className={mergeClasses("climon-pause", styles.pauseBtn)}
           appearance="subtle"

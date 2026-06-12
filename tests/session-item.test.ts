@@ -252,6 +252,39 @@ describe("SessionItem pause control", () => {
   });
 });
 
+describe("SessionItem terminated controls", () => {
+  test("omits live-session action buttons for terminal statuses", () => {
+    const terminalStatuses: SessionMeta["status"][] = ["completed", "failed", "disconnected"];
+
+    for (const status of terminalStatuses) {
+      const markup = renderToStaticMarkup(
+        createElement(SessionItem, {
+          active: true,
+          compact: false,
+          session: makeSession({ status }),
+          onClose: () => {},
+          onEdit: () => {},
+          onMaximize: () => {},
+          onNew: () => {},
+          onPauseToggle: () => {},
+          onSelect: () => {},
+          viewMode: "fill",
+          viewModeToggleable: true
+        })
+      );
+
+      expect(markup).not.toContain("New session from here");
+      expect(markup).not.toContain("Edit session");
+      expect(markup).not.toContain("Pause session");
+      expect(markup).not.toContain("Resume session");
+      expect(markup).not.toContain("Clamp terminal size");
+      expect(markup).not.toContain('data-icon="lock-open"');
+      expect(markup).not.toContain('data-icon="lock-closed"');
+      expect(markup).toContain("Close session");
+    }
+  });
+});
+
 describe("SessionItem clamp lock", () => {
   const lockProps = {
     compact: false,
@@ -324,7 +357,7 @@ describe("SessionItem clamp lock", () => {
     expect(markup).toContain('data-disabled="true"');
   });
 
-  test("does not render a lock for an inactive session", () => {
+  test("renders the lock for inactive live sessions so hover can reveal it", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionItem, {
         ...lockProps,
@@ -336,7 +369,7 @@ describe("SessionItem clamp lock", () => {
     );
 
     expect(markup).not.toContain('data-icon="lock-closed"');
-    expect(markup).not.toContain('data-icon="lock-open"');
+    expect(markup).toContain('data-icon="lock-open"');
   });
 
   test("reveals the lock on hover like the other actions, but keeps it visible on mobile", () => {
