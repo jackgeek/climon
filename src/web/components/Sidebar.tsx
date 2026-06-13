@@ -90,10 +90,10 @@ const useStyles = makeStyles({
     textAlign: "center",
     fontSize: "11px"
   },
-  actions: {
+  headerLeft: {
     display: "flex",
     alignItems: "center",
-    gap: "4px"
+    gap: "16px"
   },
   footer: {
     flex: "0 0 auto",
@@ -195,20 +195,7 @@ export function Sidebar({
   return (
     <div className={mergeClasses(styles.root, collapsed && styles.collapsedRoot)}>
       <div className={mergeClasses(styles.header, collapsed && styles.collapsedHeader)}>
-        <Text className={mergeClasses(styles.title, collapsed && styles.hiddenTitle)}>
-          climon
-          {serverVersion && <span className={styles.version}>v{serverVersion}</span>}
-        </Text>
-        <div className={styles.actions}>
-          {sessions.length === 0 && !collapsed && (
-            <Button
-              appearance="subtle"
-              icon={<Add20Regular />}
-              title="New session"
-              aria-label="New session"
-              onClick={onNew}
-            />
-          )}
+        <div className={styles.headerLeft}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Button
@@ -234,7 +221,20 @@ export function Sidebar({
               </MenuList>
             </MenuPopover>
           </Menu>
+          <Text className={mergeClasses(styles.title, collapsed && styles.hiddenTitle)}>
+            climon
+            {serverVersion && <span className={styles.version}>v{serverVersion}</span>}
+          </Text>
         </div>
+        {!collapsed && (
+          <Button
+            appearance="subtle"
+            icon={<Add20Regular />}
+            title="New session"
+            aria-label="New session"
+            onClick={onNew}
+          />
+        )}
       </div>
       <div className={styles.list} dir="rtl">
         {sessions.length === 0 ? (
