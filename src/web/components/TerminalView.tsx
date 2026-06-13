@@ -271,6 +271,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const renderedSessionIdRef = useRef<string | null>(null);
   const awaitingReplayRef = useRef(false);
   const replayAfterNextResizeRef = useRef(false);
+  const lastServerReconnectTokenRef = useRef(serverReconnectToken);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -510,8 +511,18 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     closeWs();
     initialReplayCompleteRef.current = true;
     applyTerminalScrollbackForSession(term, session);
+    // A server reconnect re-runs this effect with a bumped token. Treat it like a
+    // fresh attach (full reset + full replay) rather than a light refresh: the
+    // daemon may have reset PTY/mouse state when the last viewer dropped during
+    // the outage, and the reset+replay path (the same one session switching uses)
+    // reliably restores scrollback and mouse-tracking modes from the daemon's
+    // authoritative replay snapshot.
+    const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;
+    lastServerReconnectTokenRef.current = serverReconnectToken;
     const liveSession = session ? isLiveStatus(session.status) : false;
-    const preserveExistingScreen = Boolean(session && liveSession && renderedSessionIdRef.current === session.id);
+    const preserveExistingScreen = Boolean(
+      session && liveSession && renderedSessionIdRef.current === session.id && !isServerReconnect
+    );
     if (!preserveExistingScreen) {
       resetTerminalForSession(term, session);
       renderedSessionIdRef.current = session?.id ?? null;
@@ -538,7 +549,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (!visible || !serverConnected) {
         return;
       }
-      if (preserveExistingScreen && serverReconnectToken > 0) {
+      // Preserve the user's clamp/fill choice across the outage: the daemon may
+      // have reverted to its default mode when the last viewer disconnected, so
+      // queue the pre-outage mode and flush it once the socket reopens.
+      if (isServerReconnect) {
         queuedViewModeRef.current = viewModeRef.current;
       }
       let resetBeforeReplay = preserveExistingScreen;

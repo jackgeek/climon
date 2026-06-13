@@ -61,13 +61,27 @@ describe("TerminalView", () => {
     expect(source).toContain("}, [attachKey(session, visible), serverConnected, serverReconnectToken]);");
   });
 
+  test("fully resets and replays on server reconnect so mouse-tracking modes are restored", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain(
+      "const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;"
+    );
+    expect(source).toContain("lastServerReconnectTokenRef.current = serverReconnectToken;");
+    // A reconnect must be excluded from preserveExistingScreen so the effect runs
+    // the full reset + replay path (the daemon's replay carries the authoritative
+    // mouse private-mode suffix) instead of a light refresh that can leave xterm
+    // with mouse tracking disabled.
+    expect(source).toContain("renderedSessionIdRef.current === session.id && !isServerReconnect");
+  });
+
   test("pauses reconnect retries while the server is unavailable and restores the selected mode afterward", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("serverConnected: boolean;");
     expect(source).toContain("if (!visible || !serverConnected) {\n        return;\n      }");
     expect(source).toContain(
-      "if (preserveExistingScreen && serverReconnectToken > 0) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
+      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
     );
     expect(source).toContain("serverConnectedRef.current");
   });
@@ -77,7 +91,7 @@ describe("TerminalView", () => {
 
     expect(source).toContain("export const LIVE_ATTACH_RETRY_MS = 1000;");
     expect(source).toContain(
-      "const preserveExistingScreen = Boolean(session && liveSession && renderedSessionIdRef.current === session.id);"
+      "const preserveExistingScreen = Boolean(\n      session && liveSession && renderedSessionIdRef.current === session.id && !isServerReconnect\n    );"
     );
     expect(source).toContain(
       "if (resetBeforeReplay || replayRequested) {\n                refreshTerminalForReplay(term);\n                renderedSessionIdRef.current = session.id;\n                resetBeforeReplay = false;\n              }"
