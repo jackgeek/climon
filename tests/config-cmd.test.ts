@@ -330,7 +330,14 @@ describe("runConfigCommand", () => {
 
   test("rejects internal registry keys for get and set", () => {
     expect(runConfigCommand(["version"], env(), root)).toBe(2);
-    expect(runConfigCommand(["remote.clientId", "client-1"], env(), root)).toBe(2);
+    expect(runConfigCommand(["remote.dashboardTunnelId", "tunnel-1"], env(), root)).toBe(2);
+  });
+
+  test("accepts and validates the user-controlled remote client id", () => {
+    const testEnv = env();
+
+    expect(runConfigCommand(["remote.clientId", "client-1"], testEnv, root)).toBe(0);
+    expect(runConfigCommand(["remote.clientId", "../bad"], testEnv, root)).toBe(2);
   });
 
   test("rejects help with scope flags", () => {

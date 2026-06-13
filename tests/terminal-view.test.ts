@@ -11,10 +11,12 @@ import {
   completeInitialReplay,
   focusTerminalPane,
   mapWheelToScrollLines,
+  reconnectDelayMs,
   refreshTerminalRender,
   refreshTerminalForReplay,
   resetTerminalForSession,
   shouldRequestReplayForAuthoritativeMode,
+  shouldReconnectLiveAttachment,
   shouldHandleWheelAsScrollback,
   TerminalView,
   loadTerminalAddons,
@@ -68,11 +70,12 @@ describe("TerminalView", () => {
       "const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;"
     );
     expect(source).toContain("lastServerReconnectTokenRef.current = serverReconnectToken;");
-    // A reconnect must be excluded from preserveExistingScreen so the effect runs
-    // the full reset + replay path (the daemon's replay carries the authoritative
-    // mouse private-mode suffix) instead of a light refresh that can leave xterm
-    // with mouse tracking disabled.
-    expect(source).toContain("renderedSessionIdRef.current === session.id && !isServerReconnect");
+    // A reconnect re-queues the user's clamp/fill mode so the full reset + replay
+    // path (the daemon's replay carries the authoritative mouse private-mode
+    // suffix) restores mouse tracking after the socket reopens.
+    expect(source).toContain(
+      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
+    );
   });
 
   test("pauses reconnect retries while the server is unavailable and restores the selected mode afterward", () => {
@@ -86,18 +89,17 @@ describe("TerminalView", () => {
     expect(source).toContain("serverConnectedRef.current");
   });
 
-  test("preserves the current live screen and retries same-session reconnects until replay arrives", () => {
+  test("refreshes scrollback for mid-session replays without resetting terminal modes", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
-    expect(source).toContain("export const LIVE_ATTACH_RETRY_MS = 1000;");
+    // A browser-requested replay (e.g. after a clamp/fill toggle) arrives after
+    // the initial replay completes; intercept it so scrollback is rebuilt with a
+    // light refresh instead of being appended as live output.
+    expect(source).toContain("const replayRequested = awaitingReplayRef.current;");
+    expect(source).toContain("awaitingReplayRef.current = false;");
+    expect(source).toContain("if (initialReplayCompleteRef.current && !replayRequested) {");
     expect(source).toContain(
-      "const preserveExistingScreen = Boolean(\n      session && liveSession && renderedSessionIdRef.current === session.id && !isServerReconnect\n    );"
-    );
-    expect(source).toContain(
-      "if (resetBeforeReplay || replayRequested) {\n                refreshTerminalForReplay(term);\n                renderedSessionIdRef.current = session.id;\n                resetBeforeReplay = false;\n              }"
-    );
-    expect(source).toContain(
-      "retryTimer = setTimeout(() => {\n              retryTimer = undefined;\n              attachLiveSocket();\n            }, LIVE_ATTACH_RETRY_MS);"
+      "} else if (replayRequested) {\n            // A mid-session replay (e.g. after a clamp/fill toggle) rebuilds\n            // scrollback without a full reset so mouse-tracking modes survive.\n            refreshTerminalForReplay(term);\n          }"
     );
   });
 
@@ -107,7 +109,7 @@ describe("TerminalView", () => {
     expect(source).toContain("replayAfterNextResizeRef.current = true;");
     expect(source).toContain("message.mode = viewModeRef.current;");
     expect(source).toContain('ws.send(JSON.stringify({ type: "replay" }));');
-    expect(source).toContain('} else if (msg.type === "replay") {\n                awaitingReplayRef.current = true;\n              }');
+    expect(source).toContain('} else if (msg.type === "replay") {\n            awaitingReplayRef.current = true;\n          }');
   });
 
   test("requests a replay for daemon-reported mode changes after initial replay", () => {
@@ -257,14 +259,12 @@ describe("TerminalView", () => {
         cols: 120,
         rows: 40,
         resize: (cols: number, rows: number) => calls.push(`resize:${cols}x${rows}`),
-        reset: () => calls.push("reset"),
-        clear: () => calls.push("clear"),
-        scrollToBottom: () => calls.push("scrollToBottom")
+        reset: () => calls.push("reset")
       },
       { cols: 80, rows: 24 }
     );
 
-    expect(calls).toEqual(["resize:80x24", "reset", "clear", "scrollToBottom"]);
+    expect(calls).toEqual(["resize:80x24", "reset"]);
   });
 
   test("can refresh replay scrollback without changing the current authoritative grid", () => {
@@ -325,6 +325,64 @@ describe("TerminalView", () => {
 
     expect(replayComplete).toBe(true);
     expect(refits).toBe(1);
+  });
+
+  test("reconnects only the current visible live attachment", () => {
+    const session = { id: "s1", status: "running" } as const;
+
+    expect(
+      shouldReconnectLiveAttachment({
+        session,
+        sessionId: "s1",
+        attachmentGeneration: 2,
+        currentGeneration: 2,
+        visible: true
+      })
+    ).toBe(true);
+    expect(
+      shouldReconnectLiveAttachment({
+        session,
+        sessionId: "s1",
+        attachmentGeneration: 1,
+        currentGeneration: 2,
+        visible: true
+      })
+    ).toBe(false);
+    expect(
+      shouldReconnectLiveAttachment({
+        session,
+        sessionId: "s1",
+        attachmentGeneration: 2,
+        currentGeneration: 2,
+        visible: false
+      })
+    ).toBe(false);
+    expect(
+      shouldReconnectLiveAttachment({
+        session: { id: "s1", status: "completed" },
+        sessionId: "s1",
+        attachmentGeneration: 2,
+        currentGeneration: 2,
+        visible: true
+      })
+    ).toBe(false);
+    expect(
+      shouldReconnectLiveAttachment({
+        session,
+        sessionId: "s2",
+        attachmentGeneration: 2,
+        currentGeneration: 2,
+        visible: true
+      })
+    ).toBe(false);
+  });
+
+  test("backs off browser terminal reconnects with a cap", () => {
+    expect(reconnectDelayMs(-1)).toBe(250);
+    expect(reconnectDelayMs(0)).toBe(250);
+    expect(reconnectDelayMs(1)).toBe(500);
+    expect(reconnectDelayMs(5)).toBe(5_000);
+    expect(reconnectDelayMs(20)).toBe(5_000);
   });
 
   test("redraws terminal history when the font size changes", () => {

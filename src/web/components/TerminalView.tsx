@@ -36,8 +36,6 @@ interface ResizableTerminal {
 
 interface ResettableTerminal extends ResizableTerminal {
   reset: () => void;
-  clear: () => void;
-  scrollToBottom: () => void;
 }
 
 interface ReplayRefreshableTerminal {
@@ -65,7 +63,8 @@ const TERMINAL_SCROLLBACK = 10_000;
 const WHEEL_PIXEL_LINE_HEIGHT = 20;
 const DOM_DELTA_LINE = 1;
 const DOM_DELTA_PAGE = 2;
-export const LIVE_ATTACH_RETRY_MS = 1000;
+const RECONNECT_BASE_DELAY_MS = 250;
+const RECONNECT_MAX_DELAY_MS = 5_000;
 
 export const terminalOptions = {
   allowProposedApi: true,
@@ -140,12 +139,23 @@ export function resetTerminalForSession(term: ResettableTerminal, session: { col
     applyAuthoritativeTerminalSize(term, session.cols, session.rows);
   }
   term.reset();
-  refreshTerminalForReplay(term);
 }
 
+// A live refresh (e.g. after a clamp/fill toggle) rebuilds scrollback without a
+// full term.reset(), preserving xterm private modes such as mouse tracking. The
+// daemon's replay snapshot re-asserts the authoritative modes via its appended
+// suffix, so the screen ends up correct without clearing mouse state.
 export function refreshTerminalForReplay(term: ReplayRefreshableTerminal): void {
   term.clear();
   term.scrollToBottom();
+}
+
+export function shouldRequestReplayForAuthoritativeMode(
+  previousMode: TerminalResizeMode,
+  nextMode: TerminalResizeMode,
+  initialReplayComplete: boolean
+): boolean {
+  return initialReplayComplete && previousMode !== nextMode;
 }
 
 export function canRefitTerminalForSession(
@@ -162,14 +172,6 @@ export function canRefitTerminalForSession(
   return isLiveStatus(session.status) && initialReplayComplete;
 }
 
-export function shouldRequestReplayForAuthoritativeMode(
-  previousMode: TerminalResizeMode,
-  nextMode: TerminalResizeMode,
-  initialReplayComplete: boolean
-): boolean {
-  return initialReplayComplete && previousMode !== nextMode;
-}
-
 export function completeInitialReplay(
   replayGeneration: number,
   currentGeneration: number,
@@ -181,6 +183,28 @@ export function completeInitialReplay(
   }
   markComplete();
   refit();
+}
+
+export function reconnectDelayMs(attempt: number): number {
+  const normalizedAttempt = Math.max(0, Math.floor(attempt));
+  return Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** normalizedAttempt);
+}
+
+export function shouldReconnectLiveAttachment(state: {
+  session: Pick<SessionMeta, "id" | "status"> | null | undefined;
+  sessionId: string;
+  attachmentGeneration: number;
+  currentGeneration: number;
+  visible: boolean;
+}): boolean {
+  const session = state.session;
+  return (
+    state.attachmentGeneration === state.currentGeneration &&
+    state.visible &&
+    !!session &&
+    session.id === state.sessionId &&
+    isLiveStatus(session.status)
+  );
 }
 
 export function applyTerminalFontSize(term: FontResizableTerminal, fontSize: number, refit: () => void): void {
@@ -268,7 +292,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const serverConnectedRef = useRef(serverConnected);
   const initialReplayCompleteRef = useRef(true);
   const attachmentGenerationRef = useRef(0);
-  const renderedSessionIdRef = useRef<string | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
   const awaitingReplayRef = useRef(false);
   const replayAfterNextResizeRef = useRef(false);
   const lastServerReconnectTokenRef = useRef(serverReconnectToken);
@@ -339,6 +364,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
   }
 
+  // The daemon reported its authoritative clamp/fill mode. When it differs from
+  // what this viewer last rendered, request a fresh replay on the next resize so
+  // xterm's scrollback is rebuilt for the new PTY grid.
   function handleAuthoritativeViewMode(mode: TerminalResizeMode): void {
     const requestReplay = shouldRequestReplayForAuthoritativeMode(
       viewModeRef.current,
@@ -410,9 +438,21 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     focusTerminalPane(termRef.current, refreshActiveTerminal);
   }
 
+  function clearReconnectTimer(): void {
+    if (reconnectTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+  }
+
   function closeWs(): void {
+    clearReconnectTimer();
+    reconnectAttemptRef.current = 0;
     attachmentGenerationRef.current++;
+    initialReplayCompleteRef.current = true;
     awaitingReplayRef.current = false;
+    replayAfterNextResizeRef.current = false;
     if (wsRef.current) {
       try {
         wsRef.current.close();
@@ -422,6 +462,173 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       wsRef.current = null;
       attachedSessionIdRef.current = null;
     }
+  }
+
+  function isCurrentAttachment(ws: WebSocket, sessionId: string, attachmentGeneration: number): boolean {
+    return (
+      wsRef.current === ws &&
+      attachedSessionIdRef.current === sessionId &&
+      attachmentGeneration === attachmentGenerationRef.current
+    );
+  }
+
+  function scheduleReconnect(sessionId: string, attachmentGeneration: number): void {
+    clearReconnectTimer();
+    // While the dashboard server is known to be down (reported over SSE), pause
+    // websocket reconnect attempts. The reconnect overlay blocks interaction, and
+    // a deterministic fresh attach is driven by serverReconnectToken once the
+    // server returns -- so backoff churn here would be wasted.
+    if (!serverConnectedRef.current) {
+      return;
+    }
+    if (
+      !shouldReconnectLiveAttachment({
+        session: selectedSessionRef.current,
+        sessionId,
+        attachmentGeneration,
+        currentGeneration: attachmentGenerationRef.current,
+        visible: visibleRef.current
+      })
+    ) {
+      return;
+    }
+    const delay = reconnectDelayMs(reconnectAttemptRef.current);
+    reconnectAttemptRef.current += 1;
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      const currentSession = selectedSessionRef.current;
+      if (
+        !currentSession ||
+        !shouldReconnectLiveAttachment({
+          session: currentSession,
+          sessionId,
+          attachmentGeneration,
+          currentGeneration: attachmentGenerationRef.current,
+          visible: visibleRef.current
+        })
+      ) {
+        return;
+      }
+      attachLiveSession(currentSession, true);
+    }, delay);
+  }
+
+  function attachLiveSession(liveSession: SessionMeta, resetBeforeReplay: boolean): void {
+    clearReconnectTimer();
+    attachmentGenerationRef.current++;
+    const attachmentGeneration = attachmentGenerationRef.current;
+    const ws = new WebSocket(attachSocketUrl(liveSession.id));
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+    attachedSessionIdRef.current = liveSession.id;
+    initialReplayCompleteRef.current = false;
+
+    let firstBinaryFrame = true;
+    let disconnected = false;
+    let terminalExitReceived = false;
+
+    function handleDisconnect(): void {
+      if (disconnected) {
+        return;
+      }
+      disconnected = true;
+      if (attachmentGeneration !== attachmentGenerationRef.current) {
+        return;
+      }
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+        attachedSessionIdRef.current = null;
+      }
+      initialReplayCompleteRef.current = true;
+      if (!terminalExitReceived) {
+        scheduleReconnect(liveSession.id, attachmentGeneration);
+      }
+    }
+
+    ws.onopen = () => {
+      if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
+        return;
+      }
+      if (flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode)) {
+        // Restoring a queued mode (e.g. after a server reconnect) changes the PTY
+        // grid, so request a fresh replay on the following resize.
+        replayAfterNextResizeRef.current = true;
+        refit();
+      }
+      flushAttentionAck();
+    };
+    ws.onmessage = (ev) => {
+      if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
+        return;
+      }
+      const term = termRef.current;
+      if (!term) {
+        return;
+      }
+      if (typeof ev.data === "string") {
+        try {
+          const msg = JSON.parse(ev.data) as {
+            type: string;
+            exitCode?: number;
+            cols?: number;
+            rows?: number;
+            mode?: TerminalResizeMode;
+          };
+          if (msg.type === "exit") {
+            terminalExitReceived = true;
+            term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
+          } else if (msg.type === "size" && msg.cols && msg.rows) {
+            // Authoritative PTY size from the daemon: match it so both the host
+            // terminal and this viewer render the same grid.
+            applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
+          } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
+            handleAuthoritativeViewMode(msg.mode);
+          } else if (msg.type === "replay") {
+            awaitingReplayRef.current = true;
+          }
+        } catch {
+          // Ignore malformed control messages.
+        }
+      } else {
+        const data = new Uint8Array(ev.data as ArrayBuffer);
+        const replayRequested = awaitingReplayRef.current;
+        awaitingReplayRef.current = false;
+        if (initialReplayCompleteRef.current && !replayRequested) {
+          term.write(data);
+        } else {
+          if (firstBinaryFrame) {
+            firstBinaryFrame = false;
+            if (resetBeforeReplay) {
+              term.reset();
+            }
+          } else if (replayRequested) {
+            // A mid-session replay (e.g. after a clamp/fill toggle) rebuilds
+            // scrollback without a full reset so mouse-tracking modes survive.
+            refreshTerminalForReplay(term);
+          }
+          term.write(data, () => {
+            completeInitialReplay(
+              attachmentGeneration,
+              attachmentGenerationRef.current,
+              () => {
+                initialReplayCompleteRef.current = true;
+                reconnectAttemptRef.current = 0;
+              },
+              refreshActiveTerminal
+            );
+          });
+        }
+      }
+    };
+    ws.onerror = () => {
+      handleDisconnect();
+      try {
+        ws.close();
+      } catch {
+        // Ignore: socket may already be closing.
+      }
+    };
+    ws.onclose = handleDisconnect;
   }
 
   // Create the terminal once and wire input + resize handling.
@@ -511,22 +718,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     closeWs();
     initialReplayCompleteRef.current = true;
     applyTerminalScrollbackForSession(term, session);
-    // A server reconnect re-runs this effect with a bumped token. Treat it like a
-    // fresh attach (full reset + full replay) rather than a light refresh: the
-    // daemon may have reset PTY/mouse state when the last viewer dropped during
-    // the outage, and the reset+replay path (the same one session switching uses)
-    // reliably restores scrollback and mouse-tracking modes from the daemon's
-    // authoritative replay snapshot.
+    resetTerminalForSession(term, session);
+    // A dashboard server reconnect re-runs this effect with a bumped token.
     const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;
     lastServerReconnectTokenRef.current = serverReconnectToken;
-    const liveSession = session ? isLiveStatus(session.status) : false;
-    const preserveExistingScreen = Boolean(
-      session && liveSession && renderedSessionIdRef.current === session.id && !isServerReconnect
-    );
-    if (!preserveExistingScreen) {
-      resetTerminalForSession(term, session);
-      renderedSessionIdRef.current = session?.id ?? null;
-    }
     const attachmentGeneration = attachmentGenerationRef.current;
 
     if (!session) {
@@ -534,141 +729,21 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
 
     let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const clearRetryTimer = (): void => {
-      if (retryTimer) {
-        clearTimeout(retryTimer);
-        retryTimer = undefined;
-      }
-    };
-
-    if (liveSession) {
+    if (isLiveStatus(session.status)) {
       // Only hold the PTY (via the WebSocket) while the terminal is actually
-      // displayed. When hidden, the daemon reverts the PTY to the host size.
+      // displayed and the dashboard server is reachable. When the server is down
+      // the reconnect overlay blocks interaction; we resume once it returns.
       if (!visible || !serverConnected) {
         return;
       }
-      // Preserve the user's clamp/fill choice across the outage: the daemon may
-      // have reverted to its default mode when the last viewer disconnected, so
-      // queue the pre-outage mode and flush it once the socket reopens.
+      // Preserve the user's clamp/fill choice across an outage: the daemon may
+      // revert to its default mode when the last viewer disconnects, so queue the
+      // pre-outage mode and flush it once the socket reopens.
       if (isServerReconnect) {
         queuedViewModeRef.current = viewModeRef.current;
       }
-      let resetBeforeReplay = preserveExistingScreen;
-      let sawExit = false;
-
-      const shouldRetryLiveAttach = (): boolean => {
-        const currentSession = selectedSessionRef.current;
-        return Boolean(
-          !cancelled &&
-            !sawExit &&
-            attachmentGeneration === attachmentGenerationRef.current &&
-            currentSession &&
-            currentSession.id === session.id &&
-            isLiveStatus(currentSession.status) &&
-            visibleRef.current &&
-            serverConnectedRef.current
-        );
-      };
-
-      const attachLiveSocket = (): void => {
-        if (!shouldRetryLiveAttach()) {
-          return;
-        }
-        const ws = new WebSocket(attachSocketUrl(session.id));
-        ws.binaryType = "arraybuffer";
-        wsRef.current = ws;
-        attachedSessionIdRef.current = session.id;
-        initialReplayCompleteRef.current = false;
-        ws.onopen = () => {
-          if (flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode)) {
-            replayAfterNextResizeRef.current = true;
-            refit();
-          }
-          flushAttentionAck();
-        };
-        ws.onmessage = (ev) => {
-          if (
-            wsRef.current !== ws ||
-            attachedSessionIdRef.current !== session.id ||
-            attachmentGeneration !== attachmentGenerationRef.current
-          ) {
-            return;
-          }
-          if (typeof ev.data === "string") {
-            try {
-              const msg = JSON.parse(ev.data) as {
-                type: string;
-                exitCode?: number;
-                cols?: number;
-                rows?: number;
-                mode?: TerminalResizeMode;
-              };
-              if (msg.type === "exit") {
-                sawExit = true;
-                term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
-              } else if (msg.type === "size" && msg.cols && msg.rows) {
-                // Authoritative PTY size from the daemon: match it so both the host
-                // terminal and this viewer render the same grid.
-                applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
-              } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
-                handleAuthoritativeViewMode(msg.mode);
-              } else if (msg.type === "replay") {
-                awaitingReplayRef.current = true;
-              }
-            } catch {
-              // Ignore malformed control messages.
-            }
-          } else {
-            const data = new Uint8Array(ev.data as ArrayBuffer);
-            const replayRequested = awaitingReplayRef.current;
-            awaitingReplayRef.current = false;
-            if (initialReplayCompleteRef.current && !replayRequested) {
-              term.write(data);
-            } else {
-              if (resetBeforeReplay || replayRequested) {
-                refreshTerminalForReplay(term);
-                renderedSessionIdRef.current = session.id;
-                resetBeforeReplay = false;
-              }
-              term.write(data, () => {
-                completeInitialReplay(
-                  attachmentGeneration,
-                  attachmentGenerationRef.current,
-                  () => {
-                    initialReplayCompleteRef.current = true;
-                    renderedSessionIdRef.current = session.id;
-                    term.scrollToBottom();
-                  },
-                  refreshActiveTerminal
-                );
-              });
-            }
-          }
-        };
-        ws.onerror = () => {
-          try {
-            ws.close();
-          } catch {
-            // Ignore: socket may already be closing.
-          }
-        };
-        ws.onclose = () => {
-          if (wsRef.current === ws) {
-            wsRef.current = null;
-            attachedSessionIdRef.current = null;
-          }
-          if (shouldRetryLiveAttach() && !retryTimer) {
-            retryTimer = setTimeout(() => {
-              retryTimer = undefined;
-              attachLiveSocket();
-            }, LIVE_ATTACH_RETRY_MS);
-          }
-        };
-      };
-
-      attachLiveSocket();
+      attachLiveSession(session, false);
     } else {
       void fetchScrollback(session.id).then((buf) => {
         if (cancelled) {
@@ -676,27 +751,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         }
         if (buf) {
           term.write(buf, () => {
-            completeInitialReplay(
-              attachmentGeneration,
-              attachmentGenerationRef.current,
-              () => {
-                renderedSessionIdRef.current = session.id;
-                term.scrollToBottom();
-              },
-              refreshActiveTerminal
-            );
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
           });
         } else {
           term.write("\x1b[90m[no output captured]\x1b[0m\r\n", () => {
-            completeInitialReplay(
-              attachmentGeneration,
-              attachmentGenerationRef.current,
-              () => {
-                renderedSessionIdRef.current = session.id;
-                term.scrollToBottom();
-              },
-              refreshActiveTerminal
-            );
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
           });
         }
       });
@@ -704,13 +763,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     return () => {
       cancelled = true;
-      clearRetryTimer();
     };
-    // Re-attach only when the session, its live/terminated state, visibility,
-    // dashboard server availability, or the dashboard server recovery changes
-    // -- never on live-status
-    // idle/acknowledgement transitions, which would reset the terminal and
-    // cause a periodic resize flicker.
+    // Re-attach when the session, its live/terminated state, visibility, server
+    // availability, or a server reconnect changes -- never on live-status
+    // idle/acknowledgement transitions, which would reset the terminal and cause
+    // a periodic resize flicker.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachKey(session, visible), serverConnected, serverReconnectToken]);
 

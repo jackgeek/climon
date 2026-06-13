@@ -272,6 +272,18 @@ function isSamePatchLockOwner(actual: Partial<PatchLockOwner> | undefined, expec
   return actual?.token === expected.token;
 }
 
+function isSamePatchLockInstanceOwner(actual: Partial<PatchLockOwner> | undefined, expected: PatchLockOwner): boolean {
+  return (
+    actual?.token === expected.token &&
+    actual.pid === expected.pid &&
+    actual.createdAt === expected.createdAt &&
+    actual.hostname === expected.hostname &&
+    actual.platform === expected.platform &&
+    actual.pidNamespace === expected.pidNamespace &&
+    actual.processStartTime === expected.processStartTime
+  );
+}
+
 function isSamePatchLockIdentity(actual: PatchLockIdentity, expected: PatchLockIdentity): boolean {
   return actual.dev === expected.dev && actual.ino === expected.ino;
 }
@@ -353,7 +365,10 @@ async function releasePatchLock(lockPath: string, instance: PatchLockInstance): 
     throw error;
   }
   const currentOwner = await readPatchLockOwner(lockPath);
-  if (!isSamePatchLockIdentity(currentIdentity, instance.identity) || !isSamePatchLockOwner(currentOwner, instance.owner)) {
+  if (
+    !isSamePatchLockIdentity(currentIdentity, instance.identity) ||
+    !isSamePatchLockInstanceOwner(currentOwner, instance.owner)
+  ) {
     return;
   }
 
@@ -376,7 +391,10 @@ async function releasePatchLock(lockPath: string, instance: PatchLockInstance): 
         throw retryError;
       }
       const retryOwner = await readPatchLockOwner(lockPath);
-      if (isSamePatchLockIdentity(retryIdentity, instance.identity) && isSamePatchLockOwner(retryOwner, instance.owner)) {
+      if (
+        isSamePatchLockIdentity(retryIdentity, instance.identity) &&
+        isSamePatchLockInstanceOwner(retryOwner, instance.owner)
+      ) {
         await rm(lockPath, { recursive: true, force: true });
       }
       return;
@@ -396,7 +414,10 @@ async function releasePatchLock(lockPath: string, instance: PatchLockInstance): 
     throw error;
   }
   const releaseOwner = await readPatchLockOwner(releasePath);
-  if (!isSamePatchLockIdentity(releaseIdentity, instance.identity) || !isSamePatchLockOwner(releaseOwner, instance.owner)) {
+  if (
+    !isSamePatchLockIdentity(releaseIdentity, instance.identity) ||
+    !isSamePatchLockInstanceOwner(releaseOwner, instance.owner)
+  ) {
     return;
   }
   await rm(releasePath, { recursive: true, force: true });

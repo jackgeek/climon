@@ -4,7 +4,7 @@ import { type Socket } from "node:net";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultConfig } from "../src/config.js";
+import { defaultConfig, NEST_LEVEL_ENV_VAR, SESSION_ENV_VAR } from "../src/config.js";
 import { patchSessionMeta } from "../src/store.js";
 import { FrameDecoder, FrameType, parseJsonPayload, type TitlePayload } from "../src/ipc/frame.js";
 import { connectSessionSocket, isResolvedSessionSocketRef } from "../src/session-socket.js";
@@ -12,7 +12,9 @@ import type { SessionMeta } from "../src/types.js";
 
 // Real Linux-filesystem temp dir: unix sockets do not work on DrvFs mounts.
 const home = join(tmpdir(), `climon-title-broadcast-${process.pid}`);
-const env = { ...process.env, CLIMON_HOME: home };
+const env: NodeJS.ProcessEnv = { ...process.env, CLIMON_HOME: home };
+delete env[SESSION_ENV_VAR];
+delete env[NEST_LEVEL_ENV_VAR];
 
 async function readMeta(id: string): Promise<SessionMeta> {
   return JSON.parse(await readFile(join(home, "sessions", `${id}.json`), "utf8")) as SessionMeta;
