@@ -26,13 +26,15 @@ const VIEWED_SESSION_QUERY_TIMEOUT_MS = 500;
 function queryViewedSession(client: Client): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
+    let channel: MessageChannel | null = null;
     const finish = (value: string | null): void => {
       if (settled) return;
       settled = true;
+      channel?.port1.close();
       resolve(value);
     };
     try {
-      const channel = new MessageChannel();
+      channel = new MessageChannel();
       channel.port1.onmessage = (event: MessageEvent): void => {
         finish(parseViewedSessionResponse(event.data));
       };
