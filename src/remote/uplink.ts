@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { watch, type FSWatcher } from "node:fs";
 import { connect, type Socket } from "node:net";
-import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
   getClimonHome,
@@ -18,6 +17,7 @@ import { discoverDashboard } from "./discovery.js";
 import { isProcessAlive } from "../process-kill.js";
 import { debugUplink as log } from "./debug.js";
 import { muxIdleTimeoutMs } from "./keepalive.js";
+import { defaultClientId } from "./client-id.js";
 
 export interface UplinkConfig {
   enabled: boolean;
@@ -60,7 +60,7 @@ function asNumber(v: unknown): number | undefined {
 export function ensureClientId(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): string {
   const existing = asString(resolveConfigSetting("remote.clientId", env, cwd));
   if (existing) return existing;
-  const id = `dev-${randomBytes(5).toString("hex")}`;
+  const id = defaultClientId();
   writeConfigSetting("remote.clientId", id, "global", env, cwd);
   return id;
 }
