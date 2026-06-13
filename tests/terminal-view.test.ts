@@ -243,22 +243,39 @@ describe("TerminalView", () => {
         cols: 120,
         rows: 40,
         resize: (cols: number, rows: number) => calls.push(`resize:${cols}x${rows}`),
-        reset: () => calls.push("reset")
+        reset: () => calls.push("reset"),
+        clear: () => calls.push("clear"),
+        scrollToBottom: () => calls.push("scrollToBottom")
       },
       { cols: 80, rows: 24 }
     );
 
-    expect(calls).toEqual(["resize:80x24", "reset"]);
+    expect(calls).toEqual(["resize:80x24", "reset", "clear", "scrollToBottom"]);
   });
 
   test("can reset replay scrollback without changing the current authoritative grid", () => {
     const calls: string[] = [];
 
     resetTerminalForReplay({
-      reset: () => calls.push("reset")
+      reset: () => calls.push("reset"),
+      clear: () => calls.push("clear"),
+      scrollToBottom: () => calls.push("scrollToBottom")
     });
 
-    expect(calls).toEqual(["reset"]);
+    expect(calls).toEqual(["reset", "clear", "scrollToBottom"]);
+  });
+
+  test("keeps the viewport at the bottom after rebuilding replay scrollback", async () => {
+    const term = new Terminal({ cols: 20, rows: 3, scrollback: 100, allowProposedApi: true, convertEol: true });
+
+    await writeTerminal(term, "old1\nold2\nold3\nold4\n");
+    term.scrollLines(-1);
+
+    resetTerminalForReplay(term);
+    await writeTerminal(term, "new1\nnew2\nnew3\nnew4\nnew5\n");
+    term.scrollToBottom();
+
+    expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
   });
 
   test("does not refit while a selected session replay depends on its captured grid", () => {

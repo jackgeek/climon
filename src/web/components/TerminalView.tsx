@@ -36,10 +36,14 @@ interface ResizableTerminal {
 
 interface ResettableTerminal extends ResizableTerminal {
   reset: () => void;
+  clear: () => void;
+  scrollToBottom: () => void;
 }
 
 interface ReplayResettableTerminal {
   reset: () => void;
+  clear: () => void;
+  scrollToBottom: () => void;
 }
 
 interface RefitSessionState {
@@ -141,6 +145,8 @@ export function resetTerminalForSession(term: ResettableTerminal, session: { col
 
 export function resetTerminalForReplay(term: ReplayResettableTerminal): void {
   term.reset();
+  term.clear();
+  term.scrollToBottom();
 }
 
 export function canRefitTerminalForSession(
@@ -620,6 +626,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
                   () => {
                     initialReplayCompleteRef.current = true;
                     renderedSessionIdRef.current = session.id;
+                    term.scrollToBottom();
                   },
                   refreshActiveTerminal
                 );
@@ -661,6 +668,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
               attachmentGenerationRef.current,
               () => {
                 renderedSessionIdRef.current = session.id;
+                term.scrollToBottom();
               },
               refreshActiveTerminal
             );
@@ -672,6 +680,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
               attachmentGenerationRef.current,
               () => {
                 renderedSessionIdRef.current = session.id;
+                term.scrollToBottom();
               },
               refreshActiveTerminal
             );
