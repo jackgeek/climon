@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
+import { readServerStateFromDir } from "../src/server-state.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
@@ -149,11 +150,16 @@ describe("server shutdown ingest lifecycle", () => {
     );
     let serverExited = false;
     let ingestPid: number | undefined;
-    const base = `http://127.0.0.1:${dashboardPort}`;
+    let base = `http://127.0.0.1:${dashboardPort}`;
     try {
       await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
-        return res?.ok ? true : undefined;
+        if (res?.ok) return true;
+        const state = await readServerStateFromDir(home);
+        if (!state?.port) return undefined;
+        base = `http://127.0.0.1:${state.port}`;
+        const actual = await fetch(`${base}/health`).catch(() => undefined);
+        return actual?.ok ? true : undefined;
       }, 20_000);
       ingestPid = await waitFor(() => readPid(getIngestPidPath(env)), 10_000);
       expect(isProcessAlive(ingestPid)).toBe(true);

@@ -102,13 +102,17 @@ export async function delegateToServer(
   execPath: string,
   devEntrypoint?: string
 ): Promise<number> {
-  // Set CLIMON_CLIENT_BIN before anything else so the server can reference it.
   const resolvedEnv = resolveServerEnv(env, execPath, devEntrypoint);
-  Object.assign(process.env, resolvedEnv);
+  const applyResolvedEnv = (): void => {
+    Object.assign(process.env, resolvedEnv);
+  };
 
   // In dev mode, just import the server source directly via a runtime path
   // so the bundler doesn't pull server code into the client binary.
   if (devEntrypoint && existsSync(devEntrypoint)) {
+    // Set CLIMON_CLIENT_BIN before importing the in-process server so it can
+    // reference the client executable for dashboard-spawned sessions.
+    applyResolvedEnv();
     const { parseArgs } = await import("./args.js");
     const parsed = parseArgs(forwardArgs);
     if (parsed.command === "server") {
@@ -122,6 +126,7 @@ export async function delegateToServer(
   // Try loading a sibling JS bundle in-process (avoids spawning a 2nd process).
   const bundlePath = resolveServerBundle(env, execPath);
   if (bundlePath) {
+    applyResolvedEnv();
     const { parseArgs } = await import("./args.js");
     const parsed = parseArgs(forwardArgs);
     if (parsed.command === "server") {

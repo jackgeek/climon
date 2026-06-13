@@ -12,12 +12,15 @@ import {
   type TerminalModePayload,
   type TerminalWarningPayload
 } from "../src/ipc/frame.js";
+import { NEST_LEVEL_ENV_VAR, SESSION_ENV_VAR } from "../src/config.js";
 import { connectSessionSocket, isResolvedSessionSocketRef } from "../src/session-socket.js";
 import type { SessionMeta } from "../src/types.js";
 
 // Real Linux tmp dir: unix sockets do not work on /mnt/c DrvFs under WSL.
 const home = join(tmpdir(), `climon-revert-${process.pid}`);
-const env = { ...process.env, CLIMON_HOME: home, CLIMON_COLS: "80", CLIMON_ROWS: "24" };
+const env: NodeJS.ProcessEnv = { ...process.env, CLIMON_HOME: home, CLIMON_COLS: "80", CLIMON_ROWS: "24" };
+delete env[SESSION_ENV_VAR];
+delete env[NEST_LEVEL_ENV_VAR];
 
 async function readMeta(id: string): Promise<SessionMeta> {
   const { readFile } = await import("node:fs/promises");

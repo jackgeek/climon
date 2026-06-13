@@ -14,6 +14,7 @@ export type ParsedCommand =
   | { command: "config"; argv: string[] }
   | { command: "link"; argv: string[] }
   | { command: "uplink" }
+  | { command: "session"; id: string }
   | { command: "cleanup" }
   | { command: "ingest" };
 
@@ -171,6 +172,13 @@ export function parseArgs(argv: string[]): ParsedCommand {
       return { command: "uplink" };
     case "__ingest":
       return { command: "ingest" };
+    case "__session": {
+      const id = rest[0];
+      if (!id || rest.length !== 1) {
+        throw new Error("Provide a session id, e.g. `climon __session <id>`.");
+      }
+      return { command: "session", id };
+    }
     default: {
       const { flags, rest: runArgv } = parseSessionFlags(argv);
       if (runArgv.length === 0) {

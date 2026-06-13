@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { NEST_LEVEL_ENV_VAR, SESSION_ENV_VAR } from "../src/config.js";
 
 const home = join(process.cwd(), `.climon-headless-fast-exit-${process.pid}`);
+const env: NodeJS.ProcessEnv = { ...process.env, CLIMON_HOME: home };
+delete env[SESSION_ENV_VAR];
+delete env[NEST_LEVEL_ENV_VAR];
 
 async function waitForCompletedSession(id: string): Promise<void> {
   const metaPath = join(home, "sessions", `${id}.json`);
@@ -29,7 +33,7 @@ describe("headless run", () => {
   test("prints a session id for fast-exiting commands", async () => {
     const proc = Bun.spawn([process.execPath, "src/index.ts", "run", "--headless", process.execPath, "--version"], {
       cwd: process.cwd(),
-      env: { ...process.env, CLIMON_HOME: home },
+      env,
       stdout: "pipe",
       stderr: "pipe"
     });

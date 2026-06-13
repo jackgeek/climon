@@ -7,8 +7,10 @@ import {
   getClimonHome,
   loadConfig,
   NEST_LEVEL_ENV_VAR,
+  SESSION_ENV_VAR,
   resolveConfigSetting
 } from "./config.js";
+import { spawnHeadlessSession } from "./client/spawn-session.js";
 import { queryTerminalTitle } from "./client/query-title.js";
 import { sanitizeTitle } from "./client/title.js";
 import { sortSessionsByPriority } from "./priority.js";
@@ -209,6 +211,11 @@ export async function startMonitoredCommand(
   command: string[],
   options: { headless?: boolean; name?: string } & SessionDefaultFlags = {}
 ): Promise<number> {
+  if (process.env[SESSION_ENV_VAR]) {
+    process.stderr.write("climon: cannot start a nested session from inside an existing climon session.\n");
+    return 1;
+  }
+
   // Warn about nested sessions immediately
   const nestLevel = parseInt(process.env[NEST_LEVEL_ENV_VAR] ?? "0", 10) || 0;
   if (nestLevel > 0) {
@@ -234,16 +241,26 @@ export async function startMonitoredCommand(
     process.cwd()
   );
 
-  if (options.name === undefined && !options.headless && config.terminal.setTitle) {
+  if (options.headless) {
+    const id = await spawnHeadlessSession(command, process.cwd(), resolveLaunchSize(process.env), {
+      name: options.name,
+      priority: defaults.priority,
+      color: defaults.color ?? undefined
+    });
+    await maybeAutoLink();
+    await ensureUplink();
+    process.stdout.write(`${id}\n`);
+    return 0;
+  }
+
+  if (options.name === undefined && config.terminal.setTitle) {
     const queried = await queryTerminalTitle();
     const inferred = queried ? sanitizeTitle(queried).trim() : "";
     options.name = inferred.length > 0 ? inferred : buildDisplayCommand(command);
   }
 
   const id = generateSessionId();
-  const { cols, rows } = options.headless
-    ? resolveLaunchSize(process.env)
-    : terminalSize();
+  const { cols, rows } = terminalSize();
   const now = new Date().toISOString();
   const meta: SessionMeta = {
     id,
@@ -269,9 +286,7 @@ export async function startMonitoredCommand(
   await maybeAutoLink();
   await ensureUplink();
 
-  if (!options.headless) {
-    process.stdout.write(launchBanner(VERSION, id));
-  }
+  process.stdout.write(launchBanner(VERSION, id));
 
   const exitCode = await runSessionHost(id, meta, { headless: options.headless });
 

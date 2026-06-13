@@ -61,6 +61,7 @@ afterEach(async () => {
 describe("POST /api/sessions with a parentId", () => {
   test("spawns a child of any live session inheriting its cwd; 404 for unknown parent", async () => {
     const parentId = "parent-1";
+    const longRunningCommand = `${process.execPath} -e setTimeout(()=>{},30000)`;
     await writeSessionMeta(parentMeta(parentId), env);
 
     const port = await freePort();
@@ -81,7 +82,7 @@ describe("POST /api/sessions with a parentId", () => {
       const ok = await fetch(`${base}/api/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ command: "sleep 30", parentId, cwd: childCwd })
+        body: JSON.stringify({ command: longRunningCommand, parentId, cwd: childCwd })
       });
       expect(ok.status).toBe(201);
       const body = (await ok.json()) as { id?: string };
@@ -96,11 +97,11 @@ describe("POST /api/sessions with a parentId", () => {
       const missing = await fetch(`${base}/api/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ command: "sleep 30", parentId: "does-not-exist" })
+        body: JSON.stringify({ command: longRunningCommand, parentId: "does-not-exist" })
       });
       expect(missing.status).toBe(404);
     } finally {
-      // Stop the child session's daemon (it runs `sleep 30`) so nothing lingers.
+      // Stop the child session's daemon so nothing lingers.
       if (childId) {
         const pid = await waitFor(async () => {
           const raw = await readFile(join(home, "sessions", `${childId}.json`), "utf8");

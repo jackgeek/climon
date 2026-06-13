@@ -42,8 +42,8 @@ import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
 import { runPromote } from "./promote.js";
 import { buildPromoteDeps } from "./promote-probes.js";
-import { resolveClientInvocation } from "../cli/client-exec.js";
 import { resolveServerInvocation } from "../cli/server-exec.js";
+import { spawnHeadlessSession as spawnHeadlessSessionDirect } from "../client/spawn-session.js";
 import { resolveSessionDefaults } from "../launcher.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
@@ -518,18 +518,6 @@ export function resolveParentSpawnCwd(cwd: unknown, parentCwd: string): string {
   return typeof cwd === "string" && cwd.trim().length > 0 ? cwd.trim() : parentCwd;
 }
 
-function resolveDevClientEntrypoint(): string | undefined {
-  if (!import.meta.url.startsWith("file:")) {
-    return undefined;
-  }
-  try {
-    const candidate = fileURLToPath(new URL("../index.ts", import.meta.url));
-    return existsSync(candidate) ? candidate : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveDevIngestEntrypoint(): string | undefined {
   if (!import.meta.url.startsWith("file:")) {
     return undefined;
@@ -551,12 +539,6 @@ export function resolveIngestInvocation(
   return { file: inv.file, args: [...inv.args, "__ingest"] };
 }
 
-/**
- * Spawns `climon run --headless <argv>` using this process's own runtime and
- * entry script (the same mechanism the per-session daemon uses), captures the
- * session id it prints to stdout, and resolves with that id. Rejects on
- * non-zero exit, spawn error, or timeout.
- */
 function spawnHeadlessSession(
   argv: string[],
   cwd: string,
@@ -564,49 +546,13 @@ function spawnHeadlessSession(
   rows: string,
   meta: ResolvedSpawnMetaOptions = {}
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const { file, args } = resolveClientInvocation(
-      buildRunArgs(argv, meta),
-      process.env,
-      process.execPath,
-      resolveDevClientEntrypoint()
-    );
-    const child = spawn(file, args, {
-      cwd,
-      env: { ...process.env, CLIMON_COLS: cols, CLIMON_ROWS: rows },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true
-    });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error("Timed out creating session"));
-    }, 15000);
-    child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        reject(new Error("climon client binary not found; set CLIMON_CLIENT_BIN to its path"));
-        return;
-      }
-      reject(error);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      const id = stdout.trim().split(/\s+/).pop() ?? "";
-      if (code === 0 && id) {
-        resolve(id);
-      } else {
-        reject(new Error(stderr.trim() || `climon run exited with code ${code ?? "unknown"}`));
-      }
-    });
-  });
+  return spawnHeadlessSessionDirect(
+    argv,
+    cwd,
+    { cols: Number.parseInt(cols, 10), rows: Number.parseInt(rows, 10) },
+    meta,
+    process.env
+  );
 }
 
 /**
