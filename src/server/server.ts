@@ -36,7 +36,7 @@ import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
-import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
+import { sanitizeBrowserTerminalReplay, stripMouseTrackingControlsFromReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
@@ -69,6 +69,7 @@ interface StartServerOptions {
 interface WsData {
   sessionId: string;
   socketPath: string;
+  stripMouseTrackingFromNextReplay?: boolean;
 }
 
 export const DASHBOARD_IDLE_TIMEOUT_SECONDS = 255;
@@ -1454,8 +1455,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             if (frame.type === FrameType.Output) {
               ws.sendBinary(frame.payload);
             } else if (frame.type === FrameType.Replay) {
+              const stripMouseTracking = ws.data.stripMouseTrackingFromNextReplay === true;
+              ws.data.stripMouseTrackingFromNextReplay = false;
+              const replay = sanitizeBrowserTerminalReplay(
+                stripMouseTracking ? stripMouseTrackingControlsFromReplay(frame.payload) : frame.payload
+              );
               ws.send(JSON.stringify({ type: "replay" }));
-              ws.sendBinary(sanitizeBrowserTerminalReplay(frame.payload));
+              ws.sendBinary(replay);
             } else if (frame.type === FrameType.Exit) {
               const exit = parseJsonPayload<ExitPayload>(frame.payload);
               ws.send(JSON.stringify({ type: "exit", exitCode: exit.exitCode }));
@@ -1504,6 +1510,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               daemon.write(encodeJsonFrame(FrameType.Attention, payload));
             }
           } else if (message.type === "replay") {
+            ws.data.stripMouseTrackingFromNextReplay = true;
             daemon.write(encodeFrame(FrameType.Replay));
           }
         } catch {
