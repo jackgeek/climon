@@ -1,14 +1,11 @@
-import { randomBytes } from "node:crypto";
 import { ensureClimonHome } from "../config.js";
+import { resolveClientId } from "../remote/client-id.js";
+import { generateSessionId } from "../session-id.js";
 import { formatSessionSocketRef } from "../session-socket.js";
 import { spawnDaemon } from "../spawn-daemon.js";
 import { writeSessionMeta } from "../store.js";
 import type { AnsiColor, SessionMeta } from "../types.js";
 import { VERSION } from "../version.js";
-
-function generateSessionId(): string {
-  return `${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
-}
 
 /**
  * Creates a new monitored session that runs without a local terminal attached:
@@ -34,7 +31,7 @@ export async function spawnHeadlessSession(
     throw new Error("Provide a command to monitor, e.g. `climon copilot`.");
   }
   await ensureClimonHome(env);
-  const id = generateSessionId();
+  const id = await generateSessionId(env);
   const now = new Date().toISOString();
   const meta: SessionMeta = {
     id,
@@ -50,6 +47,7 @@ export async function spawnHeadlessSession(
     cols: Math.max(size.cols, 1),
     rows: Math.max(size.rows, 1),
     headless: true,
+    clientLabel: resolveClientId(env),
     clientVersion: VERSION,
     createdAt: now,
     updatedAt: now,

@@ -211,6 +211,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
                 className={styles.field}
                 validationState={clientIdValid ? "none" : "error"}
                 validationMessage={clientIdValid ? undefined : "1–64 chars: letters, digits, dots, hyphens, underscores."}
+                hint="Optional. Defaults to the machine hostname. Use a value that is unique per host to avoid session ID collisions."
               >
                 <Input
                   className={styles.control}

@@ -145,7 +145,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "remote.clientId",
     type: "string",
-    purpose: "Stable, non-secret client namespace; auto-generated once on the devbox to uniquely identify this remote client. Can be set manually to use a human-readable name.",
+    purpose: "Stable, non-secret client namespace identifying this machine's sessions. Defaults to the machine hostname when unset; set it to a value that is unique per host to avoid session ID collisions across machines.",
     scope: ["client"],
     acceptInput: true,
     validate: (value: unknown) => {
