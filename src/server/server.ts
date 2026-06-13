@@ -1454,6 +1454,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             if (frame.type === FrameType.Output) {
               ws.sendBinary(frame.payload);
             } else if (frame.type === FrameType.Replay) {
+              ws.send(JSON.stringify({ type: "replay" }));
               ws.sendBinary(sanitizeBrowserTerminalReplay(frame.payload));
             } else if (frame.type === FrameType.Exit) {
               const exit = parseJsonPayload<ExitPayload>(frame.payload);
@@ -1502,6 +1503,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             if (payload) {
               daemon.write(encodeJsonFrame(FrameType.Attention, payload));
             }
+          } else if (message.type === "replay") {
+            daemon.write(encodeFrame(FrameType.Replay));
           }
         } catch {
           // Ignore malformed messages.

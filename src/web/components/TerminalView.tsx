@@ -38,6 +38,10 @@ interface ResettableTerminal extends ResizableTerminal {
   reset: () => void;
 }
 
+interface ReplayResettableTerminal {
+  reset: () => void;
+}
+
 interface RefitSessionState {
   status: SessionMeta["status"];
 }
@@ -58,6 +62,7 @@ const TERMINAL_SCROLLBACK = 10_000;
 const WHEEL_PIXEL_LINE_HEIGHT = 20;
 const DOM_DELTA_LINE = 1;
 const DOM_DELTA_PAGE = 2;
+export const LIVE_ATTACH_RETRY_MS = 1000;
 
 export const terminalOptions = {
   allowProposedApi: true,
@@ -131,6 +136,10 @@ export function resetTerminalForSession(term: ResettableTerminal, session: { col
   if (session) {
     applyAuthoritativeTerminalSize(term, session.cols, session.rows);
   }
+  resetTerminalForReplay(term);
+}
+
+export function resetTerminalForReplay(term: ReplayResettableTerminal): void {
   term.reset();
 }
 
@@ -146,6 +155,14 @@ export function canRefitTerminalForSession(
     return true;
   }
   return isLiveStatus(session.status) && initialReplayComplete;
+}
+
+export function shouldRequestReplayForAuthoritativeMode(
+  previousMode: TerminalResizeMode,
+  nextMode: TerminalResizeMode,
+  initialReplayComplete: boolean
+): boolean {
+  return initialReplayComplete && previousMode !== nextMode;
 }
 
 export function completeInitialReplay(
@@ -210,10 +227,23 @@ interface Props {
   onViewModeChange: (mode: TerminalResizeMode) => void;
   fontSize: number;
   onFontSizeChange: (delta: number) => void;
+  serverConnected: boolean;
+  serverReconnectToken: number;
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { session, accentColor, maximized, visible, viewMode, onViewModeChange, fontSize, onFontSizeChange },
+  {
+    session,
+    accentColor,
+    maximized,
+    visible,
+    viewMode,
+    onViewModeChange,
+    fontSize,
+    onFontSizeChange,
+    serverConnected,
+    serverReconnectToken
+  },
   ref
 ) {
   const styles = useStyles();
@@ -230,8 +260,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
   const selectedSessionRef = useRef<SessionMeta | null>(session);
   const visibleRef = useRef(visible);
+  const serverConnectedRef = useRef(serverConnected);
   const initialReplayCompleteRef = useRef(true);
   const attachmentGenerationRef = useRef(0);
+  const renderedSessionIdRef = useRef<string | null>(null);
+  const awaitingReplayRef = useRef(false);
+  const replayAfterNextResizeRef = useRef(false);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -240,7 +274,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   useEffect(() => {
     selectedSessionRef.current = session;
     visibleRef.current = visible;
-  }, [session, visible]);
+    serverConnectedRef.current = serverConnected;
+  }, [session, visible, serverConnected]);
 
   useEffect(() => {
     onViewModeChangeRef.current = onViewModeChange;
@@ -274,12 +309,42 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const term = termRef.current;
     const ws = wsRef.current;
     if (term && ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      const requestReplay = replayAfterNextResizeRef.current;
+      const message: {
+        type: "resize";
+        cols: number;
+        rows: number;
+        mode?: TerminalResizeMode;
+      } = { type: "resize", cols: term.cols, rows: term.rows };
+      if (requestReplay) {
+        message.mode = viewModeRef.current;
+      }
+      ws.send(JSON.stringify(message));
+      if (requestReplay) {
+        replayAfterNextResizeRef.current = false;
+        ws.send(JSON.stringify({ type: "replay" }));
+      }
     }
   }
 
   function sendMode(mode: TerminalResizeMode): void {
+    viewModeRef.current = mode;
+    replayAfterNextResizeRef.current = true;
     sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
+  }
+
+  function handleAuthoritativeViewMode(mode: TerminalResizeMode): void {
+    const requestReplay = shouldRequestReplayForAuthoritativeMode(
+      viewModeRef.current,
+      mode,
+      initialReplayCompleteRef.current
+    );
+    viewModeRef.current = mode;
+    onViewModeChangeRef.current(mode);
+    if (requestReplay) {
+      replayAfterNextResizeRef.current = true;
+      refit();
+    }
   }
 
   function sendAttentionAck(sessionId: string, attentionMatchedAt: string): void {
@@ -341,6 +406,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
   function closeWs(): void {
     attachmentGenerationRef.current++;
+    awaitingReplayRef.current = false;
     if (wsRef.current) {
       try {
         wsRef.current.close();
@@ -439,7 +505,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     closeWs();
     initialReplayCompleteRef.current = true;
     applyTerminalScrollbackForSession(term, session);
-    resetTerminalForSession(term, session);
+    const liveSession = session ? isLiveStatus(session.status) : false;
+    const preserveExistingScreen = Boolean(session && liveSession && renderedSessionIdRef.current === session.id);
+    if (!preserveExistingScreen) {
+      resetTerminalForSession(term, session);
+      renderedSessionIdRef.current = session?.id ?? null;
+    }
     const attachmentGeneration = attachmentGenerationRef.current;
 
     if (!session) {
@@ -447,69 +518,137 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
 
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
-    if (isLiveStatus(session.status)) {
+    const clearRetryTimer = (): void => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+      }
+    };
+
+    if (liveSession) {
       // Only hold the PTY (via the WebSocket) while the terminal is actually
       // displayed. When hidden, the daemon reverts the PTY to the host size.
-      if (!visible) {
+      if (!visible || !serverConnected) {
         return;
       }
-      const ws = new WebSocket(attachSocketUrl(session.id));
-      ws.binaryType = "arraybuffer";
-      wsRef.current = ws;
-      attachedSessionIdRef.current = session.id;
-      initialReplayCompleteRef.current = false;
-      ws.onopen = () => {
-        flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
-        flushAttentionAck();
+      if (preserveExistingScreen && serverReconnectToken > 0) {
+        queuedViewModeRef.current = viewModeRef.current;
+      }
+      let resetBeforeReplay = preserveExistingScreen;
+      let sawExit = false;
+
+      const shouldRetryLiveAttach = (): boolean => {
+        const currentSession = selectedSessionRef.current;
+        return Boolean(
+          !cancelled &&
+            !sawExit &&
+            attachmentGeneration === attachmentGenerationRef.current &&
+            currentSession &&
+            currentSession.id === session.id &&
+            isLiveStatus(currentSession.status) &&
+            visibleRef.current &&
+            serverConnectedRef.current
+        );
       };
-      ws.onmessage = (ev) => {
-        if (
-          wsRef.current !== ws ||
-          attachedSessionIdRef.current !== session.id ||
-          attachmentGeneration !== attachmentGenerationRef.current
-        ) {
+
+      const attachLiveSocket = (): void => {
+        if (!shouldRetryLiveAttach()) {
           return;
         }
-        if (typeof ev.data === "string") {
-          try {
-            const msg = JSON.parse(ev.data) as {
-              type: string;
-              exitCode?: number;
-              cols?: number;
-              rows?: number;
-              mode?: TerminalResizeMode;
-            };
-            if (msg.type === "exit") {
-              term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
-            } else if (msg.type === "size" && msg.cols && msg.rows) {
-              // Authoritative PTY size from the daemon: match it so both the host
-              // terminal and this viewer render the same grid.
-              applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
-            } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
-              onViewModeChangeRef.current(msg.mode);
+        const ws = new WebSocket(attachSocketUrl(session.id));
+        ws.binaryType = "arraybuffer";
+        wsRef.current = ws;
+        attachedSessionIdRef.current = session.id;
+        initialReplayCompleteRef.current = false;
+        ws.onopen = () => {
+          if (flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode)) {
+            replayAfterNextResizeRef.current = true;
+            refit();
+          }
+          flushAttentionAck();
+        };
+        ws.onmessage = (ev) => {
+          if (
+            wsRef.current !== ws ||
+            attachedSessionIdRef.current !== session.id ||
+            attachmentGeneration !== attachmentGenerationRef.current
+          ) {
+            return;
+          }
+          if (typeof ev.data === "string") {
+            try {
+              const msg = JSON.parse(ev.data) as {
+                type: string;
+                exitCode?: number;
+                cols?: number;
+                rows?: number;
+                mode?: TerminalResizeMode;
+              };
+              if (msg.type === "exit") {
+                sawExit = true;
+                term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
+              } else if (msg.type === "size" && msg.cols && msg.rows) {
+                // Authoritative PTY size from the daemon: match it so both the host
+                // terminal and this viewer render the same grid.
+                applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
+              } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
+                handleAuthoritativeViewMode(msg.mode);
+              } else if (msg.type === "replay") {
+                awaitingReplayRef.current = true;
+              }
+            } catch {
+              // Ignore malformed control messages.
             }
-          } catch {
-            // Ignore malformed control messages.
-          }
-        } else {
-          const data = new Uint8Array(ev.data as ArrayBuffer);
-          if (initialReplayCompleteRef.current) {
-            term.write(data);
           } else {
-            term.write(data, () => {
-              completeInitialReplay(
-                attachmentGeneration,
-                attachmentGenerationRef.current,
-                () => {
-                  initialReplayCompleteRef.current = true;
-                },
-                refreshActiveTerminal
-              );
-            });
+            const data = new Uint8Array(ev.data as ArrayBuffer);
+            const replayRequested = awaitingReplayRef.current;
+            awaitingReplayRef.current = false;
+            if (initialReplayCompleteRef.current && !replayRequested) {
+              term.write(data);
+            } else {
+              if (resetBeforeReplay || replayRequested) {
+                resetTerminalForReplay(term);
+                renderedSessionIdRef.current = session.id;
+                resetBeforeReplay = false;
+              }
+              term.write(data, () => {
+                completeInitialReplay(
+                  attachmentGeneration,
+                  attachmentGenerationRef.current,
+                  () => {
+                    initialReplayCompleteRef.current = true;
+                    renderedSessionIdRef.current = session.id;
+                  },
+                  refreshActiveTerminal
+                );
+              });
+            }
           }
-        }
+        };
+        ws.onerror = () => {
+          try {
+            ws.close();
+          } catch {
+            // Ignore: socket may already be closing.
+          }
+        };
+        ws.onclose = () => {
+          if (wsRef.current === ws) {
+            wsRef.current = null;
+            attachedSessionIdRef.current = null;
+          }
+          if (shouldRetryLiveAttach() && !retryTimer) {
+            retryTimer = setTimeout(() => {
+              retryTimer = undefined;
+              attachLiveSocket();
+            }, LIVE_ATTACH_RETRY_MS);
+          }
+        };
       };
+
+      attachLiveSocket();
     } else {
       void fetchScrollback(session.id).then((buf) => {
         if (cancelled) {
@@ -517,11 +656,25 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         }
         if (buf) {
           term.write(buf, () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
+            completeInitialReplay(
+              attachmentGeneration,
+              attachmentGenerationRef.current,
+              () => {
+                renderedSessionIdRef.current = session.id;
+              },
+              refreshActiveTerminal
+            );
           });
         } else {
           term.write("\x1b[90m[no output captured]\x1b[0m\r\n", () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
+            completeInitialReplay(
+              attachmentGeneration,
+              attachmentGenerationRef.current,
+              () => {
+                renderedSessionIdRef.current = session.id;
+              },
+              refreshActiveTerminal
+            );
           });
         }
       });
@@ -529,12 +682,15 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     return () => {
       cancelled = true;
+      clearRetryTimer();
     };
-    // Re-attach only when the session, its live/terminated state, or visibility
-    // changes -- never on live-status idle/acknowledgement transitions, which
-    // would reset the terminal and cause a periodic resize flicker.
+    // Re-attach only when the session, its live/terminated state, visibility,
+    // dashboard server availability, or the dashboard server recovery changes
+    // -- never on live-status
+    // idle/acknowledgement transitions, which would reset the terminal and
+    // cause a periodic resize flicker.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachKey(session, visible)]);
+  }, [attachKey(session, visible), serverConnected, serverReconnectToken]);
 
   // Refit when the selected session or layout-affecting terminal chrome changes
   // so xterm re-measures before sending geometry back to the daemon.

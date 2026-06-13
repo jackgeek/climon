@@ -460,6 +460,12 @@ export async function runSessionDaemon(id: string): Promise<void> {
     let initialized = false;
     const initialFramesTimer = setTimeout(writeInitialFrames, 10);
 
+    function writeReplay(): void {
+      socket.write(encodeJsonFrame(FrameType.PtySize, { cols: appliedCols, rows: appliedRows }));
+      socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
+      socket.write(encodeFrame(FrameType.Replay, scrollback.snapshot()));
+    }
+
     function writeInitialFrames(): void {
       if (initialized) {
         return;
@@ -467,10 +473,8 @@ export async function runSessionDaemon(id: string): Promise<void> {
       initialized = true;
       clearTimeout(initialFramesTimer);
       clients.add(socket);
-      socket.write(encodeJsonFrame(FrameType.PtySize, { cols: appliedCols, rows: appliedRows }));
-      socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
+      writeReplay();
       updateOvergrownWarning();
-      socket.write(encodeFrame(FrameType.Replay, scrollback.snapshot()));
       if (exited && exitInfo) {
         socket.write(encodeJsonFrame(FrameType.Exit, exitInfo));
         socket.end();
@@ -506,6 +510,8 @@ export async function runSessionDaemon(id: string): Promise<void> {
         } else if (frame.type === FrameType.Attention) {
           void applyAttention(parseJsonPayload<AttentionPayload>(frame.payload), "user");
           writeInitialFrames();
+        } else if (frame.type === FrameType.Replay) {
+          writeReplay();
         }
       }
     });

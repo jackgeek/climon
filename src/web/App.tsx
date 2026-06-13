@@ -7,6 +7,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  Spinner,
   Text,
   makeStyles,
   mergeClasses,
@@ -180,6 +181,43 @@ const useStyles = makeStyles({
     top: "calc(var(--climon-visual-viewport-offset-top, 0px) + 8px)",
     right: "8px",
     zIndex: 20
+  },
+  serverReconnectOverlay: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 2000,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxSizing: "border-box",
+    padding: "24px",
+    backgroundColor: "rgba(0, 0, 0, 0.62)",
+    cursor: "wait"
+  },
+  serverReconnectCard: {
+    width: "min(420px, 100%)",
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "12px",
+    padding: "24px",
+    borderRadius: tokens.borderRadiusMedium,
+    boxShadow: tokens.shadow64,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    textAlign: "center"
+  },
+  serverReconnectTitle: {
+    margin: 0,
+    fontSize: "20px",
+    fontWeight: tokens.fontWeightSemibold,
+    lineHeight: tokens.lineHeightBase500
+  },
+  serverReconnectMessage: {
+    margin: 0,
+    color: tokens.colorNeutralForeground2,
+    lineHeight: tokens.lineHeightBase400
   }
 });
 
@@ -201,6 +239,8 @@ interface CssVariableStyle {
   setProperty(name: string, value: string): void;
   removeProperty(name: string): void;
 }
+
+export type ServerConnectionState = "connecting" | "connected" | "reconnecting";
 
 function toCssPx(value: number): string {
   return `${Math.max(0, value)}px`;
@@ -237,6 +277,10 @@ export function scheduleTerminalRefit(
 
 export function shouldDeleteSessionWithoutDialog(session: Pick<SessionMeta, "status">): boolean {
   return session.status === "completed" || session.status === "failed" || session.status === "disconnected";
+}
+
+export function shouldShowServerReconnectOverlay(state: ServerConnectionState): boolean {
+  return state === "reconnecting";
 }
 
 export interface KeyBarSwipeStart {
@@ -289,6 +333,45 @@ export function MainHeader({ activeSession, hidden }: MainHeaderProps) {
   );
 }
 
+export function ServerReconnectOverlay() {
+  const styles = useStyles();
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    overlayRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      ref={overlayRef}
+      className={styles.serverReconnectOverlay}
+      role="alert"
+      aria-live="assertive"
+      aria-atomic="true"
+      aria-labelledby="server-reconnect-title"
+      aria-describedby="server-reconnect-description"
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+    >
+      <div className={styles.serverReconnectCard}>
+        <Spinner size="medium" />
+        <h2 id="server-reconnect-title" className={styles.serverReconnectTitle}>
+          Connection lost
+        </h2>
+        <p id="server-reconnect-description" className={styles.serverReconnectMessage}>
+          The climon server connection was lost. Reconnecting automatically...
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -324,6 +407,8 @@ export function App() {
   });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
+  const [serverConnectionState, setServerConnectionState] = useState<ServerConnectionState>("connecting");
+  const [serverReconnectToken, setServerReconnectToken] = useState(0);
   const dismissSplash = useCallback(() => setShowSplash(false), []);
   const adjustFontSize = useCallback((delta: number) => {
     setFontSize((prev) => {
@@ -337,26 +422,84 @@ export function App() {
   const pendingSelectRef = useRef<string | null>(null);
   const terminalRef = useRef<TerminalHandle>(null);
   const swipeStartRef = useRef<KeyBarSwipeStart | null>(null);
+  const serverConnectionStateRef = useRef<ServerConnectionState>("connecting");
+  const hadServerConnectionRef = useRef(false);
 
   useAttentionAlerts(sessions);
 
   // Subscribe to live session updates and load the initial list.
   useEffect(() => {
     const es = new EventSource(eventsUrl());
+    let closed = false;
+    const markServerConnected = (): boolean => {
+      if (closed) {
+        return false;
+      }
+      const wasReconnecting = serverConnectionStateRef.current === "reconnecting";
+      hadServerConnectionRef.current = true;
+      serverConnectionStateRef.current = "connected";
+      setServerConnectionState("connected");
+      return wasReconnecting;
+    };
+    async function refreshSessionsAfterReconnect(): Promise<void> {
+      try {
+        const loadedSessions = await fetchSessions();
+        if (closed) {
+          return;
+        }
+        setSessions(loadedSessions);
+        if (markServerConnected()) {
+          setServerReconnectToken((token) => token + 1);
+        }
+      } catch {
+        // Keep the blocking reconnect overlay visible until a full session list
+        // refresh succeeds. EventSource will keep trying in the background.
+      }
+    }
+    const handleServerOpen = (): void => {
+      if (serverConnectionStateRef.current === "reconnecting") {
+        void refreshSessionsAfterReconnect();
+        return;
+      }
+      markServerConnected();
+    };
+    const applySessionsRefresh = (loadedSessions: SessionMeta[]): void => {
+      if (closed) {
+        return;
+      }
+      setSessions(loadedSessions);
+      if (markServerConnected()) {
+        setServerReconnectToken((token) => token + 1);
+      }
+    };
+    const markServerReconnecting = (): void => {
+      if (closed || !hadServerConnectionRef.current) {
+        return;
+      }
+      serverConnectionStateRef.current = "reconnecting";
+      setServerConnectionState("reconnecting");
+    };
+    es.addEventListener("open", handleServerOpen);
+    es.addEventListener("error", markServerReconnecting);
     es.addEventListener("sessions", (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as { sessions?: SessionMeta[] };
-        setSessions(data.sessions ?? []);
+        applySessionsRefresh(data.sessions ?? []);
       } catch {
         // Ignore malformed payloads; the next event will reconcile.
       }
     });
     void fetchSessions()
-      .then(setSessions)
+      .then((loadedSessions) => {
+        applySessionsRefresh(loadedSessions);
+      })
       .catch(() => {
         // SSE will deliver the list once connected.
       });
-    return () => es.close();
+    return () => {
+      closed = true;
+      es.close();
+    };
   }, []);
 
   // Load the running server's version for the sidebar heading.
@@ -669,6 +812,8 @@ export function App() {
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
   const sidebarCompact = effectiveSidebarCollapsed(sidebarCollapsed, isMobile);
+  const serverConnected = serverConnectionState === "connected";
+  const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(serverConnectionState);
 
   return (
     <div className={styles.root}>
@@ -762,6 +907,8 @@ export function App() {
           }}
           fontSize={fontSize}
           onFontSizeChange={adjustFontSize}
+          serverConnected={serverConnected}
+          serverReconnectToken={serverReconnectToken}
         />
         {panelView !== "closed" && maximized && activeSession && isLiveStatus(activeSession.status) && (
           <>
@@ -825,6 +972,7 @@ export function App() {
         onCopy={setTunnelLinkCopied}
         onClose={() => setTunnelLinkOpen(false)}
       />
+      {serverReconnectOverlayVisible && <ServerReconnectOverlay />}
     </div>
   );
 }
