@@ -30,4 +30,17 @@ describe("shouldApplyUserAttentionAcknowledgement", () => {
     const fp = "80x24\nhello world";
     expect(shouldApplyUserAttentionAcknowledgement(true, "token-1", "token-1", fp, fp)).toBe(true);
   });
+
+  test("browser input (source=user) transitions needs-attention to acknowledged before screen change", () => {
+    // When browser sends input, shouldApplyUserAttentionAcknowledgement is called with source="user"
+    // (unlike detector mode which continues to monitor). This causes the status to transition:
+    // needs-attention -> acknowledged (on browser input)
+    // acknowledged -> running (when screen changes on next idle detection cycle)
+    const currentToken = "2026-06-13T23:34:00.000Z";
+    const attentionFp = "80x24\n$ waiting for input";
+    
+    // Browser sends input while session is in needs-attention
+    expect(shouldApplyUserAttentionAcknowledgement(true, currentToken, currentToken, attentionFp, attentionFp)).toBe(true);
+  });
 });
+

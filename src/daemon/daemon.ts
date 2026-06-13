@@ -554,7 +554,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
     socket.on("data", (chunk) => {
       for (const frame of decoder.push(chunk)) {
         if (frame.type === FrameType.Input) {
-          void applyAttention({ needsAttention: false, reason: "input" }, "detector");
+          void applyAttention({ needsAttention: false, reason: "input" }, "user");
           pty.write(frame.payload.toString("utf8"));
         } else if (frame.type === FrameType.Resize) {
           const size = parseJsonPayload<ResizePayload>(frame.payload);
