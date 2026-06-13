@@ -606,7 +606,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
           log().debug(`loopback bind attempt ${attempt}/${LOOPBACK_RETRIES} failed (${code}), retrying in ${LOOPBACK_RETRY_DELAY_MS}ms...`);
           await new Promise((r) => setTimeout(r, LOOPBACK_RETRY_DELAY_MS));
         } else {
-          log().debug(`warning: could not bind loopback 127.0.0.1:${ingestPort.port} after ${LOOPBACK_RETRIES} attempts (${code})`);
+          log().warn(`warning: could not bind loopback 127.0.0.1:${ingestPort.port} after ${LOOPBACK_RETRIES} attempts (${code})`);
           process.stderr.write(
             `climon: warning: ingest could not bind loopback 127.0.0.1:${ingestPort.port} (${code}). ` +
             `Dev tunnel connections will fail. Check for stale processes on that port.\n`

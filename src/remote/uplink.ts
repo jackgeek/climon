@@ -199,7 +199,7 @@ export async function runUplinkBridge(
     try {
       messages = decoder.push(chunk);
     } catch {
-      log().debug("mux decode error, destroying channel");
+      log().error("mux decode error, destroying channel");
       channel.destroy();
       return;
     }
