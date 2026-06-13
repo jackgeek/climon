@@ -61,7 +61,13 @@ import {
   resolveNotificationMode,
   shouldShowTunnelDownBanner
 } from "./pwa/push.js";
-import { parseSessionFromSearch, parseOpenSessionMessage } from "./pwa/pushData.js";
+import {
+  parseSessionFromSearch,
+  parseOpenSessionMessage,
+  isViewedSessionQuery,
+  viewedSessionResponse
+} from "./pwa/pushData.js";
+import { computeViewedSessionId, viewedSessionAttentionAck } from "./viewedSession.js";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -536,6 +542,26 @@ export function App() {
     }
   }, [popSession]);
 
+  // The session the user is actively looking at. Used to suppress its
+  // needs-attention notifications and to auto-acknowledge it.
+  const viewedSessionId = computeViewedSessionId({ activeId, sessions, pageVisible, isMobile, maximized });
+  const viewedSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    viewedSessionIdRef.current = viewedSessionId;
+  }, [viewedSessionId]);
+
+  // Treat viewing a session as acknowledgement: when the viewed session enters
+  // needs-attention, send a single ack so the daemon clears the attention state.
+  const lastAutoAckKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const ack = viewedSessionAttentionAck(viewedSessionId, sessions, lastAutoAckKeyRef.current);
+    if (!ack) {
+      return;
+    }
+    lastAutoAckKeyRef.current = ack.key;
+    requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(ack.sessionId, ack.attentionMatchedAt));
+  }, [viewedSessionId, sessions]);
+
   // Notification tapped while the app was already open: the service worker
   // focuses this window and posts the session to open.
   useEffect(() => {
@@ -543,6 +569,10 @@ export function App() {
       return;
     }
     const onMessage = (event: MessageEvent): void => {
+      if (isViewedSessionQuery(event.data)) {
+        event.ports[0]?.postMessage(viewedSessionResponse(viewedSessionIdRef.current));
+        return;
+      }
       const id = parseOpenSessionMessage(event.data);
       if (id) {
         popSession(id);
@@ -552,7 +582,7 @@ export function App() {
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
   }, [popSession]);
 
-  useAttentionAlerts(sessions);
+  useAttentionAlerts(sessions, undefined, viewedSessionId);
 
   // Subscribe to live session updates and load the initial list.
   useEffect(() => {
