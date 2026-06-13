@@ -21,6 +21,7 @@ import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
 import { discoverDashboard } from "./remote/discovery.js";
 import { maybeAutoLink } from "./remote/link.js";
 import { generateSessionId } from "./session-id.js";
+import { resolveClientId } from "./remote/client-id.js";
 import { formatSessionSocketRef } from "./session-socket.js";
 import { runSessionHost } from "./session-host.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
@@ -272,6 +273,7 @@ export async function startMonitoredCommand(
     cols,
     rows,
     headless: options.headless ?? false,
+    clientLabel: resolveClientId(),
     clientVersion: VERSION,
     createdAt: now,
     updatedAt: now,

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnHeadlessSession } from "../src/client/spawn-session.js";
+import { resolveClientId } from "../src/remote/client-id.js";
 import { VERSION } from "../src/version.js";
 
 const home = join(process.cwd(), `.climon-spawn-session-${process.pid}`);
@@ -32,6 +33,13 @@ describe("spawnHeadlessSession", () => {
     expect(meta.headless).toBe(true);
     expect(meta.clientVersion).toBe(VERSION);
     expect(meta.socketPath).toBe("tcp://127.0.0.1:0");
+  });
+
+  test("stamps the local session with the resolved clientId as clientLabel", async () => {
+    const id = await spawnHeadlessSession(["sleep", "30"], "/tmp", { cols: 80, rows: 24 }, {}, env);
+    const metaPath = join(home, "sessions", `${id}.json`);
+    const meta = JSON.parse(await readFile(metaPath, "utf8")) as { clientLabel?: string };
+    expect(meta.clientLabel).toBe(resolveClientId(env));
   });
 
   test("persists name, priority, and color when provided", async () => {

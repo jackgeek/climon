@@ -1,4 +1,5 @@
 import { ensureClimonHome } from "../config.js";
+import { resolveClientId } from "../remote/client-id.js";
 import { generateSessionId } from "../session-id.js";
 import { formatSessionSocketRef } from "../session-socket.js";
 import { spawnDaemon } from "../spawn-daemon.js";
@@ -46,6 +47,7 @@ export async function spawnHeadlessSession(
     cols: Math.max(size.cols, 1),
     rows: Math.max(size.rows, 1),
     headless: true,
+    clientLabel: resolveClientId(env),
     clientVersion: VERSION,
     createdAt: now,
     updatedAt: now,
