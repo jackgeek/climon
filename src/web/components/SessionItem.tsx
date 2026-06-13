@@ -300,9 +300,9 @@ export function SessionItem({
       )}
       <div className={mergeClasses(styles.meta, compact && styles.compactMeta)}>
         <StatusBadge status={session.status} compact={compact} showTitle={!compact} />
-        {!compact && session.origin === "remote" && (
-          <span className={styles.origin} title={session.clientLabel ?? "remote"}>
-            {session.clientLabel ?? "remote"}
+        {!compact && session.clientLabel && (
+          <span className={styles.origin} title={session.clientLabel}>
+            {session.clientLabel}
           </span>
         )}
       </div>
