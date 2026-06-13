@@ -31,3 +31,27 @@ export async function buildWebBundle(): Promise<string> {
   }
   return js.text();
 }
+
+/**
+ * Bundles the service worker (`src/web/sw.ts`) into a single browser script
+ * served at `/sw.js`. Kept separate from the app bundle because it runs in the
+ * ServiceWorker global scope, not the page.
+ */
+export async function buildServiceWorkerBundle(): Promise<string> {
+  const entry = resolve(import.meta.dir, "../web/sw.ts");
+  const result = await Bun.build({
+    entrypoints: [entry],
+    target: "browser",
+    format: "esm",
+    minify: true,
+    define: { "process.env.NODE_ENV": '"production"' }
+  });
+  if (!result.success) {
+    throw new AggregateError(result.logs, "Failed to build service worker bundle");
+  }
+  const js = result.outputs.find((o) => o.kind === "entry-point");
+  if (!js) {
+    throw new Error("Service worker bundle produced no entry-point output");
+  }
+  return js.text();
+}
