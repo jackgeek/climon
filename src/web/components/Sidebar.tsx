@@ -25,6 +25,7 @@ import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
 import {
   getStableSessionItemRef,
+  installPwaMenuLabel,
   notificationsMenuLabel,
   removeDisconnectedMenuLabel,
   remotesMenuLabel,
@@ -147,6 +148,8 @@ interface Props {
   onManageRemote: () => void;
   notificationsEnabled: boolean;
   onToggleNotifications: () => void;
+  canInstallPwa: boolean;
+  onInstallPwa: () => void;
   tunnelLinkStatus: DashboardTunnelStatus | null;
   onTunnelLink: () => void;
   onCloseTunnelLink: () => void;
@@ -174,6 +177,8 @@ export function Sidebar({
   onManageRemote,
   notificationsEnabled,
   onToggleNotifications,
+  canInstallPwa,
+  onInstallPwa,
   tunnelLinkStatus,
   onTunnelLink,
   onCloseTunnelLink,
@@ -208,6 +213,9 @@ export function Sidebar({
             <MenuPopover>
               <MenuList>
                 <MenuItem onClick={onToggleNotifications}>{notificationsMenuLabel(notificationsEnabled)}</MenuItem>
+                {canInstallPwa && (
+                  <MenuItem onClick={onInstallPwa}>{installPwaMenuLabel}</MenuItem>
+                )}
                 {shouldShowTunnelLink(tunnelLinkStatus) && (
                   <MenuItem onClick={onTunnelLink}>{tunnelLinkMenuLabel}</MenuItem>
                 )}

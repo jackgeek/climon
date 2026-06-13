@@ -147,6 +147,8 @@ and asset serving live in `src/server/assets.ts`.
 | `sessions/<id>.log` | daemon stdout/stderr (diagnostics) |
 | `sock/<id>.sock` | per-session IPC socket (POSIX) |
 | `\\.\pipe\climon-<id>` | per-session IPC pipe (Windows) |
+| `push/vapid.json` | server VAPID keypair for Web Push (auto-created) |
+| `push/subscriptions.json` | browser push subscriptions (deduped by endpoint) |
 
 ## Priority ordering (`src/priority.ts`)
 
@@ -167,6 +169,35 @@ frame to the daemon, which is the single writer that patches the session to
 Because only cell contents are fingerprinted (not the cursor position), a
 blinking cursor is treated as static. Detection runs only while a local client is
 attached, and setting `attention.idleSeconds` to `0` or less disables it.
+
+## Web Push pipeline (mobile PWA)
+
+The dashboard server (`climon-server`) gains an additive, fail-safe push pipeline
+under `src/server/push/`:
+
+- `vapid.ts` loads-or-creates a VAPID keypair at `$CLIMON_HOME/push/vapid.json`.
+  The JWT `sub` claim defaults to a valid non-localhost `mailto:` (Apple rejects a
+  `localhost` subject with `BadJwtToken`) and can be overridden with a real contact
+  via `CLIMON_VAPID_SUBJECT`.
+- `subscriptions.ts` persists browser push subscriptions atomically at
+  `$CLIMON_HOME/push/subscriptions.json` (deduped by endpoint).
+- `attention.ts` is a pure tracker that flags sessions newly entering
+  `needs-attention` (seed-then-detect, deduped by `id:attentionMatchedAt`).
+- `send.ts` fans a payload out to all subscriptions via `web-push` and prunes
+  any subscription that returns HTTP 404/410.
+- `service.ts` wires these together; the server calls `notifyAttention(sessions)`
+  from `publishSessions()` on the same debounced sessions-dir watch signal that
+  drives SSE.
+
+The browser side registers `src/web/sw.ts` (served at `/sw.js`), subscribes via
+`PushManager` using the server's VAPID public key, and shows a notification on
+`push`. The notification is non-silent with a vibration pattern so the device
+plays its alert sound/haptics, and tapping it focuses (or opens) the dashboard
+deep-linked to the session that needs attention (`/?session=<id>` plus an
+`open-session` postMessage to an already-open tab). Push is only offered over a
+dev-tunnel origin (`*.devtunnels.ms` + HTTPS); desktop/localhost keeps the
+foreground `Notification` API. SSE (`/api/events`) remains the live in-app update
+channel; Web Push is only for background attention alerts.
 
 ## Remote clients (dev-tunnel uplink)
 

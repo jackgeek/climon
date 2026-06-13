@@ -59,6 +59,8 @@ import { writeShutdownRequestToDir } from "../remote/shutdown-request.js";
 import { createShutdownRequestWatcher } from "../remote/shutdown-watch.js";
 import { tieBreakOutcome } from "./tie-break.js";
 import { serverLog } from "./server-log.js";
+import { createPushService, type PushService } from "./push/service.js";
+import { isValidSubscription } from "./push/subscriptions.js";
 
 
 interface StartServerOptions {
@@ -420,6 +422,34 @@ export function isAllowedSpawnRequest(
     return false;
   }
   return true;
+}
+
+/**
+ * Authorizes a push subscription request that must be reachable OVER the dev
+ * tunnel (the phone is not a loopback origin). Requires a JSON content-type and
+ * that the request is same-origin: the Origin header's host (including port)
+ * equals the Host header. Unlike isAllowedSpawnRequest this does not require a
+ * loopback host, so it works for the tunnel origin while still blocking
+ * cross-origin CSRF.
+ */
+export function isSameOriginRequest(
+  contentType: string | null,
+  origin: string | null,
+  host: string | null
+): boolean {
+  if (!contentType || !contentType.toLowerCase().includes("application/json")) {
+    return false;
+  }
+  if (origin === null || host === null) {
+    return false;
+  }
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host.toLowerCase();
+  } catch {
+    return false;
+  }
+  return originHost === host.trim().toLowerCase();
 }
 
 export function splitCommand(command: string): string[] {
@@ -908,6 +938,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     return JSON.stringify({ sessions });
   }
 
+  let pushService: PushService | undefined;
+
+  async function publishSessions(): Promise<void> {
+    const sessions = sortSessionsByPriority(await listSessions());
+    broadcastSessions(JSON.stringify({ sessions }));
+    if (pushService) {
+      try {
+        await pushService.notifyAttention(sessions);
+      } catch (error) {
+        serverLog(`push notify failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
   interface ServerPorts {
     /** Main dashboard HTTP port this server process binds. */
     dashboard: number;
@@ -933,6 +977,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     return ports;
   }
 
+  try {
+    pushService = await createPushService(getClimonHome(process.env));
+    // Seed the attention tracker with the current sessions so the first real
+    // watcher-driven transition into needs-attention is detected (not consumed
+    // as the seed).
+    await pushService.notifyAttention(sortSessionsByPriority(await listSessions()));
+    startupLog("push service ready");
+  } catch (error) {
+    serverLog(`push service unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   let debounce: ReturnType<typeof setTimeout> | undefined;
   startupLog(`setting up sessions directory watcher (${getSessionsDir()})`);
   const watcher = watch(getSessionsDir(), () => {
@@ -940,7 +995,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       clearTimeout(debounce);
     }
     debounce = setTimeout(() => {
-      void sessionsPayload().then(broadcastSessions);
+      void publishSessions();
     }, 150);
   });
 
@@ -1235,6 +1290,61 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         return new Response(null, { status: 204 });
       }
 
+      if (url.pathname === "/api/push/vapid-public-key") {
+        if (!pushService) {
+          return new Response("Push unavailable", { status: 503 });
+        }
+        return Response.json({ key: pushService.getVapidPublicKey() });
+      }
+
+      if (url.pathname === "/api/push/subscribe" && request.method === "POST") {
+        if (!pushService) {
+          return new Response("Push unavailable", { status: 503 });
+        }
+        if (!isSameOriginRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let body: unknown;
+        try {
+          body = await request.json();
+        } catch {
+          return new Response("Invalid JSON body", { status: 400 });
+        }
+        if (!isValidSubscription(body)) {
+          return new Response("Invalid subscription", { status: 400 });
+        }
+        await pushService.subscribe(body);
+        return new Response(null, { status: 204 });
+      }
+
+      if (url.pathname === "/api/push/unsubscribe" && request.method === "POST") {
+        if (!pushService) {
+          return new Response("Push unavailable", { status: 503 });
+        }
+        if (!isSameOriginRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let body: { endpoint?: unknown };
+        try {
+          body = (await request.json()) as { endpoint?: unknown };
+        } catch {
+          return new Response("Invalid JSON body", { status: 400 });
+        }
+        if (typeof body.endpoint !== "string" || body.endpoint.length === 0) {
+          return new Response("Invalid endpoint", { status: 400 });
+        }
+        await pushService.unsubscribe(body.endpoint);
+        return new Response(null, { status: 204 });
+      }
+
       if (url.pathname === "/api/sessions") {
         return new Response(await sessionsPayload(), { headers: { "content-type": "application/json" } });
       }
@@ -1316,7 +1426,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         if (!updated) {
           return new Response("Not found", { status: 404 });
         }
-        broadcastSessions(await sessionsPayload());
+        await publishSessions();
         return Response.json(updated, { status: 200 });
       }
 
@@ -1342,7 +1452,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         if (!removed) {
           return new Response("Not found", { status: 404 });
         }
-        broadcastSessions(await sessionsPayload());
+        await publishSessions();
         return new Response(null, { status: 204 });
       }
 

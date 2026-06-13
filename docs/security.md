@@ -148,6 +148,24 @@ addition to a loopback source IP:
 which together defend against browser-mediated CSRF and DNS-rebinding from a page
 running on the same machine (`isAllowedSpawnRequest`).
 
+## Web Push endpoints and subscription storage
+
+The push endpoints are reachable over the dev tunnel (the phone is not loopback),
+so they inherit the tunnel's identity ACL as their access boundary:
+
+- `GET /api/push/vapid-public-key` — returns the server's public VAPID key.
+- `POST /api/push/subscribe` / `POST /api/push/unsubscribe` — guarded by
+  `isSameOriginRequest`: a JSON content-type plus an `Origin` whose host equals the
+  `Host` header. This blocks cross-origin/CSRF while still permitting the tunnel
+  origin (unlike `isAllowedSpawnRequest`, which is loopback-only and stays in force
+  for privileged spawn/patch/tunnel endpoints).
+
+The VAPID private key (`$CLIMON_HOME/push/vapid.json`) and subscriptions
+(`$CLIMON_HOME/push/subscriptions.json`) are stored under `$CLIMON_HOME` and are not
+part of user config. Subscriptions are pruned automatically when a push send returns
+HTTP 404/410. Push payloads contain only the session label and attention reason
+already visible in the dashboard — no scrollback or command output.
+
 ## Untrusted-input handling
 
 - **Session metadata** (`toLocalMeta` / `sanitizeRemotePatch`): server-controlled
