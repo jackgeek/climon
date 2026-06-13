@@ -96,6 +96,17 @@ export interface TunnelLinkConfig {
   keepAlive?: number;
 }
 
+export interface LoggingAppInsightsConfig {
+  /** Azure Application Insights connection string. When set, the server emits logs to App Insights. */
+  connectionString?: string;
+}
+
+export interface LoggingConfig {
+  /** Minimum log level: trace, debug, info, warn, error, fatal, or silent. */
+  level?: string;
+  appInsights?: LoggingAppInsightsConfig;
+}
+
 export interface AttentionConfig {
   /**
    * Number of seconds the rendered terminal grid must remain unchanged before
@@ -114,6 +125,7 @@ export interface ClimonConfig {
   remote?: RemoteConfig;
   session?: SessionDefaultsConfig;
   tunnelLink?: TunnelLinkConfig;
+  logging?: LoggingConfig;
 }
 
 export interface SessionMeta {

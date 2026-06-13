@@ -4,6 +4,11 @@ import { loadConfig } from "../src/config.js";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import {
+  buildDefaultConfigFromSettings,
+  coerceConfigValueFromSettings,
+  findConfigSetting
+} from "../src/config-settings.js";
+import {
   defaultConfig,
   getConfigPath,
   getScrollbackPath,
@@ -354,5 +359,29 @@ describe("config jsonc paths and migration", () => {
     expect(existsSync(legacyPath)).toBe(false);
     
     await rm(home, { recursive: true, force: true });
+  });
+});
+
+describe("logging config settings", () => {
+  test("logging.level defaults to trace", () => {
+    const config = buildDefaultConfigFromSettings() as unknown as {
+      logging: { level: string };
+    };
+    expect(config.logging.level).toBe("trace");
+  });
+
+  test("logging.level accepts a valid pino level", () => {
+    expect(coerceConfigValueFromSettings("logging.level", "debug")).toBe("debug");
+    expect(coerceConfigValueFromSettings("logging.level", "silent")).toBe("silent");
+  });
+
+  test("logging.level rejects an invalid level", () => {
+    expect(() => coerceConfigValueFromSettings("logging.level", "loud")).toThrow();
+  });
+
+  test("logging.appInsights.connectionString is sensitive and unset by default", () => {
+    const setting = findConfigSetting("logging.appInsights.connectionString");
+    expect(setting?.sensitive).toBe(true);
+    expect(setting?.defaultValue).toBeUndefined();
   });
 });
