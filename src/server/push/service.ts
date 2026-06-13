@@ -16,14 +16,25 @@ export interface PushService {
   notifyAttention(sessions: SessionMeta[]): Promise<void>;
 }
 
-const VAPID_SUBJECT = "mailto:climon@localhost";
+const DEFAULT_VAPID_SUBJECT = "mailto:climon@example.com";
+
+/**
+ * Resolves the VAPID JWT `sub` claim. Apple's push service rejects any subject
+ * whose hostname is `localhost` with a `BadJwtToken` 403, so the default uses a
+ * valid non-localhost contact. Operators can override it with a real `mailto:`
+ * address or `https:` URL via `CLIMON_VAPID_SUBJECT`.
+ */
+export function resolveVapidSubject(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.CLIMON_VAPID_SUBJECT?.trim();
+  return override && override.length > 0 ? override : DEFAULT_VAPID_SUBJECT;
+}
 
 export async function createPushService(
   climonHome: string,
   client?: WebPushClient,
 ): Promise<PushService> {
   const keys = await loadOrCreateVapidKeys(climonHome);
-  webpush.setVapidDetails(VAPID_SUBJECT, keys.publicKey, keys.privateKey);
+  webpush.setVapidDetails(resolveVapidSubject(), keys.publicKey, keys.privateKey);
 
   const pushClient: WebPushClient =
     client ?? {
