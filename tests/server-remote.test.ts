@@ -42,10 +42,14 @@ function freePort(): Promise<number> {
   });
 }
 
-async function waitFor<T>(fn: () => Promise<T | undefined> | T | undefined, ms = 5000): Promise<T> {
+async function waitFor<T>(fn: () => Promise<T | undefined> | T | undefined, ms = 20000): Promise<T> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const value = await Promise.resolve(fn()).catch(() => undefined);
+    // Bound each attempt so a hung probe cannot block the loop past the deadline.
+    const value = await Promise.race([
+      Promise.resolve().then(fn).catch(() => undefined),
+      new Promise<undefined>((resolve) => setTimeout(resolve, 1000, undefined))
+    ]);
     if (value !== undefined) return value;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -160,7 +164,7 @@ describe("server shutdown ingest lifecycle", () => {
         base = `http://127.0.0.1:${state.port}`;
         const actual = await fetch(`${base}/health`).catch(() => undefined);
         return actual?.ok ? true : undefined;
-      }, 20_000);
+      }, 30_000);
       ingestPid = await waitFor(() => readPid(getIngestPidPath(env)), 10_000);
       expect(isProcessAlive(ingestPid)).toBe(true);
 

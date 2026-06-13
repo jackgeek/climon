@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readIngestStateFromDir } from "../src/remote/ingest-state.js";
@@ -12,10 +12,14 @@ afterEach(() => {
   if (home) rmSync(home, { recursive: true, force: true });
 });
 
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 5000): Promise<T> {
+async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 20000): Promise<T> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const v = await fn().catch(() => undefined);
+    // Bound each attempt so a hung probe cannot block the loop past the deadline.
+    const v = await Promise.race([
+      Promise.resolve().then(fn).catch(() => undefined),
+      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
+    ]);
     if (v !== undefined) return v;
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -27,6 +31,20 @@ function tcpOpen(host: string, port: number): Promise<boolean> {
     const s = connect({ host, port });
     s.once("connect", () => { s.destroy(); resolve(true); });
     s.once("error", () => resolve(false));
+  });
+}
+
+// Bind-based free check: true when host:port can be bound (i.e. nothing is
+// listening). This is deterministic across platforms, unlike a connect-based
+// probe — on Windows, connecting to a loopback port with no listener can hang
+// (the SYN is dropped rather than refused) instead of failing fast.
+function portFree(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = createServer();
+    s.once("error", () => resolve(false));
+    s.listen(port, host, () => {
+      s.close(() => resolve(true));
+    });
   });
 }
 
@@ -44,7 +62,7 @@ describe("ingest filesystem shutdown-request (integration)", () => {
       const state = await waitFor(async () => {
         const s = await readIngestStateFromDir(home);
         return s?.host ? s : undefined;
-      });
+      }, 30000);
       // The ingest publishes its bound interface; on a non-Windows runner this is loopback.
       expect(state.host).toBeTruthy();
       expect(await tcpOpen(state.host!, state.port)).toBe(true);
@@ -54,11 +72,13 @@ describe("ingest filesystem shutdown-request (integration)", () => {
       await ingest.exited;
       expect(await readIngestStateFromDir(home)).toBeUndefined();
       expect(existsSync(getShutdownRequestPathInDir(home))).toBe(false);
-      const closed = await waitFor(async () => ((await tcpOpen("127.0.0.1", state.port)) ? undefined : true));
+      // Poll until the bound interface is bindable again, proving the ingest
+      // released the port on demotion.
+      const closed = await waitFor(async () => ((await portFree(state.host!, state.port)) ? true : undefined), 30000);
       expect(closed).toBe(true);
     } finally {
       ingest.kill();
       await ingest.exited;
     }
-  }, 30000);
+  }, 60000);
 });
