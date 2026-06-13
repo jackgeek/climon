@@ -110,6 +110,24 @@ describe("delegateToServer", () => {
     } as NodeJS.ProcessEnv;
     expect(await delegateToServer(["server"], env, "/usr/bin/climon")).toBe(127);
   });
+
+  test("does not leak fallback spawn environment into the current process", async () => {
+    const original = process.env.CLIMON_SERVER_BIN;
+    delete process.env.CLIMON_SERVER_BIN;
+    try {
+      const env = {
+        CLIMON_SERVER_BIN: "/nonexistent/climon-server-xyz"
+      } as NodeJS.ProcessEnv;
+      expect(await delegateToServer(["server"], env, "/usr/bin/climon")).toBe(127);
+      expect(process.env.CLIMON_SERVER_BIN).toBeUndefined();
+    } finally {
+      if (original === undefined) {
+        delete process.env.CLIMON_SERVER_BIN;
+      } else {
+        process.env.CLIMON_SERVER_BIN = original;
+      }
+    }
+  });
 });
 
 describe("resolveServerBundle", () => {

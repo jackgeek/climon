@@ -68,8 +68,14 @@ describe("config settings registry", () => {
   });
 
   test("marks internal settings", () => {
-    expect(findConfigSetting("remote.clientId")?.internal).toBe(true);
     expect(findConfigSetting("version")?.internal).toBe(true);
+  });
+
+  test("remote.clientId is user-configurable", () => {
+    const clientId = findConfigSetting("remote.clientId");
+
+    expect(clientId?.internal).not.toBe(true);
+    expect(clientId?.acceptInput).toBe(true);
   });
 
   test("config registry includes internal dashboard tunnel persistence fields", () => {
@@ -94,6 +100,7 @@ describe("config settings registry", () => {
       "remote.ingestHost",
       "remote.tunnelId",
       "remote.port",
+      "remote.clientId",
       "remote.keepAlive",
       "remote.peerHome",
       "remote.peerHost",

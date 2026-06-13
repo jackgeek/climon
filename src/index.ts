@@ -9,6 +9,8 @@ import { runLinkCommand } from "./cli/link-cmd.js";
 import { delegateToServer } from "./cli/server-exec.js";
 import { detectParentShell, buildShellArgv } from "./detect-shell.js";
 import { runUplink } from "./remote/uplink.js";
+import { readSessionMeta } from "./store.js";
+import { runSessionHost } from "./session-host.js";
 import {
   killAllSessions,
   killSession,
@@ -105,6 +107,13 @@ async function main(): Promise<number> {
       return runLinkCommand(parsed.argv);
     case "uplink":
       return await runUplink();
+    case "session": {
+      const meta = await readSessionMeta(parsed.id);
+      if (!meta) {
+        throw new Error(`No session found with id '${parsed.id}'.`);
+      }
+      return await runSessionHost(parsed.id, meta, { headless: true });
+    }
     default:
       process.stderr.write(helpText);
       return 1;
