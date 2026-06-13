@@ -154,7 +154,6 @@ interface Props {
   onRemoveDisconnected: () => void;
   viewMode: TerminalResizeMode;
   viewModeLocked?: boolean;
-  viewModeToggleable?: boolean;
   onViewModeToggle?: () => void;
   onMaximize: (id: string) => void;
 }
@@ -182,7 +181,6 @@ export function Sidebar({
   onRemoveDisconnected,
   viewMode,
   viewModeLocked = false,
-  viewModeToggleable = false,
   onViewModeToggle,
   onMaximize
 }: Props) {
@@ -270,7 +268,6 @@ export function Sidebar({
                   onMaximize={onMaximize}
                   viewMode={viewMode}
                   viewModeLocked={viewModeLocked}
-                  viewModeToggleable={viewModeToggleable}
                   onViewModeToggle={onViewModeToggle}
                 />
               </div>

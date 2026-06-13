@@ -727,7 +727,6 @@ export function App() {
           onRemoveDisconnected={handleRemoveDisconnected}
           viewMode={authoritativeViewMode ?? "clamped"}
           viewModeLocked={false}
-          viewModeToggleable={authoritativeViewMode !== null}
           onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "clamped"))}
           onMaximize={(id) => {
             const selected = sessions.find((s) => s.id === id);

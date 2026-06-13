@@ -48,8 +48,19 @@ const useStyles = makeStyles({
     width: 0,
     height: 0,
     transform: "translateY(-50%)",
-    borderTop: "16px solid transparent",
-    borderBottom: "16px solid transparent",
+    borderTop: "12px solid transparent",
+    borderBottom: "12px solid transparent",
+    pointerEvents: "none"
+  },
+  activeMarkerLeft: {
+    position: "absolute",
+    top: "50%",
+    left: 0,
+    width: 0,
+    height: 0,
+    transform: "translateY(-50%)",
+    borderTop: "12px solid transparent",
+    borderBottom: "12px solid transparent",
     pointerEvents: "none"
   },
   cmd: {
@@ -89,26 +100,26 @@ const useStyles = makeStyles({
   },
   newBtn: {
     position: "absolute",
-    top: "8px",
-    right: "36px",
+    bottom: "8px",
+    right: "8px",
     display: "none"
   },
   editBtn: {
     position: "absolute",
-    top: "8px",
-    right: "64px",
+    bottom: "8px",
+    right: "36px",
     display: "none"
   },
   pauseBtn: {
     position: "absolute",
-    top: "8px",
-    right: "92px",
+    bottom: "8px",
+    right: "64px",
     display: "none"
   },
   lockBtn: {
     position: "absolute",
-    top: "8px",
-    right: "120px",
+    bottom: "8px",
+    right: "92px",
     display: "none"
   },
   maximize: {
@@ -133,7 +144,6 @@ interface Props {
   onMaximize: (id: string) => void;
   viewMode?: TerminalResizeMode;
   viewModeLocked?: boolean;
-  viewModeToggleable?: boolean;
   onViewModeToggle?: () => void;
 }
 
@@ -163,7 +173,6 @@ export function SessionItem({
   onMaximize,
   viewMode,
   viewModeLocked = false,
-  viewModeToggleable = false,
   onViewModeToggle
 }: Props) {
   const styles = useStyles();
@@ -175,11 +184,14 @@ export function SessionItem({
       className={mergeClasses(styles.root, compact && styles.compactRoot, active && styles.active)}
       style={
         session.color
-          ? {
-              borderRight: `${SESSION_COLOR_ACCENT_WIDTH} solid ${
-                active ? ANSI_HIGHLIGHT_CSS[session.color] : ANSI_CSS[session.color]
-              }`
-            }
+          ? active
+            ? {
+                border: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[session.color]}`,
+                boxSizing: "border-box"
+              }
+            : {
+                borderRight: `${SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_CSS[session.color]}`
+              }
           : undefined
       }
       title={displayTitle}
@@ -197,7 +209,14 @@ export function SessionItem({
       {active && session.color && (
         <span
           className={mergeClasses("climon-active-marker", styles.activeMarker)}
-          style={{ borderRight: `16px solid ${ANSI_HIGHLIGHT_CSS[session.color]}` }}
+          style={{ borderRight: `12px solid ${ANSI_HIGHLIGHT_CSS[session.color]}` }}
+          aria-hidden="true"
+        />
+      )}
+      {active && session.color && (
+        <span
+          className={mergeClasses("climon-active-marker-left", styles.activeMarkerLeft)}
+          style={{ borderLeft: `12px solid ${ANSI_HIGHLIGHT_CSS[session.color]}` }}
           aria-hidden="true"
         />
       )}
@@ -237,7 +256,6 @@ export function SessionItem({
           icon={viewMode === "fill" && !viewModeLocked ? <LockOpen16Regular /> : <LockClosed16Regular />}
           title={clampSizeMenuLabel}
           aria-label={clampSizeMenuLabel}
-          disabled={!viewModeToggleable || viewModeLocked}
           onClick={(e) => {
             e.stopPropagation();
             onViewModeToggle?.();
