@@ -22,8 +22,10 @@ import { createShutdownRequestWatcher, type ShutdownRequestWatcher } from "./shu
 import { getShutdownRequestPath } from "./shutdown-request.js";
 import { getServerStatePath, readServerState } from "../server-state.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
-import { debugIngest as log } from "./debug.js";
+import { child, initLogger } from "../logging/logger.js";
 import { muxIdleTimeoutMs } from "./keepalive.js";
+
+const log = () => child("ingest");
 
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
@@ -164,7 +166,7 @@ export class IngestConnectionRegistry {
   async evictAndRegister(clientId: string, channel: Socket): Promise<void> {
     const existing = this.active.get(clientId);
     if (existing) {
-      log(`evicting previous connection for clientId=${clientId}`);
+      log().debug(`evicting previous connection for clientId=${clientId}`);
       existing.channel.destroy();
       await existing.teardown;
     }
@@ -203,7 +205,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
   const sessions = new Map<string, RemoteSession>();
   const decoder = new MuxDecoder();
   let label: string | undefined;
-  log(`new inbound connection from ${channel.remoteAddress ?? "unknown"}:${channel.remotePort ?? "?"}`);
+  log().debug(`new inbound connection from ${channel.remoteAddress ?? "unknown"}:${channel.remotePort ?? "?"}`);
   // Control frames are processed strictly in order via this FIFO chain. The
   // devbox re-sends `session-added` for every session on each fs.watch tick, so
   // duplicate same-id adds are routine; serializing prevents two concurrent
@@ -280,7 +282,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     if (message.kind === "hello") {
       if (!label && isValidRemoteId(message.clientId)) {
         label = message.clientId;
-        log(`hello received, clientId=${label}`);
+        log().debug(`hello received, clientId=${label}`);
         // Evict any previous connection for this clientId and wait for its
         // teardown to complete, preventing races between old cleanup and new setup.
         if (registry) {
@@ -295,18 +297,18 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     }
     if (message.kind === "pong") return;
     if (message.kind === "session-added") {
-      log(`session-added: ${message.meta.id} (${message.meta.displayCommand}) [${message.meta.status}]`);
+      log().debug(`session-added: ${message.meta.id} (${message.meta.displayCommand}) [${message.meta.status}]`);
       await addSession(message.meta);
     } else if (message.kind === "session-updated") {
       if (!isValidRemoteId(message.id)) return;
       const session = sessions.get(message.id);
       if (session) {
-        log(`session-updated: ${message.id} patch=${JSON.stringify(message.patch)}`);
+        log().debug(`session-updated: ${message.id} patch=${JSON.stringify(message.patch)}`);
         await patchSessionMeta(session.localId, sanitizeRemotePatch(message.patch), env);
       }
     } else if (message.kind === "session-removed") {
       if (!isValidRemoteId(message.id)) return;
-      log(`session-removed: ${message.id}`);
+      log().debug(`session-removed: ${message.id}`);
       await removeSession(message.id);
     }
     // attach/detach are devbox-bound only; never received here.
@@ -326,7 +328,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       clearTimeout(idleTimer);
     }
     idleTimer = setTimeout(() => {
-      log(`client ${label ?? "unknown"} idle for ${idleTimeoutMs}ms, destroying channel`);
+      log().debug(`client ${label ?? "unknown"} idle for ${idleTimeoutMs}ms, destroying channel`);
       channel.destroy();
     }, idleTimeoutMs);
     idleTimer.unref?.();
@@ -345,7 +347,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     try {
       messages = decoder.push(chunk);
     } catch {
-      log(`mux decode error from client ${label ?? "unknown"}, destroying channel`);
+      log().error(`mux decode error from client ${label ?? "unknown"}, destroying channel`);
       channel.destroy();
       return;
     }
@@ -367,7 +369,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     const teardown = async (): Promise<void> => {
       if (tearingDown) return;
       tearingDown = true;
-      log(`client ${label ?? "unknown"} disconnected, cleaning up ${sessions.size} session(s)`);
+      log().debug(`client ${label ?? "unknown"} disconnected, cleaning up ${sessions.size} session(s)`);
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       if (idleTimer) clearTimeout(idleTimer);
       await controlChain;
@@ -537,24 +539,25 @@ async function reconcileStaleRemoteSessions(env: NodeJS.ProcessEnv): Promise<voi
  * and materializes inbound mux connections as remote sessions.
  */
 export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Promise<number> {
+  initLogger("ingest");
   const singleton = await acquireSingletonDetailed(getIngestPidPath(env));
   if (!singleton.acquired) {
-    log(`another ingest instance is already running (pid=${singleton.holder}), exiting`);
+    log().debug(`another ingest instance is already running (pid=${singleton.holder}), exiting`);
     return 0;
   }
-  log("singleton acquired, starting ingest daemon");
+  log().debug("singleton acquired, starting ingest daemon");
   await reconcileStaleRemoteSessions(env);
 
   const state = await readRemoteHostState(env);
   const port = state?.ingestPort ?? asNumber(resolveConfigSetting("remote.port", env)) ?? DEFAULT_INGEST_PORT;
   const host = await resolveIngestBindAddress(env, state);
-  log(`resolved bind address: ${host}:${port}`);
+  log().debug(`resolved bind address: ${host}:${port}`);
   const ingestPort = await chooseAvailablePort(port, {
     maxAttempts: resolveIngestRetryAttempts(env),
     canBind: (candidate) => canBindTcpPort(host, candidate)
   });
   if (ingestPort.changed) {
-    log(`port ${port} unavailable, using ${ingestPort.port} instead`);
+    log().debug(`port ${port} unavailable, using ${ingestPort.port} instead`);
     if (!state) {
       writeConfigSetting("remote.port", String(ingestPort.port), "global", env);
     }
@@ -573,7 +576,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     server.once("error", reject);
     server.listen(ingestPort.port, host, resolve);
   });
-  log(`listening on ${host}:${ingestPort.port} (pid ${process.pid})`);
+  log().debug(`listening on ${host}:${ingestPort.port} (pid ${process.pid})`);
 
   // Dual-listen: when a tunnel is configured and the primary bind is not
   // loopback, add a secondary loopback listener so `devtunnel host` (which
@@ -594,16 +597,16 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
           lb.listen(ingestPort.port, "127.0.0.1", resolve);
         });
         loopbackServer = lb;
-        log(`loopback listener added on 127.0.0.1:${ingestPort.port} (for devtunnel)`);
+        log().debug(`loopback listener added on 127.0.0.1:${ingestPort.port} (for devtunnel)`);
         break;
       } catch (err: unknown) {
         lb.close();
         const code = (err as NodeJS.ErrnoException).code;
         if (attempt < LOOPBACK_RETRIES) {
-          log(`loopback bind attempt ${attempt}/${LOOPBACK_RETRIES} failed (${code}), retrying in ${LOOPBACK_RETRY_DELAY_MS}ms...`);
+          log().debug(`loopback bind attempt ${attempt}/${LOOPBACK_RETRIES} failed (${code}), retrying in ${LOOPBACK_RETRY_DELAY_MS}ms...`);
           await new Promise((r) => setTimeout(r, LOOPBACK_RETRY_DELAY_MS));
         } else {
-          log(`warning: could not bind loopback 127.0.0.1:${ingestPort.port} after ${LOOPBACK_RETRIES} attempts (${code})`);
+          log().debug(`warning: could not bind loopback 127.0.0.1:${ingestPort.port} after ${LOOPBACK_RETRIES} attempts (${code})`);
           process.stderr.write(
             `climon: warning: ingest could not bind loopback 127.0.0.1:${ingestPort.port} (${code}). ` +
             `Dev tunnel connections will fail. Check for stale processes on that port.\n`
@@ -660,12 +663,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     sessionsWatcher?.close();
     requestWatcher?.stop();
     supervisor.stop();
-    // Diagnostic debug log (temporary — same file as the watcher uses)
-    const { appendFileSync } = await import("node:fs");
-    const debugLogPath = join(getClimonHome(env), "shutdown-watcher-debug.log");
-    const dlog = (msg: string): void => {
-      try { appendFileSync(debugLogPath, `[${new Date().toISOString()}] DEMOTE: ${msg}\n`); } catch {}
-    };
+    const dlog = (m: string): void => child("shutdown-watch").debug(`DEMOTE: ${m}`);
     dlog("demoteAndExit starting");
     try {
       await demote({
@@ -762,7 +760,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
       const localId = match[1];
       // Only dismiss if the file is actually gone (not a rename/write event).
       if (!existsSync(join(sessionsDir, String(filename)))) {
-        log(`sessions watcher: remote session file deleted externally: ${localId}`);
+        log().debug(`sessions watcher: remote session file deleted externally: ${localId}`);
         registry.dismiss(localId);
       }
     });

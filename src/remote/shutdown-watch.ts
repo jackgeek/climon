@@ -1,5 +1,5 @@
-import { appendFileSync, readFileSync, rmSync, watch, type FSWatcher } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, rmSync, watch, type FSWatcher } from "node:fs";
+import { child } from "../logging/logger.js";
 import {
   getShutdownRequestPathInDir,
   parseShutdownRequest,
@@ -41,11 +41,7 @@ export function createShutdownRequestWatcher(options: ShutdownRequestWatcherOpti
   const removeFile = options.removeFile ?? ((p: string): void => rmSync(p, { force: true }));
   const requestPath = getShutdownRequestPathInDir(options.dir);
 
-  // Diagnostic debug log (temporary — remove after debugging)
-  const debugLogPath = join(dirname(requestPath), "shutdown-watcher-debug.log");
-  const debugLog = (msg: string): void => {
-    try { appendFileSync(debugLogPath, `[${new Date().toISOString()}] ${msg}\n`); } catch {}
-  };
+  const debugLog = (msg: string): void => child("shutdown-watch").debug(msg);
   debugLog(`watcher starting: watching ${requestPath}`);
 
   let done = false;

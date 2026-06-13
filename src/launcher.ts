@@ -26,7 +26,9 @@ import { formatSessionSocketRef } from "./session-socket.js";
 import { runSessionHost } from "./session-host.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
-import { debugUplink as log } from "./remote/debug.js";
+import { child } from "./logging/logger.js";
+
+const log = () => child("launcher");
 
 function terminalSize(): { cols: number; rows: number } {
   return {
@@ -88,7 +90,7 @@ async function ensureUplink(): Promise<void> {
   const port = resolveConfigSetting("remote.port", process.env, process.cwd());
   const peerHome = resolveConfigSetting("remote.peerHome", process.env, process.cwd());
 
-  log(`ensureUplink: enabled=${enabled} host=${host ?? "unset"} tunnelId=${tunnelId ? "set" : "unset"} port=${port ?? "unset"} peerHome=${peerHome ? "set" : "unset"}`);
+  log().debug(`ensureUplink: enabled=${enabled} host=${host ?? "unset"} tunnelId=${tunnelId ? "set" : "unset"} port=${port ?? "unset"} peerHome=${peerHome ? "set" : "unset"}`);
 
   let shouldSpawn = false;
 
@@ -110,14 +112,14 @@ async function ensureUplink(): Promise<void> {
     const plan = planUplinkStart({ enabled, host, tunnelId, port }, detect);
     if (plan.warning) process.stderr.write(plan.warning);
     shouldSpawn = plan.shouldSpawn;
-    log(`ensureUplink: planUplinkStart → shouldSpawn=${shouldSpawn}${plan.warning ? " (with warning)" : ""}`);
+    log().debug(`ensureUplink: planUplinkStart → shouldSpawn=${shouldSpawn}${plan.warning ? " (with warning)" : ""}`);
   }
 
   if (!shouldSpawn) {
-    log("ensureUplink: not spawning uplink");
+    log().debug("ensureUplink: not spawning uplink");
     return;
   }
-  log("ensureUplink: spawning detached __uplink process");
+  log().debug("ensureUplink: spawning detached __uplink process");
   const child = spawn(process.execPath, selfSpawnArgs(["__uplink"]), {
     detached: true,
     stdio: "ignore",
