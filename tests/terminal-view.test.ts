@@ -11,8 +11,10 @@ import {
   completeInitialReplay,
   focusTerminalPane,
   mapWheelToScrollLines,
+  reconnectDelayMs,
   refreshTerminalRender,
   resetTerminalForSession,
+  shouldReconnectLiveAttachment,
   shouldHandleWheelAsScrollback,
   TerminalView,
   loadTerminalAddons,
@@ -221,6 +223,64 @@ describe("TerminalView", () => {
 
     expect(replayComplete).toBe(true);
     expect(refits).toBe(1);
+  });
+
+  test("reconnects only the current visible live attachment", () => {
+    const session = { id: "s1", status: "running" } as const;
+
+    expect(
+      shouldReconnectLiveAttachment({
+        session,
+        sessionId: "s1",
+        attachmentGeneration: 2,
+        currentGeneration: 2,
+        visible: true
+      })
+    ).toBe(true);
+    expect(
+      shouldReconnectLiveAttachment({
+        session,
+        sessionId: "s1",
+        attachmentGeneration: 1,
+        currentGeneration: 2,
+        visible: true
+      })
+    ).toBe(false);
+    expect(
+      shouldReconnectLiveAttachment({
+        session,
+        sessionId: "s1",
+        attachmentGeneration: 2,
+        currentGeneration: 2,
+        visible: false
+      })
+    ).toBe(false);
+    expect(
+      shouldReconnectLiveAttachment({
+        session: { id: "s1", status: "completed" },
+        sessionId: "s1",
+        attachmentGeneration: 2,
+        currentGeneration: 2,
+        visible: true
+      })
+    ).toBe(false);
+    expect(
+      shouldReconnectLiveAttachment({
+        session,
+        sessionId: "s2",
+        attachmentGeneration: 2,
+        currentGeneration: 2,
+        visible: true
+      })
+    ).toBe(false);
+  });
+
+  test("backs off browser terminal reconnects with a cap", () => {
+    expect(reconnectDelayMs(-1)).toBe(250);
+    expect(reconnectDelayMs(0)).toBe(250);
+    expect(reconnectDelayMs(1)).toBe(500);
+    expect(reconnectDelayMs(5)).toBe(5_000);
+    expect(reconnectDelayMs(20)).toBe(5_000);
   });
 
   test("redraws terminal history when the font size changes", () => {
