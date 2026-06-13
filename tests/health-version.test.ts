@@ -1,12 +1,44 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getIngestPidPath } from "../src/remote/ingest.js";
 import { VERSION } from "../src/version.js";
 
 const home = join(tmpdir(), `climon-health-${process.pid}`);
 const env = { ...process.env, CLIMON_HOME: home };
+
+// A server started with --enable-remotes spawns a detached ingest daemon that
+// outlives the killed server process. Tests must stop it explicitly, otherwise
+// the orphaned ingest accumulates across runs (and can busy-loop on a core),
+// progressively slowing the whole suite under load.
+async function stopIngestDaemon(targetEnv: NodeJS.ProcessEnv): Promise<void> {
+  const raw = await readFile(getIngestPidPath(targetEnv), "utf8").catch(() => undefined);
+  const pid = raw === undefined ? 0 : Number.parseInt(raw.trim(), 10);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return;
+  }
+  try {
+    process.kill(pid);
+  } catch {
+    return;
+  }
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // already gone
+  }
+}
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -20,10 +52,16 @@ function freePort(): Promise<number> {
   });
 }
 
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 5000): Promise<T> {
+async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 30000): Promise<T> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const v = await fn().catch(() => undefined);
+    // Bound each attempt so a hung probe (e.g. a fetch to a freshly-spawned
+    // server whose event loop is still starved under load) cannot block the
+    // loop past the deadline.
+    const v = await Promise.race([
+      Promise.resolve().then(fn).catch(() => undefined),
+      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
+    ]);
     if (v !== undefined) {
       return v;
     }
@@ -55,7 +93,7 @@ describe("GET /health", () => {
       server.kill();
       await server.exited;
     }
-  }, 30000);
+  }, 60000);
 
   test("reports remotes disabled unless the server is started with --enable-remotes", async () => {
     const port = await freePort();
@@ -90,6 +128,7 @@ describe("GET /health", () => {
     } finally {
       enabledServer.kill();
       await enabledServer.exited;
+      await stopIngestDaemon(env);
     }
-  }, 30000);
+  }, 60000);
 });

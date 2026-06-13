@@ -20,10 +20,14 @@ async function readMeta(id: string): Promise<SessionMeta> {
   return JSON.parse(await readFile(join(home, "sessions", `${id}.json`), "utf8")) as SessionMeta;
 }
 
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 8000): Promise<T> {
+async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 20000): Promise<T> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const v = await fn().catch(() => undefined);
+    // Bound each attempt so a hung probe cannot block the loop past the deadline.
+    const v = await Promise.race([
+      Promise.resolve().then(fn).catch(() => undefined),
+      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
+    ]);
     if (v !== undefined) {
       return v;
     }
@@ -114,7 +118,7 @@ describe("headless session attention", () => {
       proc.kill();
       await proc.exited;
     }
-  }, 20000);
+  }, 60000);
 
   test("acknowledging a static needs-attention session keeps it acknowledged until the screen changes", async () => {
     await mkdir(home, { recursive: true });
@@ -159,7 +163,7 @@ describe("headless session attention", () => {
       proc.kill();
       await proc.exited;
     }
-  }, 20000);
+  }, 60000);
 
   test("acknowledging a paused needs-attention session clears attention fields but preserves paused", async () => {
     await mkdir(home, { recursive: true });
@@ -203,7 +207,7 @@ describe("headless session attention", () => {
       proc.kill();
       await proc.exited;
     }
-  }, 20000);
+  }, 60000);
 
   test("a paused idle session is not bumped to needs-attention by the daemon", async () => {
     await mkdir(home, { recursive: true });
@@ -244,7 +248,7 @@ describe("headless session attention", () => {
       proc.kill();
       await proc.exited;
     }
-  }, 20000);
+  }, 60000);
 
   test("a paused session still records completed when the process exits", async () => {
     await mkdir(home, { recursive: true });
@@ -274,7 +278,7 @@ describe("headless session attention", () => {
       proc.kill();
       await proc.exited.catch(() => undefined);
     }
-  }, 20000);
+  }, 60000);
 
   test("output after the user's command settles into a fresh needs-attention", async () => {
     await mkdir(home, { recursive: true });
@@ -324,5 +328,5 @@ describe("headless session attention", () => {
       proc.kill();
       await proc.exited;
     }
-  }, 20000);
+  }, 60000);
 });

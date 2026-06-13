@@ -27,10 +27,14 @@ async function readMeta(id: string): Promise<SessionMeta> {
   return JSON.parse(await readFile(join(home, "sessions", `${id}.json`), "utf8")) as SessionMeta;
 }
 
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 8000): Promise<T> {
+async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 20000): Promise<T> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const v = await fn().catch(() => undefined);
+    // Bound each attempt so a hung probe cannot block the loop past the deadline.
+    const v = await Promise.race([
+      Promise.resolve().then(fn).catch(() => undefined),
+      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
+    ]);
     if (v !== undefined) return v;
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -81,7 +85,7 @@ describe("PTY reverts to host size when the last viewer leaves", () => {
     proc.kill();
     await proc.exited;
     expect(frameTypes.slice(0, 3)).toEqual([FrameType.PtySize, FrameType.TerminalMode, FrameType.Replay]);
-  }, 30000);
+  }, 60000);
 
   test("a viewer shrinks the PTY, then disconnects and it restores", async () => {
     const proc = Bun.spawn(
@@ -135,7 +139,7 @@ describe("PTY reverts to host size when the last viewer leaves", () => {
     proc.kill();
     await proc.exited;
     expect(sizes.slice(shrinkIndex + 1).some((s) => s.cols === 80 && s.rows === 24)).toBe(true);
-  }, 30000);
+  }, 60000);
 });
 
 describe("fill window mode host warning and restore", () => {
@@ -225,7 +229,7 @@ describe("fill window mode host warning and restore", () => {
     expect(viewerModes.some((mode) => mode.mode === "clamped")).toBe(true);
     expect(viewerSizes.some((size) => size.cols === 80 && size.rows === 24)).toBe(true);
     expect(hostWarnings.some((warning) => warning.kind === "restored")).toBe(true);
-  }, 30000);
+  }, 60000);
 
   test("viewer disconnect clears the local host overgrown warning", async () => {
     const proc = Bun.spawn(
@@ -287,7 +291,7 @@ describe("fill window mode host warning and restore", () => {
     await proc.exited;
     expect(hostWarnings.some((warning) => warning.kind === "overgrown")).toBe(true);
     expect(hostWarnings.some((warning) => warning.kind === "restored")).toBe(true);
-  }, 30000);
+  }, 60000);
 
   test("browser clamp mode request returns an overgrown fill session to the host size", async () => {
     const proc = Bun.spawn(
@@ -347,7 +351,7 @@ describe("fill window mode host warning and restore", () => {
     await proc.exited;
     expect(viewerModes.some((mode) => mode.mode === "clamped")).toBe(true);
     expect(viewerSizes.some((size) => size.cols === 80 && size.rows === 24)).toBe(true);
-  }, 30000);
+  }, 60000);
 
   test("host resizes update the host cap without shrinking an active fill-mode viewer", async () => {
     const proc = Bun.spawn(
@@ -397,7 +401,7 @@ describe("fill window mode host warning and restore", () => {
     proc.kill();
     await proc.exited;
     expect(viewerSizes.at(-1)).toEqual({ cols: 140, rows: 40 });
-  }, 30000);
+  }, 60000);
 
   test("clamped viewer resize receives the authoritative PTY size even when the PTY size is unchanged", async () => {
     const proc = Bun.spawn(
@@ -449,7 +453,7 @@ describe("fill window mode host warning and restore", () => {
     proc.kill();
     await proc.exited;
     expect(viewerSizes.slice(before).some((size) => size.cols === 80 && size.rows === 24)).toBe(true);
-  }, 30000);
+  }, 60000);
 
   test("a local client attaching after fill overgrowth receives the warning", async () => {
     const proc = Bun.spawn(
@@ -506,7 +510,7 @@ describe("fill window mode host warning and restore", () => {
     await proc.exited;
     expect(host2Warnings.some((warning) => warning.kind === "overgrown")).toBe(true);
     expect(host2Frames.indexOf(FrameType.TerminalWarning)).toBeLessThan(host2Frames.indexOf(FrameType.Replay));
-  }, 30000);
+  }, 60000);
 
   test("fill-mode viewer smaller than host reverts PTY and resets mode on disconnect", async () => {
     const proc = Bun.spawn(
@@ -574,5 +578,5 @@ describe("fill window mode host warning and restore", () => {
     await proc.exited;
     expect(hostSizes.slice(sizesBeforeDisconnect).some((s) => s.cols === 120 && s.rows === 40)).toBe(true);
     expect(hostModes.slice(modesBeforeDisconnect).some((m) => m.mode === "clamped")).toBe(true);
-  }, 30000);
+  }, 60000);
 });

@@ -44,7 +44,11 @@ function sampleMeta(id: string): SessionMeta {
 async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 2000): Promise<T> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const value = await fn().catch(() => undefined);
+    // Bound each attempt so a hung probe cannot block the loop past the deadline.
+    const value = await Promise.race([
+      Promise.resolve().then(fn).catch(() => undefined),
+      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
+    ]);
     if (value !== undefined) {
       return value;
     }

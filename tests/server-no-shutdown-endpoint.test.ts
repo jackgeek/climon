@@ -20,10 +20,16 @@ function freePort(): Promise<number> {
   });
 }
 
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 5000): Promise<T> {
+async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 20000): Promise<T> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const v = await fn().catch(() => undefined);
+    // Bound each attempt so a hung probe (e.g. a fetch to a freshly-spawned
+    // server whose event loop is still starved under load) cannot block the
+    // loop past the deadline.
+    const v = await Promise.race([
+      Promise.resolve().then(fn).catch(() => undefined),
+      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
+    ]);
     if (v !== undefined) return v;
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -45,24 +51,28 @@ describe("DELETE /api/server is removed", () => {
     });
     const base = `http://127.0.0.1:${port}`;
     try {
+      // Spawning src/server.ts transpiles on each launch; under full-suite CPU
+      // contention startup can take well over the old 5s wait, so allow more time.
       await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
         return res?.ok ? true : undefined;
-      });
+      }, 30000);
       await waitFor(async () => {
         const s = await readServerStateFromDir(home);
         return s ? s : undefined;
-      });
+      }, 30000);
       await fetch(`${base}/api/server`, {
         method: "DELETE",
         headers: { "X-Climon-Shutdown-Token": "fake-token" }
       }).catch(() => undefined);
       await new Promise((r) => setTimeout(r, 400));
-      const health = await fetch(`${base}/health`);
+      // Bound this fetch so a hung connection fails fast instead of stalling to
+      // the test-level timeout.
+      const health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(5000) });
       expect(health.ok).toBe(true); // still serving — the route no longer demotes
     } finally {
       server.kill();
       await server.exited;
     }
-  }, 30000);
+  }, 60000);
 });
