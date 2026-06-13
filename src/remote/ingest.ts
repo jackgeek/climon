@@ -660,32 +660,20 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     sessionsWatcher?.close();
     requestWatcher?.stop();
     supervisor.stop();
-    // Diagnostic debug log (temporary — same file as the watcher uses)
-    const { appendFileSync } = await import("node:fs");
-    const debugLogPath = join(getClimonHome(env), "shutdown-watcher-debug.log");
-    const dlog = (msg: string): void => {
-      try { appendFileSync(debugLogPath, `[${new Date().toISOString()}] DEMOTE: ${msg}\n`); } catch {}
-    };
-    dlog("demoteAndExit starting");
     try {
       await demote({
         spawnUplink: () => {
-          dlog("spawnUplink starting");
           spawnUplinkDetached(env);
-          dlog("spawnUplink done");
         },
         stopLocalServer: async () => {
-          dlog("stopLocalServer starting");
           const local = await readServerState(env);
           if (!local || !isProcessAlive(local.pid)) {
-            dlog("stopLocalServer: server not alive, skipping");
             return;
           }
           // Try graceful shutdown via HTTP first (works cross-platform).
           // The server's /__internal/shutdown endpoint triggers plainShutdown
           // which exits 0 cleanly.
           try {
-            dlog(`stopLocalServer: requesting graceful shutdown via HTTP (port ${local.port})`);
             await fetch(`http://127.0.0.1:${local.port}/__internal/shutdown?source=ingest-demotion`, {
               method: "POST",
               signal: AbortSignal.timeout(1000),
@@ -694,16 +682,13 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
             for (let i = 0; i < 40; i++) {
               await new Promise((r) => setTimeout(r, 50));
               if (!isProcessAlive(local.pid)) {
-                dlog("stopLocalServer: server exited gracefully");
                 return;
               }
             }
-            dlog("stopLocalServer: server did not exit after HTTP shutdown");
-          } catch (e) {
-            dlog(`stopLocalServer: HTTP shutdown failed: ${(e as Error).message}`);
+          } catch {
+            // HTTP shutdown failed; fall through to force-kill.
           }
-          // Fallback: force-kill
-          dlog(`stopLocalServer: force-killing pid ${local.pid}`);
+          // Fallback: force-kill.
           // tree: false — the ingest is a child of the server on Windows (even
           // though detached), so taskkill /T would kill us too.
           killProcess(local.pid, true, process.platform, undefined, false);
@@ -712,10 +697,8 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
             await new Promise((r) => setTimeout(r, 50));
             if (!isProcessAlive(local.pid)) break;
           }
-          dlog("stopLocalServer done");
         },
         closeListener: () => new Promise<void>((resolve) => {
-          dlog("closeListener: closing server");
           // server.close() immediately closes the listening socket (frees the
           // port) and stops accepting new connections.  The callback fires when
           // all existing connections end, but we resolve immediately because we
@@ -726,18 +709,13 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
           setImmediate(resolve);
         }),
         removeBeacons: async () => {
-          dlog("removeBeacons starting");
           removeBeacons();
-          dlog("removeBeacons done");
         }
       });
-      dlog("demote() completed successfully");
-    } catch (err: unknown) {
-      dlog(`demote() threw: ${(err as Error).message}`);
+    } catch {
       // Even if uplink spawn or listener close fails, exit so process death
       // releases the contested port rather than leaving a half-demoted daemon.
     }
-    dlog("calling process.exit(0)");
     process.exit(0);
   };
 
