@@ -392,3 +392,37 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return false;
   }
 }
+
+export async function fetchVapidPublicKey(): Promise<string> {
+  const res = await fetch(withQuery("/api/push/vapid-public-key"));
+  if (!res.ok) {
+    throw new Error(`Failed to load VAPID key (${res.status})`);
+  }
+  const data = (await res.json()) as { key?: string };
+  if (!data.key) {
+    throw new Error("Server returned no VAPID key");
+  }
+  return data.key;
+}
+
+export async function postPushSubscribe(subscription: PushSubscriptionJSON): Promise<void> {
+  const res = await fetch(withQuery("/api/push/subscribe"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(subscription)
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to subscribe to push (${res.status})`);
+  }
+}
+
+export async function postPushUnsubscribe(endpoint: string): Promise<void> {
+  const res = await fetch(withQuery("/api/push/unsubscribe"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ endpoint })
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to unsubscribe from push (${res.status})`);
+  }
+}
