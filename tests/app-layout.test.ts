@@ -4,7 +4,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionMeta } from "../src/types.js";
 import { applyVisualViewportLayout, clearVisualViewportLayout, scheduleTerminalRefit } from "../src/web/App.js";
-import { MainHeader } from "../src/web/App.js";
+import {
+  MainHeader,
+  ServerReconnectOverlay,
+  shouldShowServerReconnectOverlay,
+  type ServerConnectionState
+} from "../src/web/App.js";
 import { shouldDeleteSessionWithoutDialog } from "../src/web/App.js";
 
 function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
@@ -132,6 +137,41 @@ describe("scheduleTerminalRefit", () => {
       expect(nameIndex).toBeGreaterThan(-1);
       expect(statusIndex).toBeGreaterThan(nameIndex);
       expect(idIndex).toBeGreaterThan(statusIndex);
+    });
+  });
+
+  describe("ServerReconnectOverlay", () => {
+    test("is only shown after an established server connection is lost", () => {
+      const visibleStates: ServerConnectionState[] = ["reconnecting"];
+      const hiddenStates: ServerConnectionState[] = ["connecting", "connected"];
+
+      for (const state of visibleStates) {
+        expect(shouldShowServerReconnectOverlay(state)).toBe(true);
+      }
+      for (const state of hiddenStates) {
+        expect(shouldShowServerReconnectOverlay(state)).toBe(false);
+      }
+    });
+
+    test("alerts that the server connection was lost and reconnects automatically", () => {
+      const markup = renderToStaticMarkup(createElement(ServerReconnectOverlay));
+
+      expect(markup).toContain('role="alert"');
+      expect(markup).toContain('tabindex="-1"');
+      expect(markup).toContain("Connection lost");
+      expect(markup).toContain("The climon server connection was lost. Reconnecting automatically...");
+    });
+
+    test("refreshes all sessions before reattaching terminals after a server reconnect", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("async function refreshSessionsAfterReconnect(): Promise<void>");
+      expect(source).toContain(
+        'if (serverConnectionStateRef.current === "reconnecting") {\n        void refreshSessionsAfterReconnect();\n        return;\n      }'
+      );
+      expect(source).toContain(
+        "setSessions(loadedSessions);\n        if (markServerConnected()) {\n          setServerReconnectToken"
+      );
     });
   });
 

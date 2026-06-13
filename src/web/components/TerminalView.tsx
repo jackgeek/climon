@@ -38,6 +38,11 @@ interface ResettableTerminal extends ResizableTerminal {
   reset: () => void;
 }
 
+interface ReplayRefreshableTerminal {
+  clear: () => void;
+  scrollToBottom: () => void;
+}
+
 interface RefitSessionState {
   status: SessionMeta["status"];
 }
@@ -134,6 +139,23 @@ export function resetTerminalForSession(term: ResettableTerminal, session: { col
     applyAuthoritativeTerminalSize(term, session.cols, session.rows);
   }
   term.reset();
+}
+
+// A live refresh (e.g. after a clamp/fill toggle) rebuilds scrollback without a
+// full term.reset(), preserving xterm private modes such as mouse tracking. The
+// daemon's replay snapshot re-asserts the authoritative modes via its appended
+// suffix, so the screen ends up correct without clearing mouse state.
+export function refreshTerminalForReplay(term: ReplayRefreshableTerminal): void {
+  term.clear();
+  term.scrollToBottom();
+}
+
+export function shouldRequestReplayForAuthoritativeMode(
+  previousMode: TerminalResizeMode,
+  nextMode: TerminalResizeMode,
+  initialReplayComplete: boolean
+): boolean {
+  return initialReplayComplete && previousMode !== nextMode;
 }
 
 export function canRefitTerminalForSession(
@@ -234,10 +256,23 @@ interface Props {
   onViewModeChange: (mode: TerminalResizeMode) => void;
   fontSize: number;
   onFontSizeChange: (delta: number) => void;
+  serverConnected: boolean;
+  serverReconnectToken: number;
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { session, accentColor, maximized, visible, viewMode, onViewModeChange, fontSize, onFontSizeChange },
+  {
+    session,
+    accentColor,
+    maximized,
+    visible,
+    viewMode,
+    onViewModeChange,
+    fontSize,
+    onFontSizeChange,
+    serverConnected,
+    serverReconnectToken
+  },
   ref
 ) {
   const styles = useStyles();
@@ -254,10 +289,14 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
   const selectedSessionRef = useRef<SessionMeta | null>(session);
   const visibleRef = useRef(visible);
+  const serverConnectedRef = useRef(serverConnected);
   const initialReplayCompleteRef = useRef(true);
   const attachmentGenerationRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const awaitingReplayRef = useRef(false);
+  const replayAfterNextResizeRef = useRef(false);
+  const lastServerReconnectTokenRef = useRef(serverReconnectToken);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -266,7 +305,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   useEffect(() => {
     selectedSessionRef.current = session;
     visibleRef.current = visible;
-  }, [session, visible]);
+    serverConnectedRef.current = serverConnected;
+  }, [session, visible, serverConnected]);
 
   useEffect(() => {
     onViewModeChangeRef.current = onViewModeChange;
@@ -300,12 +340,45 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const term = termRef.current;
     const ws = wsRef.current;
     if (term && ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      const requestReplay = replayAfterNextResizeRef.current;
+      const message: {
+        type: "resize";
+        cols: number;
+        rows: number;
+        mode?: TerminalResizeMode;
+      } = { type: "resize", cols: term.cols, rows: term.rows };
+      if (requestReplay) {
+        message.mode = viewModeRef.current;
+      }
+      ws.send(JSON.stringify(message));
+      if (requestReplay) {
+        replayAfterNextResizeRef.current = false;
+        ws.send(JSON.stringify({ type: "replay" }));
+      }
     }
   }
 
   function sendMode(mode: TerminalResizeMode): void {
+    viewModeRef.current = mode;
+    replayAfterNextResizeRef.current = true;
     sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
+  }
+
+  // The daemon reported its authoritative clamp/fill mode. When it differs from
+  // what this viewer last rendered, request a fresh replay on the next resize so
+  // xterm's scrollback is rebuilt for the new PTY grid.
+  function handleAuthoritativeViewMode(mode: TerminalResizeMode): void {
+    const requestReplay = shouldRequestReplayForAuthoritativeMode(
+      viewModeRef.current,
+      mode,
+      initialReplayCompleteRef.current
+    );
+    viewModeRef.current = mode;
+    onViewModeChangeRef.current(mode);
+    if (requestReplay) {
+      replayAfterNextResizeRef.current = true;
+      refit();
+    }
   }
 
   function sendAttentionAck(sessionId: string, attentionMatchedAt: string): void {
@@ -378,6 +451,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     reconnectAttemptRef.current = 0;
     attachmentGenerationRef.current++;
     initialReplayCompleteRef.current = true;
+    awaitingReplayRef.current = false;
+    replayAfterNextResizeRef.current = false;
     if (wsRef.current) {
       try {
         wsRef.current.close();
@@ -399,6 +474,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
   function scheduleReconnect(sessionId: string, attachmentGeneration: number): void {
     clearReconnectTimer();
+    // While the dashboard server is known to be down (reported over SSE), pause
+    // websocket reconnect attempts. The reconnect overlay blocks interaction, and
+    // a deterministic fresh attach is driven by serverReconnectToken once the
+    // server returns -- so backoff churn here would be wasted.
+    if (!serverConnectedRef.current) {
+      return;
+    }
     if (
       !shouldReconnectLiveAttachment({
         session: selectedSessionRef.current,
@@ -467,7 +549,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
         return;
       }
-      flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
+      if (flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode)) {
+        // Restoring a queued mode (e.g. after a server reconnect) changes the PTY
+        // grid, so request a fresh replay on the following resize.
+        replayAfterNextResizeRef.current = true;
+        refit();
+      }
       flushAttentionAck();
     };
     ws.onmessage = (ev) => {
@@ -495,14 +582,18 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             // terminal and this viewer render the same grid.
             applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
           } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
-            onViewModeChangeRef.current(msg.mode);
+            handleAuthoritativeViewMode(msg.mode);
+          } else if (msg.type === "replay") {
+            awaitingReplayRef.current = true;
           }
         } catch {
           // Ignore malformed control messages.
         }
       } else {
         const data = new Uint8Array(ev.data as ArrayBuffer);
-        if (initialReplayCompleteRef.current) {
+        const replayRequested = awaitingReplayRef.current;
+        awaitingReplayRef.current = false;
+        if (initialReplayCompleteRef.current && !replayRequested) {
           term.write(data);
         } else {
           if (firstBinaryFrame) {
@@ -510,6 +601,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             if (resetBeforeReplay) {
               term.reset();
             }
+          } else if (replayRequested) {
+            // A mid-session replay (e.g. after a clamp/fill toggle) rebuilds
+            // scrollback without a full reset so mouse-tracking modes survive.
+            refreshTerminalForReplay(term);
           }
           term.write(data, () => {
             completeInitialReplay(
@@ -624,6 +719,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     initialReplayCompleteRef.current = true;
     applyTerminalScrollbackForSession(term, session);
     resetTerminalForSession(term, session);
+    // A dashboard server reconnect re-runs this effect with a bumped token.
+    const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;
+    lastServerReconnectTokenRef.current = serverReconnectToken;
     const attachmentGeneration = attachmentGenerationRef.current;
 
     if (!session) {
@@ -634,9 +732,16 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     if (isLiveStatus(session.status)) {
       // Only hold the PTY (via the WebSocket) while the terminal is actually
-      // displayed. When hidden, the daemon reverts the PTY to the host size.
-      if (!visible) {
+      // displayed and the dashboard server is reachable. When the server is down
+      // the reconnect overlay blocks interaction; we resume once it returns.
+      if (!visible || !serverConnected) {
         return;
+      }
+      // Preserve the user's clamp/fill choice across an outage: the daemon may
+      // revert to its default mode when the last viewer disconnects, so queue the
+      // pre-outage mode and flush it once the socket reopens.
+      if (isServerReconnect) {
+        queuedViewModeRef.current = viewModeRef.current;
       }
       attachLiveSession(session, false);
     } else {
@@ -659,11 +764,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     return () => {
       cancelled = true;
     };
-    // Re-attach only when the session, its live/terminated state, or visibility
-    // changes -- never on live-status idle/acknowledgement transitions, which
-    // would reset the terminal and cause a periodic resize flicker.
+    // Re-attach when the session, its live/terminated state, visibility, server
+    // availability, or a server reconnect changes -- never on live-status
+    // idle/acknowledgement transitions, which would reset the terminal and cause
+    // a periodic resize flicker.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachKey(session, visible)]);
+  }, [attachKey(session, visible), serverConnected, serverReconnectToken]);
 
   // Refit when the selected session or layout-affecting terminal chrome changes
   // so xterm re-measures before sending geometry back to the daemon.

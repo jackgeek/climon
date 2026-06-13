@@ -22,6 +22,56 @@ import { patchSessionMeta, patchSessionMetaFromCurrent, readSessionMeta, writeSc
 import { cleanupSessionSocket, listenOnSessionSocket } from "../session-socket.js";
 
 const STATUS_DEBUG = process.env.CLIMON_STATUS_DEBUG === "1";
+const ESC_CSI_PRIVATE_MODE_PREFIX = "\x1b[?";
+const CSI_PRIVATE_MODE_CONTROL = /\x1b\[\?([0-9;]*)([hl])/g;
+const INCOMPLETE_PRIVATE_MODE_SUFFIX = /\x1b\[\?[0-9;]*$/;
+export const TRACKED_MOUSE_PRIVATE_MODES = ["1000", "1002", "1003", "1005", "1006", "1015"] as const;
+
+export function trackMousePrivateModesFromOutput(
+  modeState: Map<string, boolean>,
+  chunk: string | Uint8Array,
+  remainder = "",
+  trackedModes: readonly string[] = TRACKED_MOUSE_PRIVATE_MODES
+): string {
+  const tracked = new Set(trackedModes);
+  const chunkText = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+  const input = `${remainder}${chunkText}`;
+  CSI_PRIVATE_MODE_CONTROL.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let lastCompleteMatchEnd = 0;
+  while ((match = CSI_PRIVATE_MODE_CONTROL.exec(input)) !== null) {
+    const rawParams = match[1] ?? "";
+    const action = match[2];
+    const enabled = action === "h";
+    for (const param of rawParams.split(";")) {
+      if (tracked.has(param)) {
+        modeState.set(param, enabled);
+      }
+    }
+    lastCompleteMatchEnd = match.index + match[0].length;
+  }
+  const trailingPrefix = input.lastIndexOf(ESC_CSI_PRIVATE_MODE_PREFIX);
+  if (trailingPrefix >= lastCompleteMatchEnd) {
+    const trailing = input.slice(trailingPrefix);
+    if (INCOMPLETE_PRIVATE_MODE_SUFFIX.test(trailing)) {
+      return trailing.slice(-64);
+    }
+  }
+  return "";
+}
+
+export function buildMousePrivateModeReplaySuffix(
+  modeState: ReadonlyMap<string, boolean>,
+  trackedModes: readonly string[] = TRACKED_MOUSE_PRIVATE_MODES
+): Buffer {
+  let suffix = "";
+  for (const mode of trackedModes) {
+    if (modeState.get(mode) === true) {
+      suffix += `${ESC_CSI_PRIVATE_MODE_PREFIX}${mode}h`;
+    }
+  }
+  return Buffer.from(suffix);
+}
 
 /**
  * Resolves a requested resize to the dimensions actually applied to the PTY.
@@ -110,6 +160,8 @@ export async function runSessionDaemon(id: string): Promise<void> {
   }
 
   const scrollback = new ScrollbackBuffer();
+  const mousePrivateModeState = new Map<string, boolean>();
+  let mousePrivateModeRemainder = "";
   const clients = new Set<Socket>();
   const hosts = new Set<Socket>();
   // Sockets that have acted as browser viewers (sent a non-host Resize). When
@@ -394,9 +446,20 @@ export async function runSessionDaemon(id: string): Promise<void> {
     return;
   }
 
+  function replaySnapshot(): Buffer {
+    const snapshot = scrollback.snapshot();
+    const mouseModeSuffix = buildMousePrivateModeReplaySuffix(mousePrivateModeState);
+    return mouseModeSuffix.length > 0 ? Buffer.concat([snapshot, mouseModeSuffix]) : snapshot;
+  }
+
   // Attach PTY listeners synchronously, before any await, so early output and a
   // fast-exiting command are never missed while metadata is being written.
   pty.onData((data) => {
+    mousePrivateModeRemainder = trackMousePrivateModesFromOutput(
+      mousePrivateModeState,
+      data,
+      mousePrivateModeRemainder
+    );
     scrollback.append(data);
     headlessTerm.write(data);
     broadcast(encodeFrame(FrameType.Output, data));
@@ -460,6 +523,12 @@ export async function runSessionDaemon(id: string): Promise<void> {
     let initialized = false;
     const initialFramesTimer = setTimeout(writeInitialFrames, 10);
 
+    function writeReplay(): void {
+      socket.write(encodeJsonFrame(FrameType.PtySize, { cols: appliedCols, rows: appliedRows }));
+      socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
+      socket.write(encodeFrame(FrameType.Replay, replaySnapshot()));
+    }
+
     function writeInitialFrames(): void {
       if (initialized) {
         return;
@@ -467,10 +536,8 @@ export async function runSessionDaemon(id: string): Promise<void> {
       initialized = true;
       clearTimeout(initialFramesTimer);
       clients.add(socket);
-      socket.write(encodeJsonFrame(FrameType.PtySize, { cols: appliedCols, rows: appliedRows }));
-      socket.write(encodeJsonFrame(FrameType.TerminalMode, { mode: terminalMode } satisfies TerminalModePayload));
+      writeReplay();
       updateOvergrownWarning();
-      socket.write(encodeFrame(FrameType.Replay, scrollback.snapshot()));
       if (exited && exitInfo) {
         socket.write(encodeJsonFrame(FrameType.Exit, exitInfo));
         socket.end();
@@ -507,6 +574,8 @@ export async function runSessionDaemon(id: string): Promise<void> {
         } else if (frame.type === FrameType.Attention) {
           void applyAttention(parseJsonPayload<AttentionPayload>(frame.payload), "user");
           writeInitialFrames();
+        } else if (frame.type === FrameType.Replay) {
+          writeReplay();
         }
       }
     });

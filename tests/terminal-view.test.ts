@@ -13,7 +13,9 @@ import {
   mapWheelToScrollLines,
   reconnectDelayMs,
   refreshTerminalRender,
+  refreshTerminalForReplay,
   resetTerminalForSession,
+  shouldRequestReplayForAuthoritativeMode,
   shouldReconnectLiveAttachment,
   shouldHandleWheelAsScrollback,
   TerminalView,
@@ -38,7 +40,9 @@ describe("TerminalView", () => {
         visible: false,
         viewMode: "clamped",
         fontSize: 13,
-        onFontSizeChange: () => {}
+        onFontSizeChange: () => {},
+        serverConnected: true,
+        serverReconnectToken: 0
       })
     );
 
@@ -50,6 +54,69 @@ describe("TerminalView", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);");
+  });
+
+  test("reattaches live sessions after the dashboard server reconnects", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("serverReconnectToken: number");
+    expect(source).toContain("}, [attachKey(session, visible), serverConnected, serverReconnectToken]);");
+  });
+
+  test("fully resets and replays on server reconnect so mouse-tracking modes are restored", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain(
+      "const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;"
+    );
+    expect(source).toContain("lastServerReconnectTokenRef.current = serverReconnectToken;");
+    // A reconnect re-queues the user's clamp/fill mode so the full reset + replay
+    // path (the daemon's replay carries the authoritative mouse private-mode
+    // suffix) restores mouse tracking after the socket reopens.
+    expect(source).toContain(
+      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
+    );
+  });
+
+  test("pauses reconnect retries while the server is unavailable and restores the selected mode afterward", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("serverConnected: boolean;");
+    expect(source).toContain("if (!visible || !serverConnected) {\n        return;\n      }");
+    expect(source).toContain(
+      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
+    );
+    expect(source).toContain("serverConnectedRef.current");
+  });
+
+  test("refreshes scrollback for mid-session replays without resetting terminal modes", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    // A browser-requested replay (e.g. after a clamp/fill toggle) arrives after
+    // the initial replay completes; intercept it so scrollback is rebuilt with a
+    // light refresh instead of being appended as live output.
+    expect(source).toContain("const replayRequested = awaitingReplayRef.current;");
+    expect(source).toContain("awaitingReplayRef.current = false;");
+    expect(source).toContain("if (initialReplayCompleteRef.current && !replayRequested) {");
+    expect(source).toContain(
+      "} else if (replayRequested) {\n            // A mid-session replay (e.g. after a clamp/fill toggle) rebuilds\n            // scrollback without a full reset so mouse-tracking modes survive.\n            refreshTerminalForReplay(term);\n          }"
+    );
+  });
+
+  test("requests a replay after mode-change resize so scrollback is rebuilt for the new PTY size", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("replayAfterNextResizeRef.current = true;");
+    expect(source).toContain("message.mode = viewModeRef.current;");
+    expect(source).toContain('ws.send(JSON.stringify({ type: "replay" }));');
+    expect(source).toContain('} else if (msg.type === "replay") {\n            awaitingReplayRef.current = true;\n          }');
+  });
+
+  test("requests a replay for daemon-reported mode changes after initial replay", () => {
+    expect(shouldRequestReplayForAuthoritativeMode("clamped", "fill", true)).toBe(true);
+    expect(shouldRequestReplayForAuthoritativeMode("fill", "clamped", true)).toBe(true);
+    expect(shouldRequestReplayForAuthoritativeMode("fill", "fill", true)).toBe(false);
+    expect(shouldRequestReplayForAuthoritativeMode("clamped", "fill", false)).toBe(false);
   });
 
   test("refreshes the renderer when a hidden terminal becomes visible", () => {
@@ -198,6 +265,41 @@ describe("TerminalView", () => {
     );
 
     expect(calls).toEqual(["resize:80x24", "reset"]);
+  });
+
+  test("can refresh replay scrollback without changing the current authoritative grid", () => {
+    const calls: string[] = [];
+
+    refreshTerminalForReplay({
+      clear: () => calls.push("clear"),
+      scrollToBottom: () => calls.push("scrollToBottom")
+    });
+
+    expect(calls).toEqual(["clear", "scrollToBottom"]);
+  });
+
+  test("keeps the viewport at the bottom after rebuilding replay scrollback", async () => {
+    const term = new Terminal({ cols: 20, rows: 3, scrollback: 100, allowProposedApi: true, convertEol: true });
+
+    await writeTerminal(term, "old1\nold2\nold3\nold4\n");
+    term.scrollLines(-1);
+
+    refreshTerminalForReplay(term);
+    await writeTerminal(term, "new1\nnew2\nnew3\nnew4\nnew5\n");
+    term.scrollToBottom();
+
+    expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
+  });
+
+  test("refreshes live replay scrollback without resetting terminal modes", () => {
+    const calls: string[] = [];
+
+    refreshTerminalForReplay({
+      clear: () => calls.push("clear"),
+      scrollToBottom: () => calls.push("scrollToBottom")
+    });
+
+    expect(calls).not.toContain("reset");
   });
 
   test("does not refit while a selected session replay depends on its captured grid", () => {
