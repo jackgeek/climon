@@ -1,5 +1,8 @@
 import { useEffect, useMemo } from "react";
 import type { SessionMeta } from "../types.js";
+import { webLog } from "./log.js";
+
+const log = webLog("attention-alerts");
 
 export interface AttentionAlert {
   title: string;
@@ -99,7 +102,7 @@ function browserStorage(storage?: NotificationStorage | null): NotificationStora
   try {
     return window.localStorage;
   } catch (error) {
-    console.warn("Unable to access notification preference storage.", error);
+    log.warn({ err: String(error) }, "Unable to access notification preference storage.");
     return null;
   }
 }
@@ -118,7 +121,7 @@ export function readBrowserNotificationsEnabled(
         preference = stored === "true";
       }
     } catch (error) {
-      console.warn("Unable to read notification preference.", error);
+      log.warn({ err: String(error) }, "Unable to read notification preference.");
     }
   }
   return notificationsEnabledFromState(permission, preference);
@@ -132,7 +135,7 @@ export function writeBrowserNotificationsEnabled(enabled: boolean, storage?: Not
   try {
     resolvedStorage.setItem(NOTIFICATIONS_ENABLED_STORAGE_KEY, String(enabled));
   } catch (error) {
-    console.warn("Unable to write notification preference.", error);
+    log.warn({ err: String(error) }, "Unable to write notification preference.");
   }
 }
 

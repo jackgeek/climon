@@ -62,6 +62,9 @@ import {
   shouldShowTunnelDownBanner
 } from "./pwa/push.js";
 import { parseSessionFromSearch, parseOpenSessionMessage } from "./pwa/pushData.js";
+import { webLog } from "./log.js";
+
+const log = webLog("app");
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -465,7 +468,7 @@ export function App() {
       return;
     }
     void registerServiceWorker().catch((error) => {
-      console.warn("Service worker registration failed", error);
+      log.warn({ err: String(error) }, "Service worker registration failed");
     });
   }, [pushSupported, isTunnelOrigin]);
 
@@ -901,7 +904,7 @@ export function App() {
       if (notificationsEnabled) {
         writeBrowserNotificationsEnabled(false);
         setNotificationsEnabled(false);
-        void unsubscribeFromPush().catch((error) => console.warn("Push unsubscribe failed", error));
+        void unsubscribeFromPush().catch((error) => log.warn({ err: String(error) }, "Push unsubscribe failed"));
         return;
       }
       void requestBrowserNotificationPermission().then(async (permission) => {
@@ -918,7 +921,7 @@ export function App() {
           setNotificationsEnabled(true);
           setNotificationMessage(null);
         } catch (error) {
-          console.warn("Push subscribe failed", error);
+          log.warn({ err: String(error) }, "Push subscribe failed");
           writeBrowserNotificationsEnabled(false);
           setNotificationsEnabled(false);
           setNotificationMessage("Failed to enable push notifications. Make sure climon is installed to your home screen and try again.");

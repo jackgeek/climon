@@ -1,3 +1,7 @@
+import { webLog } from "./log.js";
+
+const log = webLog("sidebar-collapse");
+
 export const SIDEBAR_COLLAPSED_STORAGE_KEY = "climon.sidebarCollapsed";
 
 type SidebarCollapseStorage = Pick<Storage, "getItem" | "setItem">;
@@ -22,7 +26,7 @@ function resolveStorage(
   try {
     return resolveBrowserStorage();
   } catch (error) {
-    console.warn(warningMessage, error);
+    log.warn({ err: String(error) }, warningMessage);
     return null;
   }
 }
@@ -43,7 +47,7 @@ export function readSidebarCollapsed(
   try {
     return resolvedStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
   } catch (error) {
-    console.warn("Unable to read sidebar collapse preference.", error);
+    log.warn({ err: String(error) }, "Unable to read sidebar collapse preference.");
     return false;
   }
 }
@@ -65,7 +69,7 @@ export function writeSidebarCollapsed(
   try {
     resolvedStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(collapsed));
   } catch (error) {
-    console.warn("Unable to write sidebar collapse preference.", error);
+    log.warn({ err: String(error) }, "Unable to write sidebar collapse preference.");
   }
 }
 
