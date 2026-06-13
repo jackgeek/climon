@@ -43,5 +43,5 @@ export function buildFileStream(
   const dir = logDirForRole(role, env);
   mkdirSync(dir, { recursive: true });
   const path = logFilePathForRole(role, env, sessionId);
-  return { stream: pino.destination({ dest: path, sync: false, mkdir: true }) as unknown as NodeJS.WritableStream };
+  return { stream: pino.destination({ dest: path, sync: true, mkdir: true }) as unknown as NodeJS.WritableStream };
 }
