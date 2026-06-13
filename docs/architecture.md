@@ -199,6 +199,16 @@ dev-tunnel origin (`*.devtunnels.ms` + HTTPS); desktop/localhost keeps the
 foreground `Notification` API. SSE (`/api/events`) remains the live in-app update
 channel; Web Push is only for background attention alerts.
 
+Notifications for the session the user is actively viewing are suppressed. The
+client computes a single "viewed session" (mirroring `TerminalView`'s
+`terminalVisible` rule). The in-app alert manager (`src/web/attentionAlerts.ts`)
+excludes it from the title count and alerts, and `App.tsx` auto-acknowledges it
+so the daemon clears the attention state. For background push, `sw.ts` asks open
+window clients which session they are viewing (via a `MessageChannel` reply) and
+suppresses the OS notification when any client reports viewing the pushed session
+(`shouldSuppressPush` in `src/web/pwa/pushData.ts`); it defaults to showing the
+notification on no/late reply.
+
 ## Remote clients (dev-tunnel uplink)
 
 A devbox runs a singleton **uplink** agent (`climon __uplink`) that connects to
