@@ -581,8 +581,8 @@ function probeSocket(socketPath: string, timeoutMs = 2000): Promise<boolean> {
 /**
  * Decides whether a session should be marked disconnected on dashboard startup.
  * Local sessions require a live daemonPid AND a responsive socket. Remote
- * sessions have no per-session daemonPid (their socket is owned by the ingest
- * daemon), so they are judged purely by probing the socket directly.
+ * sockets are active ingest bridges: connecting to them is observable by the
+ * remote side, so liveness is owned by the ingest/uplink keepalive lifecycle.
  */
 export async function shouldMarkDisconnected(
   session: SessionMeta,
@@ -597,7 +597,7 @@ export async function shouldMarkDisconnected(
     return false;
   }
   if (session.origin === "remote") {
-    return !(await probe(session.socketPath));
+    return false;
   }
   const pidAlive = session.daemonPid ? isProcessAlive(session.daemonPid) : false;
   const socketOk = pidAlive ? await probe(session.socketPath) : false;

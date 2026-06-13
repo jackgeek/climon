@@ -58,6 +58,8 @@ const TERMINAL_SCROLLBACK = 10_000;
 const WHEEL_PIXEL_LINE_HEIGHT = 20;
 const DOM_DELTA_LINE = 1;
 const DOM_DELTA_PAGE = 2;
+const RECONNECT_BASE_DELAY_MS = 250;
+const RECONNECT_MAX_DELAY_MS = 5_000;
 
 export const terminalOptions = {
   allowProposedApi: true,
@@ -161,6 +163,28 @@ export function completeInitialReplay(
   refit();
 }
 
+export function reconnectDelayMs(attempt: number): number {
+  const normalizedAttempt = Math.max(0, Math.floor(attempt));
+  return Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** normalizedAttempt);
+}
+
+export function shouldReconnectLiveAttachment(state: {
+  session: Pick<SessionMeta, "id" | "status"> | null | undefined;
+  sessionId: string;
+  attachmentGeneration: number;
+  currentGeneration: number;
+  visible: boolean;
+}): boolean {
+  const session = state.session;
+  return (
+    state.attachmentGeneration === state.currentGeneration &&
+    state.visible &&
+    !!session &&
+    session.id === state.sessionId &&
+    isLiveStatus(session.status)
+  );
+}
+
 export function applyTerminalFontSize(term: FontResizableTerminal, fontSize: number, refit: () => void): void {
   term.options.fontSize = fontSize;
   refreshTerminalRender(term);
@@ -232,6 +256,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const visibleRef = useRef(visible);
   const initialReplayCompleteRef = useRef(true);
   const attachmentGenerationRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -339,8 +365,19 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     focusTerminalPane(termRef.current, refreshActiveTerminal);
   }
 
+  function clearReconnectTimer(): void {
+    if (reconnectTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+  }
+
   function closeWs(): void {
+    clearReconnectTimer();
+    reconnectAttemptRef.current = 0;
     attachmentGenerationRef.current++;
+    initialReplayCompleteRef.current = true;
     if (wsRef.current) {
       try {
         wsRef.current.close();
@@ -350,6 +387,153 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       wsRef.current = null;
       attachedSessionIdRef.current = null;
     }
+  }
+
+  function isCurrentAttachment(ws: WebSocket, sessionId: string, attachmentGeneration: number): boolean {
+    return (
+      wsRef.current === ws &&
+      attachedSessionIdRef.current === sessionId &&
+      attachmentGeneration === attachmentGenerationRef.current
+    );
+  }
+
+  function scheduleReconnect(sessionId: string, attachmentGeneration: number): void {
+    clearReconnectTimer();
+    if (
+      !shouldReconnectLiveAttachment({
+        session: selectedSessionRef.current,
+        sessionId,
+        attachmentGeneration,
+        currentGeneration: attachmentGenerationRef.current,
+        visible: visibleRef.current
+      })
+    ) {
+      return;
+    }
+    const delay = reconnectDelayMs(reconnectAttemptRef.current);
+    reconnectAttemptRef.current += 1;
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      const currentSession = selectedSessionRef.current;
+      if (
+        !currentSession ||
+        !shouldReconnectLiveAttachment({
+          session: currentSession,
+          sessionId,
+          attachmentGeneration,
+          currentGeneration: attachmentGenerationRef.current,
+          visible: visibleRef.current
+        })
+      ) {
+        return;
+      }
+      attachLiveSession(currentSession, true);
+    }, delay);
+  }
+
+  function attachLiveSession(liveSession: SessionMeta, resetBeforeReplay: boolean): void {
+    clearReconnectTimer();
+    attachmentGenerationRef.current++;
+    const attachmentGeneration = attachmentGenerationRef.current;
+    const ws = new WebSocket(attachSocketUrl(liveSession.id));
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+    attachedSessionIdRef.current = liveSession.id;
+    initialReplayCompleteRef.current = false;
+
+    let firstBinaryFrame = true;
+    let disconnected = false;
+    let terminalExitReceived = false;
+
+    function handleDisconnect(): void {
+      if (disconnected) {
+        return;
+      }
+      disconnected = true;
+      if (attachmentGeneration !== attachmentGenerationRef.current) {
+        return;
+      }
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+        attachedSessionIdRef.current = null;
+      }
+      initialReplayCompleteRef.current = true;
+      if (!terminalExitReceived) {
+        scheduleReconnect(liveSession.id, attachmentGeneration);
+      }
+    }
+
+    ws.onopen = () => {
+      if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
+        return;
+      }
+      flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
+      flushAttentionAck();
+    };
+    ws.onmessage = (ev) => {
+      if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
+        return;
+      }
+      const term = termRef.current;
+      if (!term) {
+        return;
+      }
+      if (typeof ev.data === "string") {
+        try {
+          const msg = JSON.parse(ev.data) as {
+            type: string;
+            exitCode?: number;
+            cols?: number;
+            rows?: number;
+            mode?: TerminalResizeMode;
+          };
+          if (msg.type === "exit") {
+            terminalExitReceived = true;
+            term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
+          } else if (msg.type === "size" && msg.cols && msg.rows) {
+            // Authoritative PTY size from the daemon: match it so both the host
+            // terminal and this viewer render the same grid.
+            applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
+          } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
+            onViewModeChangeRef.current(msg.mode);
+          }
+        } catch {
+          // Ignore malformed control messages.
+        }
+      } else {
+        const data = new Uint8Array(ev.data as ArrayBuffer);
+        if (initialReplayCompleteRef.current) {
+          term.write(data);
+        } else {
+          if (firstBinaryFrame) {
+            firstBinaryFrame = false;
+            if (resetBeforeReplay) {
+              term.reset();
+            }
+          }
+          term.write(data, () => {
+            completeInitialReplay(
+              attachmentGeneration,
+              attachmentGenerationRef.current,
+              () => {
+                initialReplayCompleteRef.current = true;
+                reconnectAttemptRef.current = 0;
+              },
+              refreshActiveTerminal
+            );
+          });
+        }
+      }
+    };
+    ws.onerror = () => {
+      handleDisconnect();
+      try {
+        ws.close();
+      } catch {
+        // Ignore: socket may already be closing.
+      }
+    };
+    ws.onclose = handleDisconnect;
   }
 
   // Create the terminal once and wire input + resize handling.
@@ -454,62 +638,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (!visible) {
         return;
       }
-      const ws = new WebSocket(attachSocketUrl(session.id));
-      ws.binaryType = "arraybuffer";
-      wsRef.current = ws;
-      attachedSessionIdRef.current = session.id;
-      initialReplayCompleteRef.current = false;
-      ws.onopen = () => {
-        flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode);
-        flushAttentionAck();
-      };
-      ws.onmessage = (ev) => {
-        if (
-          wsRef.current !== ws ||
-          attachedSessionIdRef.current !== session.id ||
-          attachmentGeneration !== attachmentGenerationRef.current
-        ) {
-          return;
-        }
-        if (typeof ev.data === "string") {
-          try {
-            const msg = JSON.parse(ev.data) as {
-              type: string;
-              exitCode?: number;
-              cols?: number;
-              rows?: number;
-              mode?: TerminalResizeMode;
-            };
-            if (msg.type === "exit") {
-              term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
-            } else if (msg.type === "size" && msg.cols && msg.rows) {
-              // Authoritative PTY size from the daemon: match it so both the host
-              // terminal and this viewer render the same grid.
-              applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
-            } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
-              onViewModeChangeRef.current(msg.mode);
-            }
-          } catch {
-            // Ignore malformed control messages.
-          }
-        } else {
-          const data = new Uint8Array(ev.data as ArrayBuffer);
-          if (initialReplayCompleteRef.current) {
-            term.write(data);
-          } else {
-            term.write(data, () => {
-              completeInitialReplay(
-                attachmentGeneration,
-                attachmentGenerationRef.current,
-                () => {
-                  initialReplayCompleteRef.current = true;
-                },
-                refreshActiveTerminal
-              );
-            });
-          }
-        }
-      };
+      attachLiveSession(session, false);
     } else {
       void fetchScrollback(session.id).then((buf) => {
         if (cancelled) {

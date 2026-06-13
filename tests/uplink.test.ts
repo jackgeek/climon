@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { writeSessionMeta } from "../src/store.js";
 import { ensureClimonHome } from "../src/config.js";
 import { MuxDecoder } from "../src/remote/mux.js";
+import { muxIdleTimeoutMs } from "../src/remote/keepalive.js";
 import { ensureClientId, resolveUplinkConfig, runUplinkBridge } from "../src/remote/uplink.js";
 import type { SessionMeta } from "../src/types.js";
 
@@ -52,6 +53,12 @@ describe("ensureClientId", () => {
 });
 
 describe("runUplinkBridge", () => {
+  test("computes a mux idle timeout from the keepalive interval", () => {
+    expect(muxIdleTimeoutMs(0)).toBe(0);
+    expect(muxIdleTimeoutMs(50)).toBe(150);
+    expect(muxIdleTimeoutMs(50.2)).toBe(151);
+  });
+
   test("sends hello then advertises existing local sessions", async () => {
     const now = new Date().toISOString();
     const meta: SessionMeta = {
@@ -134,6 +141,22 @@ describe("runUplinkBridge", () => {
     await done;
 
     expect(received).toEqual(["hello"]);
+    server.close();
+  });
+
+  test("closes an idle mux channel whose keepalive is not answered", async () => {
+    const server: Server = createServer((_socket: Socket) => {
+      // Intentionally do not write any mux frames back to the uplink.
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const client = connect(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", r));
+
+    const done = runUplinkBridge(client, { env, clientId: "dev1", keepAliveSeconds: 0.05 });
+    await done;
+
+    expect(client.destroyed).toBe(true);
     server.close();
   });
 });

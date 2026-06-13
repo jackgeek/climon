@@ -17,6 +17,7 @@ import { connectSessionSocket } from "../session-socket.js";
 import { discoverDashboard } from "./discovery.js";
 import { isProcessAlive } from "../process-kill.js";
 import { debugUplink as log } from "./debug.js";
+import { muxIdleTimeoutMs } from "./keepalive.js";
 
 export interface UplinkConfig {
   enabled: boolean;
@@ -137,7 +138,8 @@ export async function runUplinkBridge(
   options: { env?: NodeJS.ProcessEnv; clientId: string; keepAliveSeconds?: number }
 ): Promise<void> {
   const env = options.env ?? process.env;
-  const keepAliveMs = (options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS) * 1000;
+  const keepAliveMs = Math.max(0, (options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS) * 1000);
+  const idleTimeoutMs = muxIdleTimeoutMs(keepAliveMs);
   log(`bridge connected, sending hello (clientId=${options.clientId}, keepAlive=${keepAliveMs}ms)`);
   let bytesSent = 0;
   let bytesReceived = 0;
@@ -163,16 +165,33 @@ export async function runUplinkBridge(
   }
 
   // Periodic keepalive ping prevents the dev tunnel relay from dropping idle
-  // forwarded connections. Both sides send pings; a pong reply is not required
-  // but confirms the remote end is still processing frames.
+  // forwarded connections. Both sides send pings; any inbound mux frame keeps the
+  // channel alive, while a silent peer is torn down so the supervisor reconnects.
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const armIdleTimer = (): void => {
+    if (idleTimeoutMs <= 0) {
+      return;
+    }
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+    }
+    idleTimer = setTimeout(() => {
+      log(`channel idle for ${idleTimeoutMs}ms, destroying bridge`);
+      channel.destroy();
+    }, idleTimeoutMs);
+    idleTimer.unref?.();
+  };
   if (keepAliveMs > 0) {
     keepAliveTimer = setInterval(() => {
       bridge.write(encodeControl({ kind: "ping" }));
     }, keepAliveMs);
+    keepAliveTimer.unref?.();
+    armIdleTimer();
   }
 
   channel.on("data", (chunk: Buffer) => {
+    armIdleTimer();
     bytesReceived += chunk.length;
     let messages;
     try {
@@ -204,6 +223,7 @@ export async function runUplinkBridge(
     const teardown = (reason: string): void => {
       log(`channel ${reason}, tearing down bridge (sent=${bytesSent} recv=${bytesReceived})`);
       if (keepAliveTimer) clearInterval(keepAliveTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       watcher?.close();
       for (const socket of bridge.attached.values()) socket.destroy();
       resolve();

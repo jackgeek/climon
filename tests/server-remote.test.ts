@@ -91,19 +91,19 @@ describe("shouldMarkDisconnected", () => {
     expect(await shouldMarkDisconnected(meta({ origin: "local", daemonPid: undefined }), probe)).toBe(true);
   });
 
-  test("remote session probes the socket directly, ignoring missing daemonPid", async () => {
-    const probeAlive = async () => true;
-    expect(await shouldMarkDisconnected(meta({ origin: "remote", daemonPid: undefined }), probeAlive)).toBe(false);
+  test("remote sessions are left to ingest liveness without probing their bridge sockets", async () => {
+    let probed = false;
+    const probe = async () => {
+      probed = true;
+      return false;
+    };
+    expect(await shouldMarkDisconnected(meta({ origin: "remote", daemonPid: undefined }), probe)).toBe(false);
+    expect(probed).toBe(false);
   });
 
-  test("remote session with dead socket -> disconnected", async () => {
+  test("paused local sessions can be marked disconnected when unreachable", async () => {
     const probeDead = async () => false;
-    expect(await shouldMarkDisconnected(meta({ origin: "remote" }), probeDead)).toBe(true);
-  });
-
-  test("paused live sessions can be marked disconnected when unreachable", async () => {
-    const probeDead = async () => false;
-    expect(await shouldMarkDisconnected(meta({ status: "paused", origin: "remote" }), probeDead)).toBe(true);
+    expect(await shouldMarkDisconnected(meta({ status: "paused", origin: "local" }), probeDead)).toBe(true);
   });
 
   test("terminated sessions are never touched", async () => {
