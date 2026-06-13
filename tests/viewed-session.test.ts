@@ -72,8 +72,18 @@ describe("viewedSessionAttentionAck", () => {
     expect(viewedSessionAttentionAck(null, sessions, null)).toBeNull();
   });
 
+  test("returns null when the viewed session is not in the list", () => {
+    const sessions = [session({ id: "a", status: "needs-attention", attentionMatchedAt: "a-1" })];
+    expect(viewedSessionAttentionAck("missing", sessions, null)).toBeNull();
+  });
+
   test("returns null when the viewed session does not need attention", () => {
     const sessions = [session({ id: "a", status: "running" })];
+    expect(viewedSessionAttentionAck("a", sessions, null)).toBeNull();
+  });
+
+  test("returns null when needs-attention but attentionMatchedAt is absent", () => {
+    const sessions = [session({ id: "a", status: "needs-attention" })];
     expect(viewedSessionAttentionAck("a", sessions, null)).toBeNull();
   });
 
