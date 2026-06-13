@@ -186,9 +186,9 @@ describe("SessionItem compact rendering", () => {
       })
     );
 
-    expect(markup).toContain("border-right:4px solid #729fcf");
+    expect(markup).toContain("border:4px solid #729fcf");
     expect(markup).toContain("climon-active-marker");
-    expect(markup).toContain("border-right:16px solid #729fcf");
+    expect(markup).toContain("border-right:12px solid #729fcf");
     expect(markup).not.toContain("#3465a4");
   });
 });
@@ -268,8 +268,7 @@ describe("SessionItem terminated controls", () => {
           onNew: () => {},
           onPauseToggle: () => {},
           onSelect: () => {},
-          viewMode: "fill",
-          viewModeToggleable: true
+          viewMode: "fill"
         })
       );
 
@@ -302,8 +301,7 @@ describe("SessionItem clamp lock", () => {
         ...lockProps,
         active: true,
         session: makeSession(),
-        viewMode: "clamped",
-        viewModeToggleable: true
+        viewMode: "clamped"
       })
     );
 
@@ -317,8 +315,7 @@ describe("SessionItem clamp lock", () => {
         ...lockProps,
         active: true,
         session: makeSession(),
-        viewMode: "fill",
-        viewModeToggleable: true
+        viewMode: "fill"
       })
     );
 
@@ -326,35 +323,33 @@ describe("SessionItem clamp lock", () => {
     expect(markup).not.toContain('data-icon="lock-closed"');
   });
 
-  test("forces a closed, disabled lock when locked even if the mode is fill", () => {
+  test("forces a closed lock when locked even if the mode is fill", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionItem, {
         ...lockProps,
         active: true,
         session: makeSession(),
         viewMode: "fill",
-        viewModeToggleable: true,
         viewModeLocked: true
       })
     );
 
     expect(markup).toContain('data-icon="lock-closed"');
     expect(markup).not.toContain('data-icon="lock-open"');
-    expect(markup).toContain('data-disabled="true"');
+    expect(markup).not.toContain('data-disabled="true"');
   });
 
-  test("disables the lock when the mode is not toggleable", () => {
+  test("keeps the lock enabled for the active session", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionItem, {
         ...lockProps,
         active: true,
         session: makeSession(),
-        viewMode: "clamped",
-        viewModeToggleable: false
+        viewMode: "clamped"
       })
     );
 
-    expect(markup).toContain('data-disabled="true"');
+    expect(markup).not.toContain('data-disabled="true"');
   });
 
   test("renders the lock for inactive live sessions so hover can reveal it", () => {
@@ -363,8 +358,7 @@ describe("SessionItem clamp lock", () => {
         ...lockProps,
         active: false,
         session: makeSession(),
-        viewMode: "fill",
-        viewModeToggleable: true
+        viewMode: "fill"
       })
     );
 
