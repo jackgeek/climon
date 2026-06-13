@@ -24,7 +24,7 @@ export function initLogger(role: LogRole, options: LoggerInitOptions = {}): Logg
   }
 
   const streams: StreamEntry[] = [
-    buildFileStream(role, env, options.sessionId),
+    { ...buildFileStream(role, env, options.sessionId), level },
     ...(TERMINAL_ROLES.has(role) ? [{ stream: createPrettyStream(), level: "info" as const }] : []),
     ...(options.extraStreams ?? []),
   ];

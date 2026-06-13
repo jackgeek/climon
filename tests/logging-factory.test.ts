@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { logDirForRole, logFilePathForRole } from "../src/logging/sinks.js";
 import {
@@ -53,6 +53,29 @@ describe("logger factory", () => {
       initLogger("server", { level: "info", env: { CLIMON_HOME: home } as NodeJS.ProcessEnv });
       getLogger().info("hello");
       expect(existsSync(join(home, "logs", "server"))).toBe(true);
+    } finally {
+      resetLoggerForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("debug records reach the file for multistream (terminal) roles", () => {
+    const home = mkdtempSync(join(tmpdir(), "climon-debug-"));
+    try {
+      resetLoggerForTests();
+      // "server" is a terminal role, so the file stream is combined with the
+      // pretty stream via pino.multistream. The file stream must capture the
+      // logger's full level (not multistream's "info" default) or debug/trace
+      // diagnostics are silently dropped from the log file.
+      initLogger("server", { level: "trace", env: { CLIMON_HOME: home } as NodeJS.ProcessEnv });
+      const log = getLogger();
+      log.debug("debug-marker-xyz");
+      log.flush?.();
+      const file = logFilePathForRole("server", { CLIMON_HOME: home } as NodeJS.ProcessEnv);
+      const dir = join(home, "logs", "server");
+      const written = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).join("");
+      expect(file.startsWith(dir)).toBe(true);
+      expect(written).toContain("debug-marker-xyz");
     } finally {
       resetLoggerForTests();
       rmSync(home, { recursive: true, force: true });
