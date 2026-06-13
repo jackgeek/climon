@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { clampResize, revertSize } from "../src/daemon/daemon.js";
+import {
+  buildMousePrivateModeReplaySuffix,
+  clampResize,
+  revertSize,
+  trackMousePrivateModesFromOutput
+} from "../src/daemon/daemon.js";
 
 const host = { cols: 80, rows: 24 };
 
@@ -54,5 +59,33 @@ describe("revertSize", () => {
 
   test("floors the host dimensions at 1x1", () => {
     expect(revertSize({ cols: 0, rows: -3 }, { cols: 40, rows: 12 })).toEqual({ cols: 1, rows: 1 });
+  });
+});
+
+describe("mouse private mode replay tracking", () => {
+  test("tracks private mouse modes across split output chunks", () => {
+    const state = new Map<string, boolean>();
+    const remainder = trackMousePrivateModesFromOutput(state, "\x1b[?10");
+    expect(remainder).toBe("\x1b[?10");
+    const nextRemainder = trackMousePrivateModesFromOutput(state, "00h", remainder);
+    expect(nextRemainder).toBe("");
+    expect(state.get("1000")).toBe(true);
+  });
+
+  test("tracks mixed enable/disable controls and keeps the latest state", () => {
+    const state = new Map<string, boolean>();
+    const remainder = trackMousePrivateModesFromOutput(state, "\x1b[?1000;1006h\x1b[?1000l");
+    expect(remainder).toBe("");
+    expect(state.get("1000")).toBe(false);
+    expect(state.get("1006")).toBe(true);
+  });
+
+  test("builds a deterministic replay suffix for enabled mouse modes", () => {
+    const state = new Map<string, boolean>([
+      ["1000", true],
+      ["1006", true],
+      ["1002", false]
+    ]);
+    expect(buildMousePrivateModeReplaySuffix(state).toString()).toBe("\x1b[?1000h\x1b[?1006h");
   });
 });
