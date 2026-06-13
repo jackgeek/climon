@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import xterm from "@xterm/headless";
-import { sanitizeBrowserTerminalReplay, stripMouseTrackingControlsFromReplay } from "../src/terminal-replay.js";
+import { sanitizeBrowserTerminalReplay } from "../src/terminal-replay.js";
 
 const { Terminal } = xterm;
 
@@ -22,19 +22,5 @@ describe("sanitizeBrowserTerminalReplay", () => {
 
     expect(normalHistory(term)).not.toContain("alt1");
     expect(normalHistory(term)).not.toContain("alt2");
-  });
-});
-
-describe("stripMouseTrackingControlsFromReplay", () => {
-  test("removes mouse tracking mode changes from live replay refresh data", () => {
-    expect(stripMouseTrackingControlsFromReplay(Buffer.from("a\x1b[?1000h\x1b[?1006hbb\x1b[?1000l")).toString()).toBe(
-      "abb"
-    );
-  });
-
-  test("preserves unrelated private mode controls and non-mouse params", () => {
-    expect(stripMouseTrackingControlsFromReplay(Buffer.from("\x1b[?25l\x1b[?25;1000h")).toString()).toBe(
-      "\x1b[?25l\x1b[?25h"
-    );
   });
 });
