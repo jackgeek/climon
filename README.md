@@ -320,6 +320,21 @@ Notes:
 
 See [docs/security.md](docs/security.md) for the full threat model.
 
+### Install on mobile (PWA) + push notifications
+
+When you open a Tunnel Link on a phone, the dashboard menu shows **Install as PWA**.
+Installing adds climon to your home screen so it can deliver **push notifications when
+a session needs attention** — even when the app is closed.
+
+- Android (Chrome): tap **Install as PWA**, then **Install**.
+- iPhone (Safari, iOS 16.4+): tap **Install as PWA** for instructions, then use
+  **Share → Add to Home Screen**. Open climon from the new icon, then enable
+  notifications from the menu.
+
+The install is **temporary**: it only works while that Tunnel Link is up. When the
+tunnel closes, the app shows a banner asking you to long-press the icon and choose
+**Uninstall**.
+
 ### Manual dev tunnel creation
 
 The dashboard's **Auto-create tunnel** button is the easiest path. If you want
