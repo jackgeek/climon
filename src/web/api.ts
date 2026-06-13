@@ -179,6 +179,15 @@ export async function fetchHealth(): Promise<{ version: string | null; remotesEn
   }
 }
 
+export async function probeHealthy(): Promise<boolean> {
+  try {
+    const res = await fetch(withQuery("/health"), { cache: "no-store" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function attachSocketUrl(id: string): string {
   return attachSocketUrlForLocation(id, location);
 }

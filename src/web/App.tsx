@@ -20,6 +20,7 @@ import {
   fetchSessions,
   deleteSession,
   fetchHealth,
+  probeHealthy,
   isLiveStatus,
   updateSession,
   closeDashboardTunnel,
@@ -51,6 +52,20 @@ import {
 import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 import { toggleViewMode } from "./view-mode.js";
+import { InstallPwaDialog } from "./components/InstallPwaDialog.js";
+import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa } from "./pwa/pwaContext.js";
+import {
+  registerServiceWorker,
+  subscribeToPush,
+  unsubscribeFromPush,
+  resolveNotificationMode,
+  shouldShowTunnelDownBanner
+} from "./pwa/push.js";
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+}
 
 type PanelView = TerminalPanelView | "closed";
 
@@ -218,6 +233,17 @@ const useStyles = makeStyles({
     margin: 0,
     color: tokens.colorNeutralForeground2,
     lineHeight: tokens.lineHeightBase400
+  },
+  tunnelDownBanner: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+    padding: "12px 16px",
+    textAlign: "center",
+    backgroundColor: tokens.colorPaletteRedBackground3,
+    color: tokens.colorNeutralForegroundOnBrand
   }
 });
 
@@ -407,6 +433,13 @@ export function App() {
   });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
+  const [pwaInstallOpen, setPwaInstallOpen] = useState(false);
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [tunnelDownBannerVisible, setTunnelDownBannerVisible] = useState(false);
+  const isTunnelOrigin = readIsTunnelOrigin();
+  const isStandalone = readIsStandalone();
+  const pushSupported = isPushSupported();
+  const installAvailable = canInstallPwa({ isTunnelOrigin, isStandalone });
   const [serverConnectionState, setServerConnectionState] = useState<ServerConnectionState>("connecting");
   const [serverReconnectToken, setServerReconnectToken] = useState(0);
   const dismissSplash = useCallback(() => setShowSplash(false), []);
@@ -424,6 +457,45 @@ export function App() {
   const swipeStartRef = useRef<KeyBarSwipeStart | null>(null);
   const serverConnectionStateRef = useRef<ServerConnectionState>("connecting");
   const hadServerConnectionRef = useRef(false);
+
+  useEffect(() => {
+    if (!pushSupported || !isTunnelOrigin) {
+      return;
+    }
+    void registerServiceWorker().catch((error) => {
+      console.warn("Service worker registration failed", error);
+    });
+  }, [pushSupported, isTunnelOrigin]);
+
+  useEffect(() => {
+    function onBeforeInstall(event: Event): void {
+      event.preventDefault();
+      setDeferredInstallPrompt(event as BeforeInstallPromptEvent);
+    }
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    return () => window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+  }, []);
+
+  useEffect(() => {
+    if (!isStandalone) {
+      return;
+    }
+    const FAILURE_THRESHOLD = 3;
+    const POLL_INTERVAL_MS = 15000;
+    let failures = 0;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      void probeHealthy().then((ok) => {
+        if (cancelled) return;
+        failures = ok ? 0 : failures + 1;
+        setTunnelDownBannerVisible(shouldShowTunnelDownBanner(failures, FAILURE_THRESHOLD));
+      });
+    }, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isStandalone]);
 
   useAttentionAlerts(sessions);
 
@@ -768,12 +840,47 @@ export function App() {
   }, []);
 
   const handleToggleNotifications = useCallback((): void => {
+    const mode = resolveNotificationMode({ pushSupported, isTunnelOrigin });
+
+    if (mode === "push") {
+      if (notificationsEnabled) {
+        writeBrowserNotificationsEnabled(false);
+        setNotificationsEnabled(false);
+        void unsubscribeFromPush().catch((error) => console.warn("Push unsubscribe failed", error));
+        return;
+      }
+      void requestBrowserNotificationPermission().then(async (permission) => {
+        const granted = notificationsEnabledFromState(permission, true);
+        if (!granted) {
+          writeBrowserNotificationsEnabled(false);
+          setNotificationsEnabled(false);
+          setNotificationMessage(browserNotificationPermissionMessage(permission));
+          return;
+        }
+        try {
+          await subscribeToPush();
+          writeBrowserNotificationsEnabled(true);
+          setNotificationsEnabled(true);
+          setNotificationMessage(null);
+        } catch (error) {
+          console.warn("Push subscribe failed", error);
+          writeBrowserNotificationsEnabled(false);
+          setNotificationsEnabled(false);
+          setNotificationMessage("Failed to enable push notifications. Make sure climon is installed to your home screen and try again.");
+        }
+      }).catch(() => {
+        writeBrowserNotificationsEnabled(false);
+        setNotificationsEnabled(false);
+        setNotificationMessage(browserNotificationPermissionMessage("request-failed"));
+      });
+      return;
+    }
+
     if (notificationsEnabled) {
       writeBrowserNotificationsEnabled(false);
       setNotificationsEnabled(false);
       return;
     }
-
     void requestBrowserNotificationPermission().then((permission) => {
       const enabled = notificationsEnabledFromState(permission, true);
       writeBrowserNotificationsEnabled(enabled);
@@ -784,7 +891,19 @@ export function App() {
       setNotificationsEnabled(false);
       setNotificationMessage(browserNotificationPermissionMessage("request-failed"));
     });
-  }, [notificationsEnabled]);
+  }, [notificationsEnabled, pushSupported, isTunnelOrigin]);
+
+  const handleInstallPwa = useCallback((): void => {
+    const prompt = deferredInstallPrompt;
+    if (prompt) {
+      void prompt.prompt().finally(() => {
+        setDeferredInstallPrompt(null);
+        setPwaInstallOpen(false);
+      });
+      return;
+    }
+    // iOS / no programmatic prompt: dialog already shows manual instructions.
+  }, [deferredInstallPrompt]);
 
   const handleTunnelLink = useCallback(async (): Promise<void> => {
     setTunnelLinkOpen(true);
@@ -831,6 +950,17 @@ export function App() {
           </DialogBody>
         </DialogSurface>
       </Dialog>
+      <InstallPwaDialog
+        open={pwaInstallOpen}
+        canPrompt={deferredInstallPrompt !== null}
+        onOpenChange={setPwaInstallOpen}
+        onInstall={handleInstallPwa}
+      />
+      {tunnelDownBannerVisible && (
+        <div role="alert" className={styles.tunnelDownBanner}>
+          This climon Tunnel Link is no longer available. Long-press the climon icon and choose Uninstall.
+        </div>
+      )}
       <div
         className={mergeClasses(
           styles.sidebar,
@@ -865,8 +995,8 @@ export function App() {
           onManageRemote={() => setRemoteOpen(true)}
           notificationsEnabled={notificationsEnabled}
           onToggleNotifications={handleToggleNotifications}
-          canInstallPwa={false}
-          onInstallPwa={() => {}}
+          canInstallPwa={installAvailable}
+          onInstallPwa={() => setPwaInstallOpen(true)}
           tunnelLinkStatus={tunnelLinkStatus}
           onTunnelLink={() => void handleTunnelLink()}
           onCloseTunnelLink={() => void handleCloseTunnelLink()}

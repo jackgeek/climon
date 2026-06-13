@@ -40,3 +40,12 @@ export async function unsubscribeFromPush(): Promise<void> {
   await subscription.unsubscribe();
   await postPushUnsubscribe(endpoint);
 }
+
+export type NotificationMode = "push" | "browser";
+
+export function resolveNotificationMode(opts: {
+  pushSupported: boolean;
+  isTunnelOrigin: boolean;
+}): NotificationMode {
+  return opts.pushSupported && opts.isTunnelOrigin ? "push" : "browser";
+}
