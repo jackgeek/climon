@@ -176,6 +176,9 @@ The dashboard server (`climon-server`) gains an additive, fail-safe push pipelin
 under `src/server/push/`:
 
 - `vapid.ts` loads-or-creates a VAPID keypair at `$CLIMON_HOME/push/vapid.json`.
+  The JWT `sub` claim defaults to a valid non-localhost `mailto:` (Apple rejects a
+  `localhost` subject with `BadJwtToken`) and can be overridden with a real contact
+  via `CLIMON_VAPID_SUBJECT`.
 - `subscriptions.ts` persists browser push subscriptions atomically at
   `$CLIMON_HOME/push/subscriptions.json` (deduped by endpoint).
 - `attention.ts` is a pure tracker that flags sessions newly entering
@@ -188,10 +191,13 @@ under `src/server/push/`:
 
 The browser side registers `src/web/sw.ts` (served at `/sw.js`), subscribes via
 `PushManager` using the server's VAPID public key, and shows a notification on
-`push`. Push is only offered over a dev-tunnel origin (`*.devtunnels.ms` + HTTPS);
-desktop/localhost keeps the foreground `Notification` API. SSE (`/api/events`)
-remains the live in-app update channel; Web Push is only for background attention
-alerts.
+`push`. The notification is non-silent with a vibration pattern so the device
+plays its alert sound/haptics, and tapping it focuses (or opens) the dashboard
+deep-linked to the session that needs attention (`/?session=<id>` plus an
+`open-session` postMessage to an already-open tab). Push is only offered over a
+dev-tunnel origin (`*.devtunnels.ms` + HTTPS); desktop/localhost keeps the
+foreground `Notification` API. SSE (`/api/events`) remains the live in-app update
+channel; Web Push is only for background attention alerts.
 
 ## Remote clients (dev-tunnel uplink)
 

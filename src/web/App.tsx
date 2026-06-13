@@ -61,6 +61,7 @@ import {
   resolveNotificationMode,
   shouldShowTunnelDownBanner
 } from "./pwa/push.js";
+import { parseSessionFromSearch, parseOpenSessionMessage } from "./pwa/pushData.js";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -436,6 +437,7 @@ export function App() {
   const [pwaInstallOpen, setPwaInstallOpen] = useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [tunnelDownBannerVisible, setTunnelDownBannerVisible] = useState(false);
+  const [pendingPopId, setPendingPopId] = useState<string | null>(null);
   const isTunnelOrigin = readIsTunnelOrigin();
   const isStandalone = readIsStandalone();
   const pushSupported = isPushSupported();
@@ -496,6 +498,59 @@ export function App() {
       clearInterval(timer);
     };
   }, [isStandalone]);
+
+  // Bring a session front-and-center (e.g. when a push notification is tapped).
+  // Deferred via state so it also works when the session list hasn't loaded yet.
+  const popSession = useCallback((id: string): void => {
+    setPendingPopId(id);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingPopId) {
+      return;
+    }
+    const target = sessions.find((s) => s.id === pendingPopId);
+    if (!target) {
+      return; // wait until the session list includes it
+    }
+    setPendingPopId(null);
+    setActiveId(pendingPopId);
+    if (isMobile) {
+      setMaximized(true);
+    }
+    const attentionMatchedAt = target.attentionMatchedAt;
+    if (target.status === "needs-attention" && attentionMatchedAt) {
+      requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(pendingPopId, attentionMatchedAt));
+    }
+  }, [pendingPopId, sessions, isMobile]);
+
+  // Deep link: a notification-opened window arrives at /?session=<id>.
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const id = parseSessionFromSearch(window.location.search);
+    if (id) {
+      popSession(id);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [popSession]);
+
+  // Notification tapped while the app was already open: the service worker
+  // focuses this window and posts the session to open.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return;
+    }
+    const onMessage = (event: MessageEvent): void => {
+      const id = parseOpenSessionMessage(event.data);
+      if (id) {
+        popSession(id);
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [popSession]);
 
   useAttentionAlerts(sessions);
 

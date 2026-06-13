@@ -1,5 +1,10 @@
 /// <reference lib="webworker" />
-import { parsePushData } from "./pwa/pushData.js";
+import {
+  parsePushData,
+  buildNotificationOptions,
+  notificationTargetPath,
+  OPEN_SESSION_MESSAGE,
+} from "./pwa/pushData.js";
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -13,30 +18,29 @@ self.addEventListener("activate", (event: ExtendableEvent) => {
 
 self.addEventListener("push", (event: PushEvent) => {
   const data = parsePushData(event.data?.text());
-  event.waitUntil(
-    self.registration.showNotification(data.title, {
-      body: data.body,
-      icon: "/assets/icon-192.png",
-      badge: "/assets/icon-192.png",
-      tag: data.sessionId ? `climon-${data.sessionId}` : "climon",
-      data: { sessionId: data.sessionId },
-    }),
-  );
+  event.waitUntil(self.registration.showNotification(data.title, buildNotificationOptions(data)));
 });
 
 self.addEventListener("notificationclick", (event: NotificationEvent) => {
   event.notification.close();
-  const targetUrl = "/";
+  const sessionId =
+    (event.notification.data as { sessionId?: string } | null)?.sessionId ?? undefined;
+  const targetPath = notificationTargetPath(sessionId);
   event.waitUntil(
     (async () => {
       const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       for (const client of allClients) {
         if ("focus" in client) {
           await client.focus();
+          if (sessionId) {
+            client.postMessage({ type: OPEN_SESSION_MESSAGE, sessionId });
+          }
           return;
         }
       }
-      await self.clients.openWindow(targetUrl);
+      // No focusable client: open the dashboard deep-linked to the session.
+      // The freshly opened page reads ?session= on load and pops it.
+      await self.clients.openWindow(targetPath);
     })(),
   );
 });
