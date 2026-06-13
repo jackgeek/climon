@@ -4,7 +4,8 @@ import { createServer, connect, type Server } from "node:net";
 import { join } from "node:path";
 import { listSessions, readSessionMeta } from "../src/store.js";
 import { getRemoteHostPath } from "../src/config.js";
-import { encodeControl } from "../src/remote/mux.js";
+import { connectSessionSocket } from "../src/session-socket.js";
+import { encodeControl, MuxDecoder } from "../src/remote/mux.js";
 import { isValidRemoteId, runIngestConnection, TunnelHostSupervisor } from "../src/remote/ingest.js";
 import type { SessionMeta } from "../src/types.js";
 
@@ -192,6 +193,53 @@ describe("runIngestConnection", () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(await listSessions(env)).toHaveLength(0);
     await closeClientAndServer(client, server);
+  });
+
+  test("requests remote attach for every local bridge connection", async () => {
+    const server: Server = createServer((socket) => {
+      void runIngestConnection(socket, { env, maxSessions: 10 });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const client = connect(port, "127.0.0.1");
+    const decoder = new MuxDecoder();
+    const attaches: string[] = [];
+    const detaches: string[] = [];
+    client.on("data", (chunk) => {
+      for (const msg of decoder.push(chunk)) {
+        if (msg.type === "control" && msg.message.kind === "attach") {
+          attaches.push(msg.message.id);
+        } else if (msg.type === "control" && msg.message.kind === "detach") {
+          detaches.push(msg.message.id);
+        }
+      }
+    });
+    await new Promise<void>((r) => client.once("connect", r));
+    client.write(encodeControl({ kind: "hello", clientId: "dev1" }));
+    client.write(encodeControl({ kind: "session-added", meta: sampleMeta("s1") }));
+
+    const meta = await waitFor(async () => {
+      const value = await readSessionMeta("dev1~s1", env);
+      return value?.origin === "remote" && !value.socketPath.endsWith(":0") ? value : undefined;
+    });
+
+    const first = connectSessionSocket(meta.socketPath);
+    await new Promise<void>((r) => first.once("connect", r));
+    await waitFor(async () => (attaches.length >= 1 ? true : undefined));
+
+    const second = connectSessionSocket(meta.socketPath);
+    await new Promise<void>((r) => second.once("connect", r));
+    await waitFor(async () => (attaches.length >= 2 ? true : undefined));
+
+    first.destroy();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(detaches).toEqual([]);
+
+    second.destroy();
+    await waitFor(async () => (detaches.length === 1 ? true : undefined));
+    expect(attaches).toEqual(["s1", "s1"]);
+    expect(detaches).toEqual(["s1"]);
+    await closeClientAndServer(client, server, "dev1~s1");
   });
 
   test("tears down an idle mux channel whose keepalive is not answered", async () => {

@@ -244,9 +244,12 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
     const sockets = new Set<Socket>();
     const server = createNetServer((socket) => {
       sockets.add(socket);
-      if (sockets.size === 1) send(encodeControl({ kind: "attach", id: meta.id }));
+      send(encodeControl({ kind: "attach", id: meta.id }));
       socket.on("data", (chunk: Buffer) => send(encodeData(meta.id, chunk)));
+      let cleanedUp = false;
       const cleanup = (): void => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         sockets.delete(socket);
         if (sockets.size === 0) send(encodeControl({ kind: "detach", id: meta.id }));
       };
