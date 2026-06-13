@@ -54,6 +54,6 @@ describe("headless run", () => {
 
     expect(stderr).toBe("");
     expect(exitCode).toBe(0);
-    expect(id).toMatch(/^[a-z0-9]+-[a-f0-9]{6}$/);
+    expect(id).toMatch(/^[a-z]+(-[a-z]+){2}$/);
   }, 15000);
 });

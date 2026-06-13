@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { basename } from "node:path";
-import { randomBytes } from "node:crypto";
 import {
   ensureClimonHome,
   getClimonHome,
@@ -21,15 +20,12 @@ import { isProcessAlive, killProcess } from "./process-kill.js";
 import { detectDevtunnel, type DetectResult } from "./remote/tunnel.js";
 import { discoverDashboard } from "./remote/discovery.js";
 import { maybeAutoLink } from "./remote/link.js";
+import { generateSessionId } from "./session-id.js";
 import { formatSessionSocketRef } from "./session-socket.js";
 import { runSessionHost } from "./session-host.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 import { debugUplink as log } from "./remote/debug.js";
-
-function generateSessionId(): string {
-  return `${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
-}
 
 function terminalSize(): { cols: number; rows: number } {
   return {
@@ -259,7 +255,7 @@ export async function startMonitoredCommand(
     options.name = inferred.length > 0 ? inferred : buildDisplayCommand(command);
   }
 
-  const id = generateSessionId();
+  const id = await generateSessionId();
   const { cols, rows } = terminalSize();
   const now = new Date().toISOString();
   const meta: SessionMeta = {

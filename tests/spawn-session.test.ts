@@ -14,7 +14,7 @@ afterEach(async () => {
 describe("spawnHeadlessSession", () => {
   test("writes metadata with the given cwd and command, returns an id", async () => {
     const id = await spawnHeadlessSession(["sleep", "30"], "/tmp", { cols: 100, rows: 40 }, {}, env);
-    expect(id).toMatch(/^[a-z0-9]+-[a-f0-9]{6}$/);
+    expect(id).toMatch(/^[a-z]+(-[a-z]+){2}$/);
     const metaPath = join(home, "sessions", `${id}.json`);
     const meta = JSON.parse(await readFile(metaPath, "utf8")) as {
       cwd: string;
