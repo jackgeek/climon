@@ -865,6 +865,8 @@ export function App() {
           onManageRemote={() => setRemoteOpen(true)}
           notificationsEnabled={notificationsEnabled}
           onToggleNotifications={handleToggleNotifications}
+          canInstallPwa={false}
+          onInstallPwa={() => {}}
           tunnelLinkStatus={tunnelLinkStatus}
           onTunnelLink={() => void handleTunnelLink()}
           onCloseTunnelLink={() => void handleCloseTunnelLink()}

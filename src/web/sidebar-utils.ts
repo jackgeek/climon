@@ -1,5 +1,6 @@
 export const remotesMenuLabel = "Remotes";
 export const removeDisconnectedMenuLabel = "Remove disconnected";
+export const installPwaMenuLabel = "Install as PWA";
 export function notificationsMenuLabel(enabled: boolean): string {
   return enabled ? "Disable notifications" : "Enable notifications";
 }
