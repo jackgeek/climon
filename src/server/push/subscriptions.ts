@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export interface StoredPushSubscription {
@@ -34,10 +34,9 @@ async function readAll(climonHome: string): Promise<StoredPushSubscription[]> {
 
 async function writeAll(climonHome: string, subs: StoredPushSubscription[]): Promise<void> {
   const path = subscriptionsPath(climonHome);
-  await mkdir(dirname(path), { recursive: true });
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await Bun.write(tmp, JSON.stringify(subs, null, 2));
-  const { rename } = await import("node:fs/promises");
+  await writeFile(tmp, JSON.stringify(subs, null, 2), { mode: 0o600 });
   await rename(tmp, path);
 }
 

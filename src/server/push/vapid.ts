@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import webpush from "web-push";
 
@@ -29,7 +29,7 @@ export async function loadOrCreateVapidKeys(climonHome: string): Promise<VapidKe
     publicKey: generated.publicKey,
     privateKey: generated.privateKey,
   };
-  await mkdir(dirname(path), { recursive: true });
-  await Bun.write(path, JSON.stringify(keys, null, 2));
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, JSON.stringify(keys, null, 2), { mode: 0o600 });
   return keys;
 }

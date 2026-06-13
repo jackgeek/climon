@@ -979,6 +979,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   try {
     pushService = await createPushService(getClimonHome(process.env));
+    // Seed the attention tracker with the current sessions so the first real
+    // watcher-driven transition into needs-attention is detected (not consumed
+    // as the seed).
+    await pushService.notifyAttention(sortSessionsByPriority(await listSessions()));
     startupLog("push service ready");
   } catch (error) {
     serverLog(`push service unavailable: ${error instanceof Error ? error.message : String(error)}`);
