@@ -23,6 +23,7 @@ import { getShutdownRequestPath } from "./shutdown-request.js";
 import { getServerStatePath, readServerState } from "../server-state.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
 import { debugIngest as log } from "./debug.js";
+import { muxIdleTimeoutMs } from "./keepalive.js";
 
 const REMOTE_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STR = 4096;
@@ -310,15 +311,33 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
 
   // Keepalive ping from the ingest side keeps the tunnel relay alive even before
   // a devbox connects (the tunnel host process maintains the forwarded port).
-  const keepAliveMs = (options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS) * 1000;
+  const keepAliveMs = Math.max(0, (options.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS) * 1000);
+  const idleTimeoutMs = muxIdleTimeoutMs(keepAliveMs);
   let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const armIdleTimer = (): void => {
+    if (idleTimeoutMs <= 0) {
+      return;
+    }
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+    }
+    idleTimer = setTimeout(() => {
+      log(`client ${label ?? "unknown"} idle for ${idleTimeoutMs}ms, destroying channel`);
+      channel.destroy();
+    }, idleTimeoutMs);
+    idleTimer.unref?.();
+  };
   if (keepAliveMs > 0) {
     keepAliveTimer = setInterval(() => {
       send(encodeControl({ kind: "ping" }));
     }, keepAliveMs);
+    keepAliveTimer.unref?.();
+    armIdleTimer();
   }
 
   channel.on("data", (chunk: Buffer) => {
+    armIdleTimer();
     let messages;
     try {
       messages = decoder.push(chunk);
@@ -347,6 +366,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       tearingDown = true;
       log(`client ${label ?? "unknown"} disconnected, cleaning up ${sessions.size} session(s)`);
       if (keepAliveTimer) clearInterval(keepAliveTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       await controlChain;
       for (const remoteId of [...sessions.keys()]) await removeSession(remoteId);
       if (label && registry) registry.markTornDown(label, channel);

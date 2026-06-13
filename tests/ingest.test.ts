@@ -193,6 +193,31 @@ describe("runIngestConnection", () => {
     expect(await listSessions(env)).toHaveLength(0);
     await closeClientAndServer(client, server);
   });
+
+  test("tears down an idle mux channel whose keepalive is not answered", async () => {
+    const server: Server = createServer((socket) => {
+      void runIngestConnection(socket, { env, maxSessions: 10, keepAliveSeconds: 0.05 });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    const client = connect(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", r));
+    client.write(encodeControl({ kind: "hello", clientId: "dev1" }));
+    client.write(encodeControl({ kind: "session-added", meta: sampleMeta("s1") }));
+
+    await waitFor(async () => {
+      const meta = await readSessionMeta("dev1~s1", env);
+      return meta?.origin === "remote" ? meta : undefined;
+    });
+
+    const after = await waitFor(async () => {
+      const meta = await readSessionMeta("dev1~s1", env);
+      return meta?.status === "disconnected" ? meta : undefined;
+    });
+
+    expect(after.status).toBe("disconnected");
+    await closeClientAndServer(client, server);
+  });
 });
 
 
