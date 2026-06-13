@@ -12,7 +12,7 @@ import {
   focusTerminalPane,
   mapWheelToScrollLines,
   refreshTerminalRender,
-  resetTerminalForReplay,
+  refreshTerminalForReplay,
   resetTerminalForSession,
   shouldRequestReplayForAuthoritativeMode,
   shouldHandleWheelAsScrollback,
@@ -80,7 +80,7 @@ describe("TerminalView", () => {
       "const preserveExistingScreen = Boolean(session && liveSession && renderedSessionIdRef.current === session.id);"
     );
     expect(source).toContain(
-      "if (resetBeforeReplay || replayRequested) {\n                resetTerminalForReplay(term);\n                renderedSessionIdRef.current = session.id;\n                resetBeforeReplay = false;\n              }"
+      "if (resetBeforeReplay || replayRequested) {\n                refreshTerminalForReplay(term);\n                renderedSessionIdRef.current = session.id;\n                resetBeforeReplay = false;\n              }"
     );
     expect(source).toContain(
       "retryTimer = setTimeout(() => {\n              retryTimer = undefined;\n              attachLiveSocket();\n            }, LIVE_ATTACH_RETRY_MS);"
@@ -253,16 +253,15 @@ describe("TerminalView", () => {
     expect(calls).toEqual(["resize:80x24", "reset", "clear", "scrollToBottom"]);
   });
 
-  test("can reset replay scrollback without changing the current authoritative grid", () => {
+  test("can refresh replay scrollback without changing the current authoritative grid", () => {
     const calls: string[] = [];
 
-    resetTerminalForReplay({
-      reset: () => calls.push("reset"),
+    refreshTerminalForReplay({
       clear: () => calls.push("clear"),
       scrollToBottom: () => calls.push("scrollToBottom")
     });
 
-    expect(calls).toEqual(["reset", "clear", "scrollToBottom"]);
+    expect(calls).toEqual(["clear", "scrollToBottom"]);
   });
 
   test("keeps the viewport at the bottom after rebuilding replay scrollback", async () => {
@@ -271,11 +270,22 @@ describe("TerminalView", () => {
     await writeTerminal(term, "old1\nold2\nold3\nold4\n");
     term.scrollLines(-1);
 
-    resetTerminalForReplay(term);
+    refreshTerminalForReplay(term);
     await writeTerminal(term, "new1\nnew2\nnew3\nnew4\nnew5\n");
     term.scrollToBottom();
 
     expect(term.buffer.active.viewportY).toBe(term.buffer.active.baseY);
+  });
+
+  test("refreshes live replay scrollback without resetting terminal modes", () => {
+    const calls: string[] = [];
+
+    refreshTerminalForReplay({
+      clear: () => calls.push("clear"),
+      scrollToBottom: () => calls.push("scrollToBottom")
+    });
+
+    expect(calls).not.toContain("reset");
   });
 
   test("does not refit while a selected session replay depends on its captured grid", () => {

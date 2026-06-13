@@ -40,8 +40,7 @@ interface ResettableTerminal extends ResizableTerminal {
   scrollToBottom: () => void;
 }
 
-interface ReplayResettableTerminal {
-  reset: () => void;
+interface ReplayRefreshableTerminal {
   clear: () => void;
   scrollToBottom: () => void;
 }
@@ -140,11 +139,11 @@ export function resetTerminalForSession(term: ResettableTerminal, session: { col
   if (session) {
     applyAuthoritativeTerminalSize(term, session.cols, session.rows);
   }
-  resetTerminalForReplay(term);
+  term.reset();
+  refreshTerminalForReplay(term);
 }
 
-export function resetTerminalForReplay(term: ReplayResettableTerminal): void {
-  term.reset();
+export function refreshTerminalForReplay(term: ReplayRefreshableTerminal): void {
   term.clear();
   term.scrollToBottom();
 }
@@ -615,7 +614,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
               term.write(data);
             } else {
               if (resetBeforeReplay || replayRequested) {
-                resetTerminalForReplay(term);
+                refreshTerminalForReplay(term);
                 renderedSessionIdRef.current = session.id;
                 resetBeforeReplay = false;
               }
