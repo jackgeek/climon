@@ -7,7 +7,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { buildWebBundle } from "../src/server/web-build.ts";
+import { buildWebBundle, buildServiceWorkerBundle } from "../src/server/web-build.ts";
 
 const projectRoot = dirname(dirname(import.meta.path));
 
@@ -23,6 +23,10 @@ const lines: string[] = [
 const appJs = await buildWebBundle();
 lines.push(`export const WEB_APP_JS = Buffer.from("${Buffer.from(appJs, "utf8").toString("base64")}", "base64");`);
 
+// The bundled service worker, served at /sw.js.
+const swJs = await buildServiceWorkerBundle();
+lines.push(`export const WEB_SW_JS = Buffer.from("${Buffer.from(swJs, "utf8").toString("base64")}", "base64");`);
+
 // xterm's stylesheet, served separately and linked from the HTML shell.
 const xtermCss = readFileSync(Bun.resolveSync("@xterm/xterm/css/xterm.css", projectRoot));
 lines.push(`export const XTERM_CSS = Buffer.from("${xtermCss.toString("base64")}", "base64");`);
@@ -34,8 +38,21 @@ lines.push(`export const LOGO_JPG = Buffer.from("${logoJpg.toString("base64")}",
 const faviconPng = readFileSync(resolve(projectRoot, "src/web/assets/favicon.png"));
 lines.push(`export const FAVICON_PNG = Buffer.from("${faviconPng.toString("base64")}", "base64");`);
 
+// PWA icons (manifest + apple-touch), generated from carbine.png.
+const icon192 = readFileSync(resolve(projectRoot, "src/web/assets/icon-192.png"));
+lines.push(`export const ICON_192_PNG = Buffer.from("${icon192.toString("base64")}", "base64");`);
+
+const icon512 = readFileSync(resolve(projectRoot, "src/web/assets/icon-512.png"));
+lines.push(`export const ICON_512_PNG = Buffer.from("${icon512.toString("base64")}", "base64");`);
+
+const iconMaskable = readFileSync(resolve(projectRoot, "src/web/assets/icon-maskable-512.png"));
+lines.push(`export const ICON_MASKABLE_512_PNG = Buffer.from("${iconMaskable.toString("base64")}", "base64");`);
+
+const appleTouch = readFileSync(resolve(projectRoot, "src/web/assets/apple-touch-icon-180.png"));
+lines.push(`export const APPLE_TOUCH_ICON_180_PNG = Buffer.from("${appleTouch.toString("base64")}", "base64");`);
+
 lines.push(``);
 
 const outPath = resolve(projectRoot, "src/server/embedded-assets.ts");
 writeFileSync(outPath, lines.join("\n"));
-console.log(`✓ Wrote ${outPath} (web bundle + xterm.css embedded)`);
+console.log(`✓ Wrote ${outPath} (web bundle + service worker + xterm.css + icons embedded)`);
