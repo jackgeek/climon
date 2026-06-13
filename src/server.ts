@@ -1,11 +1,23 @@
 #!/usr/bin/env bun
 import { helpText, parseArgs } from "./cli/args.js";
+import { resolveConfigSetting } from "./config.js";
+import { createAppInsightsStream } from "./logging/appinsights.js";
+import { initLogger } from "./logging/logger.js";
 import { runIngestDaemon } from "./remote/ingest.js";
 import { startServer } from "./server/server.js";
+
+async function initServerLogging(): Promise<void> {
+  const conn =
+    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING ??
+    (resolveConfigSetting("logging.appInsights.connectionString") as string | undefined);
+  const ai = await createAppInsightsStream(conn);
+  initLogger("server", { extraStreams: ai ? [ai] : [] });
+}
 
 async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.command === "server") {
+    await initServerLogging();
     await startServer({ port: parsed.port, enableRemotes: parsed.enableRemotes });
     return 0;
   }
