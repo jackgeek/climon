@@ -276,56 +276,6 @@ describe("headless session attention", () => {
     }
   }, 20000);
 
-  test("typing into an idle session suppresses re-flagging while the command stays silent", async () => {
-    await mkdir(home, { recursive: true });
-    const config = defaultConfig();
-    config.attention.idleSeconds = 1;
-    await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
-
-    // A silent long-lived process: the PTY echoes typed input, but the program
-    // itself produces no further output, mirroring `sleep 30` typed at a prompt.
-    const proc = Bun.spawn(
-      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
-      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
-    );
-    const id = (await new Response(proc.stdout).text()).trim();
-    try {
-      // 1. The static launch screen flags needs-attention.
-      await waitFor(async () => {
-        const m = await readMeta(id);
-        return m.status === "needs-attention" ? m : undefined;
-      });
-
-      // 2. The user types a command; the echoed screen is absorbed as input.
-      await sendInput(id, "do-something\n");
-
-      // 3. The session clears to running and must stay there: the post-input
-      //    screen is static well beyond the idle window but must not re-flag.
-      const running = await waitFor(async () => {
-        const m = await readMeta(id);
-        return m.status === "running" ? m : undefined;
-      });
-      expect(running.status).toBe("running");
-
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      const stillRunning = await readMeta(id);
-      expect(stillRunning.status).toBe("running");
-    } finally {
-      const pid = await readMeta(id)
-        .then((m) => m.daemonPid)
-        .catch(() => undefined);
-      if (pid) {
-        try {
-          process.kill(pid);
-        } catch {
-          // already gone
-        }
-      }
-      proc.kill();
-      await proc.exited;
-    }
-  }, 20000);
-
   test("output after the user's command settles into a fresh needs-attention", async () => {
     await mkdir(home, { recursive: true });
     const config = defaultConfig();

@@ -59,21 +59,27 @@ describe("server port safety", () => {
         return res?.ok
           ? ((await res.json()) as { ok?: boolean; ports?: { dashboard?: number } })
           : undefined;
-      });
+      }, 30000);
       expect(body.ok).toBe(true);
       expect(body.ports?.dashboard).toBe(port);
 
-      const state = JSON.parse(await readFile(join(home, "server.json"), "utf8")) as {
-        pid?: number;
-        port?: number;
-      };
+      // The state file is written around startup; poll for it (and the
+      // expected pid/port) rather than reading once to avoid a write race.
+      const state = await waitFor(async () => {
+        const raw = await readFile(join(home, "server.json"), "utf8").catch(() => undefined);
+        if (raw === undefined) {
+          return undefined;
+        }
+        const parsed = JSON.parse(raw) as { pid?: number; port?: number };
+        return parsed.port === port && parsed.pid === server.pid ? parsed : undefined;
+      }, 10000);
       expect(state.port).toBe(port);
       expect(state.pid).toBe(server.pid);
     } finally {
       server.kill();
       await server.exited;
     }
-  }, 30000);
+  }, 60000);
 
   test("releases the port and removes the state file on shutdown", async () => {
     const port = await freePort();
@@ -85,7 +91,7 @@ describe("server port safety", () => {
     await waitFor(async () => {
       const res = await fetch(`${base}/health`).catch(() => undefined);
       return res?.ok ? true : undefined;
-    });
+    }, 30000);
 
     // Hold an SSE connection open: a naive stop() would wait on this and leak
     // the port. Safe shutdown must force it closed.
@@ -97,7 +103,7 @@ describe("server port safety", () => {
 
     const released = await waitFor(async () => {
       return (await portFree(port)) ? true : undefined;
-    });
+    }, 10000);
     expect(released).toBe(true);
 
     // On POSIX the SIGTERM handler runs and removes the state file. Windows
@@ -106,5 +112,5 @@ describe("server port safety", () => {
     if (process.platform !== "win32") {
       await expect(readFile(join(home, "server.json"), "utf8")).rejects.toThrow();
     }
-  }, 30000);
+  }, 60000);
 });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NEST_LEVEL_ENV_VAR, SESSION_ENV_VAR } from "../src/config.js";
 
@@ -31,6 +31,11 @@ afterEach(async () => {
 
 describe("headless run", () => {
   test("prints a session id for fast-exiting commands", async () => {
+    // Keep the test hermetic: don't auto-link to a real peer climon (auto-link
+    // prints status messages to stderr, which this test asserts is empty).
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.jsonc"), '{ "remote": { "autoLink": false } }\n');
+
     const proc = Bun.spawn([process.execPath, "src/index.ts", "run", "--headless", process.execPath, "--version"], {
       cwd: process.cwd(),
       env,

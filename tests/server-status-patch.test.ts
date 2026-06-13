@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,8 +9,6 @@ import { readSessionMeta, writeSessionMeta } from "../src/store.js";
 import type { PriorityReason, SessionMeta, SessionStatus } from "../src/types.js";
 
 const testRoot = join(tmpdir(), "climon-server-status-patch");
-
-let homeCounter = 0;
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -92,41 +90,6 @@ function sessionMeta(home: string, id: string, status: SessionStatus): SessionMe
   };
 }
 
-async function withServer<T>(fn: (base: string, env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
-  await mkdir(testRoot, { recursive: true });
-  const home = join(testRoot, `home-${process.pid}-${homeCounter++}`);
-  const env = { ...process.env, CLIMON_HOME: home };
-  const port = await freePort();
-  const server = Bun.spawn(
-    [process.execPath, "src/server.ts", "server", "--port", String(port)],
-    { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
-  );
-  try {
-    const base = `http://127.0.0.1:${port}`;
-    await waitFor(async () => {
-      const res = await fetch(`${base}/health`).catch(() => undefined);
-      return res?.ok ? true : undefined;
-    }, 15_000);
-    return await fn(base, env);
-  } finally {
-    server.kill();
-    let exited = await waitForExit(server, 2000);
-    if (!exited) {
-      const pid = server.pid;
-      if (pid && Number.isInteger(pid) && pid > 0) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // already exited
-        }
-      }
-      await waitForExit(server, 1000);
-    }
-    await stopIngestDaemon(env);
-    await rm(home, { recursive: true, force: true });
-  }
-}
-
 async function stopIngestDaemon(env: NodeJS.ProcessEnv): Promise<void> {
   const raw = await readFile(getIngestPidPath(env), "utf8").catch(() => undefined);
   const pid = raw === undefined ? 0 : Number.parseInt(raw.trim(), 10);
@@ -162,10 +125,6 @@ async function patchStatus(base: string, id: string, status: string): Promise<Re
   });
 }
 
-afterEach(async () => {
-  await rm(testRoot, { recursive: true, force: true });
-});
-
 describe("parseBrowserStatusPatch", () => {
   test("accepts the browser pause status", () => {
     expect(parseBrowserStatusPatch("paused")).toBe("paused");
@@ -190,148 +149,167 @@ describe("parseBrowserStatusPatch", () => {
 });
 
 describe("PATCH /api/sessions/:id status", () => {
+  // Share a single dashboard server across these cases. Each test uses a unique
+  // session id, so they don't interfere, and we avoid spawning (and cold-
+  // transpiling) a fresh server subprocess per test — the main source of
+  // timing flakiness when the suite runs under load.
+  const home = join(testRoot, `home-${process.pid}`);
+  const env = { ...process.env, CLIMON_HOME: home };
+  let server: Bun.Subprocess;
+  let base = "";
+
+  beforeAll(async () => {
+    await mkdir(home, { recursive: true });
+    const port = await freePort();
+    server = Bun.spawn(
+      [process.execPath, "src/server.ts", "server", "--port", String(port)],
+      { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
+    );
+    base = `http://127.0.0.1:${port}`;
+    await waitFor(async () => {
+      const res = await fetch(`${base}/health`).catch(() => undefined);
+      return res?.ok ? true : undefined;
+    }, 30_000);
+  }, 60_000);
+
+  afterAll(async () => {
+    server.kill();
+    const exited = await waitForExit(server, 2000);
+    if (!exited) {
+      const pid = server.pid;
+      if (pid && Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already exited
+        }
+      }
+      await waitForExit(server, 1000);
+    }
+    await stopIngestDaemon(env);
+    await rm(testRoot, { recursive: true, force: true });
+  });
+
   test("pauses a running session and records the running priority reason", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-running", "running"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-running", "running"), env);
 
-      const res = await patchStatus(base, "sess-running", "paused");
+    const res = await patchStatus(base, "sess-running", "paused");
 
-      expect(res.status).toBe(200);
-      const persisted = await readSessionMeta("sess-running", env);
-      expect(persisted?.status).toBe("paused");
-      expect(persisted?.priorityReason).toBe("running");
-      expect(persisted?.userPaused).toBe(true);
-    });
-  }, 30000);
+    expect(res.status).toBe(200);
+    const persisted = await readSessionMeta("sess-running", env);
+    expect(persisted?.status).toBe("paused");
+    expect(persisted?.priorityReason).toBe("running");
+    expect(persisted?.userPaused).toBe(true);
+  });
 
   test("pauses an acknowledged session", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-acknowledged", "acknowledged"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-acknowledged", "acknowledged"), env);
 
-      const res = await patchStatus(base, "sess-acknowledged", "paused");
+    const res = await patchStatus(base, "sess-acknowledged", "paused");
 
-      expect(res.status).toBe(200);
-      const persisted = await readSessionMeta("sess-acknowledged", env);
-      expect(persisted?.status).toBe("paused");
-    });
-  }, 30000);
+    expect(res.status).toBe(200);
+    const persisted = await readSessionMeta("sess-acknowledged", env);
+    expect(persisted?.status).toBe("paused");
+  });
 
   test("pauses a needs-attention session", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-attention", "needs-attention"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-attention", "needs-attention"), env);
 
-      const res = await patchStatus(base, "sess-attention", "paused");
+    const res = await patchStatus(base, "sess-attention", "paused");
 
-      expect(res.status).toBe(200);
-      const persisted = await readSessionMeta("sess-attention", env);
-      expect(persisted?.status).toBe("paused");
-    });
-  }, 30000);
+    expect(res.status).toBe(200);
+    const persisted = await readSessionMeta("sess-attention", env);
+    expect(persisted?.status).toBe("paused");
+  });
 
   test("keeps a paused session paused when pausing again", () => {
     expect(() => validateBrowserStatusTransition("paused", "paused")).not.toThrow();
   });
 
   test("resumes a paused session", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-paused", "paused"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-paused", "paused"), env);
 
-      const res = await patchStatus(base, "sess-paused", "running");
+    const res = await patchStatus(base, "sess-paused", "running");
 
-      expect(res.status).toBe(200);
-      const persisted = await readSessionMeta("sess-paused", env);
-      expect(persisted?.status).toBe("running");
-      expect(persisted?.userPaused).toBe(false);
-    });
-  }, 30000);
+    expect(res.status).toBe(200);
+    const persisted = await readSessionMeta("sess-paused", env);
+    expect(persisted?.status).toBe("running");
+    expect(persisted?.userPaused).toBe(false);
+  });
 
   test("rejects pausing a failed session and leaves it failed", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-failed", "failed"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-failed", "failed"), env);
 
-      const res = await patchStatus(base, "sess-failed", "paused");
+    const res = await patchStatus(base, "sess-failed", "paused");
 
-      expect(res.status).toBe(400);
-      const persisted = await readSessionMeta("sess-failed", env);
-      expect(persisted?.status).toBe("failed");
-    });
-  }, 30000);
+    expect(res.status).toBe(400);
+    const persisted = await readSessionMeta("sess-failed", env);
+    expect(persisted?.status).toBe("failed");
+  });
 
   test("rejects resuming a disconnected session and leaves it disconnected", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-disconnected", "disconnected"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-disconnected", "disconnected"), env);
 
-      const res = await patchStatus(base, "sess-disconnected", "running");
+    const res = await patchStatus(base, "sess-disconnected", "running");
 
-      expect(res.status).toBe(400);
-      const persisted = await readSessionMeta("sess-disconnected", env);
-      expect(persisted?.status).toBe("disconnected");
-    });
-  }, 30000);
+    expect(res.status).toBe(400);
+    const persisted = await readSessionMeta("sess-disconnected", env);
+    expect(persisted?.status).toBe("disconnected");
+  });
 
   test("rejects resuming a completed session and leaves it completed", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-completed", "completed"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-completed", "completed"), env);
 
-      const res = await patchStatus(base, "sess-completed", "running");
+    const res = await patchStatus(base, "sess-completed", "running");
 
-      expect(res.status).toBe(400);
-      const persisted = await readSessionMeta("sess-completed", env);
-      expect(persisted?.status).toBe("completed");
-    });
-  }, 30000);
+    expect(res.status).toBe(400);
+    const persisted = await readSessionMeta("sess-completed", env);
+    expect(persisted?.status).toBe("completed");
+  });
 
   test("rejects browser attempts to set terminal statuses", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-invalid", "running"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-invalid", "running"), env);
 
-      const res = await patchStatus(base, "sess-invalid", "completed");
+    const res = await patchStatus(base, "sess-invalid", "completed");
 
-      expect(res.status).toBe(400);
-      const persisted = await readSessionMeta("sess-invalid", env);
-      expect(persisted?.status).toBe("running");
-    });
-  }, 30000);
+    expect(res.status).toBe(400);
+    const persisted = await readSessionMeta("sess-invalid", env);
+    expect(persisted?.status).toBe("running");
+  });
 
   test("returns 404 when status is patched on a missing session", async () => {
-    await withServer(async (base) => {
-      const res = await patchStatus(base, "missing", "paused");
+    const res = await patchStatus(base, "missing", "paused");
 
-      expect(res.status).toBe(404);
-    });
-  }, 30000);
+    expect(res.status).toBe(404);
+  });
 
   test("still applies metadata-only patches without requiring an existing status transition", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-priority", "completed"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-priority", "completed"), env);
 
-      const res = await fetch(`${base}/api/sessions/sess-priority`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ priority: 100 })
-      });
-
-      expect(res.status).toBe(200);
-      const persisted = await readSessionMeta("sess-priority", env);
-      expect(persisted?.status).toBe("completed");
-      expect(persisted?.priority).toBe(100);
+    const res = await fetch(`${base}/api/sessions/sess-priority`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ priority: 100 })
     });
-  }, 30000);
+
+    expect(res.status).toBe(200);
+    const persisted = await readSessionMeta("sess-priority", env);
+    expect(persisted?.status).toBe("completed");
+    expect(persisted?.priority).toBe(100);
+  });
 
   test("does not patch metadata when a requested status transition is invalid", async () => {
-    await withServer(async (base, env) => {
-      await writeSessionMeta(sessionMeta(env.CLIMON_HOME ?? "", "sess-mixed", "completed"), env);
+    await writeSessionMeta(sessionMeta(home, "sess-mixed", "completed"), env);
 
-      const res = await fetch(`${base}/api/sessions/sess-mixed`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "renamed", status: "running" })
-      });
-
-      expect(res.status).toBe(400);
-      const persisted = await readSessionMeta("sess-mixed", env);
-      expect(persisted?.status).toBe("completed");
-      expect(persisted?.name).toBeUndefined();
+    const res = await fetch(`${base}/api/sessions/sess-mixed`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "renamed", status: "running" })
     });
-  }, 30000);
+
+    expect(res.status).toBe(400);
+    const persisted = await readSessionMeta("sess-mixed", env);
+    expect(persisted?.status).toBe("completed");
+    expect(persisted?.name).toBeUndefined();
+  });
 });
