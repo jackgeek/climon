@@ -18,6 +18,7 @@ import {
   startMonitoredCommand
 } from "./launcher.js";
 import { VERSION } from "./version.js";
+import { initLogger } from "./logging/logger.js";
 
 const INSTALLER_BUNDLE_NAME = "climon-alpha";
 
@@ -60,6 +61,10 @@ async function main(): Promise<number> {
   if (installerResult !== undefined) return installerResult;
 
   const parsed = parseArgs(process.argv.slice(2));
+
+  if (parsed.command !== "uplink") {
+    initLogger("client");
+  }
 
   switch (parsed.command) {
     case "help":

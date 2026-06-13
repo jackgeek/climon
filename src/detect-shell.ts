@@ -1,11 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { readlinkSync } from "node:fs";
-
-const debugEnabled = !!process.env.CLIMON_DEBUG;
+import { child } from "./logging/logger.js";
 
 function debug(message: string): void {
-  if (!debugEnabled) return;
-  process.stderr.write(`[climon:shell-detect] ${message}\n`);
+  child("shell-detect").debug(message);
 }
 
 /**

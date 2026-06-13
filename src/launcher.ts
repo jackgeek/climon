@@ -26,7 +26,7 @@ import { formatSessionSocketRef } from "./session-socket.js";
 import { runSessionHost } from "./session-host.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
-import { child } from "./logging/logger.js";
+import { child, suspendTerminal, resumeTerminal } from "./logging/logger.js";
 
 const log = () => child("launcher");
 
@@ -288,7 +288,13 @@ export async function startMonitoredCommand(
 
   process.stdout.write(launchBanner(VERSION, id));
 
-  const exitCode = await runSessionHost(id, meta, { headless: options.headless });
+  suspendTerminal();
+  let exitCode: number;
+  try {
+    exitCode = await runSessionHost(id, meta, { headless: options.headless });
+  } finally {
+    resumeTerminal();
+  }
 
   if (nestLevel > 0) {
     process.stderr.write(`\x1b[33mclimon: returning to session (depth ${nestLevel})\x1b[0m\n`);
