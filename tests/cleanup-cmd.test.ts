@@ -5,6 +5,7 @@ import { serializeServerState } from "../src/server-state.js";
 import { serializeIngestState } from "../src/remote/ingest-state.js";
 import { teardownLocalServerStack } from "../src/remote/teardown.js";
 import { runCleanupCommand } from "../src/cli/cleanup-cmd.js";
+import { initLogger, resetLoggerForTests } from "../src/logging/logger.js";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -113,6 +114,70 @@ describe("teardownLocalServerStack", () => {
     expect(existsSync(join(home, "ingest.pid"))).toBe(true);
     expect(existsSync(join(home, "uplink.pid"))).toBe(true);
     expect(report.staleFiles.length).toBeGreaterThan(0);
+  });
+});
+
+describe("teardownLocalServerStack logging", () => {
+  function captureLog(): { records: () => Array<Record<string, unknown>>; stream: NodeJS.WritableStream } {
+    const lines: string[] = [];
+    const stream = {
+      write(chunk: string) {
+        lines.push(chunk);
+        return true;
+      }
+    } as unknown as NodeJS.WritableStream;
+    const records = () =>
+      lines
+        .join("")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+    return { records, stream };
+  }
+
+  test("emits structured teardown lifecycle logs tagged with the teardown component", async () => {
+    seedStack();
+    const { records, stream } = captureLog();
+    resetLoggerForTests();
+    // Use a non-terminal role so no pretty stream prints to stdout during the test.
+    initLogger("ingest", { level: "debug", env, extraStreams: [{ stream, level: "debug" }] });
+    try {
+      const { isProcessAlive, killProcess } = mockKillSucceeds();
+      await teardownLocalServerStack({ env, isProcessAlive, killProcess });
+    } finally {
+      resetLoggerForTests();
+    }
+
+    const recs = records();
+    const messages = recs.map((r) => r.msg);
+    expect(messages).toContain("starting local dashboard stack teardown");
+    expect(messages).toContain("local dashboard stack teardown complete");
+    expect(recs.some((r) => r.msg === "removed beacon" && typeof r.path === "string")).toBe(true);
+    // Every teardown record keeps the component binding (no field collisions).
+    expect(recs.every((r) => r.component === "teardown")).toBe(true);
+  });
+
+  test("logs a warning per daemon that cannot be stopped", async () => {
+    seedStack();
+    const { records, stream } = captureLog();
+    resetLoggerForTests();
+    initLogger("ingest", { level: "debug", env, extraStreams: [{ stream, level: "debug" }] });
+    try {
+      await teardownLocalServerStack({
+        env,
+        isProcessAlive: () => true,
+        killProcess: () => true,
+        waitTimeoutMs: 100
+      });
+    } finally {
+      resetLoggerForTests();
+    }
+
+    const warnings = records().filter(
+      (r) => r.level === 40 && r.msg === "failed to stop daemon during teardown"
+    );
+    expect(warnings.length).toBe(3);
+    expect(warnings.every((r) => r.component === "teardown" && typeof r.daemon === "string" && r.reason)).toBe(true);
   });
 });
 
