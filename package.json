@@ -22,6 +22,7 @@
     "server": "bun src/server.ts server",
     "start": "bun src/index.ts",
     "logs": "bun scripts/logs.ts",
+    "log-level": "bun scripts/log-level.ts",
     "docs:config": "bun scripts/generate-config-docs.ts"
   },
   "engines": {

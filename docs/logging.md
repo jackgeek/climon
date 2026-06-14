@@ -26,6 +26,23 @@ The effective level is resolved with this precedence:
 - `climon config set logging.level info`
 - One-off deep debugging: `CLIMON_LOG_LEVEL=debug climon ...`
 
+### Setting CLIMON_LOG_LEVEL persistently
+
+`bun run log-level <level>` persists the `CLIMON_LOG_LEVEL` environment variable
+for your user. It works on Windows (via `setx` / the `HKCU\Environment` registry
+key) and on Unix/WSL (via a managed block in your shell rc file):
+
+- `bun run log-level debug` — set the level
+- `bun run log-level silent` — turn logging off
+- `bun run log-level --unset` — remove the persistent override
+- `bun run log-level --show` — print the current value
+
+A process can't change its parent shell, so the new value applies to new
+terminals; the command also prints how to apply it in the current session
+(`$env:CLIMON_LOG_LEVEL='debug'` on PowerShell, `export CLIMON_LOG_LEVEL=debug`
+on bash).
+
+
 ## Where logs go
 
 NDJSON log files are written under `$CLIMON_HOME/logs/<role>/`:
