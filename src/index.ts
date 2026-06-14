@@ -69,7 +69,7 @@ async function main(): Promise<number> {
 
   switch (parsed.command) {
     case "help":
-      writeStdout(helpText);
+      writeStdout(helpText, { log: false });
       return 0;
     case "version":
       writeStdout(`climon v${VERSION}\n`);
@@ -121,7 +121,7 @@ async function main(): Promise<number> {
       return await runSessionHost(parsed.id, meta, { headless: true });
     }
     default:
-      writeStderr(helpText);
+      writeStderr(helpText, { log: false });
       return 1;
   }
 }

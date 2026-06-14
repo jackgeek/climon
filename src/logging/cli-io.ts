@@ -20,15 +20,21 @@ function mirror(stream: "stdout" | "stderr", text: string): void {
  * command's terminal output is always captured in the log files. Terminal
  * output is unchanged.
  */
-export function writeStdout(text: string): void {
+/**
+ * Writes user-facing output to stdout AND mirrors it to the cli debug log so a
+ * command's terminal output is always captured in the log files. Terminal
+ * output is unchanged. Pass `{ log: false }` to skip the debug mirror for
+ * high-volume, low-signal output such as `--help` text.
+ */
+export function writeStdout(text: string, options: { log?: boolean } = {}): void {
   process.stdout.write(text);
-  mirror("stdout", text);
+  if (options.log !== false) mirror("stdout", text);
 }
 
 /** Like {@link writeStdout}, but for stderr. */
-export function writeStderr(text: string): void {
+export function writeStderr(text: string, options: { log?: boolean } = {}): void {
   process.stderr.write(text);
-  mirror("stderr", text);
+  if (options.log !== false) mirror("stderr", text);
 }
 
 /** Records a CLI command invocation at debug level. */

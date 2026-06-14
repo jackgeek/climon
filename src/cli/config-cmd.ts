@@ -66,8 +66,8 @@ ${renderConfigSettingsHelp()}
 }
 
 export interface ConfigCommandIO {
-  stdout?: (chunk: string) => void;
-  stderr?: (chunk: string) => void;
+  stdout?: (chunk: string, options?: { log?: boolean }) => void;
+  stderr?: (chunk: string, options?: { log?: boolean }) => void;
   confirm?: (path: string) => boolean;
 }
 
@@ -81,8 +81,8 @@ function defaultConfirm(_path: string): boolean {
 
 function normalizeCommandIO(io: ConfigCommandIO = {}): Required<ConfigCommandIO> {
   return {
-    stdout: io.stdout ?? ((chunk) => writeStdout(chunk)),
-    stderr: io.stderr ?? ((chunk) => writeStderr(chunk)),
+    stdout: io.stdout ?? ((chunk, options) => writeStdout(chunk, options)),
+    stderr: io.stderr ?? ((chunk, options) => writeStderr(chunk, options)),
     confirm: io.confirm ?? defaultConfirm
   };
 }
@@ -156,7 +156,7 @@ export function runConfigCommand(
   try {
     switch (action.action) {
       case "help": {
-        commandIO.stdout(configHelpText());
+        commandIO.stdout(configHelpText(), { log: false });
         return 0;
       }
       case "debug": {
