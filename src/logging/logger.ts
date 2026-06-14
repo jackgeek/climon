@@ -4,6 +4,7 @@ import { createPrettyStream, setTerminalSuspended } from "./pretty.js";
 import { REDACT_OPTIONS } from "./redact.js";
 import { buildFileStream } from "./sinks.js";
 import type { LoggerInitOptions, LogRole, StreamEntry } from "./types.js";
+import { VERSION } from "../version.js";
 
 let root: Logger | undefined;
 
@@ -19,7 +20,7 @@ export function initLogger(role: LogRole, options: LoggerInitOptions = {}): Logg
   const level = options.level ?? resolveEffectiveLevel(env);
 
   if (level === "silent") {
-    root = pino({ level: "silent", enabled: false, base: { role, pid: process.pid } });
+    root = pino({ level: "silent", enabled: false, base: { role, pid: process.pid, version: VERSION } });
     return root;
   }
 
@@ -31,7 +32,7 @@ export function initLogger(role: LogRole, options: LoggerInitOptions = {}): Logg
 
   const dest = streams.length === 1 ? streams[0].stream : pino.multistream(streams, { dedupe: false });
   root = pino(
-    { level, redact: REDACT_OPTIONS, base: { role, pid: process.pid } },
+    { level, redact: REDACT_OPTIONS, base: { role, pid: process.pid, version: VERSION } },
     dest,
   );
   return root;

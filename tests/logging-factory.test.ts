@@ -10,6 +10,7 @@ import {
   suspendTerminal,
   resumeTerminal,
 } from "../src/logging/logger.js";
+import { VERSION } from "../src/version.js";
 
 const env = { CLIMON_HOME: "/tmp/climon-test-home" } as NodeJS.ProcessEnv;
 
@@ -76,6 +77,26 @@ describe("logger factory", () => {
       const written = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).join("");
       expect(file.startsWith(dir)).toBe(true);
       expect(written).toContain("debug-marker-xyz");
+    } finally {
+      resetLoggerForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("every record includes the climon version", () => {
+    const home = mkdtempSync(join(tmpdir(), "climon-version-"));
+    try {
+      resetLoggerForTests();
+      initLogger("server", { level: "info", env: { CLIMON_HOME: home } as NodeJS.ProcessEnv });
+      getLogger().info("version-marker");
+      getLogger().flush?.();
+      const dir = join(home, "logs", "server");
+      const written = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).join("");
+      const record = written
+        .split(/\r?\n/)
+        .filter((line) => line.includes("version-marker"))
+        .map((line) => JSON.parse(line))[0];
+      expect(record.version).toBe(VERSION);
     } finally {
       resetLoggerForTests();
       rmSync(home, { recursive: true, force: true });
