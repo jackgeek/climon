@@ -54,6 +54,19 @@ describe("parseArgs", () => {
     });
   });
 
+  test("parses server with --no-takeover", () => {
+    expect(parseArgs(["server", "--no-takeover"])).toEqual({
+      command: "server",
+      noTakeover: true
+    });
+    expect(parseArgs(["server", "--no-takeover", "--port", "9000", "--enable-remotes"])).toEqual({
+      command: "server",
+      port: 9000,
+      enableRemotes: true,
+      noTakeover: true
+    });
+  });
+
   test("parses ls and kill", () => {
     expect(parseArgs(["ls"])).toEqual({ command: "ls" });
     expect(parseArgs(["kill", "abc"])).toEqual({ command: "kill", id: "abc" });

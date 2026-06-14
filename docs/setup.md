@@ -81,6 +81,8 @@ climon generates these comments automatically from the settings registry. See `c
 
 - Set `CLIMON_HOME` to use a different state directory (useful for testing).
 - `--port N` flag on `climon server` overrides the port at runtime.
+- `--no-takeover` flag on `climon server` starts on the next available port
+  instead of terminating an existing dashboard server.
 
 ## Verify the install
 
