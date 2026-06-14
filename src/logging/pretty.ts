@@ -20,7 +20,7 @@ function colorForLevel(level: number): string {
   if (level >= 40) return "\u001b[33m"; // warn — yellow
   if (level >= 30) return "\u001b[32m"; // info — green
   if (level >= 20) return "\u001b[34m"; // debug — blue
-  return "\u001b[90m"; // trace — gray
+  return "\u001b[38;5;240m"; // trace — dark gray
 }
 
 export interface PrettyStreamOptions {
