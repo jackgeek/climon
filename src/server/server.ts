@@ -141,7 +141,7 @@ export async function findExistingDashboardServer(
     }
     getLogger().debug(`findExistingDashboardServer: health response ok=${res.ok}, healthy=${healthy}`);
   } catch (err) {
-    getLogger().error(`findExistingDashboardServer: health probe failed: ${err instanceof Error ? err.message : String(err)}`);
+    getLogger().debug(`findExistingDashboardServer: health probe failed: ${err instanceof Error ? err.message : String(err)}`);
     healthy = false;
   }
   if (!healthy) {
@@ -747,7 +747,7 @@ export function applyDashboardTunnelPersistence(
 }
 
 function startupLog(message: string): void {
-  getLogger().info(message);
+  getLogger().debug(message);
 }
 
 const TIE_BREAK_SETTLE_MS = 750;
