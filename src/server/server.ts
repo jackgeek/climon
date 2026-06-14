@@ -875,7 +875,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         ? `displaced the ${peerLabel} host via the filesystem handoff`
         : `found no live ${peerLabel} host — starting fresh`;
     startupLog(`promote complete: ${summary}`);
-    process.stdout.write(`climon: ${summary}.\n`);
   }
 
   startupLog(`choosing an available port starting from ${config.server.port}`);
