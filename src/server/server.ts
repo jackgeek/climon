@@ -1033,7 +1033,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       // server can exit 0 instead of being force-killed.
       if (url.pathname === "/__internal/shutdown" && request.method === "POST") {
         if (!isLocal(request, srv)) {
-          getLogger().error(`/__internal/shutdown: rejected non-local request from ${srv.requestIP(request)?.address}`);
+          getLogger().warn(`/__internal/shutdown: rejected non-local request from ${srv.requestIP(request)?.address}`);
           return new Response("Forbidden", { status: 403 });
         }
         const source = url.searchParams.get("source");

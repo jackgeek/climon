@@ -42,6 +42,7 @@ export function createShutdownRequestWatcher(options: ShutdownRequestWatcherOpti
   const requestPath = getShutdownRequestPathInDir(options.dir);
 
   const debugLog = (msg: string): void => child("shutdown-watch").debug(msg);
+  const traceLog = (msg: string): void => child("shutdown-watch").trace(msg);
   debugLog(`watcher starting: watching ${requestPath}`);
 
   let done = false;
@@ -60,11 +61,11 @@ export function createShutdownRequestWatcher(options: ShutdownRequestWatcherOpti
       raw = readFile(requestPath);
     } catch (err: unknown) {
       if (pollCount <= 3 || pollCount % 5 === 0) {
-        debugLog(`poll #${pollCount}: no file (${(err as NodeJS.ErrnoException).code ?? "unknown"})`);
+        traceLog(`poll #${pollCount}: no file (${(err as NodeJS.ErrnoException).code ?? "unknown"})`);
       }
       return; // absent or unreadable
     }
-    debugLog(`poll #${pollCount}: READ FILE (${raw.length} bytes): ${raw.trim()}`);
+    traceLog(`poll #${pollCount}: READ FILE (${raw.length} bytes): ${raw.trim()}`);
     const request = parseShutdownRequest(raw);
     if (!request) {
       debugLog(`poll #${pollCount}: PARSE FAILED — removing malformed file`);
@@ -79,7 +80,7 @@ export function createShutdownRequestWatcher(options: ShutdownRequestWatcherOpti
 
   try {
     watcher = watchFn(options.dir, (_event, filename) => {
-      debugLog(`fs.watch event: ${_event} ${filename}`);
+      traceLog(`fs.watch event: ${_event} ${filename}`);
       if (!filename || String(filename) === SHUTDOWN_REQUEST_BASENAME) check();
     });
     debugLog("fs.watch started");

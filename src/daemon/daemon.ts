@@ -381,7 +381,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
       const now = new Date().toISOString();
       statusLog.debug(`status=clearing-attention source=${source} fingerprint=${fpMatch ? "unchanged" : "changed"}`);
       if (!fpMatch) {
-        statusLog.debug(`attention_fp=${JSON.stringify(prevAttentionFp)} current_fp=${JSON.stringify(currentFingerprint)}`);
+        statusLog.trace(`attention_fp=${JSON.stringify(prevAttentionFp)} current_fp=${JSON.stringify(currentFingerprint)}`);
       }
       void patchSessionMetaFromCurrent(id, (current) => ({
         status: current.status === "paused" ? "paused" : source === "user" ? "acknowledged" : "running",
@@ -474,7 +474,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
         if (transition) {
           const newStatus = transition.needsAttention ? "needs-attention" : "running";
           if (fpChanged) {
-            statusLog.debug(`status=${newStatus} fingerprint=changed prev=${JSON.stringify(lastSampledFingerprint)} curr=${JSON.stringify(currentFingerprint)}`);
+            statusLog.trace(`status=${newStatus} fingerprint=changed prev=${JSON.stringify(lastSampledFingerprint)} curr=${JSON.stringify(currentFingerprint)}`);
           } else {
             statusLog.debug(`status=${newStatus} fingerprint=unchanged`);
           }

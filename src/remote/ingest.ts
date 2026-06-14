@@ -303,7 +303,7 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
       if (!isValidRemoteId(message.id)) return;
       const session = sessions.get(message.id);
       if (session) {
-        log().debug(`session-updated: ${message.id} patch=${JSON.stringify(message.patch)}`);
+        log().trace(`session-updated: ${message.id} patch=${JSON.stringify(message.patch)}`);
         await patchSessionMeta(session.localId, sanitizeRemotePatch(message.patch), env);
       }
     } else if (message.kind === "session-removed") {
@@ -731,7 +731,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
       });
       dlog("demote() completed successfully");
     } catch (err: unknown) {
-      dlog(`demote() threw: ${(err as Error).message}`);
+      child("shutdown-watch").warn(`DEMOTE: demote() threw: ${(err as Error).message}`);
       // Even if uplink spawn or listener close fails, exit so process death
       // releases the contested port rather than leaving a half-demoted daemon.
     }
