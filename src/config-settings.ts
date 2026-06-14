@@ -46,8 +46,8 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "terminal.clampBrowserToHost",
     type: "boolean",
-    defaultValue: true,
-    purpose: "When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling.",
+    defaultValue: false,
+    purpose: "When false (default), a browser viewer may grow the shared PTY beyond the host terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent content mangling.",
     scope: ["daemon"]
   },
   {

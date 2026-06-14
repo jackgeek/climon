@@ -61,8 +61,8 @@ describe("config defaults", () => {
     expect("token" in config.server).toBe(false);
   });
 
-  test("clamps browser to host terminal size by default", () => {
-    expect(defaultConfig().terminal.clampBrowserToHost).toBe(true);
+  test("does not clamp browser to host terminal size by default", () => {
+    expect(defaultConfig().terminal.clampBrowserToHost).toBe(false);
   });
 
   test("sets the terminal title by default", () => {

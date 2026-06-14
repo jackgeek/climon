@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type Socket } from "node:net";
-import { rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,6 +21,16 @@ const home = join(tmpdir(), `climon-revert-${process.pid}`);
 const env: NodeJS.ProcessEnv = { ...process.env, CLIMON_HOME: home, CLIMON_COLS: "80", CLIMON_ROWS: "24" };
 delete env[SESSION_ENV_VAR];
 delete env[NEST_LEVEL_ENV_VAR];
+
+// These tests exercise clamp-specific resize/revert behavior, so opt the test
+// home into clamped mode explicitly now that the default is fill (unclamped).
+beforeEach(async () => {
+  await mkdir(home, { recursive: true });
+  await writeFile(
+    join(home, "config.jsonc"),
+    JSON.stringify({ version: 1, terminal: { clampBrowserToHost: true } })
+  );
+});
 
 async function readMeta(id: string): Promise<SessionMeta> {
   const { readFile } = await import("node:fs/promises");

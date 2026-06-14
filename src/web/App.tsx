@@ -439,7 +439,7 @@ export function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [activeViewMode, setActiveViewMode] = useState<{ sessionId: string | null; mode: TerminalResizeMode }>({
     sessionId: null,
-    mode: "clamped"
+    mode: "fill"
   });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
@@ -1090,9 +1090,9 @@ export function App() {
           onCloseTunnelLink={() => void handleCloseTunnelLink()}
           showRemotesMenu={remotesEnabled}
           onRemoveDisconnected={handleRemoveDisconnected}
-          viewMode={authoritativeViewMode ?? "clamped"}
+          viewMode={authoritativeViewMode ?? "fill"}
           viewModeLocked={false}
-          onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "clamped"))}
+          onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "fill"))}
           onMaximize={(id) => {
             const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
@@ -1118,7 +1118,7 @@ export function App() {
           accentColor={activeSession?.color}
           maximized={maximized}
           visible={terminalVisible}
-          viewMode={authoritativeViewMode ?? "clamped"}
+          viewMode={authoritativeViewMode ?? "fill"}
           onViewModeChange={(mode) => {
             if (activeId) {
               setActiveViewMode({ sessionId: activeId, mode });

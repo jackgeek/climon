@@ -59,7 +59,7 @@ describe("config settings registry", () => {
       version: 1,
       server: { host: "127.0.0.1", port: 3131 },
       terminal: {
-        clampBrowserToHost: true,
+        clampBrowserToHost: false,
         detachPrefix: 0x1c,
         setTitle: true
       },

@@ -281,7 +281,7 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `version` | number | `1` | client, daemon, server | Schema version for the persisted config.json format. Always 1 for the current release. (**internal**) |
 | `server.host` | string | `127.0.0.1` | server | IP address the dashboard server binds to. Defaults to loopback for local-only access. |
 | `server.port` | number | `3131` | server | TCP port the dashboard server listens on. Change if 3131 conflicts with another service. |
-| `terminal.clampBrowserToHost` | boolean | `true` | daemon | When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling. |
+| `terminal.clampBrowserToHost` | boolean | `false` | daemon | When false (default), a browser viewer may grow the shared PTY beyond the host terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent content mangling. |
 | `terminal.detachPrefix` | number | `28` | client | Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255]. |
 | `terminal.setTitle` | boolean | `true` | client | When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false. |
 | `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |

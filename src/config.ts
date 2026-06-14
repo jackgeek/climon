@@ -163,7 +163,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     const parsedConfigObject = parsedConfig as ClimonConfig;
     // Backfill sections added after a config file was first written.
     if (!parsedConfigObject.terminal || typeof parsedConfigObject.terminal.clampBrowserToHost !== "boolean") {
-      parsedConfigObject.terminal = { ...(parsedConfigObject.terminal ?? {}), clampBrowserToHost: true };
+      parsedConfigObject.terminal = { ...(parsedConfigObject.terminal ?? {}), clampBrowserToHost: false };
     }
     parsedConfigObject.terminal.detachPrefix = normalizeDetachPrefix(parsedConfigObject.terminal.detachPrefix);
     if (typeof parsedConfigObject.terminal.setTitle !== "boolean") {
