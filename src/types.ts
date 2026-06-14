@@ -68,6 +68,8 @@ export interface RemoteConfig {
   dashboardTunnelId?: string;
   /** Server-owned persisted dashboard tunnel cluster reused for tunnel link sessions. */
   dashboardTunnelCluster?: string;
+  /** Server-owned flag: whether the Tunnel Link was enabled, so the server re-establishes it on startup. */
+  dashboardTunnelEnabled?: boolean;
   /** Local port the devbox forwards and the ingest daemon listens on. */
   port?: number;
   /** Consecutive ingest daemon ports to try from the preferred port before giving up. */
@@ -96,6 +98,17 @@ export interface TunnelLinkConfig {
   keepAlive?: number;
 }
 
+export interface LoggingAppInsightsConfig {
+  /** Azure Application Insights connection string. When set, the server emits logs to App Insights. */
+  connectionString?: string;
+}
+
+export interface LoggingConfig {
+  /** Minimum log level: trace, debug, info, warn, error, fatal, or silent. */
+  level?: string;
+  appInsights?: LoggingAppInsightsConfig;
+}
+
 export interface AttentionConfig {
   /**
    * Number of seconds the rendered terminal grid must remain unchanged before
@@ -114,6 +127,7 @@ export interface ClimonConfig {
   remote?: RemoteConfig;
   session?: SessionDefaultsConfig;
   tunnelLink?: TunnelLinkConfig;
+  logging?: LoggingConfig;
 }
 
 export interface SessionMeta {

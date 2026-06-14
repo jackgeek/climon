@@ -427,8 +427,18 @@ Notes:
 - To cut a `minor`/`major` release instead, run `bun run release minor|major`
   locally and push with `git push --follow-tags`.
 
+## Logging
+
+climon logs to `$CLIMON_HOME/logs/` using structured pino. Control verbosity with
+`logging.level` in config or the `CLIMON_LOG_LEVEL` environment variable
+(`trace`…`fatal`, or `silent` to disable). See **[docs/logging.md](docs/logging.md)**
+for details, including how to turn logging on and off and the optional App
+Insights sink. (This replaces the old `CLIMON_DEBUG` / `CLIMON_STATUS_DEBUG`
+flags.)
+
 ## Further reading
 
 See [`docs/setup.md`](docs/setup.md), [`docs/usage.md`](docs/usage.md),
-[`docs/architecture.md`](docs/architecture.md), and
+[`docs/architecture.md`](docs/architecture.md),
+[`docs/logging.md`](docs/logging.md), and
 [`docs/troubleshooting.md`](docs/troubleshooting.md) for details.

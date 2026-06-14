@@ -1,4 +1,5 @@
 [test]
-# Force the default CLIMON_HOME onto a throwaway temp dir so a test that forgets
-# to isolate can never touch a developer's real ~/.climon. See the preload file.
-preload = ["./tests/preload-isolate-home.ts"]
+# log-silence quiets logger output during tests; preload-isolate-home forces the
+# default CLIMON_HOME onto a throwaway temp dir so a test that forgets to isolate
+# can never touch a developer's real ~/.climon. See the preload files.
+preload = ["./tests/log-silence.ts", "./tests/preload-isolate-home.ts"]

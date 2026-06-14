@@ -73,6 +73,10 @@ export function getSessionsDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(getClimonHome(env), "sessions");
 }
 
+export function getLogsDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(getClimonHome(env), "logs");
+}
+
 export function getSocketDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(getClimonHome(env), "sock");
 }

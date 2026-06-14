@@ -119,6 +119,13 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     internal: true
   },
   {
+    path: "remote.dashboardTunnelEnabled",
+    type: "boolean",
+    purpose: "Server-owned flag recording whether the Tunnel Link is enabled, so the server re-establishes the dashboard tunnel automatically on startup.",
+    scope: ["server"],
+    internal: true
+  },
+  {
     path: "remote.port",
     type: "number",
     purpose: "Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set.",
@@ -231,6 +238,28 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
         throw new Error("tunnelLink.keepAlive must be a non-negative number");
       }
     }
+  },
+  {
+    path: "logging.level",
+    type: "string",
+    defaultValue: "trace",
+    purpose: "Minimum log level emitted by climon processes. One of: trace, debug, info, warn, error, fatal, silent. Defaults to trace (everything). Set to silent to disable logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable.",
+    scope: ["client", "daemon", "server"],
+    acceptInput: true,
+    validate: (value: unknown) => {
+      const levels = ["trace", "debug", "info", "warn", "error", "fatal", "silent"];
+      if (typeof value !== "string" || !levels.includes(value)) {
+        throw new Error(`logging.level must be one of: ${levels.join(", ")}`);
+      }
+    }
+  },
+  {
+    path: "logging.appInsights.connectionString",
+    type: "string",
+    purpose: "Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable.",
+    scope: ["server"],
+    sensitive: true,
+    acceptInput: true
   }
 ];
 

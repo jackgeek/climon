@@ -144,11 +144,26 @@ and asset serving live in `src/server/assets.ts`.
 | `server.json` | running dashboard server state: `{ pid, port, ingest? }` (discovery/stop; read by a peer OS for WSL<->Windows discovery) |
 | `sessions/<id>.json` | session metadata |
 | `sessions/<id>.scrollback` | final captured output |
-| `sessions/<id>.log` | daemon stdout/stderr (diagnostics) |
+| `sessions/<id>.log` | daemon raw stdout/stderr (uncaught crash output) |
+| `logs/<role>/*.log` | structured pino NDJSON logs per role (server/client/daemon/ingest/uplink) |
 | `sock/<id>.sock` | per-session IPC socket (POSIX) |
 | `\\.\pipe\climon-<id>` | per-session IPC pipe (Windows) |
 | `push/vapid.json` | server VAPID keypair for Web Push (auto-created) |
 | `push/subscriptions.json` | browser push subscriptions (deduped by endpoint) |
+
+## Logging (`src/logging/`)
+
+All processes log through a shared pino factory (`src/logging/logger.ts`):
+`initLogger(role)` configures a process-wide root logger and `child(component)`
+tags records by area. Each role writes structured NDJSON to its own sink under
+`$CLIMON_HOME/logs/<role>/` (`src/logging/sinks.ts`); the client and server also
+pretty-print to the terminal (`info`/`warn` to stdout, `error`/`fatal` to stderr),
+and the client suspends that terminal output while attached to a PTY so it never
+corrupts the shell. Streams are built in-process with no worker thread or sidecar
+files, preserving the single-binary compile model. The optional App Insights sink
+is server-only (`src/logging/appinsights.ts`). The per-session daemon additionally
+keeps a separate raw `sessions/<id>.log` for uncaught crash traces. At level
+`silent` no streams, directories, or files are created.
 
 ## Priority ordering (`src/priority.ts`)
 
@@ -198,6 +213,16 @@ deep-linked to the session that needs attention (`/?session=<id>` plus an
 dev-tunnel origin (`*.devtunnels.ms` + HTTPS); desktop/localhost keeps the
 foreground `Notification` API. SSE (`/api/events`) remains the live in-app update
 channel; Web Push is only for background attention alerts.
+
+Notifications for the session the user is actively viewing are suppressed. The
+client computes a single "viewed session" (mirroring `TerminalView`'s
+`terminalVisible` rule). The in-app alert manager (`src/web/attentionAlerts.ts`)
+excludes it from the title count and alerts, and `App.tsx` auto-acknowledges it
+so the daemon clears the attention state. For background push, `sw.ts` asks open
+window clients which session they are viewing (via a `MessageChannel` reply) and
+suppresses the OS notification when any client reports viewing the pushed session
+(`shouldSuppressPush` in `src/web/pwa/pushData.ts`); it defaults to showing the
+notification on no/late reply.
 
 ## Remote clients (dev-tunnel uplink)
 
@@ -256,7 +281,15 @@ OS moves the host role:
   `shutdown-request.json` into the peer's `CLIMON_HOME`. It proceeds when the peer
   is gone (clearing stale beacons) and aborts (advising `climon cleanup`) rather
   than running a second ingest past a live, un-clearable peer. The network carries
-  only the data plane.
+  only the data plane. After binding, a brief **settle window** re-reads the peer
+  `server.json` to catch a contested promote (e.g. the peer was unreachable over
+  TCP under WSL2 NAT, so the direct handoff could not complete): the
+  most-recently-started server wins by comparing the `startedAt` timestamps and
+  force-demotes the loser over the filesystem, so a deliberately-started newcomer
+  takes over regardless of OS. An exact start-time tie — or a peer whose
+  `server.json` predates `startedAt` — falls back to the deterministic OS rule
+  (WSL stays host). Both sides compare the same timestamps, so the outcome
+  converges no matter which re-checks first.
 - **Demote**: the peer's durable **ingest** watches its own home (`fs.watch` + ~1s
   poll); on a well-formed request it spawns an uplink toward the new host, stops the
   co-located dashboard server, frees the ingest port, removes its beacons (and the

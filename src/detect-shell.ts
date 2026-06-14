@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { readlinkSync } from "node:fs";
-
-const debugEnabled = !!process.env.CLIMON_DEBUG;
+import { child } from "./logging/logger.js";
 
 function debug(message: string): void {
-  if (!debugEnabled) return;
-  process.stderr.write(`[climon:shell-detect] ${message}\n`);
+  child("shell-detect").debug(message);
+}
+
+function trace(message: string): void {
+  child("shell-detect").trace(message);
 }
 
 /**
@@ -35,7 +37,7 @@ function isBlocked(exe: string): boolean {
   const base = exe.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
   const name = base.replace(/\.exe$/, "");
   const blocked = BLOCKED_PARENTS.has(base) || BLOCKED_PARENTS.has(name);
-  debug(`  isBlocked("${exe}") → base="${base}" name="${name}" → ${blocked}`);
+  trace(`  isBlocked("${exe}") → base="${base}" name="${name}" → ${blocked}`);
   return blocked;
 }
 
@@ -61,7 +63,7 @@ function queryWindowsProcess(pid: number): ProcessInfo {
     });
     const stdout = (result.stdout ?? "").trim();
     const stderr = (result.stderr ?? "").trim();
-    debug(`  queryWindowsProcess(${pid}): stdout="${stdout}" stderr="${stderr}" exitCode=${result.status}`);
+    trace(`  queryWindowsProcess(${pid}): stdout="${stdout}" stderr="${stderr}" exitCode=${result.status}`);
     if (result.status !== 0 || !stdout) {
       return { exe: null, parentPid: null };
     }
@@ -77,7 +79,7 @@ function queryWindowsProcess(pid: number): ProcessInfo {
       parentPid: Number.isFinite(parentPid) ? parentPid : null
     };
   } catch (e) {
-    debug(`  queryWindowsProcess(${pid}): exception ${e}`);
+    trace(`  queryWindowsProcess(${pid}): exception ${e}`);
     return { exe: null, parentPid: null };
   }
 }
@@ -87,23 +89,23 @@ function queryWindowsProcess(pid: number): ProcessInfo {
  * executable is found (max 5 levels to avoid infinite loops).
  */
 function detectWindowsParent(startPid: number): string | null {
-  debug(`detectWindowsParent starting at PID ${startPid}`);
+  trace(`detectWindowsParent starting at PID ${startPid}`);
   let pid: number | null = startPid;
   for (let depth = 0; depth < 5 && pid !== null && pid > 0; depth++) {
-    debug(`  depth=${depth} checking PID ${pid}`);
+    trace(`  depth=${depth} checking PID ${pid}`);
     const { exe, parentPid } = queryWindowsProcess(pid);
     if (exe && !isBlocked(exe)) {
-      debug(`  → found shell: "${exe}"`);
+      trace(`  → found shell: "${exe}"`);
       return exe;
     }
     if (!exe) {
-      debug(`  → no exe for PID ${pid}, stopping tree walk`);
+      trace(`  → no exe for PID ${pid}, stopping tree walk`);
       break;
     }
-    debug(`  → blocked, moving to parent PID ${parentPid}`);
+    trace(`  → blocked, moving to parent PID ${parentPid}`);
     pid = parentPid;
   }
-  debug(`  → tree walk exhausted, returning null`);
+  trace(`  → tree walk exhausted, returning null`);
   return null;
 }
 
@@ -112,23 +114,23 @@ function detectWindowsParent(startPid: number): string | null {
  * is found.
  */
 function detectLinuxParent(startPid: number): string | null {
-  debug(`detectLinuxParent starting at PID ${startPid}`);
+  trace(`detectLinuxParent starting at PID ${startPid}`);
   let pid = startPid;
   for (let depth = 0; depth < 5 && pid > 1; depth++) {
     try {
       const exe = readlinkSync(`/proc/${pid}/exe`);
-      debug(`  depth=${depth} PID ${pid} → exe="${exe}"`);
+      trace(`  depth=${depth} PID ${pid} → exe="${exe}"`);
       if (!isBlocked(exe)) return exe;
       const stat = require("node:fs").readFileSync(`/proc/${pid}/stat`, "utf-8") as string;
       const ppidMatch = stat.match(/^\d+ \(.+?\) \S+ (\d+)/);
       if (!ppidMatch) break;
       pid = parseInt(ppidMatch[1], 10);
     } catch (e) {
-      debug(`  depth=${depth} PID ${pid} → error: ${e}`);
+      trace(`  depth=${depth} PID ${pid} → error: ${e}`);
       break;
     }
   }
-  debug(`  → tree walk exhausted, returning null`);
+  trace(`  → tree walk exhausted, returning null`);
   return null;
 }
 
@@ -137,7 +139,7 @@ function detectLinuxParent(startPid: number): string | null {
  * non-blocked executable is found.
  */
 function detectDarwinParent(startPid: number): string | null {
-  debug(`detectDarwinParent starting at PID ${startPid}`);
+  trace(`detectDarwinParent starting at PID ${startPid}`);
   let pid = startPid;
   for (let depth = 0; depth < 5 && pid > 1; depth++) {
     try {
@@ -146,7 +148,7 @@ function detectDarwinParent(startPid: number): string | null {
         timeout: 5000
       });
       const output = result.stdout?.trim() ?? "";
-      debug(`  depth=${depth} PID ${pid} → ps output="${output}"`);
+      trace(`  depth=${depth} PID ${pid} → ps output="${output}"`);
       if (!output) break;
       const parts = output.trimEnd().split(/\s+/);
       const parentPid = parseInt(parts[parts.length - 1], 10);
@@ -154,15 +156,15 @@ function detectDarwinParent(startPid: number): string | null {
       if (comm.startsWith("-")) comm = comm.slice(1);
       if (!comm) break;
       const resolved = Bun.which(comm) ?? comm;
-      debug(`  depth=${depth} PID ${pid} → comm="${comm}" resolved="${resolved}"`);
+      trace(`  depth=${depth} PID ${pid} → comm="${comm}" resolved="${resolved}"`);
       if (!isBlocked(resolved)) return resolved;
       pid = parentPid;
     } catch (e) {
-      debug(`  depth=${depth} PID ${pid} → error: ${e}`);
+      trace(`  depth=${depth} PID ${pid} → error: ${e}`);
       break;
     }
   }
-  debug(`  → tree walk exhausted, returning null`);
+  trace(`  → tree walk exhausted, returning null`);
   return null;
 }
 

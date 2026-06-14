@@ -57,8 +57,8 @@ import {
 } from "../server-state.js";
 import { writeShutdownRequestToDir } from "../remote/shutdown-request.js";
 import { createShutdownRequestWatcher } from "../remote/shutdown-watch.js";
-import { tieBreakOutcome } from "./tie-break.js";
-import { serverLog } from "./server-log.js";
+import { dualPromoteSettleDecision } from "./tie-break.js";
+import { getLogger } from "../logging/logger.js";
 import { createPushService, type PushService } from "./push/service.js";
 import { isValidSubscription } from "./push/subscriptions.js";
 
@@ -138,7 +138,7 @@ export async function findExistingDashboardServer(
 ): Promise<ExistingDashboardServer | undefined> {
   const url = dashboardUrl(host, port);
   const fetchFn = options.fetchFn ?? fetch;
-  serverLog(`findExistingDashboardServer: probing ${url}health`);
+  getLogger().debug(`findExistingDashboardServer: probing ${url}health`);
   let healthy = false;
   try {
     const res = await fetchFn(`${url}health`, { signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS) });
@@ -146,18 +146,18 @@ export async function findExistingDashboardServer(
       const body = (await res.json()) as { ok?: unknown };
       healthy = body.ok === true;
     }
-    serverLog(`findExistingDashboardServer: health response ok=${res.ok}, healthy=${healthy}`);
+    getLogger().debug(`findExistingDashboardServer: health response ok=${res.ok}, healthy=${healthy}`);
   } catch (err) {
-    serverLog(`findExistingDashboardServer: health probe failed: ${err instanceof Error ? err.message : String(err)}`);
+    getLogger().debug(`findExistingDashboardServer: health probe failed: ${err instanceof Error ? err.message : String(err)}`);
     healthy = false;
   }
   if (!healthy) {
-    serverLog("findExistingDashboardServer: not healthy — no existing server");
+    getLogger().debug("findExistingDashboardServer: not healthy — no existing server");
     return undefined;
   }
 
   const pid = await readLiveServerPid(options.env, options.isProcessAliveFn);
-  serverLog(`findExistingDashboardServer: healthy server found, pid=${pid ?? "unknown"}`);
+  getLogger().debug(`findExistingDashboardServer: healthy server found, pid=${pid ?? "unknown"}`);
   return pid === undefined ? { url } : { url, pid };
 }
 
@@ -195,6 +195,7 @@ export async function stopDashboardServer(options: {
   isProcessAlive?: (pid: number) => boolean;
   graceMs?: number;
   pollMs?: number;
+  stopIngest?: (options?: Parameters<typeof stopIngestDaemon>[0]) => Promise<boolean>;
 } = {}): Promise<boolean> {
   const env = options.env ?? process.env;
   const kill = options.killProcess ?? killProcess;
@@ -202,10 +203,24 @@ export async function stopDashboardServer(options: {
   const graceMs = options.graceMs ?? KILL_GRACE_MS;
   const pollMs = options.pollMs ?? 50;
   const pid = await readLiveServerPid(env, isAlive);
-  serverLog(`stopDashboardServer: readLiveServerPid returned ${pid ?? "undefined"}`);
-  if (pid === undefined) return false;
-  const result = await terminatePidWithEscalation(pid, kill, isAlive, graceMs, pollMs);
-  serverLog(`stopDashboardServer: terminatePidWithEscalation(${pid}) returned ${result}`);
+  getLogger().debug(`stopDashboardServer: readLiveServerPid returned ${pid ?? "undefined"}`);
+  let result = false;
+  if (pid !== undefined) {
+    result = await terminatePidWithEscalation(pid, kill, isAlive, graceMs, pollMs);
+    getLogger().debug(`stopDashboardServer: terminatePidWithEscalation(${pid}) returned ${result}`);
+  }
+  // The ingest daemon's lifecycle is owned by the dashboard server: stopping the
+  // server must also stop its co-located ingest so it is never orphaned. The
+  // signal/HTTP plainShutdown path already does this; doing it here covers the
+  // PID-based termination path (restart/takeover via handleExistingDashboardServer)
+  // where the server is force-killed and its own signal handler never runs.
+  const stopIngest = options.stopIngest ?? stopIngestDaemon;
+  try {
+    const ingestStopped = await stopIngest({ env, killProcess: kill, isProcessAlive: isAlive, graceMs, pollMs });
+    getLogger().debug(`stopDashboardServer: stopIngestDaemon returned ${ingestStopped}`);
+  } catch (error) {
+    getLogger().debug(`stopDashboardServer: stopIngestDaemon failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return result;
 }
 
@@ -216,19 +231,19 @@ export async function stopDashboardServer(options: {
  */
 async function requestServerShutdownViaHttp(url: string): Promise<boolean> {
   const shutdownUrl = `${url.replace(/\/?$/, "")}/__internal/shutdown`;
-  serverLog(`requestServerShutdownViaHttp: POSTing to ${shutdownUrl}`);
+  getLogger().debug(`requestServerShutdownViaHttp: POSTing to ${shutdownUrl}`);
   try {
     const res = await fetch(shutdownUrl, {
       method: "POST",
       signal: AbortSignal.timeout(5000)
     });
     if (!res.ok) {
-      serverLog(`requestServerShutdownViaHttp: POST returned ${res.status} — treating as failure`);
+      getLogger().error(`requestServerShutdownViaHttp: POST returned ${res.status} — treating as failure`);
       return false;
     }
-    serverLog(`requestServerShutdownViaHttp: POST returned 200; polling for shutdown`);
+    getLogger().debug(`requestServerShutdownViaHttp: POST returned 200; polling for shutdown`);
   } catch (err) {
-    serverLog(`requestServerShutdownViaHttp: POST failed: ${err instanceof Error ? err.message : String(err)}`);
+    getLogger().error(`requestServerShutdownViaHttp: POST failed: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
   // Wait for the server to actually stop responding.
@@ -238,15 +253,15 @@ async function requestServerShutdownViaHttp(url: string): Promise<boolean> {
     try {
       const probe = await fetch(`${url}health`, { signal: AbortSignal.timeout(500) });
       if (!probe.ok) {
-        serverLog("requestServerShutdownViaHttp: health probe returned non-ok — server is down");
+        getLogger().debug("requestServerShutdownViaHttp: health probe returned non-ok — server is down");
         return true;
       }
     } catch {
-      serverLog("requestServerShutdownViaHttp: health probe threw — server is down");
+      getLogger().debug("requestServerShutdownViaHttp: health probe threw — server is down");
       return true;
     }
   }
-  serverLog("requestServerShutdownViaHttp: timed out waiting for server to stop");
+  getLogger().error("requestServerShutdownViaHttp: timed out waiting for server to stop");
   return false;
 }
 
@@ -278,11 +293,11 @@ export async function handleExistingDashboardServer(
     });
   const requestHttpShutdown = options.requestShutdown ?? requestServerShutdownViaHttp;
 
-  serverLog(`handleExistingDashboardServer: existing=${JSON.stringify(existing)}, tty=${stdinIsTTY}`);
+  getLogger().debug(`handleExistingDashboardServer: existing=${JSON.stringify(existing)}, tty=${stdinIsTTY}`);
 
   if (!stdinIsTTY) {
     write(`climon server is already running at ${existing.url}\n`);
-    serverLog("handleExistingDashboardServer: non-interactive — exiting");
+    getLogger().debug("handleExistingDashboardServer: non-interactive — exiting");
     return "exit";
   }
 
@@ -292,31 +307,31 @@ export async function handleExistingDashboardServer(
     .toLowerCase();
   if (answer !== "y" && answer !== "yes") {
     write(`Existing server left running at ${existing.url}\n`);
-    serverLog(`handleExistingDashboardServer: user declined (answer=${JSON.stringify(answer)})`);
+    getLogger().debug(`handleExistingDashboardServer: user declined (answer=${JSON.stringify(answer)})`);
     return "exit";
   }
 
-  serverLog(`handleExistingDashboardServer: user confirmed termination`);
+  getLogger().debug(`handleExistingDashboardServer: user confirmed termination`);
 
   if (existing.pid !== undefined) {
-    serverLog(`handleExistingDashboardServer: attempting PID-based stop (pid=${existing.pid})`);
+    getLogger().debug(`handleExistingDashboardServer: attempting PID-based stop (pid=${existing.pid})`);
     if (await stopServer(existing.pid)) {
-      serverLog("handleExistingDashboardServer: PID-based stop succeeded");
+      getLogger().debug("handleExistingDashboardServer: PID-based stop succeeded");
       write("Existing climon server terminated. Starting a new server...\n");
       return "continue";
     }
-    serverLog("handleExistingDashboardServer: PID-based stop failed");
+    getLogger().error("handleExistingDashboardServer: PID-based stop failed");
   }
 
   // PID unknown or kill failed — request graceful shutdown via HTTP.
-  serverLog(`handleExistingDashboardServer: trying HTTP shutdown for ${existing.url}`);
+  getLogger().debug(`handleExistingDashboardServer: trying HTTP shutdown for ${existing.url}`);
   if (await requestHttpShutdown(existing.url)) {
-    serverLog("handleExistingDashboardServer: HTTP shutdown succeeded");
+    getLogger().debug("handleExistingDashboardServer: HTTP shutdown succeeded");
     write("Existing climon server terminated. Starting a new server...\n");
     return "continue";
   }
 
-  serverLog("handleExistingDashboardServer: all termination methods failed");
+  getLogger().error("handleExistingDashboardServer: all termination methods failed");
   write(`Unable to terminate the existing server at ${existing.url}\n`);
   return "exit";
 }
@@ -703,7 +718,11 @@ async function ensureIngestDaemon(): Promise<void> {
   if (await isIngestDaemonAlive()) {
     const beacon = await readIngestState(process.env);
     const expectedHost = await resolveIngestBindAddress(process.env);
-    if (!ingestNeedsRecycle(beacon, expectedHost)) return;
+    if (!ingestNeedsRecycle(beacon, expectedHost)) {
+      getLogger().debug(`ingest daemon already running (pid ${beacon?.pid ?? "?"}, port ${beacon?.port ?? "?"}).`);
+      return;
+    }
+    getLogger().debug("ingest daemon is stale or wrong-bound; recycling it...");
     startupLog("recycling a stale or wrong-bound ingest singleton so it re-binds and publishes");
     try {
       await stopIngestDaemon();
@@ -711,6 +730,7 @@ async function ensureIngestDaemon(): Promise<void> {
       // Best-effort: the ingest is a detached singleton.
     }
   }
+  getLogger().debug("starting ingest daemon...");
   const inv = resolveIngestInvocation(process.env, process.execPath);
   const child = spawn(inv.file, inv.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
@@ -722,7 +742,11 @@ async function ensureIngestDaemon(): Promise<void> {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 200));
-    if (await isIngestDaemonAlive()) return;
+    if (await isIngestDaemonAlive()) {
+      const beacon = await readIngestState(process.env);
+      getLogger().debug(`ingest daemon ready (pid ${beacon?.pid ?? child.pid ?? "?"}, port ${beacon?.port ?? "?"}).`);
+      return;
+    }
   }
   process.stderr.write(
     "climon: warning: ingest daemon did not start within 5 s. " +
@@ -753,12 +777,51 @@ export function applyDashboardTunnelPersistence(
   delete config.remote.dashboardTunnelCluster;
 }
 
-function startupLog(message: string): void {
-  serverLog(message);
-  if (process.env.CLIMON_DEBUG === "1") {
-    process.stderr.write(`[startup +${process.uptime().toFixed(3)}s] ${message}\n`);
+/**
+ * Records whether the Tunnel Link is enabled so the server re-establishes the
+ * dashboard tunnel on its next startup. Mutates the passed config in place.
+ */
+export function applyDashboardTunnelEnabled(config: ClimonConfig, enabled: boolean): void {
+  config.remote = { ...config.remote, dashboardTunnelEnabled: enabled };
+}
+
+/** Loads, updates, and persists the dashboard-tunnel enabled flag. Best-effort. */
+async function persistDashboardTunnelEnabled(enabled: boolean): Promise<void> {
+  try {
+    const latest = await loadConfig();
+    applyDashboardTunnelEnabled(latest, enabled);
+    await saveConfig(latest);
+  } catch (error) {
+    getLogger().debug(`persistDashboardTunnelEnabled(${enabled}) failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+
+function startupLog(message: string): void {
+  getLogger().debug(message);
+}
+
+/**
+ * Awaits a promise but gives up after `ms`, so a single teardown step can never
+ * block shutdown indefinitely. Resolves either way; a timeout is logged.
+ */
+async function withTimeout(label: string, promise: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      getLogger().debug(`warning: ${label} did not finish within ${ms} ms; continuing shutdown.`);
+      resolve();
+    }, ms);
+  });
+  try {
+    await Promise.race([Promise.resolve(promise).then(() => undefined, () => undefined), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+const SHUTDOWN_HARD_TIMEOUT_MS = 10000;
+const LISTENER_CLOSE_TIMEOUT_MS = 3000;
+const TUNNEL_CLOSE_TIMEOUT_MS = 3000;
 
 const TIE_BREAK_SETTLE_MS = 750;
 const TIE_BREAK_POLL_MS = 150;
@@ -766,48 +829,65 @@ const TIE_BREAK_POLL_MS = 150;
 /**
  * Dual-promote settle window: after this OS declares host (server.json written),
  * watch the peer home briefly for a competing server.json. If the peer also
- * promoted, apply the deterministic tie-break — WSL stays host and force-demotes
- * the loser; Windows demotes itself by asking its OWN ingest to stand down. Both
- * sides converge on the loser's ingest demoting, so the outcome is the same
- * regardless of which re-checks first. The requests are token-free (authorized by
- * same-user filesystem write access).
+ * promoted, the most-recently-started server wins — it force-demotes the loser by
+ * writing a (token-free, same-user-filesystem-authorized) shutdown-request into
+ * the loser's home, whose ingest (or no-ingest shutdown watcher) consumes it and
+ * stands down. This makes a deliberately-started newcomer take over an existing
+ * host regardless of OS, even when the peer is unreachable over TCP (e.g. WSL2
+ * NAT loopback isolation) so the cross-OS handoff could not complete directly.
+ * An exact start-time tie, or a peer whose server.json predates the `startedAt`
+ * field, falls back to the deterministic OS tie-break (WSL stays host). Both
+ * sides compare the same two timestamps, so the outcome converges no matter which
+ * re-checks first.
  */
-async function settleDualPromote(peerHome: string): Promise<void> {
+async function settleDualPromote(peerHome: string, localStartedAt: number): Promise<void> {
   const localIsWsl = isWsl(process.env);
   const localLabel = localIsWsl ? "WSL" : "Windows";
-  serverLog(`settleDualPromote: started (localIsWsl=${localIsWsl}, peerHome=${peerHome}, settle=${TIE_BREAK_SETTLE_MS}ms)`);
+  getLogger().debug(
+    `settleDualPromote: started (localIsWsl=${localIsWsl}, localStartedAt=${localStartedAt}, ` +
+      `peerHome=${peerHome}, settle=${TIE_BREAK_SETTLE_MS}ms)`
+  );
   const deadline = Date.now() + TIE_BREAK_SETTLE_MS;
-  let peerServerPresent = false;
+  let peerState: ServerState | undefined;
   while (Date.now() < deadline) {
-    if (await readServerStateFromDir(peerHome)) {
-      peerServerPresent = true;
-      break;
-    }
+    peerState = await readServerStateFromDir(peerHome);
+    if (peerState) break;
     await new Promise((r) => setTimeout(r, TIE_BREAK_POLL_MS));
   }
-  const outcome = tieBreakOutcome({ localIsWsl, peerServerPresent });
-  serverLog(`settleDualPromote: peerServerPresent=${peerServerPresent}, outcome=${outcome}`);
-  if (outcome === "stay-host") {
-    if (peerServerPresent) {
-      // Winner: belt-and-suspenders force-demote the loser by writing a request
-      // into its home; its ingest consumes it and stands down.
-      startupLog("dual-promote: winning the tie; force-demoting the peer");
-      serverLog(`settleDualPromote: writing shutdown request to peerHome=${peerHome}`);
-      await writeShutdownRequestToDir(peerHome, { requestedBy: localLabel, ts: Date.now() });
-    }
+  if (!peerState) {
+    getLogger().debug("settleDualPromote: no competing peer server; staying host");
+    return;
+  }
+
+  const peerStartedAt = peerState.startedAt;
+  const decision = dualPromoteSettleDecision({ localIsWsl, localStartedAt, peerStartedAt });
+  const basis =
+    typeof peerStartedAt === "number" && peerStartedAt !== localStartedAt
+      ? `start-time (${localStartedAt} vs peer ${peerStartedAt})`
+      : peerStartedAt === undefined
+        ? "deterministic (peer has no startedAt)"
+        : "deterministic (start-time tie)";
+  getLogger().debug(`settleDualPromote: peer present; decision=${decision} by ${basis}`);
+
+  if (decision === "win") {
+    // Winner: force-demote the loser by writing a request into its home; its
+    // ingest (or no-ingest shutdown watcher) consumes it and stands down.
+    startupLog(`dual-promote: winning by ${basis}; force-demoting the peer`);
+    getLogger().debug(`settleDualPromote: writing shutdown request to peerHome=${peerHome}`);
+    await writeShutdownRequestToDir(peerHome, { requestedBy: localLabel, ts: Date.now() });
     return;
   }
   // Loser: self-demote by writing a request into our OWN home. Our ingest stops
   // this server (stopLocalServer), spawns our uplink toward the winner, and frees
   // the ingest port — exactly the peer-initiated handoff path.
-  startupLog("dual-promote: losing the tie; self-demoting via the local ingest");
-  serverLog(`settleDualPromote: LOSING tie-break — writing self-shutdown request to ${getClimonHome(process.env)}`);
+  startupLog(`dual-promote: losing by ${basis}; self-demoting via the local ingest`);
+  getLogger().debug(`settleDualPromote: LOSING — writing self-shutdown request to ${getClimonHome(process.env)}`);
   await writeShutdownRequestToDir(getClimonHome(process.env), { requestedBy: localLabel, ts: Date.now() });
 }
 
 
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
-  process.stdout.write("climon server starting...\n");
+  getLogger().info("climon server starting...");
   startupLog("startServer invoked");
   startupLog("ensuring climon home directory");
   await ensureClimonHome();
@@ -889,7 +969,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         ? `displaced the ${peerLabel} host via the filesystem handoff`
         : `found no live ${peerLabel} host — starting fresh`;
     startupLog(`promote complete: ${summary}`);
-    process.stdout.write(`climon: ${summary}.\n`);
   }
 
   startupLog(`choosing an available port starting from ${config.server.port}`);
@@ -958,7 +1037,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       try {
         await pushService.notifyAttention(sessions);
       } catch (error) {
-        serverLog(`push notify failed: ${error instanceof Error ? error.message : String(error)}`);
+        getLogger().error(`push notify failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
@@ -996,7 +1075,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     await pushService.notifyAttention(sortSessionsByPriority(await listSessions()));
     startupLog("push service ready");
   } catch (error) {
-    serverLog(`push service unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    getLogger().error(`push service unavailable: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -1047,11 +1126,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       // server can exit 0 instead of being force-killed.
       if (url.pathname === "/__internal/shutdown" && request.method === "POST") {
         if (!isLocal(request, srv)) {
-          serverLog(`/__internal/shutdown: rejected non-local request from ${srv.requestIP(request)?.address}`);
+          getLogger().warn(`/__internal/shutdown: rejected non-local request from ${srv.requestIP(request)?.address}`);
           return new Response("Forbidden", { status: 403 });
         }
         const source = url.searchParams.get("source");
-        serverLog(`/__internal/shutdown: accepted from ${srv.requestIP(request)?.address}; scheduling shutdown`);
+        getLogger().debug(`/__internal/shutdown: accepted from ${srv.requestIP(request)?.address}; scheduling shutdown`);
         // Defer shutdown to next tick so the HTTP response is sent before
         // closeListenerAndStreams() tears down Bun.serve.
         setImmediate(() => requestShutdown?.({
@@ -1215,7 +1294,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           return new Response("Forbidden", { status: 403 });
         }
         try {
-          return Response.json(await dashboardTunnel.ensure());
+          const info = await dashboardTunnel.ensure();
+          await persistDashboardTunnelEnabled(true);
+          return Response.json(info);
         } catch (error) {
           const message = error instanceof Error ? error.message : "Tunnel Link error";
           return new Response(message, { status: message === dashboardTunnelAuthMessage ? 401 : 500 });
@@ -1233,6 +1314,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
         try {
           await dashboardTunnel.close();
+          await persistDashboardTunnelEnabled(false);
           return new Response(null, { status: 204 });
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Tunnel Link error", { status: 500 });
@@ -1609,14 +1691,27 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   startupLog("Bun.serve started; writing server state file");
   const recordedPorts = await collectServerPorts();
-  const serverState: ServerState = { pid: process.pid, port: dashboardPort.port };
+  const localStartedAt = Date.now();
+  const serverState: ServerState = { pid: process.pid, port: dashboardPort.port, startedAt: localStartedAt };
   if (recordedPorts.ingest !== undefined) serverState.ingest = recordedPorts.ingest;
   const serverStatePath = getServerStatePath();
-  serverLog(`writing server.json: path=${serverStatePath}, content=${JSON.stringify(serverState)}`);
+  getLogger().debug(`writing server.json: path=${serverStatePath}, content=${JSON.stringify(serverState)}`);
   await atomicWrite(serverStatePath, serializeServerState(serverState));
-  serverLog(`server.json written successfully`);
+  getLogger().debug(`server.json written successfully`);
   startupLog("state file written; advertising URL");
   printStartup(config, dashboardPort.port);
+
+  // Re-establish a previously-enabled Tunnel Link. The dashboard tunnel manager
+  // reuses the persisted tunnel identity, so the public URL is stable across
+  // restarts. Best-effort and non-blocking: a failure (e.g. devtunnel missing or
+  // unauthenticated) must not prevent the server from serving.
+  if (config.remote?.dashboardTunnelEnabled) {
+    startupLog("re-establishing previously enabled Tunnel Link");
+    void dashboardTunnel.ensure().then(
+      (info) => startupLog(`Tunnel Link re-established at ${info.url}`),
+      (error) => getLogger().debug(`Tunnel Link re-establish failed: ${error instanceof Error ? error.message : String(error)}`)
+    );
+  }
 
   await new Promise<void>((resolve) => {
     let shuttingDown = false;
@@ -1636,16 +1731,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
       }
       sseClients.clear();
-      try {
-        await server.stop(true);
-      } catch {
-        // Listener already stopped.
-      }
-      try {
-        await dashboardTunnel.close();
-      } catch {
-        // No tunnel running or already closed.
-      }
+      // Bound each close so a stuck listener or tunnel host (seen on Windows)
+      // can never block shutdown indefinitely.
+      await withTimeout("dashboard listener close", Promise.resolve(server.stop(true)), LISTENER_CLOSE_TIMEOUT_MS);
+      await withTimeout("Tunnel Link close", dashboardTunnel.close(), TUNNEL_CLOSE_TIMEOUT_MS);
     };
     // Plain shutdown (SIGINT/SIGTERM/internal HTTP): close the co-located ingest
     // too. The one exception is an ingest-initiated demotion request; that daemon
@@ -1655,26 +1744,35 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       shuttingDown = true;
       const why = reason ?? "signal received";
       const shouldStopIngest = options.stopIngest ?? true;
-      serverLog(`plainShutdown triggered (pid=${process.pid}, reason=${why}); removing ${getServerStatePath()}`);
+      getLogger().debug(`plainShutdown triggered (pid=${process.pid}, reason=${why}); removing ${getServerStatePath()}`);
       startupLog("plain shutdown requested; releasing resources");
-      process.stdout.write(`climon server shutting down (${why}).\n`);
+      getLogger().info(`climon server shutting down (${why}).`);
       // Remove server.json synchronously so it is guaranteed to be cleaned up
       // even if the process is force-killed shortly after Ctrl+C on Windows.
       try { rmSync(getServerStatePath(), { force: true }); } catch { /* best-effort */ }
+      // Hard watchdog: guarantee the process exits even if a teardown step hangs.
+      const forceExit = setTimeout(() => {
+        process.stdout.write("climon: shutdown is taking too long; forcing exit.\n");
+        getLogger().debug("plainShutdown: hard watchdog fired; forcing process.exit(0)");
+        process.exit(0);
+      }, SHUTDOWN_HARD_TIMEOUT_MS);
+      forceExit.unref?.();
       void (async () => {
+        getLogger().debug("closing dashboard listener and streams...");
         await closeListenerAndStreams();
         if (shouldStopIngest) {
           try {
             const stopped = await stopIngestDaemon();
-            serverLog(`plainShutdown: stopIngestDaemon returned ${stopped}`);
+            getLogger().debug(`plainShutdown: stopIngestDaemon returned ${stopped}`);
           } catch (error) {
-            serverLog(`plainShutdown: stopIngestDaemon failed: ${error instanceof Error ? error.message : String(error)}`);
+            getLogger().error(`plainShutdown: stopIngestDaemon failed: ${error instanceof Error ? error.message : String(error)}`);
           }
         } else {
-          serverLog("plainShutdown: leaving ingest shutdown to its demotion path");
+          getLogger().debug("plainShutdown: leaving ingest shutdown to its demotion path");
         }
-        serverLog("plainShutdown: shutdown complete");
+        getLogger().debug("plainShutdown: shutdown complete");
         startupLog("plain shutdown complete");
+        clearTimeout(forceExit);
         resolve();
         // Ensure the process exits even if stale handles keep the event loop alive.
         process.exit(0);
@@ -1691,7 +1789,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       const shutdownWatcher = createShutdownRequestWatcher({
         dir: getClimonHome(),
         onValid: (req) => {
-          serverLog(`shutdown-request watcher: received valid request from ${req.requestedBy}; invoking shutdown`);
+          getLogger().debug(`shutdown-request watcher: received valid request from ${req.requestedBy}; invoking shutdown`);
           shutdownWatcher.stop();
           plainShutdown(`peer ${req.requestedBy} won the dual-promote tie-break`);
         }
@@ -1699,20 +1797,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       // Ensure the watcher is cleaned up on any shutdown path.
       const origRequestShutdown = requestShutdown;
       requestShutdown = (options?: ServerShutdownOptions) => { shutdownWatcher.stop(); origRequestShutdown?.(options); };
-      serverLog("shutdown-request watcher started (no ingest, peer configured)");
+      getLogger().debug("shutdown-request watcher started (no ingest, peer configured)");
     }
     // Run the dual-promote settle window concurrently with serving, AFTER the
     // shutdown handlers are registered: if this OS loses the tie, its own ingest
     // SIGTERMs this server, so plainShutdown must already be installed to remove
     // server.json cleanly. Running it concurrently (not awaited before serving)
     // also keeps the settle window off every peer startup's critical path.
-    if (peerHome) void settleDualPromote(peerHome);
+    if (peerHome) void settleDualPromote(peerHome, localStartedAt);
   });
 }
 
 function printStartup(config: ClimonConfig, port: number): void {
   void config;
-  process.stdout.write(`climon server v${VERSION} listening on http://127.0.0.1:${port}/\n`);
+  getLogger().info(`climon server v${VERSION} listening on http://127.0.0.1:${port}/`);
 }
 
 /**

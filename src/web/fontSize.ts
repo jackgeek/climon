@@ -1,3 +1,7 @@
+import { webLog } from "./log.js";
+
+const log = webLog("font-size");
+
 export const FONT_SIZE_STORAGE_KEY = "climon.fontSize";
 
 export const MIN_FONT_SIZE = 8;
@@ -26,7 +30,7 @@ function resolveStorage(
   try {
     return resolveBrowserStorage();
   } catch (error) {
-    console.warn(warningMessage, error);
+    log.warn({ err: String(error) }, warningMessage);
     return null;
   }
 }
@@ -58,7 +62,7 @@ export function readFontSize(
     }
     return clampFontSize(parsed);
   } catch (error) {
-    console.warn("Unable to read font size preference.", error);
+    log.warn({ err: String(error) }, "Unable to read font size preference.");
     return DEFAULT_FONT_SIZE;
   }
 }
@@ -76,6 +80,6 @@ export function writeFontSize(
   try {
     resolvedStorage.setItem(FONT_SIZE_STORAGE_KEY, String(clampFontSize(size)));
   } catch (error) {
-    console.warn("Unable to write font size preference.", error);
+    log.warn({ err: String(error) }, "Unable to write font size preference.");
   }
 }
