@@ -430,4 +430,52 @@ describe("createAttentionAlertManager", () => {
     expect(soundCallCount).toBe(1);
     expect(notificationCallCount).toBe(1);
   });
+
+  test("excludes the viewed session from the attention count and alerts", () => {
+    const h = createHarness();
+    h.manager.update([session({ id: "a", status: "running", name: "API server" })]);
+    h.manager.update(
+      [session({ id: "a", status: "needs-attention", attentionMatchedAt: "a-1", name: "API server" })],
+      "a"
+    );
+    expect(h.title()).toBe("climon");
+    expect(h.soundCalls).toEqual([]);
+    expect(h.notifications).toEqual([]);
+  });
+
+  test("still alerts for non-viewed sessions while one session is viewed", () => {
+    const h = createHarness();
+    h.manager.update([
+      session({ id: "a", status: "running", name: "API server" }),
+      session({ id: "b", status: "running", name: "Worker" })
+    ]);
+    h.manager.update(
+      [
+        session({ id: "a", status: "needs-attention", attentionMatchedAt: "a-1", name: "API server" }),
+        session({ id: "b", status: "needs-attention", attentionMatchedAt: "b-1", name: "Worker" })
+      ],
+      "a"
+    );
+    expect(h.title()).toBe("climon (!1)");
+    expect(h.soundCalls).toEqual(["play"]);
+    expect(h.notifications.map((n) => n.sessionId)).toEqual(["b"]);
+  });
+
+  test("does not re-alert a still-attentive session after the user navigates away", () => {
+    const h = createHarness();
+    h.manager.update([session({ id: "a", status: "running", name: "API server" })]);
+    const attentive = session({
+      id: "a",
+      status: "needs-attention",
+      attentionMatchedAt: "a-1",
+      name: "API server"
+    });
+    // Enters needs-attention while viewed -> suppressed but recorded as seen.
+    h.manager.update([attentive], "a");
+    // User navigates away while it is still attentive -> no new alert.
+    h.manager.update([attentive], null);
+    expect(h.soundCalls).toEqual([]);
+    expect(h.notifications).toEqual([]);
+    expect(h.title()).toBe("climon (!1)");
+  });
 });

@@ -119,6 +119,13 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     internal: true
   },
   {
+    path: "remote.dashboardTunnelEnabled",
+    type: "boolean",
+    purpose: "Server-owned flag recording whether the Tunnel Link is enabled, so the server re-establishes the dashboard tunnel automatically on startup.",
+    scope: ["server"],
+    internal: true
+  },
+  {
     path: "remote.port",
     type: "number",
     purpose: "Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set.",

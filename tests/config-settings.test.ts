@@ -28,6 +28,7 @@ describe("config settings registry", () => {
       "remote.tunnelId",
       "remote.dashboardTunnelId",
       "remote.dashboardTunnelCluster",
+      "remote.dashboardTunnelEnabled",
       "remote.port",
       "remote.ingestPortRetryAttempts",
       "remote.clientId",
@@ -118,7 +119,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(25);
+    expect(allConfigKeys().length).toBe(26);
   });
 
   test("coerces values through registry validators", () => {

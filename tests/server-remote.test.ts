@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
-import { readServerStateFromDir } from "../src/server-state.js";
+import { readServerStateFromDir, getServerStatePath, serializeServerState } from "../src/server-state.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
@@ -635,5 +635,126 @@ describe("stopIngestDaemon", () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("stopDashboardServer", () => {
+  test("also stops the co-located ingest daemon", async () => {
+    const testTmp = join(process.cwd(), ".copilot-tmp");
+    mkdirSync(testTmp, { recursive: true });
+    const home = mkdtempSync(join(testTmp, "climon-server-remote-"));
+    try {
+      const env = { CLIMON_HOME: home };
+      writeFileSync(getServerStatePath(env), serializeServerState({ pid: 4321, port: 3131 }));
+      const kills: Array<[number, boolean]> = [];
+      let serverAlive = true;
+      let ingestStopCalled = false;
+
+      const stopDashboardServer = (
+        serverModule as typeof serverModule & {
+          stopDashboardServer?: (options: {
+            env: NodeJS.ProcessEnv;
+            killProcess: (pid: number, force: boolean) => boolean;
+            isProcessAlive: (pid: number) => boolean;
+            graceMs?: number;
+            pollMs?: number;
+            stopIngest?: (options?: unknown) => Promise<boolean>;
+          }) => Promise<boolean>;
+        }
+      ).stopDashboardServer;
+
+      expect(typeof stopDashboardServer).toBe("function");
+      const stopped = await stopDashboardServer?.({
+        env,
+        killProcess: (pid, force) => {
+          kills.push([pid, force]);
+          serverAlive = false;
+          return true;
+        },
+        isProcessAlive: () => serverAlive,
+        stopIngest: async () => {
+          ingestStopCalled = true;
+          return true;
+        }
+      });
+
+      expect(stopped).toBe(true);
+      expect(kills).toEqual([[4321, false]]);
+      expect(ingestStopCalled).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("stops an orphaned ingest even when no server is running", async () => {
+    const testTmp = join(process.cwd(), ".copilot-tmp");
+    mkdirSync(testTmp, { recursive: true });
+    const home = mkdtempSync(join(testTmp, "climon-server-remote-"));
+    try {
+      const env = { CLIMON_HOME: home };
+      // No server.json present → server pid is undefined.
+      let ingestStopCalled = false;
+
+      const stopDashboardServer = (
+        serverModule as typeof serverModule & {
+          stopDashboardServer?: (options: {
+            env: NodeJS.ProcessEnv;
+            killProcess: (pid: number, force: boolean) => boolean;
+            isProcessAlive: (pid: number) => boolean;
+            stopIngest?: (options?: unknown) => Promise<boolean>;
+          }) => Promise<boolean>;
+        }
+      ).stopDashboardServer;
+
+      const stopped = await stopDashboardServer?.({
+        env,
+        killProcess: () => true,
+        isProcessAlive: () => false,
+        stopIngest: async () => {
+          ingestStopCalled = true;
+          return true;
+        }
+      });
+
+      // No server was stopped, but the ingest cleanup still ran.
+      expect(stopped).toBe(false);
+      expect(ingestStopCalled).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("applyDashboardTunnelEnabled", () => {
+  test("records the enabled flag on the remote config", () => {
+    const applyDashboardTunnelEnabled = (
+      serverModule as typeof serverModule & {
+        applyDashboardTunnelEnabled?: (config: ClimonConfig, enabled: boolean) => void;
+      }
+    ).applyDashboardTunnelEnabled;
+
+    expect(typeof applyDashboardTunnelEnabled).toBe("function");
+    const config = { server: { host: "127.0.0.1", port: 3131 } } as unknown as ClimonConfig;
+    applyDashboardTunnelEnabled?.(config, true);
+    expect(config.remote?.dashboardTunnelEnabled).toBe(true);
+    applyDashboardTunnelEnabled?.(config, false);
+    expect(config.remote?.dashboardTunnelEnabled).toBe(false);
+  });
+
+  test("preserves existing dashboard tunnel identity when toggling enabled", () => {
+    const applyDashboardTunnelEnabled = (
+      serverModule as typeof serverModule & {
+        applyDashboardTunnelEnabled?: (config: ClimonConfig, enabled: boolean) => void;
+      }
+    ).applyDashboardTunnelEnabled;
+
+    const config = {
+      server: { host: "127.0.0.1", port: 3131 },
+      remote: { dashboardTunnelId: "happy-tree-abc123", dashboardTunnelCluster: "eun1" }
+    } as unknown as ClimonConfig;
+    applyDashboardTunnelEnabled?.(config, true);
+    expect(config.remote?.dashboardTunnelId).toBe("happy-tree-abc123");
+    expect(config.remote?.dashboardTunnelCluster).toBe("eun1");
+    expect(config.remote?.dashboardTunnelEnabled).toBe(true);
   });
 });

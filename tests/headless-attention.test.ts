@@ -79,6 +79,22 @@ async function sendInput(id: string, data: string): Promise<void> {
   });
 }
 
+async function openViewerWithResize(id: string, cols: number, rows: number) {
+  const meta = await readMeta(id);
+  const socket = connectSessionSocket(meta.socketPath);
+  await new Promise<void>((resolve, reject) => {
+    socket.once("connect", () => {
+      socket.write(encodeJsonFrame(FrameType.Resize, { cols, rows, source: "viewer" }), () => resolve());
+    });
+    socket.once("error", reject);
+  });
+  // Drain incoming frames so the held-open viewer socket stays healthy. A real
+  // browser viewer stays connected; disconnecting would revert the size and mask
+  // the bug, so the caller is responsible for closing this socket.
+  socket.on("data", () => {});
+  return socket;
+}
+
 afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
@@ -150,6 +166,132 @@ describe("headless session attention", () => {
       expect(stillAcknowledged.status).toBe("acknowledged");
       expect(stillAcknowledged.priorityReason).toBe("running");
     } finally {
+      const pid = await readMeta(id)
+        .then((m) => m.daemonPid)
+        .catch(() => undefined);
+      if (pid) {
+        try {
+          process.kill(pid);
+        } catch {
+          // already gone
+        }
+      }
+      proc.kill();
+      await proc.exited;
+    }
+  }, 60000);
+
+  test("a viewer resize does not clear attention on a still-idle session", async () => {
+    await mkdir(home, { recursive: true });
+    const config = defaultConfig();
+    config.attention.idleSeconds = 1;
+    await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
+
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    let viewer: ReturnType<typeof connectSessionSocket> | undefined;
+    try {
+      const flagged = await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "needs-attention" ? m : undefined;
+      });
+      const token = flagged.attentionMatchedAt;
+
+      // Viewing the session attaches a browser terminal that fits and resizes.
+      // The viewer stays connected (closing it would revert the size and mask the
+      // bug). The reflow must not be read as activity that clears attention.
+      viewer = await openViewerWithResize(id, 40, 12);
+
+      // Confirm the resize actually took effect (otherwise the test is vacuous).
+      const resized = await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.cols === 40 && m.rows === 12 ? m : undefined;
+      });
+      expect(resized.cols).toBe(40);
+
+      // Span several idle sampling cycles to let any spurious transition surface.
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      const afterResize = await readMeta(id);
+      expect(afterResize.status).toBe("needs-attention");
+      expect(afterResize.priorityReason).toBe("attention");
+      // Same outstanding attention event — never cleared and re-flagged.
+      expect(afterResize.attentionMatchedAt).toBe(token);
+    } finally {
+      viewer?.destroy();
+      const pid = await readMeta(id)
+        .then((m) => m.daemonPid)
+        .catch(() => undefined);
+      if (pid) {
+        try {
+          process.kill(pid);
+        } catch {
+          // already gone
+        }
+      }
+      proc.kill();
+      await proc.exited;
+    }
+  }, 60000);
+
+  test("viewing a needs-attention session (resize + ack) keeps it acknowledged", async () => {
+    // Reproduces the two reported regressions: after the dashboard views a
+    // needs-attention session — attaching a browser terminal that resizes and
+    // then sends a user acknowledgement — the session must settle on
+    // "acknowledged" and stay there. The viewer-resize reflow must not be read
+    // as activity that (1) clears the ack to "running" or (2) re-flags
+    // "needs-attention" once the reflowed screen goes idle again.
+    await mkdir(home, { recursive: true });
+    const config = defaultConfig();
+    config.attention.idleSeconds = 1;
+    await writeFile(join(home, "config.json"), JSON.stringify(config), "utf8");
+
+    const proc = Bun.spawn(
+      [process.execPath, "src/index.ts", "run", "--headless", process.execPath, "-e", "setTimeout(()=>{},30000)"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    const id = (await new Response(proc.stdout).text()).trim();
+    let viewer: ReturnType<typeof connectSessionSocket> | undefined;
+    try {
+      const flagged = await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "needs-attention" ? m : undefined;
+      });
+      const token = flagged.attentionMatchedAt;
+
+      // View the session: attach a browser viewer that resizes, then send the
+      // user acknowledgement on the same held-open socket (as the dashboard does).
+      viewer = await openViewerWithResize(id, 40, 12);
+      await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.cols === 40 && m.rows === 12 ? m : undefined;
+      });
+      viewer.write(
+        encodeJsonFrame(FrameType.Attention, {
+          needsAttention: false,
+          reason: "viewed",
+          attentionMatchedAt: token
+        } satisfies AttentionPayload)
+      );
+
+      const acknowledged = await waitFor(async () => {
+        const m = await readMeta(id);
+        return m.status === "acknowledged" ? m : undefined;
+      });
+      expect(acknowledged.status).toBe("acknowledged");
+
+      // Hold the viewer open and sample across several idle cycles. The status
+      // must never leave "acknowledged" while the screen stays static.
+      const seen = new Set<string>();
+      for (let i = 0; i < 12; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        seen.add((await readMeta(id)).status);
+      }
+      expect([...seen]).toEqual(["acknowledged"]);
+    } finally {
+      viewer?.destroy();
       const pid = await readMeta(id)
         .then((m) => m.daemonPid)
         .catch(() => undefined);

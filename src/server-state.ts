@@ -17,6 +17,14 @@ export interface ServerState {
   port: number;
   /** TCP port the remote ingest listener bound to, when remotes are enabled. */
   ingest?: number;
+  /**
+   * Epoch milliseconds when this server promoted (wrote its state file). The
+   * dual-promote settle window compares this against the peer's value so the
+   * most-recently-started server wins a contested promote regardless of OS; an
+   * exact tie (or a peer that predates this field) falls back to the
+   * deterministic OS tie-break. Optional for backward compatibility.
+   */
+  startedAt?: number;
 }
 
 /** Basename of the server state file under CLIMON_HOME. */
@@ -40,6 +48,9 @@ export function parseServerState(raw: string): ServerState | undefined {
     typeof parsed.ingest === "number" && Number.isInteger(parsed.ingest) && parsed.ingest > 0;
   const state: ServerState = { pid: parsed.pid as number, port: parsed.port as number };
   if (ingestOk) state.ingest = parsed.ingest as number;
+  if (typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt) && parsed.startedAt > 0) {
+    state.startedAt = parsed.startedAt;
+  }
   return state;
 }
 
@@ -76,5 +87,6 @@ async function readServerStateFromPath(path: string): Promise<ServerState | unde
 export function serializeServerState(state: ServerState): string {
   const payload: ServerState = { pid: state.pid, port: state.port };
   if (state.ingest !== undefined) payload.ingest = state.ingest;
+  if (state.startedAt !== undefined) payload.startedAt = state.startedAt;
   return `${JSON.stringify(payload)}\n`;
 }

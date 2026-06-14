@@ -34,7 +34,7 @@ function makeHome(name: string): string {
   return home;
 }
 
-function writeServerJson(home: string, state: { pid: number; port: number; ingest?: number }): void {
+function writeServerJson(home: string, state: { pid: number; port: number; ingest?: number; startedAt?: number }): void {
   writeFileSync(join(home, "server.json"), serializeServerState(state));
 }
 
@@ -101,6 +101,19 @@ describe("server-state", () => {
 
   test("getServerStatePath honors CLIMON_HOME", () => {
     expect(getServerStatePath({ CLIMON_HOME: "/tmp/x" })).toBe(join("/tmp/x", "server.json"));
+  });
+
+  test("round-trips the optional startedAt promote timestamp", async () => {
+    const home = makeHome("state3");
+    writeServerJson(home, { pid: 4242, port: 3131, startedAt: 1700000000000 });
+    expect(await readServerStateFromDir(home)).toEqual({ pid: 4242, port: 3131, startedAt: 1700000000000 });
+    expect(serializeServerState({ pid: 1, port: 2, startedAt: 5 })).toBe('{"pid":1,"port":2,"startedAt":5}\n');
+  });
+
+  test("ignores a non-positive or non-finite startedAt", async () => {
+    const home = makeHome("state4");
+    writeFileSync(join(home, "server.json"), JSON.stringify({ pid: 1, port: 2, startedAt: 0 }));
+    expect(await readServerStateFromDir(home)).toEqual({ pid: 1, port: 2 });
   });
 });
 

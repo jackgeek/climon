@@ -1,5 +1,4 @@
 import { readFileSync, rmSync, watch, type FSWatcher } from "node:fs";
-import { child } from "../logging/logger.js";
 import {
   getShutdownRequestPathInDir,
   parseShutdownRequest,
@@ -41,38 +40,25 @@ export function createShutdownRequestWatcher(options: ShutdownRequestWatcherOpti
   const removeFile = options.removeFile ?? ((p: string): void => rmSync(p, { force: true }));
   const requestPath = getShutdownRequestPathInDir(options.dir);
 
-  const debugLog = (msg: string): void => child("shutdown-watch").debug(msg);
-  const traceLog = (msg: string): void => child("shutdown-watch").trace(msg);
-  debugLog(`watcher starting: watching ${requestPath}`);
-
   let done = false;
   let watcher: FSWatcher | undefined;
 
   // A request present at startup cannot be for this fresh instance: clear it.
   removeFile(requestPath);
-  debugLog("cleared stale request (if any)");
 
-  let pollCount = 0;
   const check = (): void => {
     if (done) return;
-    pollCount++;
     let raw: string;
     try {
       raw = readFile(requestPath);
-    } catch (err: unknown) {
-      if (pollCount <= 3 || pollCount % 5 === 0) {
-        traceLog(`poll #${pollCount}: no file (${(err as NodeJS.ErrnoException).code ?? "unknown"})`);
-      }
+    } catch {
       return; // absent or unreadable
     }
-    traceLog(`poll #${pollCount}: READ FILE (${raw.length} bytes): ${raw.trim()}`);
     const request = parseShutdownRequest(raw);
     if (!request) {
-      debugLog(`poll #${pollCount}: PARSE FAILED — removing malformed file`);
       removeFile(requestPath); // malformed/oversized: drop it
       return;
     }
-    debugLog(`poll #${pollCount}: VALID request from ${request.requestedBy} — firing onValid`);
     done = true;
     removeFile(requestPath); // consume before acting
     options.onValid(request);
@@ -80,23 +66,18 @@ export function createShutdownRequestWatcher(options: ShutdownRequestWatcherOpti
 
   try {
     watcher = watchFn(options.dir, (_event, filename) => {
-      traceLog(`fs.watch event: ${_event} ${filename}`);
       if (!filename || String(filename) === SHUTDOWN_REQUEST_BASENAME) check();
     });
-    debugLog("fs.watch started");
-  } catch (err: unknown) {
-    debugLog(`fs.watch failed: ${(err as Error).message}`);
+  } catch {
     // fs.watch unsupported here; rely on polling.
   }
   const timer = setInterval(check, pollMs);
-  debugLog(`poll timer started (${pollMs}ms interval)`);
 
   return {
     stop: (): void => {
       done = true;
       watcher?.close();
       clearInterval(timer);
-      debugLog("watcher stopped");
     }
   };
 }

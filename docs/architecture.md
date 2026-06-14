@@ -214,6 +214,16 @@ dev-tunnel origin (`*.devtunnels.ms` + HTTPS); desktop/localhost keeps the
 foreground `Notification` API. SSE (`/api/events`) remains the live in-app update
 channel; Web Push is only for background attention alerts.
 
+Notifications for the session the user is actively viewing are suppressed. The
+client computes a single "viewed session" (mirroring `TerminalView`'s
+`terminalVisible` rule). The in-app alert manager (`src/web/attentionAlerts.ts`)
+excludes it from the title count and alerts, and `App.tsx` auto-acknowledges it
+so the daemon clears the attention state. For background push, `sw.ts` asks open
+window clients which session they are viewing (via a `MessageChannel` reply) and
+suppresses the OS notification when any client reports viewing the pushed session
+(`shouldSuppressPush` in `src/web/pwa/pushData.ts`); it defaults to showing the
+notification on no/late reply.
+
 ## Remote clients (dev-tunnel uplink)
 
 A devbox runs a singleton **uplink** agent (`climon __uplink`) that connects to
@@ -271,7 +281,15 @@ OS moves the host role:
   `shutdown-request.json` into the peer's `CLIMON_HOME`. It proceeds when the peer
   is gone (clearing stale beacons) and aborts (advising `climon cleanup`) rather
   than running a second ingest past a live, un-clearable peer. The network carries
-  only the data plane.
+  only the data plane. After binding, a brief **settle window** re-reads the peer
+  `server.json` to catch a contested promote (e.g. the peer was unreachable over
+  TCP under WSL2 NAT, so the direct handoff could not complete): the
+  most-recently-started server wins by comparing the `startedAt` timestamps and
+  force-demotes the loser over the filesystem, so a deliberately-started newcomer
+  takes over regardless of OS. An exact start-time tie — or a peer whose
+  `server.json` predates `startedAt` — falls back to the deterministic OS rule
+  (WSL stays host). Both sides compare the same timestamps, so the outcome
+  converges no matter which re-checks first.
 - **Demote**: the peer's durable **ingest** watches its own home (`fs.watch` + ~1s
   poll); on a well-formed request it spawns an uplink toward the new host, stops the
   co-located dashboard server, frees the ingest port, removes its beacons (and the
