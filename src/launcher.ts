@@ -6,7 +6,6 @@ import {
   getClimonHome,
   loadConfig,
   NEST_LEVEL_ENV_VAR,
-  SESSION_ENV_VAR,
   resolveConfigSetting
 } from "./config.js";
 import { spawnHeadlessSession } from "./client/spawn-session.js";
@@ -211,11 +210,6 @@ export async function startMonitoredCommand(
   command: string[],
   options: { headless?: boolean; name?: string } & SessionDefaultFlags = {}
 ): Promise<number> {
-  if (process.env[SESSION_ENV_VAR]) {
-    writeStderr("climon: cannot start a nested session from inside an existing climon session.\n");
-    return 1;
-  }
-
   // Warn about nested sessions immediately
   const nestLevel = parseInt(process.env[NEST_LEVEL_ENV_VAR] ?? "0", 10) || 0;
   if (nestLevel > 0) {
