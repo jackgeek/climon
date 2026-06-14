@@ -55,7 +55,7 @@ describe("server port safety", () => {
   test("health reports the bound dashboard port and writes it to the state file", async () => {
     const port = await freePort();
     const server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--port", String(port)],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const base = `http://127.0.0.1:${port}`;
@@ -90,7 +90,7 @@ describe("server port safety", () => {
   test("releases the port and removes the state file on shutdown", async () => {
     const port = await freePort();
     const server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--port", String(port)],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const base = `http://127.0.0.1:${port}`;

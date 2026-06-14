@@ -96,6 +96,10 @@ view, interact with, or manage your monitored sessions from a browser.
 - `--lan` — bind to `0.0.0.0` so other machines on the network can access the
   dashboard.
 - `--port N` — use a custom port instead of the default `3131`.
+- `--no-takeover` — never terminate (or prompt to terminate) an already-running
+  dashboard server. Instead, start a second server on the next available port.
+  Useful for tests and for running a throwaway dashboard without disrupting your
+  main one.
 
 Once the server is running you can also start new sessions directly from the
 dashboard. Session creation is **per-session**: hover any live session

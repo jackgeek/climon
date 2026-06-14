@@ -66,6 +66,13 @@ import { isValidSubscription } from "./push/subscriptions.js";
 interface StartServerOptions {
   port?: number;
   enableRemotes?: boolean;
+  /**
+   * When true, never terminate or prompt to terminate an existing dashboard
+   * server. Skips the existing-server check entirely and binds the next
+   * available port instead. Used by tests so the suite cannot take down a
+   * developer's running dashboard.
+   */
+  noTakeover?: boolean;
 }
 
 interface WsData {
@@ -919,17 +926,21 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   await saveConfig(config);
 
   startupLog(`checking for an existing dashboard server on port ${config.server.port}`);
-  const existing = await findExistingDashboardServer(config.server.host, config.server.port);
-  if (existing) {
-    startupLog(`existing dashboard server found at ${existing.url}; prompting for action`);
-    const action = await handleExistingDashboardServer(existing);
-    if (action === "exit") {
-      startupLog("leaving existing server running; exiting startup");
-      return;
-    }
-    startupLog("existing server handled; continuing startup");
+  if (options.noTakeover) {
+    startupLog("--no-takeover set; skipping existing-server check (will bind the next free port)");
   } else {
-    startupLog("no existing dashboard server found");
+    const existing = await findExistingDashboardServer(config.server.host, config.server.port);
+    if (existing) {
+      startupLog(`existing dashboard server found at ${existing.url}; prompting for action`);
+      const action = await handleExistingDashboardServer(existing);
+      if (action === "exit") {
+        startupLog("leaving existing server running; exiting startup");
+        return;
+      }
+      startupLog("existing server handled; continuing startup");
+    } else {
+      startupLog("no existing dashboard server found");
+    }
   }
 
   // Cross-OS promote: when a peer OS is configured, displace any peer host

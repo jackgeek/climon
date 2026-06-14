@@ -43,7 +43,7 @@ afterEach(async () => {
 describe("DELETE /api/server is removed", () => {
   test("a DELETE with the (former) shutdown token no longer shuts the dashboard down", async () => {
     const port = await freePort();
-    const server = Bun.spawn([process.execPath, "src/server.ts", "server", "--port", String(port)], {
+    const server = Bun.spawn([process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)], {
       cwd: process.cwd(),
       env,
       stdout: "pipe",

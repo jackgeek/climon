@@ -6,7 +6,7 @@ export type ParsedCommand =
   | { command: "help" }
   | { command: "version" }
   | { command: "shell"; priority?: number; color?: SessionColorMode | null; name?: string }
-  | { command: "server"; port?: number; enableRemotes?: boolean }
+  | { command: "server"; port?: number; enableRemotes?: boolean; noTakeover?: boolean }
   | { command: "ls" }
   | { command: "kill"; id: string }
   | { command: "kill-all" }
@@ -27,8 +27,10 @@ Usage:
                                Run a command in a monitored PTY session
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white)
-  climon server [--port N] [--enable-remotes]
+  climon server [--port N] [--enable-remotes] [--no-takeover]
                                Start the dashboard web server (loopback only)
+                               (--no-takeover: never terminate an existing
+                               server; start on the next available port)
   climon ls                    List monitored sessions
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
@@ -118,6 +120,7 @@ export function parseArgs(argv: string[]): ParsedCommand {
     case "server": {
       let port: number | undefined;
       let enableRemotes = false;
+      let noTakeover = false;
       for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
         if (arg === "--port") {
@@ -127,9 +130,16 @@ export function parseArgs(argv: string[]): ParsedCommand {
           port = Number(arg.slice("--port=".length));
         } else if (arg === "--enable-remotes") {
           enableRemotes = true;
+        } else if (arg === "--no-takeover") {
+          noTakeover = true;
         }
       }
-      return { command: "server", port, ...(enableRemotes ? { enableRemotes } : {}) };
+      return {
+        command: "server",
+        port,
+        ...(enableRemotes ? { enableRemotes } : {}),
+        ...(noTakeover ? { noTakeover } : {})
+      };
     }
     case "ls":
     case "list":

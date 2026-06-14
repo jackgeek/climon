@@ -168,7 +168,7 @@ describe("PATCH /api/sessions/:id status", () => {
     await mkdir(home, { recursive: true });
     const port = await freePort();
     server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--port", String(port)],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
       { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
     );
     base = `http://127.0.0.1:${port}`;

@@ -76,15 +76,16 @@ export function resolveServerInvocation(
 async function runServerInProcess(
   bundlePath: string,
   port: number | undefined,
-  enableRemotes: boolean | undefined
+  enableRemotes: boolean | undefined,
+  noTakeover: boolean | undefined
 ): Promise<number> {
   const mod = await import(bundlePath);
   if (typeof mod.startServer === "function") {
-    await mod.startServer({ port, enableRemotes });
+    await mod.startServer({ port, enableRemotes, noTakeover });
     return 0;
   }
   if (typeof mod.default?.startServer === "function") {
-    await mod.default.startServer({ port, enableRemotes });
+    await mod.default.startServer({ port, enableRemotes, noTakeover });
     return 0;
   }
   writeStderr(
@@ -119,7 +120,7 @@ export async function delegateToServer(
     if (parsed.command === "server") {
       const serverModPath = join(dirname(devEntrypoint), "server", "server.js");
       const mod = await import(serverModPath);
-      await mod.startServer({ port: parsed.port, enableRemotes: parsed.enableRemotes });
+      await mod.startServer({ port: parsed.port, enableRemotes: parsed.enableRemotes, noTakeover: parsed.noTakeover });
       return 0;
     }
   }
@@ -131,7 +132,7 @@ export async function delegateToServer(
     const { parseArgs } = await import("./args.js");
     const parsed = parseArgs(forwardArgs);
     if (parsed.command === "server") {
-      return runServerInProcess(bundlePath, parsed.port, parsed.enableRemotes);
+      return runServerInProcess(bundlePath, parsed.port, parsed.enableRemotes, parsed.noTakeover);
     }
   }
 

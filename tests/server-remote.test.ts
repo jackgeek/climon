@@ -149,7 +149,7 @@ describe("server shutdown ingest lifecycle", () => {
     );
 
     const server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--port", String(dashboardPort), "--enable-remotes"],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(dashboardPort), "--enable-remotes"],
       { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
     );
     let serverExited = false;

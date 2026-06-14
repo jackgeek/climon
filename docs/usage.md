@@ -5,6 +5,7 @@
 ```bash
 climon server                 # http://127.0.0.1:3131 (localhost only)
 climon server --port 8080     # custom port
+climon server --no-takeover   # coexist with a running server on the next free port
 ```
 
 The server prints the URL on startup and binds to loopback (`127.0.0.1`) only for

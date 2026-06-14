@@ -33,7 +33,7 @@ async function main(): Promise<number> {
   const parsed = parseArgs(process.argv.slice(2));
   if (parsed.command === "server") {
     await initServerLogging();
-    await startServer({ port: parsed.port, enableRemotes: parsed.enableRemotes });
+    await startServer({ port: parsed.port, enableRemotes: parsed.enableRemotes, noTakeover: parsed.noTakeover });
     return 0;
   }
   if (parsed.command === "ingest") {

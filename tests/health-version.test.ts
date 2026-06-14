@@ -78,7 +78,7 @@ describe("GET /health", () => {
   test("reports the server version", async () => {
     const port = await freePort();
     const server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--port", String(port)],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const base = `http://127.0.0.1:${port}`;
@@ -98,7 +98,7 @@ describe("GET /health", () => {
   test("reports remotes disabled unless the server is started with --enable-remotes", async () => {
     const port = await freePort();
     const server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--port", String(port)],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const base = `http://127.0.0.1:${port}`;
@@ -115,7 +115,7 @@ describe("GET /health", () => {
 
     const enabledPort = await freePort();
     const enabledServer = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--enable-remotes", "--port", String(enabledPort)],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--enable-remotes", "--port", String(enabledPort)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const enabledBase = `http://127.0.0.1:${enabledPort}`;
