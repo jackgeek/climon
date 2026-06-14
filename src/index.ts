@@ -18,6 +18,8 @@ import {
   startMonitoredCommand
 } from "./launcher.js";
 import { VERSION } from "./version.js";
+import { initLogger } from "./logging/logger.js";
+import { writeStdout, writeStderr, logCliCommand } from "./logging/cli-io.js";
 
 const INSTALLER_BUNDLE_NAME = "climon-alpha";
 
@@ -53,7 +55,6 @@ async function tryRunInstaller(): Promise<number | undefined> {
   process.stderr.write("climon: installer bundle does not export runSetupCli() or main()\n");
   return 1;
 }
-
 async function main(): Promise<number> {
   // If an installer bundle is present next to the executable, run it.
   const installerResult = await tryRunInstaller();
@@ -61,12 +62,17 @@ async function main(): Promise<number> {
 
   const parsed = parseArgs(process.argv.slice(2));
 
+  if (parsed.command !== "uplink") {
+    initLogger("client");
+    logCliCommand(parsed.command);
+  }
+
   switch (parsed.command) {
     case "help":
-      process.stdout.write(helpText);
+      writeStdout(helpText, { log: false });
       return 0;
     case "version":
-      process.stdout.write(`climon v${VERSION}\n`);
+      writeStdout(`climon v${VERSION}\n`);
       return 0;
     case "server":
       return await delegateToServer(
@@ -115,7 +121,7 @@ async function main(): Promise<number> {
       return await runSessionHost(parsed.id, meta, { headless: true });
     }
     default:
-      process.stderr.write(helpText);
+      writeStderr(helpText, { log: false });
       return 1;
   }
 }
@@ -127,6 +133,6 @@ main()
     }
   })
   .catch((error: unknown) => {
-    process.stderr.write(`climon: ${(error as Error).message}\n`);
+    writeStderr(`climon: ${(error as Error).message}\n`);
     process.exitCode = 1;
   });

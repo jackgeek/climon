@@ -6,9 +6,11 @@ import { selfSpawnArgs } from "./self-spawn.js";
 
 /**
  * Spawns a detached per-session daemon (`climon __session <id>`) that owns the
- * PTY and survives the launcher exiting. Output is logged to
- * `<sessionsDir>/<id>.log`. `windowsHide` prevents a console window flashing on
- * Windows; the parent's log fd is closed after the child inherits it.
+ * PTY and survives the launcher exiting. The daemon's raw stdio is redirected to
+ * `<sessionsDir>/<id>.log` to capture uncaught crash output; structured pino
+ * logs are written separately to `$CLIMON_HOME/logs/daemon/<id>.log`.
+ * `windowsHide` prevents a console window flashing on Windows; the parent's log
+ * fd is closed after the child inherits it.
  */
 export function spawnDaemon(id: string, env: NodeJS.ProcessEnv): void {
   const logPath = join(getSessionsDir(env), `${id}.log`);

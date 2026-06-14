@@ -95,6 +95,15 @@ durable ingest watches its own home and demotes on the next well-formed request.
   atomically (temp file + `rename`, so the ingest watcher never observes a torn
   or empty file) with `0600` permissions inside a `0700` directory.
 
+## Logging
+
+Logs are written locally under `$CLIMON_HOME/logs/` by default and never leave the
+machine unless you opt in. Secrets (auth tokens, tunnel credentials, the App
+Insights connection string) are redacted to `[REDACTED]` in all log output. The
+Application Insights sink is the only network egress path for logs and is disabled
+unless a connection string is configured (`logging.appInsights.connectionString`
+or `APPLICATIONINSIGHTS_CONNECTION_STRING`). See [`logging.md`](logging.md).
+
 ## Containment: server-side sanitization
 
 A devbox only streams session I/O and metadata; it can never name another

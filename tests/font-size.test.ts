@@ -31,11 +31,12 @@ class ThrowingStorage {
   }
 }
 
-function captureConsoleWarnings(run: () => void): unknown[][] {
+function captureConsoleWarnings(run: () => void): string[] {
   const originalWarn = console.warn;
-  const warnings: unknown[][] = [];
+  const messages: string[] = [];
   console.warn = (...args: unknown[]) => {
-    warnings.push(args);
+    const message = args.find((arg): arg is string => typeof arg === "string");
+    if (message !== undefined) messages.push(message);
   };
 
   try {
@@ -44,7 +45,7 @@ function captureConsoleWarnings(run: () => void): unknown[][] {
     console.warn = originalWarn;
   }
 
-  return warnings;
+  return messages;
 }
 
 describe("clampFontSize", () => {
@@ -118,9 +119,9 @@ describe("font size persistence", () => {
     });
 
     expect(warnings).toHaveLength(3);
-    expect(warnings[0]?.[0]).toBe("Unable to read font size preference.");
-    expect(warnings[1]?.[0]).toBe("Unable to write font size preference.");
-    expect(warnings[2]?.[0]).toBe("Unable to read font size preference.");
+    expect(warnings[0]).toBe("Unable to read font size preference.");
+    expect(warnings[1]).toBe("Unable to write font size preference.");
+    expect(warnings[2]).toBe("Unable to read font size preference.");
   });
 
   test("falls back and warns when implicit browser storage lookup throws", () => {
@@ -144,7 +145,7 @@ describe("font size persistence", () => {
     expect(readLookups).toBe(1);
     expect(writeLookups).toBe(1);
     expect(warnings).toHaveLength(2);
-    expect(warnings[0]?.[0]).toBe("Unable to read font size preference.");
-    expect(warnings[1]?.[0]).toBe("Unable to write font size preference.");
+    expect(warnings[0]).toBe("Unable to read font size preference.");
+    expect(warnings[1]).toBe("Unable to write font size preference.");
   });
 });

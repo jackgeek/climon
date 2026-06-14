@@ -144,11 +144,26 @@ and asset serving live in `src/server/assets.ts`.
 | `server.json` | running dashboard server state: `{ pid, port, ingest? }` (discovery/stop; read by a peer OS for WSL<->Windows discovery) |
 | `sessions/<id>.json` | session metadata |
 | `sessions/<id>.scrollback` | final captured output |
-| `sessions/<id>.log` | daemon stdout/stderr (diagnostics) |
+| `sessions/<id>.log` | daemon raw stdout/stderr (uncaught crash output) |
+| `logs/<role>/*.log` | structured pino NDJSON logs per role (server/client/daemon/ingest/uplink) |
 | `sock/<id>.sock` | per-session IPC socket (POSIX) |
 | `\\.\pipe\climon-<id>` | per-session IPC pipe (Windows) |
 | `push/vapid.json` | server VAPID keypair for Web Push (auto-created) |
 | `push/subscriptions.json` | browser push subscriptions (deduped by endpoint) |
+
+## Logging (`src/logging/`)
+
+All processes log through a shared pino factory (`src/logging/logger.ts`):
+`initLogger(role)` configures a process-wide root logger and `child(component)`
+tags records by area. Each role writes structured NDJSON to its own sink under
+`$CLIMON_HOME/logs/<role>/` (`src/logging/sinks.ts`); the client and server also
+pretty-print to the terminal (`info`/`warn` to stdout, `error`/`fatal` to stderr),
+and the client suspends that terminal output while attached to a PTY so it never
+corrupts the shell. Streams are built in-process with no worker thread or sidecar
+files, preserving the single-binary compile model. The optional App Insights sink
+is server-only (`src/logging/appinsights.ts`). The per-session daemon additionally
+keeps a separate raw `sessions/<id>.log` for uncaught crash traces. At level
+`silent` no streams, directories, or files are created.
 
 ## Priority ordering (`src/priority.ts`)
 

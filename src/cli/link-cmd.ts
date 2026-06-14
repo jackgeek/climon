@@ -1,4 +1,5 @@
 import { linkPeer } from "../remote/link.js";
+import { writeStdout } from "../logging/cli-io.js";
 
 /**
  * `climon link [--peer-home <path>]` — wires same-machine WSL<->Windows
@@ -10,7 +11,8 @@ export function runLinkCommand(
   argv: string[],
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
-  out: (text: string) => void = (text) => process.stdout.write(text)
+  out: (text: string, options?: { log?: boolean }) => void = (text, options) =>
+    writeStdout(text, options)
 ): number {
   let peerHome: string | undefined;
   for (let i = 0; i < argv.length; i += 1) {
@@ -21,7 +23,7 @@ export function runLinkCommand(
     } else if (arg.startsWith("--peer-home=")) {
       peerHome = arg.slice("--peer-home=".length);
     } else if (arg === "--help" || arg === "-h") {
-      out("Usage: climon link [--peer-home <path-to-peer-CLIMON_HOME>]\n");
+      out("Usage: climon link [--peer-home <path-to-peer-CLIMON_HOME>]\n", { log: false });
       return 0;
     }
   }
