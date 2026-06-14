@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { writeStderr } from "../logging/cli-io.js";
 
 const SERVER_BIN_NAME = "climon-server";
 const SERVER_BUNDLE_NAME = "climon-beta";
@@ -86,7 +87,7 @@ async function runServerInProcess(
     await mod.default.startServer({ port, enableRemotes });
     return 0;
   }
-  process.stderr.write(
+  writeStderr(
     `climon: server bundle at ${bundlePath} does not export startServer()\n`
   );
   return 1;
@@ -143,13 +144,13 @@ export async function delegateToServer(
   });
   if (result.error) {
     if ((result.error as NodeJS.ErrnoException).code === "ENOENT") {
-      process.stderr.write(
+      writeStderr(
         `climon: the dashboard server (${SERVER_BIN_NAME}) is not installed.\n` +
           `Install the server binary alongside climon, or set CLIMON_SERVER_BIN to its path.\n`
       );
       return 127;
     }
-    process.stderr.write(`climon: failed to start server: ${result.error.message}\n`);
+    writeStderr(`climon: failed to start server: ${result.error.message}\n`);
     return 1;
   }
   return result.status ?? 0;

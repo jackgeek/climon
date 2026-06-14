@@ -11,6 +11,7 @@ import {
   type WriteScope
 } from "../config.js";
 import { renderConfigSettingsHelp } from "../config-settings.js";
+import { writeStdout, writeStderr } from "../logging/cli-io.js";
 
 export type ConfigAction =
   | { action: "help" }
@@ -80,8 +81,8 @@ function defaultConfirm(_path: string): boolean {
 
 function normalizeCommandIO(io: ConfigCommandIO = {}): Required<ConfigCommandIO> {
   return {
-    stdout: io.stdout ?? ((chunk) => process.stdout.write(chunk)),
-    stderr: io.stderr ?? ((chunk) => process.stderr.write(chunk)),
+    stdout: io.stdout ?? ((chunk) => writeStdout(chunk)),
+    stderr: io.stderr ?? ((chunk) => writeStderr(chunk)),
     confirm: io.confirm ?? defaultConfirm
   };
 }

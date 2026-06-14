@@ -27,6 +27,7 @@ import { runSessionHost } from "./session-host.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 import { child, suspendTerminal, resumeTerminal } from "./logging/logger.js";
+import { writeStdout, writeStderr } from "./logging/cli-io.js";
 
 const log = () => child("launcher");
 
@@ -100,7 +101,7 @@ async function ensureUplink(): Promise<void> {
     const target = await discoverDashboard(process.env, process.cwd());
     if (target?.location === "peer") {
       shouldSpawn = true;
-      process.stdout.write(
+      writeStdout(
         `climon: dashboard detected on the peer OS; this session will appear at ${target.url}\r\n`
       );
     }
@@ -110,7 +111,7 @@ async function ensureUplink(): Promise<void> {
     const needsTunnel = enabled && !host && tunnelId;
     const detect = needsTunnel ? await detectDevtunnel() : { available: false };
     const plan = planUplinkStart({ enabled, host, tunnelId, port }, detect);
-    if (plan.warning) process.stderr.write(plan.warning);
+    if (plan.warning) writeStderr(plan.warning);
     shouldSpawn = plan.shouldSpawn;
     log().debug(`ensureUplink: planUplinkStart → shouldSpawn=${shouldSpawn}${plan.warning ? " (with warning)" : ""}`);
   }
@@ -211,14 +212,14 @@ export async function startMonitoredCommand(
   options: { headless?: boolean; name?: string } & SessionDefaultFlags = {}
 ): Promise<number> {
   if (process.env[SESSION_ENV_VAR]) {
-    process.stderr.write("climon: cannot start a nested session from inside an existing climon session.\n");
+    writeStderr("climon: cannot start a nested session from inside an existing climon session.\n");
     return 1;
   }
 
   // Warn about nested sessions immediately
   const nestLevel = parseInt(process.env[NEST_LEVEL_ENV_VAR] ?? "0", 10) || 0;
   if (nestLevel > 0) {
-    process.stderr.write(`\x1b[33mclimon: nested session (depth ${nestLevel + 1})\x1b[0m\n`);
+    writeStderr(`\x1b[33mclimon: nested session (depth ${nestLevel + 1})\x1b[0m\n`);
   }
 
   if (command.length === 0) {
@@ -248,7 +249,7 @@ export async function startMonitoredCommand(
     });
     await maybeAutoLink();
     await ensureUplink();
-    process.stdout.write(`${id}\n`);
+    writeStdout(`${id}\n`);
     return 0;
   }
 
@@ -297,7 +298,7 @@ export async function startMonitoredCommand(
   }
 
   if (nestLevel > 0) {
-    process.stderr.write(`\x1b[33mclimon: returning to session (depth ${nestLevel})\x1b[0m\n`);
+    writeStderr(`\x1b[33mclimon: returning to session (depth ${nestLevel})\x1b[0m\n`);
   }
   return exitCode;
 }
@@ -305,13 +306,13 @@ export async function startMonitoredCommand(
 export async function listSessionsCommand(): Promise<number> {
   const sessions = sortSessionsByPriority(await listSessions());
   if (sessions.length === 0) {
-    process.stdout.write("No climon sessions found.\n");
+    writeStdout("No climon sessions found.\n");
     return 0;
   }
   for (const session of sessions) {
     const flag = session.status === "needs-attention" ? "!" : " ";
     const label = session.name ? `${session.name} (${session.displayCommand})` : session.displayCommand;
-    process.stdout.write(
+    writeStdout(
       `${flag} ${session.id.padEnd(16)} ${session.status.padEnd(16)} ${label}\n`
     );
   }
@@ -326,7 +327,7 @@ async function killSessionMeta(
   const id = meta.id;
   if (meta.daemonPid === undefined) {
     if (meta.origin !== "remote") {
-      process.stdout.write(
+      writeStdout(
         `climon: could not terminate session ${id}; daemon pid is not available yet.\n`
       );
       return false;
@@ -334,7 +335,7 @@ async function killSessionMeta(
   } else if (!kill(meta.daemonPid, false) && isAlive(meta.daemonPid)) {
     kill(meta.daemonPid, true);
     if (isAlive(meta.daemonPid)) {
-      process.stdout.write(
+      writeStdout(
         `climon: could not terminate session ${id}; it may still be running.\n`
       );
       return false;
@@ -357,7 +358,7 @@ export async function killSession(
   if (!(await killSessionMeta(meta, kill, isAlive))) {
     return 1;
   }
-  process.stdout.write(`Killed session ${id}.\n`);
+  writeStdout(`Killed session ${id}.\n`);
   return 0;
 }
 
@@ -375,7 +376,7 @@ export async function killAllSessions(
     )
     .sort((a, b) => a.id.localeCompare(b.id));
   if (activeSessions.length === 0) {
-    process.stdout.write("No active climon sessions found.\n");
+    writeStdout("No active climon sessions found.\n");
     return 0;
   }
 
@@ -395,10 +396,10 @@ export async function killAllSessions(
   }
 
   if (killed > 0) {
-    process.stdout.write(`Killed ${killed} climon session${killed === 1 ? "" : "s"}.\n`);
+    writeStdout(`Killed ${killed} climon session${killed === 1 ? "" : "s"}.\n`);
   }
   if (removed > 0) {
-    process.stdout.write(`Removed ${removed} daemon-less climon session${removed === 1 ? "" : "s"}.\n`);
+    writeStdout(`Removed ${removed} daemon-less climon session${removed === 1 ? "" : "s"}.\n`);
   }
   return failed === 0 ? 0 : 1;
 }

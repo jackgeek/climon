@@ -3,6 +3,7 @@ import { helpText, parseArgs } from "./cli/args.js";
 import { resolveConfigSetting } from "./config.js";
 import { createAppInsightsStream } from "./logging/appinsights.js";
 import { getLogger, initLogger } from "./logging/logger.js";
+import { writeStderr } from "./logging/cli-io.js";
 import { runIngestDaemon } from "./remote/ingest.js";
 import { startServer } from "./server/server.js";
 
@@ -39,8 +40,8 @@ async function main(): Promise<number> {
     await runIngestDaemon();
     return 0;
   }
-  process.stderr.write("climon-server: expected the `server` command.\n");
-  process.stderr.write(helpText);
+  writeStderr("climon-server: expected the `server` command.\n");
+  writeStderr(helpText);
   return 1;
 }
 
@@ -51,6 +52,6 @@ main()
     }
   })
   .catch((error: unknown) => {
-    process.stderr.write(`climon-server: ${(error as Error).message}\n`);
+    writeStderr(`climon-server: ${(error as Error).message}\n`);
     process.exitCode = 1;
   });

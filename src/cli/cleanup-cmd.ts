@@ -1,4 +1,5 @@
 import { teardownLocalServerStack } from "../remote/teardown.js";
+import { writeStdout, writeStderr } from "../logging/cli-io.js";
 
 export interface CleanupCommandOptions {
   env?: NodeJS.ProcessEnv;
@@ -15,8 +16,8 @@ export interface CleanupCommandOptions {
  * its beacon, and reports problems with manual remediation advice.
  */
 export async function runCleanupCommand(options: CleanupCommandOptions = {}): Promise<number> {
-  const write = options.stdout ?? ((chunk: string) => process.stdout.write(chunk));
-  const writeErr = options.stderr ?? ((chunk: string) => process.stderr.write(chunk));
+  const write = options.stdout ?? ((chunk: string) => writeStdout(chunk));
+  const writeErr = options.stderr ?? ((chunk: string) => writeStderr(chunk));
   const report = await teardownLocalServerStack({
     env: options.env,
     isProcessAlive: options.isProcessAlive,
