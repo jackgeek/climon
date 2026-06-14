@@ -1642,7 +1642,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       const shouldStopIngest = options.stopIngest ?? true;
       getLogger().debug(`plainShutdown triggered (pid=${process.pid}, reason=${why}); removing ${getServerStatePath()}`);
       startupLog("plain shutdown requested; releasing resources");
-      process.stdout.write(`climon server shutting down (${why}).\n`);
+      getLogger().info(`climon server shutting down (${why}).`);
       // Remove server.json synchronously so it is guaranteed to be cleaned up
       // even if the process is force-killed shortly after Ctrl+C on Windows.
       try { rmSync(getServerStatePath(), { force: true }); } catch { /* best-effort */ }
