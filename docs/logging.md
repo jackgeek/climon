@@ -45,8 +45,13 @@ uncaught stack traces.
 
 Run `bun run logs` to open [lnav](https://lnav.org/) on `$CLIMON_HOME/logs`,
 which tails and searches every role's NDJSON files in one place. Extra arguments
-are forwarded to lnav, e.g. `bun run logs -- -c ':filter-in error'`. Install lnav
-first (`brew install lnav`, `apt install lnav`, `dnf install lnav`).
+are forwarded to lnav, e.g. `bun run logs -- -c ':filter-in error'`.
+
+lnav has no native Windows build, so on Windows `bun run logs` automatically
+falls back to running lnav inside WSL (the logs path is translated with
+`wslpath`). Install lnav first — `brew install lnav`, `apt install lnav`, or
+`dnf install lnav` (inside WSL on Windows).
+
 
 On a terminal, the server and (when not attached) the client also pretty-print:
 `info`/`warn` to stdout and `error`/`fatal` to stderr. The client suppresses
