@@ -286,7 +286,7 @@ export async function startMonitoredCommand(
   await maybeAutoLink();
   await ensureUplink();
 
-  process.stdout.write(launchBanner(VERSION, id));
+  log().info(launchBanner(VERSION, id).trimEnd());
 
   suspendTerminal();
   let exitCode: number;
