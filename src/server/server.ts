@@ -901,26 +901,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   const peerHome = ((value: unknown) => (typeof value === "string" && value.length > 0 ? value : undefined))(
     resolveConfigSetting("remote.peerHome", process.env, process.cwd())
   );
-  startupLog("creating dashboard tunnel manager");
-  const keepAliveSec = config.tunnelLink?.keepAlive ?? 60;
-  const dashboardTunnel = createDashboardTunnelManager({
-    port: config.server.port,
-    keepAliveMs: keepAliveSec * 1000,
-    persisted: {
-      tunnelId: config.remote?.dashboardTunnelId,
-      cluster: config.remote?.dashboardTunnelCluster
-    },
-    onPersistTunnel: async ({ tunnelId, cluster }) => {
-      const latest = await loadConfig();
-      applyDashboardTunnelPersistence(latest, { type: "persist", tunnelId, cluster });
-      await saveConfig(latest);
-    },
-    onClearPersistedTunnel: async () => {
-      const latest = await loadConfig();
-      applyDashboardTunnelPersistence(latest, { type: "clear" });
-      await saveConfig(latest);
-    }
-  });
   config.server.host = "127.0.0.1";
   startupLog("saving config (host pinned to 127.0.0.1)");
   await saveConfig(config);
@@ -984,6 +964,32 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     startupLog("saving config with updated port");
     await saveConfig(config);
   }
+
+  // Created only after the port is finalized so the tunnel maps and hosts the
+  // port this server actually bound. Creating it earlier (with the requested
+  // port) means a restart that shifts to the next free port — common during a
+  // takeover while the old listener is still releasing the socket — would
+  // forward the restored tunnel to a dead port, so the link never comes back.
+  startupLog("creating dashboard tunnel manager");
+  const keepAliveSec = config.tunnelLink?.keepAlive ?? 60;
+  const dashboardTunnel = createDashboardTunnelManager({
+    port: config.server.port,
+    keepAliveMs: keepAliveSec * 1000,
+    persisted: {
+      tunnelId: config.remote?.dashboardTunnelId,
+      cluster: config.remote?.dashboardTunnelCluster
+    },
+    onPersistTunnel: async ({ tunnelId, cluster }) => {
+      const latest = await loadConfig();
+      applyDashboardTunnelPersistence(latest, { type: "persist", tunnelId, cluster });
+      await saveConfig(latest);
+    },
+    onClearPersistedTunnel: async () => {
+      const latest = await loadConfig();
+      applyDashboardTunnelPersistence(latest, { type: "clear" });
+      await saveConfig(latest);
+    }
+  });
 
   // Clean up stale sessions whose daemons are no longer responsive.
   startupLog("cleaning up stale sessions");
@@ -1708,8 +1714,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   if (config.remote?.dashboardTunnelEnabled) {
     startupLog("re-establishing previously enabled Tunnel Link");
     void dashboardTunnel.ensure().then(
-      (info) => startupLog(`Tunnel Link re-established at ${info.url}`),
-      (error) => getLogger().debug(`Tunnel Link re-establish failed: ${error instanceof Error ? error.message : String(error)}`)
+      (info) => {
+        startupLog(`Tunnel Link re-established at ${info.url}`);
+        getLogger().info(`Tunnel Link re-established at ${info.url}`);
+      },
+      (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        getLogger().warn(`Tunnel Link could not be re-established: ${message}`);
+        process.stderr.write(`climon: could not re-establish the Tunnel Link: ${message}\n`);
+      }
     );
   }
 
