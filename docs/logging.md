@@ -41,6 +41,13 @@ NDJSON log files are written under `$CLIMON_HOME/logs/<role>/`:
 The daemon also keeps a raw crash file at `sessions/<session-id>.log` for
 uncaught stack traces.
 
+### Tailing logs with lnav
+
+Run `bun run logs` to open [lnav](https://lnav.org/) on `$CLIMON_HOME/logs`,
+which tails and searches every role's NDJSON files in one place. Extra arguments
+are forwarded to lnav, e.g. `bun run logs -- -c ':filter-in error'`. Install lnav
+first (`brew install lnav`, `apt install lnav`, `dnf install lnav`).
+
 On a terminal, the server and (when not attached) the client also pretty-print:
 `info`/`warn` to stdout and `error`/`fatal` to stderr. The client suppresses
 terminal output while it is attached to your session so it never corrupts your
