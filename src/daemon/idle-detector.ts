@@ -49,4 +49,20 @@ export class ScreenIdleDetector {
     return undefined;
   }
 
+  /**
+   * Re-baselines the tracked fingerprint after a viewer resize reflows the
+   * screen. A resize is driven by a browser viewer attaching/resizing, not by
+   * the program producing output, so it must not be treated as activity:
+   * `flagged` and the idle countdown (`lastChangeAt`) are preserved. The next
+   * `update` with the reflowed fingerprint then sees no change, keeping a
+   * still-idle session flagged. No-op when idle detection is disabled or before
+   * the first `update` has seeded a baseline.
+   */
+  absorbResize(fingerprint: string): void {
+    if (this.idleMs <= 0 || this.lastFingerprint === undefined) {
+      return;
+    }
+    this.lastFingerprint = fingerprint;
+  }
+
 }

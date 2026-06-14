@@ -175,6 +175,10 @@ export async function runSessionHost(id: string, meta: SessionMeta, options: Ses
     pty.resize(cols, rows);
     if (changed) {
       headlessTerm.resize(Math.max(cols, 1), Math.max(rows, 1));
+      // A viewer-driven resize reflows the screen but is not program activity;
+      // re-baseline the idle detector so it does not read the reflow as a change
+      // that clears an outstanding needs-attention/acknowledged state.
+      idleDetector.absorbResize(fingerprint());
       void patchSessionMeta(id, { cols, rows });
       broadcast(encodeJsonFrame(FrameType.PtySize, { cols, rows }));
     } else if (clampedViewer) {
@@ -191,6 +195,9 @@ export async function runSessionHost(id: string, meta: SessionMeta, options: Ses
     appliedRows = target.rows;
     pty.resize(target.cols, target.rows);
     headlessTerm.resize(Math.max(target.cols, 1), Math.max(target.rows, 1));
+    // Reverting to host size on last-viewer-disconnect also reflows the screen;
+    // re-baseline so the revert is not read as activity that clears attention.
+    idleDetector.absorbResize(fingerprint());
     void patchSessionMeta(id, { cols: target.cols, rows: target.rows });
     broadcast(encodeJsonFrame(FrameType.PtySize, { cols: target.cols, rows: target.rows }));
     updateOvergrownWarning();
@@ -488,3 +495,5 @@ export async function runSessionHost(id: string, meta: SessionMeta, options: Ses
 
   return exitCode;
 }
+
+
