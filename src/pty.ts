@@ -67,6 +67,9 @@ export function spawnPty(options: PtyOptions): PtyHandle {
   const exitListeners: Array<(exitCode: number) => void> = [];
   let exitCode: number | undefined;
 
+  let appliedCols = options.cols;
+  let appliedRows = options.rows;
+
   const terminal = new Bun.Terminal({
     cols: options.cols,
     rows: options.rows,
@@ -125,8 +128,30 @@ export function spawnPty(options: PtyOptions): PtyHandle {
       }
     },
     resize: (cols, rows) => {
+      const nextCols = Math.max(cols, 1);
+      const nextRows = Math.max(rows, 1);
+      if (nextCols === appliedCols && nextRows === appliedRows) {
+        return;
+      }
+      appliedCols = nextCols;
+      appliedRows = nextRows;
       try {
-        terminal.resize(Math.max(cols, 1), Math.max(rows, 1));
+        terminal.resize(nextCols, nextRows);
+        // `Bun.Terminal.resize` updates the kernel window size (TIOCSWINSZ) but,
+        // at least on macOS, does not deliver SIGWINCH to the child. Node-based
+        // TUIs such as the Copilot CLI cache `process.stdout.columns/rows` and
+        // only refresh them on SIGWINCH, so without the signal they keep drawing
+        // at the previous size. Browser viewers that resized their grid then
+        // render the stale-sized output onto a different grid, corrupting the
+        // display, while the local terminal (matching the program's size) looks
+        // fine. Deliver SIGWINCH explicitly so the child re-reads the new size.
+        if (process.platform !== "win32") {
+          try {
+            proc.kill("SIGWINCH");
+          } catch {
+            // Child already exited; nothing to signal.
+          }
+        }
       } catch {
         // Resizing can fail transiently while the child is exiting; ignore.
       }
