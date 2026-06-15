@@ -260,6 +260,72 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     scope: ["server"],
     sensitive: true,
     acceptInput: true
+  },
+  {
+    path: "eula.accepted",
+    type: "boolean",
+    defaultValue: false,
+    purpose:
+      "Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.",
+    scope: ["client"],
+    internal: true
+  },
+  {
+    path: "eula.version",
+    type: "string",
+    purpose:
+      "The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance.",
+    scope: ["client"],
+    internal: true
+  },
+  {
+    path: "eula.acceptedAt",
+    type: "string",
+    purpose: "ISO-8601 timestamp recording when the EULA was accepted.",
+    scope: ["client"],
+    internal: true
+  },
+  {
+    path: "telemetry.enabled",
+    type: "boolean",
+    defaultValue: false,
+    purpose:
+      "When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default.",
+    scope: ["client", "server"],
+    acceptInput: true
+  },
+  {
+    path: "update.auto",
+    type: "boolean",
+    defaultValue: false,
+    purpose:
+      "When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`.",
+    scope: ["client"],
+    acceptInput: true
+  },
+  {
+    path: "update.lastCheck",
+    type: "string",
+    purpose:
+      "ISO-8601 timestamp of the last background update check. Used to throttle checks.",
+    scope: ["client"],
+    internal: true
+  },
+  {
+    path: "update.availableVersion",
+    type: "string",
+    purpose:
+      "Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update.",
+    scope: ["client"],
+    internal: true
+  },
+  {
+    path: "install.id",
+    type: "string",
+    purpose:
+      "Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information.",
+    scope: ["client", "server"],
+    internal: true
   }
 ];
 

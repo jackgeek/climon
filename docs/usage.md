@@ -304,4 +304,12 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `tunnelLink.keepAlive` | number | `60` | server | Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel relay to prevent idle disconnection. Set to 0 to disable keep-alive pings. |
 | `logging.level` | string | `trace` | client, daemon, server | Minimum log level emitted by climon processes. One of: trace, debug, info, warn, error, fatal, silent. Defaults to trace (everything). Set to silent to disable logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable. |
 | `logging.appInsights.connectionString` | string | unset | server | Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable. (**sensitive**) |
+| `eula.accepted` | boolean | `false` | client | Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing. (**internal**) |
+| `eula.version` | string | unset | client | The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance. (**internal**) |
+| `eula.acceptedAt` | string | unset | client | ISO-8601 timestamp recording when the EULA was accepted. (**internal**) |
+| `telemetry.enabled` | boolean | `false` | client, server | When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default. |
+| `update.auto` | boolean | `false` | client | When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`. |
+| `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |
+| `update.availableVersion` | string | unset | client | Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update. (**internal**) |
+| `install.id` | string | unset | client, server | Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information. (**internal**) |
 <!-- END GENERATED CONFIG SETTINGS -->
