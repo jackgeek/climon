@@ -57,6 +57,45 @@ climon attach <id>        # reattach a running session
 climon kill <id>          # terminate a session and remove its metadata
 ```
 
+## Onboarding, telemetry, and updates
+
+### `climon setup`
+
+Re-run the first-run onboarding flow (licence, telemetry, auto-update) at any
+time. Interactive by default; use flags for non-interactive setup:
+
+```bash
+climon setup                                            # interactive prompts
+climon setup --apply --accept-eula --telemetry=on --auto-update=off
+```
+
+- `--apply` — non-interactive; apply flags without prompting.
+- `--accept-eula` — accept the licence (required to complete `--apply`).
+- `--telemetry=on|off` — anonymous usage telemetry (default **off**).
+- `--auto-update=on|off` — background auto-update (default **off**).
+
+You can also change these later with `climon config telemetry.enabled <bool>`
+and `climon config update.auto <bool>`.
+
+### `climon update`
+
+Manually download, verify, and apply the latest release:
+
+```bash
+climon update
+```
+
+The artifact's Ed25519 detached signature is verified against the embedded
+public key before any file is replaced; unverifiable or tampered downloads are
+rejected and nothing changes. Updates are **non-destructive** — they never kill
+running sessions or a running dashboard server. Binaries are swapped atomically
+(rename-over on Unix, displace-to-`.old` on Windows) and deferred when locked.
+Running processes keep the old code; newly started sessions and a restarted
+server use the new version.
+
+When `update.auto` is off (default), climon prints a one-line banner when a
+newer version is available instead of applying it automatically.
+
 ## The dashboard
 
 - **Session list** (left): every monitored session with a status badge —
