@@ -28,7 +28,8 @@ export async function createAppInsightsStream(
   const installId = options?.installId;
   const stream = await createWriteStream({
     setup: (appInsights: {
-      setup: (s: string) => { start: () => void };
+      setup: (s: string) => unknown;
+      start: () => void;
       defaultClient?: {
         context?: {
           keys?: { cloudRoleInstance?: string };
@@ -36,7 +37,7 @@ export async function createAppInsightsStream(
         };
       };
     }) => {
-      appInsights.setup(connectionString).start();
+      appInsights.setup(connectionString);
       if (installId) {
         const context = appInsights.defaultClient?.context;
         const key = context?.keys?.cloudRoleInstance;
@@ -44,6 +45,7 @@ export async function createAppInsightsStream(
           context.tags[key] = installId;
         }
       }
+      appInsights.start();
     },
   });
   return { stream: stream as unknown as NodeJS.WritableStream };
