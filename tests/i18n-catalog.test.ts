@@ -6,8 +6,9 @@ import {
   renderMessage,
   validateCatalog,
 } from "../src/i18n/catalog.js";
+import type { Catalog } from "../src/i18n/types.js";
 
-const FIXTURE = {
+const FIXTURE: Catalog = {
   "test.simple": { id: "0000000a", t: "a static message", params: {} },
   "test.one_param": {
     id: "0000000b",
