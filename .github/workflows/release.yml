@@ -22,10 +22,14 @@ jobs:
     # Skip the bump commit the release itself pushes, otherwise it would loop.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
     env:
-      # Mapped at job level so the `if:` guards on the signing steps can read it
-      # (step-level env is not visible to a step's own `if`). Empty until the
-      # signing key secret is provisioned, which keeps releases working meanwhile.
-      CLIMON_UPDATE_PRIVATE_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY }}
+      # Non-sensitive boolean mapped at job level so the `if:` guards on the
+      # signing steps can read it (step-level env is not visible to a step's own
+      # `if`, and the `secrets` context is unavailable in step `if:`). The actual
+      # private key is scoped to ONLY the signing step below to keep it out of the
+      # environment of `curl | bash` and `bun install` (postinstall) steps. Empty
+      # until the signing key secret is provisioned, which keeps releases working
+      # meanwhile.
+      HAS_SIGNING_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY != '' && 'yes' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,8 +95,9 @@ jobs:
         run: bun run compile
 
       - name: Sign release artifacts + emit manifest
-        if: ${{ env.CLIMON_UPDATE_PRIVATE_KEY != '' }}
+        if: ${{ env.HAS_SIGNING_KEY != '' }}
         env:
+          CLIMON_UPDATE_PRIVATE_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY }}
           RELEASE_VERSION: ${{ steps.release-tag.outputs.tag }}
           RELEASE_BASE_URL: https://github.com/jackgeek/climon/releases/download/${{ steps.release-tag.outputs.tag }}
         run: bun run sign-release
@@ -116,7 +121,7 @@ jobs:
           test "$actual_count" = "${#expected[@]}"
 
       - name: Verify signatures present
-        if: ${{ env.CLIMON_UPDATE_PRIVATE_KEY != '' }}
+        if: ${{ env.HAS_SIGNING_KEY != '' }}
         run: |
           set -euo pipefail
           test -f dist/manifest.json
@@ -139,7 +144,7 @@ jobs:
           fi
 
       - name: Publish update manifest + signatures
-        if: ${{ env.CLIMON_UPDATE_PRIVATE_KEY != '' }}
+        if: ${{ env.HAS_SIGNING_KEY != '' }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release-tag.outputs.tag }}
