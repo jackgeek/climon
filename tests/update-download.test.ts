@@ -15,6 +15,9 @@ beforeEach(() => {
       if (new URL(req.url).pathname === "/ok") {
         return new Response("payload-bytes");
       }
+      if (new URL(req.url).pathname === "/big") {
+        return new Response("x".repeat(4096));
+      }
       return new Response("nope", { status: 404 });
     },
   });
@@ -38,5 +41,12 @@ describe("downloadToFile", () => {
     await expect(
       downloadToFile(`http://localhost:${server.port}/missing`, dest)
     ).rejects.toThrow();
+  });
+
+  test("throws when the body exceeds the byte cap", async () => {
+    const dest = join(dir, "big.bin");
+    await expect(
+      downloadToFile(`http://localhost:${server.port}/big`, dest, 1024)
+    ).rejects.toThrow(/too large/);
   });
 });

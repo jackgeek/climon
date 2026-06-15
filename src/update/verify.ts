@@ -1,14 +1,14 @@
-/**
- * Verifies a detached Ed25519 signature over `data` using a base64 raw public
- * key (32 bytes) and a base64 signature (64 bytes). Returns false on any error
- * (bad key, bad signature, mismatch) rather than throwing.
- */
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy.buffer;
 }
 
+/**
+ * Verifies a detached Ed25519 signature over `data` using a base64 raw public
+ * key (32 bytes) and a base64 signature (64 bytes). Returns false on any error
+ * (bad key, bad signature, mismatch) rather than throwing.
+ */
 export async function verifySignature(
   data: Uint8Array,
   signatureB64: string,
