@@ -16,6 +16,9 @@ export type ParsedCommand =
   | { command: "uplink" }
   | { command: "session"; id: string }
   | { command: "cleanup" }
+  | { command: "update"; argv: string[] }
+  | { command: "setup"; argv: string[] }
+  | { command: "update-check" }
   | { command: "ingest" };
 
 export const helpText = `climon v${VERSION} — web-based monitor for interactive CLI sessions
@@ -40,6 +43,9 @@ Usage:
   climon link [--peer-home P]   Link WSL<->Windows dashboard discovery
   climon kill <id>             Terminate a session
   climon kill --all            Kill or remove all active sessions
+  climon update                Download, verify, and apply the latest version
+                               (never interrupts running sessions)
+  climon setup                 Re-run onboarding (licence, telemetry, updates)
   climon --version             Show the climon version
   climon --help                Show this help
 `;
@@ -98,7 +104,7 @@ export function parseArgs(argv: string[]): ParsedCommand {
 
   // Handle bare flags that should trigger shell mode with session flags
   // e.g. `climon --name "my session"` with no command after flags
-  if (argv[0].startsWith("--") && !["--help", "-h", "--version", "-v"].includes(argv[0])) {
+  if (argv[0].startsWith("--") && !["--help", "-h", "--version", "-v", "--update"].includes(argv[0])) {
     const { flags, rest } = parseSessionFlags(argv);
     if (rest.length === 0) {
       return { command: "shell", ...flags };
@@ -117,6 +123,13 @@ export function parseArgs(argv: string[]): ParsedCommand {
     case "--version":
     case "-v":
       return { command: "version" };
+    case "--update":
+    case "update":
+      return { command: "update", argv: rest };
+    case "setup":
+      return { command: "setup", argv: rest };
+    case "__update-check":
+      return { command: "update-check" };
     case "server": {
       let port: number | undefined;
       let enableRemotes = false;
