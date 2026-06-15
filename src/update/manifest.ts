@@ -32,8 +32,15 @@ export function isNewer(manifest: Manifest, current: string): boolean {
 export async function fetchManifest(url: string): Promise<Manifest> {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok) throw new Error(`Manifest fetch failed: HTTP ${res.status}`);
-  const data = (await res.json()) as Manifest;
-  if (typeof data.version !== "string" || typeof data.artifacts !== "object") {
+  const data = (await res.json()) as Manifest | null;
+  if (
+    !data ||
+    typeof data !== "object" ||
+    typeof data.version !== "string" ||
+    !data.artifacts ||
+    typeof data.artifacts !== "object" ||
+    Array.isArray(data.artifacts)
+  ) {
     throw new Error("Malformed manifest");
   }
   return data;
