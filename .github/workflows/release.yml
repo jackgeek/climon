@@ -21,6 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     # Skip the bump commit the release itself pushes, otherwise it would loop.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    env:
+      # Mapped at job level so the `if:` guards on the signing steps can read it
+      # (step-level env is not visible to a step's own `if`). Empty until the
+      # signing key secret is provisioned, which keeps releases working meanwhile.
+      CLIMON_UPDATE_PRIVATE_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,6 +90,13 @@ jobs:
       - name: Compile release binaries
         run: bun run compile
 
+      - name: Sign release artifacts + emit manifest
+        if: ${{ env.CLIMON_UPDATE_PRIVATE_KEY != '' }}
+        env:
+          RELEASE_VERSION: ${{ steps.release-tag.outputs.tag }}
+          RELEASE_BASE_URL: https://github.com/jackgeek/climon/releases/download/${{ steps.release-tag.outputs.tag }}
+        run: bun run sign-release
+
       - name: Verify release artifacts
         run: |
           set -euo pipefail
@@ -103,6 +115,13 @@ jobs:
           actual_count="$(find dist -maxdepth 1 -type f -name 'climon-*.zip' | wc -l | tr -d ' ')"
           test "$actual_count" = "${#expected[@]}"
 
+      - name: Verify signatures present
+        if: ${{ env.CLIMON_UPDATE_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          test -f dist/manifest.json
+          for z in dist/climon-*.zip; do test -f "$z.sig"; done
+
       - name: Push bump commit and tag
         if: ${{ steps.existing-release.outputs.tag == '' }}
         run: git push --follow-tags origin HEAD:main
@@ -118,3 +137,12 @@ jobs:
           else
             gh release create "$TAG" dist/*.zip --title "$TAG" --notes "Release $TAG"
           fi
+
+      - name: Publish update manifest + signatures
+        if: ${{ env.CLIMON_UPDATE_PRIVATE_KEY != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" dist/*.zip.sig dist/manifest.json --clobber
