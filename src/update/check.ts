@@ -1,5 +1,6 @@
 import {
   compareSemver,
+  currentArtifactKey,
   fetchManifest as defaultFetchManifest,
   type Manifest,
 } from "./manifest.js";
@@ -32,7 +33,12 @@ export async function runBackgroundCheck(
   const url = opts.manifestUrl ?? DEFAULT_MANIFEST_URL;
   try {
     const manifest = await fetcher(url);
-    if (compareSemver(manifest.version, opts.currentVersion) > 0) {
+    // Only cache a version we could actually install on this platform: an
+    // appliable artifact must exist for the current OS/arch. This avoids
+    // advertising (and, in auto mode, repeatedly attempting) updates that have
+    // no matching download here.
+    const hasArtifact = manifest.artifacts?.[currentArtifactKey()] !== undefined;
+    if (hasArtifact && compareSemver(manifest.version, opts.currentVersion) > 0) {
       setAvailableVersion(manifest.version, env);
     } else {
       clearAvailableVersion(env);

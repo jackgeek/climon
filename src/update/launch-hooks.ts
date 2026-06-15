@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { t } from "../i18n/messages.js";
 import { VERSION } from "../version.js";
+import { compareSemver } from "./manifest.js";
 import { getAvailableVersion, isAutoUpdate, shouldCheck } from "./state.js";
 
 /**
@@ -12,7 +13,9 @@ export async function maybeShowUpdateBanner(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
   const next = getAvailableVersion(env);
-  if (!next) return;
+  // Re-compare against the running version: the cache can be stale-equal (e.g.
+  // after an out-of-band reinstall) and must not trigger a banner or a download.
+  if (!next || compareSemver(next, VERSION) <= 0) return;
   if (isAutoUpdate(env)) {
     // Auto mode: apply in a detached child so the session starts immediately and
     // running sessions are never interrupted (the swap is non-destructive).
