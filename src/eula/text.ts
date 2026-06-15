@@ -5,7 +5,7 @@ export const EULA_VERSION = "1";
 
 export type EulaDocument = { version: string; text: string };
 
-const EN_TEXT = `climon End User Licence Agreement (Version ${"1"})
+const EN_TEXT = `climon End User Licence Agreement (Version ${EULA_VERSION})
 
 IMPORTANT — READ CAREFULLY. This End User Licence Agreement ("Agreement") is a
 legal agreement between you ("Licensee") and Brodie Jack Allan, a sole trader

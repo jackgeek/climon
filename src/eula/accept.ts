@@ -39,7 +39,9 @@ export type EulaGateOptions = {
  * - Non-interactive: requires `acceptEula === true`, else prints guidance and
  *   returns false.
  * - Interactive: prints the licence and requires the user to type "I AGREE".
- * Never throws; callers decide how to handle a false return (e.g. abort).
+ * A false return means "not accepted" and callers decide how to handle it (e.g.
+ * abort). Note: recording acceptance performs filesystem writes, which can throw
+ * on I/O failure (e.g. a read-only or full filesystem).
  */
 export async function ensureEulaAccepted(
   options: EulaGateOptions = {}
