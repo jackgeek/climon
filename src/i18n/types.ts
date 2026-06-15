@@ -1,0 +1,33 @@
+/** Controlled vocabulary describing what kind of data an interpolated param is. */
+export type RedactCategory =
+  | "hostname"
+  | "path"
+  | "url"
+  | "config"
+  | "pii"
+  | "token"
+  | "generic";
+
+/** Metadata for a single interpolated parameter of a message template. */
+export interface ParamMeta {
+  /** When true, the value is scrubbed before transmission to Application Insights. */
+  redact: boolean;
+  /** Data class, used for typed redaction markers and viewer display. */
+  category?: RedactCategory;
+}
+
+/** A single catalog entry: stable id, template, and per-parameter metadata. */
+export interface CatalogEntry {
+  /** Stable 8-hex-digit identifier sent to Application Insights. */
+  id: string;
+  /** Template text with `{named}` placeholders. */
+  t: string;
+  /** Metadata for each placeholder name in `t`. */
+  params: Record<string, ParamMeta>;
+}
+
+/** The full catalog: symbolic key -> entry. */
+export type Catalog = Record<string, CatalogEntry>;
+
+/** Runtime parameter values supplied at a log call site. */
+export type MessageParams = Record<string, unknown>;
