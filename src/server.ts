@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { helpText, parseArgs } from "./cli/args.js";
 import { resolveConfigSetting } from "./config.js";
+import { ensureInstallId } from "./install-id.js";
 import { createAppInsightsStream } from "./logging/appinsights.js";
 import { getLogger, initLogger } from "./logging/logger.js";
 import { writeStderr } from "./logging/cli-io.js";
@@ -11,6 +12,14 @@ async function initServerLogging(): Promise<void> {
   const conn =
     process.env.APPLICATIONINSIGHTS_CONNECTION_STRING ??
     (resolveConfigSetting("logging.appInsights.connectionString") as string | undefined);
+  // Resolve the anonymous installation id on startup so it is attached to every
+  // forwarded record. Never let id resolution block server startup.
+  let installId: string | undefined;
+  try {
+    installId = await ensureInstallId();
+  } catch {
+    installId = undefined;
+  }
   // A misconfigured App Insights connection string must never prevent the
   // dashboard server from starting: logging is a debugging aid, not a core
   // dependency. Degrade to file/terminal logging if the AI stream fails.
@@ -21,7 +30,7 @@ async function initServerLogging(): Promise<void> {
   } catch (error) {
     aiError = error;
   }
-  initLogger("server", { extraStreams: ai ? [ai] : [] });
+  initLogger("server", { installId, extraStreams: ai ? [ai] : [] });
   if (aiError) {
     getLogger().warn(
       `App Insights logging disabled: ${aiError instanceof Error ? aiError.message : String(aiError)}`,
