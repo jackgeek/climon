@@ -1,11 +1,18 @@
 // @ts-expect-error: pino-applicationinsights ships without complete types
 import { createWriteStream } from "pino-applicationinsights";
+import { loadCatalog } from "../i18n/catalog.js";
+import { createCompactingTransform } from "./appinsights-transform.js";
 import type { StreamEntry } from "./types.js";
 
 /**
  * Builds an in-process App Insights stream entry for the server multistream.
  * Returns undefined when no connection string is configured. Imported only on
  * server-side code paths so the Azure SDK never reaches the client binary.
+ *
+ * Records are passed through a compacting transform first: catalogued messages
+ * are sent as their 8-hex id with per-parameter-redacted args (never the
+ * rendered text), which keeps Application Insights ingestion small and avoids
+ * leaking message-specific sensitive values.
  *
  * pino-applicationinsights' `createWriteStream` does not accept a connection
  * string directly: it only understands an instrumentation `key` or a `setup`
@@ -16,10 +23,16 @@ export async function createAppInsightsStream(
   connectionString: string | undefined,
 ): Promise<StreamEntry | undefined> {
   if (!connectionString || connectionString.trim() === "") return undefined;
-  const stream = await createWriteStream({
+  const aiStream = await createWriteStream({
     setup: (appInsights: { setup: (s: string) => { start: () => void } }) => {
       appInsights.setup(connectionString).start();
     },
   });
-  return { stream: stream as unknown as NodeJS.WritableStream };
+
+  // pino writes NDJSON into the transform; the transform feeds compacted NDJSON
+  // into the Azure write stream.
+  const transform = createCompactingTransform(loadCatalog());
+  transform.pipe(aiStream as unknown as NodeJS.WritableStream);
+
+  return { stream: transform as unknown as NodeJS.WritableStream };
 }

@@ -101,6 +101,29 @@ Every record forwarded to Application Insights carries an anonymous
 first server start. It contains no personal information and exists only so logs
 from one installation can be distinguished from another.
 
+Forwarding can be turned off without removing the connection string by setting
+`telemetry.enabled` to `false`. Any other value (including absent) leaves the
+"connection string present ⇒ enabled" behavior unchanged.
+
+### Compact emission
+
+Records are rewritten before they leave the process so Application Insights
+never receives rendered message text:
+
+- Catalogued messages (logged via the `logMsg` helper) are sent as their 8-hex
+  message id in the trace `message` field instead of the full string. The hex id
+  maps back to the source template in `src/i18n/messages.en.json`, which a log
+  viewer (Azure Workbook / KQL `externaldata` join, Grafana, or Seq) can stitch
+  back in realtime — the same catalog also drives i18n.
+- Interpolation arguments are attached as properties, but any parameter the
+  catalog entry marks `redact: true` (hostnames, paths, URLs, config values,
+  tokens, PII) is replaced with `[REDACTED:<category>]` before sending.
+- Records that are not yet catalogued fall back to the sentinel id `00000000`
+  and keep their rendered text, so emission stays correct during the migration.
+
+Local log streams (console, file) always keep the full rendered text; only the
+Application Insights stream is compacted and redacted.
+
 ## Logging during tests
 
 `bun test` sets the level to `silent` automatically (via `tests/log-silence.ts`,

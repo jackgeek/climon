@@ -9,9 +9,14 @@ import { runIngestDaemon } from "./remote/ingest.js";
 import { startServer } from "./server/server.js";
 
 async function initServerLogging(): Promise<void> {
-  const conn =
-    process.env.APPLICATIONINSIGHTS_CONNECTION_STRING ??
-    (resolveConfigSetting("logging.appInsights.connectionString") as string | undefined);
+  // Telemetry forwarding is disabled only when explicitly turned off. The
+  // `telemetry.enabled` setting is owned by the installer/upgrader work; until
+  // that lands, a present connection string keeps the existing opt-in behavior.
+  const telemetryDisabled = resolveConfigSetting("telemetry.enabled") === false;
+  const conn = telemetryDisabled
+    ? undefined
+    : process.env.APPLICATIONINSIGHTS_CONNECTION_STRING ??
+      (resolveConfigSetting("logging.appInsights.connectionString") as string | undefined);
   // Resolve the anonymous installation id on startup so it is attached to every
   // forwarded record. Never let id resolution block server startup.
   let installId: string | undefined;
