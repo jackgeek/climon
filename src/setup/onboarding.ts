@@ -1,3 +1,8 @@
+import { writeConfigSetting } from "../config.js";
+import { ensureEulaAccepted } from "../eula/accept.js";
+import { ensureInstallId } from "./install-id.js";
+import { t } from "../i18n/messages.js";
+
 export type SetupOptions = {
   /** Run non-interactively (no prompts). */
   apply: boolean;
@@ -30,4 +35,67 @@ export function parseSetupOptions(args: string[]): SetupOptions {
       );
   }
   return options;
+}
+
+export type OnboardingIO = {
+  env?: NodeJS.ProcessEnv;
+  options: SetupOptions;
+  print?: (s: string) => void;
+  prompt?: (question: string) => Promise<string>;
+};
+
+export type OnboardingResult = { accepted: boolean };
+
+/** Reads a yes/no answer; default is NO when the user just presses enter. */
+function isYes(answer: string): boolean {
+  return /^(y|yes)$/i.test(answer.trim());
+}
+
+/**
+ * Runs the full onboarding flow: EULA gate, telemetry opt-in, auto-update
+ * opt-in, and install-id assignment. Both opt-ins default OFF. When the EULA is
+ * not accepted, no telemetry/update state is written and accepted=false.
+ */
+export async function runOnboarding(io: OnboardingIO): Promise<OnboardingResult> {
+  const env = io.env ?? process.env;
+  const print = io.print ?? ((s: string) => process.stdout.write(s));
+  const prompt =
+    io.prompt ??
+    (async (question: string) => {
+      const { createInterface } = await import("node:readline/promises");
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        return await rl.question(question);
+      } finally {
+        rl.close();
+      }
+    });
+
+  const interactive = !io.options.apply;
+
+  const accepted = await ensureEulaAccepted({
+    env,
+    interactive,
+    acceptEula: io.options.acceptEula,
+    print,
+    prompt,
+  });
+  if (!accepted) return { accepted: false };
+
+  // Telemetry opt-in (default OFF).
+  let telemetry: boolean;
+  if (io.options.telemetry !== undefined) telemetry = io.options.telemetry;
+  else if (interactive) telemetry = isYes(await prompt(t("telemetry.prompt")));
+  else telemetry = false;
+  writeConfigSetting("telemetry.enabled", String(telemetry), "global", env);
+
+  // Auto-update opt-in (default OFF).
+  let autoUpdate: boolean;
+  if (io.options.autoUpdate !== undefined) autoUpdate = io.options.autoUpdate;
+  else if (interactive) autoUpdate = isYes(await prompt(t("autoUpdate.prompt")));
+  else autoUpdate = false;
+  writeConfigSetting("update.auto", String(autoUpdate), "global", env);
+
+  ensureInstallId(env);
+  return { accepted: true };
 }
