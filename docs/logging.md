@@ -96,6 +96,11 @@ connection string and it is enabled automatically (off by default):
 
 This sends log data over the network and is opt-in only.
 
+Every record forwarded to Application Insights carries an anonymous
+`installId` — a random UUID stored in `$CLIMON_HOME/install.json`, generated on
+first server start. It contains no personal information and exists only so logs
+from one installation can be distinguished from another.
+
 ## Logging during tests
 
 `bun test` sets the level to `silent` automatically (via `tests/log-silence.ts`,
