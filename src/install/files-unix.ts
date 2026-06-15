@@ -1,11 +1,9 @@
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { installFilesForPlatform } from "./install-manifest.js";
 
 /** Files in the source (zip) directory and their installed names. */
-const INSTALL_FILES: { source: string; dest: string }[] = [
-  { source: "install", dest: "climon" },
-  { source: "climon-beta", dest: "climon-beta" },
-];
+const INSTALL_FILES = installFilesForPlatform("linux");
 const LOCKED_COPY_ERROR_CODES = new Set(["EBUSY", "EACCES", "EPERM", "ETXTBSY"]);
 
 export type CopyFile = (source: string, destination: string) => void;
