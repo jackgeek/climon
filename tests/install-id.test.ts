@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { ensureInstallId, getInstallId, getInstallIdPath } from "../src/install-id.js";
 
 async function makeTestHome(): Promise<string> {
