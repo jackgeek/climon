@@ -4,11 +4,15 @@
 
 - Always start new work in a fresh git worktree under the `.worktrees/` folder, never directly on the main checkout. Create one per task with `git worktree add .worktrees/<branch-name> -b <branch-name>` (or check out an existing branch) and do all edits, builds, and tests there. The `.worktrees/` folder is gitignored.
 
+## Local Copilot CLI skills
+
+- Repo-local Copilot CLI skills live in `copilot-plugin/` (a per-session plugin, not installed globally). Load them with `copilot --plugin-dir copilot-plugin` from the repo root, then invoke a skill by describing the task (e.g. "update the changelog" runs the `update-changelog` skill). See `copilot-plugin/README.md`.
+
 ## Build, test, and lint commands
 
 - Install dependencies with `bun install`. The project uses Bun (`packageManager: bun@1.3.10`) and TypeScript ESM.
 - Build all runtime artifacts with `bun run build:all` (`build` client, `build:web` dashboard bundle, `build:server` server entrypoint).
-- Compile release binaries with `bun run compile`; release automation runs `bun run release` from `.github/workflows/release.yml`.
+- Compile release binaries with `bun run compile`; bump the version and create the matching git tag with `bun run release`.
 - Type-check/lint with `bun run lint` or `bun run typecheck` (`tsc -p tsconfig.json --noEmit`).
 - Run the full suite with `bun test tests`.
 - Run a single test file with `bun test tests/config.test.ts`.
@@ -38,5 +42,5 @@ Remote clients use an ingest/uplink bridge over Microsoft dev tunnels or a direc
 - Treat remote input as untrusted. Keep remote ID validation, metadata namespacing, patch allowlists, bounded mux frames, and loopback-only privileged dashboard APIs aligned with `docs/security.md`.
 - Configuration is hierarchical for `climon config`: local `.climon/config.jsonc` files are checked from the cwd upward before global `$CLIMON_HOME/config.jsonc`; legacy `config.json` files are read for backward compatibility and migrated on first write. Writes use explicit `--local`/`--global` or the nearest existing config.
 - Config settings are declared in `src/config-settings.ts`. Whenever a config setting is added, removed, renamed, re-scoped, retyped, or has its purpose or default changed, update that registry, regenerate config docs/comments with `bun run docs:config`, and keep the change backward compatible with existing config files.
-- When changing install or release behavior, check `scripts/`, `src/install/`, `src/release/`, and `.github/workflows/release.yml` together because version bumping, binary compilation, PATH setup, and installer packaging are coupled.
+- When changing install or release behavior, check `scripts/`, `src/install/`, and `src/release/` together because version bumping, binary compilation, PATH setup, and installer packaging are coupled.
 - Keep docs in sync with behavior that users rely on: `README.md` for user-facing workflow, `docs/architecture.md` for component/data-flow changes, `docs/security.md` for remote or network-facing changes, and `docs/setup.md`/`docs/usage.md` for setup and command changes.

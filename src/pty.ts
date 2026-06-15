@@ -67,6 +67,9 @@ export function spawnPty(options: PtyOptions): PtyHandle {
   const exitListeners: Array<(exitCode: number) => void> = [];
   let exitCode: number | undefined;
 
+  let appliedCols = options.cols;
+  let appliedRows = options.rows;
+
   const terminal = new Bun.Terminal({
     cols: options.cols,
     rows: options.rows,
@@ -125,8 +128,44 @@ export function spawnPty(options: PtyOptions): PtyHandle {
       }
     },
     resize: (cols, rows) => {
+      const nextCols = Math.max(cols, 1);
+      const nextRows = Math.max(rows, 1);
+      if (nextCols === appliedCols && nextRows === appliedRows) {
+        return;
+      }
+      appliedCols = nextCols;
+      appliedRows = nextRows;
       try {
-        terminal.resize(Math.max(cols, 1), Math.max(rows, 1));
+        terminal.resize(nextCols, nextRows);
+        // `Bun.Terminal.resize` updates the kernel window size (TIOCSWINSZ) but,
+        // at least on macOS, does not signal the terminal's foreground process
+        // group the way the kernel normally does on a winsize change. Node-based
+        // TUIs such as the Copilot CLI cache `process.stdout.columns/rows` and
+        // only refresh them on SIGWINCH, so without the signal they keep drawing
+        // at the previous size. Browser viewers that resized their grid then
+        // render the stale-sized output onto a different grid, corrupting the
+        // display, while the local terminal (matching the program's size) looks
+        // fine.
+        //
+        // Signalling only the direct child is not enough: when the PTY runs a
+        // shell (e.g. `climon` wrapping zsh), the actual TUI is a *grandchild*
+        // in a different process group, so the shell never forwards the signal.
+        // Deliver SIGWINCH to the direct child and every descendant so nested
+        // programs re-read the new size.
+        if (process.platform !== "win32") {
+          try {
+            proc.kill("SIGWINCH");
+          } catch {
+            // Child already exited; nothing to signal.
+          }
+          for (const pid of descendantPids(proc.pid)) {
+            try {
+              process.kill(pid, "SIGWINCH");
+            } catch {
+              // Descendant exited between listing and signalling; ignore.
+            }
+          }
+        }
       } catch {
         // Resizing can fail transiently while the child is exiting; ignore.
       }
@@ -139,6 +178,61 @@ export function spawnPty(options: PtyOptions): PtyHandle {
       }
     }
   };
+}
+
+/**
+ * Returns the PIDs of every descendant process of `rootPid` (children,
+ * grandchildren, ...). Used to deliver SIGWINCH to a nested foreground program
+ * when the PTY runs a shell. Returns an empty array on failure or on Windows.
+ */
+function descendantPids(rootPid: number): number[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+  let stdout = "";
+  try {
+    // `-A` (all processes) + bare `pid=`/`ppid=` headers are POSIX and work on
+    // both macOS and Linux. Spawning `ps` per resize is acceptable: resizes are
+    // de-duped against the applied size before this runs.
+    const result = Bun.spawnSync(["ps", "-A", "-o", "pid=", "-o", "ppid="]);
+    stdout = result.success ? result.stdout.toString() : "";
+  } catch {
+    return [];
+  }
+  const childrenByParent = new Map<number, number[]>();
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const [pidStr, ppidStr] = trimmed.split(/\s+/);
+    const pid = Number(pidStr);
+    const ppid = Number(ppidStr);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid)) {
+      continue;
+    }
+    const siblings = childrenByParent.get(ppid);
+    if (siblings) {
+      siblings.push(pid);
+    } else {
+      childrenByParent.set(ppid, [pid]);
+    }
+  }
+  const descendants: number[] = [];
+  const stack = [rootPid];
+  const seen = new Set<number>([rootPid]);
+  while (stack.length > 0) {
+    const current = stack.pop() as number;
+    for (const child of childrenByParent.get(current) ?? []) {
+      if (seen.has(child)) {
+        continue;
+      }
+      seen.add(child);
+      descendants.push(child);
+      stack.push(child);
+    }
+  }
+  return descendants;
 }
 
 /**
