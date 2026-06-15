@@ -1,28 +1,34 @@
 import { Transform } from "node:stream";
 import { lookupByKey } from "../i18n/catalog.js";
 import { SENTINEL_MSG_ID } from "../i18n/log-msg.js";
-import type { Catalog, CatalogEntry, MessageParams } from "../i18n/types.js";
+import type { Catalog, CatalogEntry } from "../i18n/types.js";
 
 /**
  * Transforms pino records into a compact form for Application Insights so the
  * variable, potentially sensitive rendered text never leaves the machine:
  *
  *  - catalogued records (with `msgId`) send the 8-hex id as the trace message
- *    and redact `args` per the catalog's per-parameter metadata;
+ *    and replace each redact:true parameter field with a typed marker, per the
+ *    catalog's per-parameter metadata; non-redacted params stay as flat
+ *    properties so they remain queryable in Application Insights;
  *  - uncatalogued records (legacy `logger.x(...)` sites not yet migrated) get a
  *    sentinel id and keep their text for now, per the migration plan.
  */
 
-/** Replaces redacted params with a typed marker; leaves the rest untouched. */
-export function redactArgs(
-  args: MessageParams,
+/**
+ * Returns a copy of `record` with every redact:true catalog parameter present
+ * at the top level replaced by a typed marker. Other fields are untouched.
+ */
+export function redactParams(
+  record: Record<string, unknown>,
   entry: CatalogEntry | undefined,
-): MessageParams {
-  if (!entry) return { ...args };
-  const out: MessageParams = {};
-  for (const [key, value] of Object.entries(args)) {
-    const meta = entry.params[key];
-    out[key] = meta?.redact ? `[REDACTED:${meta.category ?? "generic"}]` : value;
+): Record<string, unknown> {
+  const out = { ...record };
+  if (!entry) return out;
+  for (const [name, meta] of Object.entries(entry.params)) {
+    if (meta.redact && Object.prototype.hasOwnProperty.call(out, name)) {
+      out[name] = `[REDACTED:${meta.category ?? "generic"}]`;
+    }
   }
   return out;
 }
@@ -32,19 +38,17 @@ export function compactRecord(
   record: Record<string, unknown>,
   catalog: Catalog,
 ): Record<string, unknown> {
-  const out = { ...record };
-  const msgId = typeof out.msgId === "string" ? out.msgId : undefined;
+  const msgId = typeof record.msgId === "string" ? record.msgId : undefined;
 
-  if (msgId) {
-    const entry = lookupByKey(catalog, String(out.msgKey ?? ""));
-    const args = (out.args ?? {}) as MessageParams;
-    out.args = redactArgs(args, entry);
-    // The trace message becomes the stable id; the rendered text is discarded.
-    out.msg = msgId;
-  } else {
-    out.msgId = SENTINEL_MSG_ID;
+  if (!msgId) {
     // Keep the rendered `msg` until the call-site migration is complete.
+    return { ...record, msgId: SENTINEL_MSG_ID };
   }
+
+  const entry = lookupByKey(catalog, String(record.msgKey ?? ""));
+  const out = redactParams(record, entry);
+  // The trace message becomes the stable id; the rendered text is discarded.
+  out.msg = msgId;
   return out;
 }
 

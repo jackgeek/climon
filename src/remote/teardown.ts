@@ -6,6 +6,7 @@ import { getServerStatePath, readServerState } from "../server-state.js";
 import { getIngestStatePath } from "./ingest-state.js";
 import { getShutdownRequestPath } from "./shutdown-request.js";
 import { child } from "../logging/logger.js";
+import { logMsg } from "../i18n/log-msg.js";
 
 /**
  * Lazily bind to the active root logger so the role set by the entrypoint's
@@ -42,7 +43,7 @@ export async function stopUplinkDaemon(
   const kill = options.killProcess ?? killProcess;
   const pid = await readPid(getUplinkPidPath(env));
   if (pid === undefined || !isAlive(pid)) return false;
-  log().debug({ pid }, "stopping uplink daemon via pidfile");
+  logMsg(log(), "debug", "teardown.stopping_uplink_daemon_via_pidfile", { pid });
   return kill(pid, false);
 }
 
@@ -108,14 +109,14 @@ export async function teardownLocalServerStack(
   const failures: KillFailure[] = [];
   const staleFiles: StaleFile[] = [];
 
-  log().debug("starting local dashboard stack teardown");
+  logMsg(log(), "debug", "teardown.starting_local_dashboard_stack_teardown", {});
 
   // --- Kill processes ---
   const serverState = await readServerState(env);
   let serverStopped = false;
   let serverDead = true;
   if (serverState && isAlive(serverState.pid)) {
-    log().debug({ pid: serverState.pid, port: serverState.port }, "stopping dashboard server");
+    logMsg(log(), "debug", "teardown.stopping_dashboard_server", { pid: serverState.pid, port: serverState.port });
     // Try graceful HTTP shutdown first (cross-platform, no signal issues).
     try {
       await fetch(`http://127.0.0.1:${serverState.port}/__internal/shutdown`, {
@@ -170,7 +171,7 @@ export async function teardownLocalServerStack(
   let ingestStopped = false;
   let ingestDead = true;
   if (ingestPid !== undefined && isAlive(ingestPid)) {
-    log().debug({ pid: ingestPid }, "stopping ingest daemon");
+    logMsg(log(), "debug", "teardown.stopping_ingest_daemon", { pid: ingestPid });
     // On Windows, headless daemon processes (no message loop) ignore taskkill
     // without /F. Skip the graceful attempt and force-kill directly.
     const forceFirst = process.platform === "win32";
@@ -212,7 +213,7 @@ export async function teardownLocalServerStack(
   let uplinkStopped = false;
   let uplinkDead = true;
   if (uplinkPid !== undefined && isAlive(uplinkPid)) {
-    log().debug({ pid: uplinkPid }, "stopping uplink daemon");
+    logMsg(log(), "debug", "teardown.stopping_uplink_daemon", { pid: uplinkPid });
     const forceFirstUplink = process.platform === "win32";
     const killed = kill(uplinkPid, forceFirstUplink);
     if (killed) {
@@ -249,14 +250,15 @@ export async function teardownLocalServerStack(
   }
 
   // --- Remove beacon files (only if owning process is confirmed dead) ---
-  if (serverStopped) log().debug({ pid: serverState?.pid }, "dashboard server stopped");
-  if (ingestStopped) log().debug({ pid: ingestPid }, "ingest daemon stopped");
-  if (uplinkStopped) log().debug({ pid: uplinkPid }, "uplink daemon stopped");
+  if (serverStopped) logMsg(log(), "debug", "teardown.dashboard_server_stopped", { pid: serverState?.pid });
+  if (ingestStopped) logMsg(log(), "debug", "teardown.ingest_daemon_stopped", { pid: ingestPid });
+  if (uplinkStopped) logMsg(log(), "debug", "teardown.uplink_daemon_stopped", { pid: uplinkPid });
   for (const failure of failures) {
-    log().warn(
-      { daemon: failure.component, pid: failure.pid, reason: failure.reason },
-      "failed to stop daemon during teardown"
-    );
+    logMsg(log(), "warn", "teardown.failed_to_stop_daemon", {
+      daemon: failure.component,
+      pid: failure.pid,
+      reason: failure.reason
+    });
   }
 
   const removed: string[] = [];
@@ -273,25 +275,22 @@ export async function teardownLocalServerStack(
     if (!exists) continue;
     if (!dead && pid !== undefined) {
       staleFiles.push({ path, pid });
-      log().warn({ path, pid }, "beacon retained; owning process still alive");
+      logMsg(log(), "warn", "teardown.beacon_retained_owner_alive", { path, pid });
     } else {
       await removeFile(path);
       removed.push(path);
-      log().debug({ path }, "removed beacon");
+      logMsg(log(), "debug", "teardown.removed_beacon", { path });
     }
   }
 
-  log().debug(
-    {
-      serverStopped,
-      ingestStopped,
-      uplinkStopped,
-      removed: removed.length,
-      failures: failures.length,
-      staleFiles: staleFiles.length
-    },
-    "local dashboard stack teardown complete"
-  );
+  logMsg(log(), "debug", "teardown.local_dashboard_stack_teardown_complete", {
+    serverStopped,
+    ingestStopped,
+    uplinkStopped,
+    removed: removed.length,
+    failures: failures.length,
+    staleFiles: staleFiles.length
+  });
 
   return { serverStopped, ingestStopped, uplinkStopped, removed, failures, staleFiles };
 }

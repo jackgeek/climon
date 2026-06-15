@@ -1,7 +1,1498 @@
 {
+  "boot.app_insights_logging_disabled": {
+    "id": "a124a281",
+    "t": "App Insights logging disabled: {err}",
+    "params": {
+      "err": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "cli.command_invocation": {
+    "id": "0b82ce8c",
+    "t": "cli command: {command}",
+    "params": {
+      "command": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "cli.stream_output": {
+    "id": "9b3b4c83",
+    "t": "{detail}",
+    "params": {
+      "stream": {
+        "redact": false,
+        "category": "generic"
+      },
+      "detail": {
+        "redact": true,
+        "category": "pii"
+      }
+    }
+  },
+  "daemon.attention_fingerprint_mismatch": {
+    "id": "896ef823",
+    "t": "attention_fp={attentionFp} current_fp={currentFp}",
+    "params": {
+      "attentionFp": {
+        "redact": true,
+        "category": "pii"
+      },
+      "currentFp": {
+        "redact": true,
+        "category": "pii"
+      }
+    }
+  },
+  "daemon.clearing_attention_status": {
+    "id": "e9270940",
+    "t": "status=clearing-attention source={source} fingerprint={fingerprint}",
+    "params": {
+      "source": {
+        "redact": false,
+        "category": "generic"
+      },
+      "fingerprint": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "daemon.needs_attention_status": {
+    "id": "d2753865",
+    "t": "status=needs-attention reason=\"{reason}\" fingerprint={fingerprint}",
+    "params": {
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      },
+      "fingerprint": {
+        "redact": true,
+        "category": "pii"
+      }
+    }
+  },
+  "daemon.sampled_fingerprint_changed": {
+    "id": "0b9bbdd9",
+    "t": "status={status} fingerprint=changed prev={prev} curr={curr}",
+    "params": {
+      "status": {
+        "redact": false,
+        "category": "generic"
+      },
+      "prev": {
+        "redact": true,
+        "category": "pii"
+      },
+      "curr": {
+        "redact": true,
+        "category": "pii"
+      }
+    }
+  },
+  "daemon.sampled_fingerprint_unchanged": {
+    "id": "c975d378",
+    "t": "status={status} fingerprint=unchanged",
+    "params": {
+      "status": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "discovery.checking_peer_home": {
+    "id": "9705e8b0",
+    "t": "checking peer at {peerHome}",
+    "params": {
+      "peerHome": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "discovery.discovering_dashboard": {
+    "id": "2a5495d1",
+    "t": "discovering dashboard...",
+    "params": {}
+  },
+  "discovery.found_local_dashboard": {
+    "id": "9a3bd0cb",
+    "t": "found local dashboard: pid={pid} port={port} ingest={ingest}",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "ingest": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "discovery.local_server_pid_not_alive": {
+    "id": "5cf73def",
+    "t": "local server.json exists (pid={pid}) but process not alive",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "discovery.no_peer_home_configured": {
+    "id": "d858ca48",
+    "t": "no peerHome configured, no dashboard found",
+    "params": {}
+  },
+  "discovery.no_peer_ingest_found": {
+    "id": "7599f386",
+    "t": "no peer ingest.json found (peer ingest not running?)",
+    "params": {}
+  },
+  "discovery.no_reachable_peer_host_found": {
+    "id": "fb4c3393",
+    "t": "no reachable peer host found",
+    "params": {}
+  },
+  "discovery.peer_host_probe_result": {
+    "id": "862ffc45",
+    "t": "  {host}:{port} → {reachability}",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reachability": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "discovery.peer_ingest_state": {
+    "id": "c0339827",
+    "t": "peer ingest.json: port={port} host={host}",
+    "params": {
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      }
+    }
+  },
+  "discovery.probing_peer_host_candidates": {
+    "id": "91eee210",
+    "t": "probing peer host candidates: [{candidates}]",
+    "params": {
+      "candidates": {
+        "redact": true,
+        "category": "hostname"
+      }
+    }
+  },
+  "ingest.client_disconnected_cleanup": {
+    "id": "fd14537a",
+    "t": "client {clientId} disconnected, cleaning up {sessionCount} session(s)",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "sessionCount": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.client_idle_destroying_channel": {
+    "id": "414efde0",
+    "t": "client {clientId} idle for {idleTimeout}ms, destroying channel",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "idleTimeout": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.evicting_previous_connection": {
+    "id": "f632385a",
+    "t": "evicting previous connection for clientId={clientId}",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.hello_received": {
+    "id": "18fa1535",
+    "t": "hello received, clientId={clientId}",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.inbound_connection": {
+    "id": "37853b5b",
+    "t": "new inbound connection from {host}:{port}",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.listening": {
+    "id": "2c06ad99",
+    "t": "listening on {host}:{port} (pid {pid})",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.loopback_bind_failed": {
+    "id": "8caec904",
+    "t": "warning: could not bind loopback 127.0.0.1:{port} after {attempts} attempts ({code})",
+    "params": {
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "attempts": {
+        "redact": false,
+        "category": "generic"
+      },
+      "code": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.loopback_bind_retry": {
+    "id": "ae015f71",
+    "t": "loopback bind attempt {attempt}/{maxAttempts} failed ({code}), retrying in {delay}ms...",
+    "params": {
+      "attempt": {
+        "redact": false,
+        "category": "generic"
+      },
+      "maxAttempts": {
+        "redact": false,
+        "category": "generic"
+      },
+      "code": {
+        "redact": false,
+        "category": "generic"
+      },
+      "delay": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.loopback_listener_added": {
+    "id": "37cfcb57",
+    "t": "loopback listener added on 127.0.0.1:{port} (for devtunnel)",
+    "params": {
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.mux_decode_error_from_client": {
+    "id": "168bcaa8",
+    "t": "mux decode error from client {clientId}, destroying channel",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.port_unavailable_using_alternative": {
+    "id": "03074e83",
+    "t": "port {port} unavailable, using {newPort} instead",
+    "params": {
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "newPort": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.remote_session_file_deleted": {
+    "id": "f8c5ad79",
+    "t": "sessions watcher: remote session file deleted externally: {localId}",
+    "params": {
+      "localId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.resolved_bind_address": {
+    "id": "c5ad8f8d",
+    "t": "resolved bind address: {host}:{port}",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.session_added": {
+    "id": "ddbd2f3d",
+    "t": "session-added: {sessionId} ({displayCommand}) [{status}]",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "displayCommand": {
+        "redact": true,
+        "category": "config"
+      },
+      "status": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.session_removed": {
+    "id": "9cda3bf3",
+    "t": "session-removed: {sessionId}",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.session_updated": {
+    "id": "89286e2c",
+    "t": "session-updated: {sessionId} patch={patch}",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "patch": {
+        "redact": true,
+        "category": "config"
+      }
+    }
+  },
+  "ingest.singleton_acquired_daemon": {
+    "id": "6d2087f1",
+    "t": "singleton acquired, starting ingest daemon",
+    "params": {}
+  },
+  "ingest.singleton_already_running": {
+    "id": "3ee241e8",
+    "t": "another ingest instance is already running (pid={pid}), exiting",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "launcher.ensure_uplink_config": {
+    "id": "f8a7d98f",
+    "t": "ensureUplink: enabled={enabled} host={host} tunnelId={tunnelId} port={port} peerHome={peerHome}",
+    "params": {
+      "enabled": {
+        "redact": false,
+        "category": "generic"
+      },
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "tunnelId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "peerHome": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "launcher.ensure_uplink_plan": {
+    "id": "afc0c350",
+    "t": "ensureUplink: planUplinkStart → shouldSpawn={shouldSpawn}{warningSuffix}",
+    "params": {
+      "shouldSpawn": {
+        "redact": false,
+        "category": "generic"
+      },
+      "warningSuffix": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "launcher.launch_banner": {
+    "id": "18768226",
+    "t": "climon v{version} monitoring session {id}",
+    "params": {
+      "version": {
+        "redact": false,
+        "category": "generic"
+      },
+      "id": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "launcher.uplink_not_spawned": {
+    "id": "3972cb6d",
+    "t": "ensureUplink: not spawning uplink",
+    "params": {}
+  },
+  "launcher.uplink_spawning_detached_process": {
+    "id": "0a018893",
+    "t": "ensureUplink: spawning detached __uplink process",
+    "params": {}
+  },
+  "push.send_failed": {
+    "id": "f684f7b2",
+    "t": "send failed",
+    "params": {
+      "endpoint": {
+        "redact": true,
+        "category": "url"
+      },
+      "err": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.climon_server_listening": {
+    "id": "a5071ad6",
+    "t": "climon server v{version} listening on http://127.0.0.1:{port}/",
+    "params": {
+      "version": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.climon_server_shutting_down": {
+    "id": "df84b352",
+    "t": "climon server shutting down ({reason}).",
+    "params": {
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.climon_server_starting": {
+    "id": "eca18625",
+    "t": "climon server starting...",
+    "params": {}
+  },
+  "server.closing_dashboard_listener_streams": {
+    "id": "d4acf7ee",
+    "t": "closing dashboard listener and streams...",
+    "params": {}
+  },
+  "server.find_existing_dashboard_probe": {
+    "id": "ccb43663",
+    "t": "findExistingDashboardServer: probing {url}health",
+    "params": {
+      "url": {
+        "redact": true,
+        "category": "url"
+      }
+    }
+  },
+  "server.find_existing_health_probe_failed": {
+    "id": "a6f0cf1b",
+    "t": "findExistingDashboardServer: health probe failed: {error}",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.find_existing_health_response": {
+    "id": "66336dec",
+    "t": "findExistingDashboardServer: health response ok={ok}, healthy={healthy}",
+    "params": {
+      "ok": {
+        "redact": false,
+        "category": "generic"
+      },
+      "healthy": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.find_existing_healthy_server_found": {
+    "id": "139eadad",
+    "t": "findExistingDashboardServer: healthy server found, pid={pid}",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.find_existing_not_healthy": {
+    "id": "5dd4362c",
+    "t": "findExistingDashboardServer: not healthy — no existing server",
+    "params": {}
+  },
+  "server.handle_existing_dashboard_state": {
+    "id": "0f18ede1",
+    "t": "handleExistingDashboardServer: existing={existing}, tty={tty}",
+    "params": {
+      "existing": {
+        "redact": true,
+        "category": "url"
+      },
+      "tty": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.handle_existing_http_shutdown_attempt": {
+    "id": "7b41bc00",
+    "t": "handleExistingDashboardServer: trying HTTP shutdown for {url}",
+    "params": {
+      "url": {
+        "redact": true,
+        "category": "url"
+      }
+    }
+  },
+  "server.handle_existing_http_shutdown_succeeded": {
+    "id": "b937c22f",
+    "t": "handleExistingDashboardServer: HTTP shutdown succeeded",
+    "params": {}
+  },
+  "server.handle_existing_non_interactive_exit": {
+    "id": "b07709c0",
+    "t": "handleExistingDashboardServer: non-interactive — exiting",
+    "params": {}
+  },
+  "server.handle_existing_pid_stop_attempt": {
+    "id": "c04eece6",
+    "t": "handleExistingDashboardServer: attempting PID-based stop (pid={pid})",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.handle_existing_pid_stop_failed": {
+    "id": "638db3c6",
+    "t": "handleExistingDashboardServer: PID-based stop failed",
+    "params": {}
+  },
+  "server.handle_existing_pid_stop_succeeded": {
+    "id": "a8baec51",
+    "t": "handleExistingDashboardServer: PID-based stop succeeded",
+    "params": {}
+  },
+  "server.handle_existing_termination_failed": {
+    "id": "7ed96578",
+    "t": "handleExistingDashboardServer: all termination methods failed",
+    "params": {}
+  },
+  "server.handle_existing_user_confirmed": {
+    "id": "07867e59",
+    "t": "handleExistingDashboardServer: user confirmed termination",
+    "params": {}
+  },
+  "server.handle_existing_user_declined": {
+    "id": "e0232fee",
+    "t": "handleExistingDashboardServer: user declined (answer={answer})",
+    "params": {
+      "answer": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.ingest_daemon_already_running": {
+    "id": "adc32b4f",
+    "t": "ingest daemon already running (pid {pid}, port {port}).",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.ingest_daemon_ready": {
+    "id": "06c46483",
+    "t": "ingest daemon ready (pid {pid}, port {port}).",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.ingest_daemon_recycling_stale": {
+    "id": "835b8748",
+    "t": "ingest daemon is stale or wrong-bound; recycling it...",
+    "params": {}
+  },
+  "server.ingest_daemon_starting": {
+    "id": "85a741cf",
+    "t": "starting ingest daemon...",
+    "params": {}
+  },
+  "server.internal_shutdown_accepted": {
+    "id": "0a75b289",
+    "t": "/__internal/shutdown: accepted from {address}; scheduling shutdown",
+    "params": {
+      "address": {
+        "redact": true,
+        "category": "hostname"
+      }
+    }
+  },
+  "server.internal_shutdown_rejected_non_local": {
+    "id": "59c37d87",
+    "t": "/__internal/shutdown: rejected non-local request from {address}",
+    "params": {
+      "address": {
+        "redact": true,
+        "category": "hostname"
+      }
+    }
+  },
+  "server.persist_dashboard_tunnel_enabled_failed": {
+    "id": "b01c50c7",
+    "t": "persistDashboardTunnelEnabled({enabled}) failed: {error}",
+    "params": {
+      "enabled": {
+        "redact": false,
+        "category": "generic"
+      },
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.plain_shutdown_complete": {
+    "id": "fe774625",
+    "t": "plainShutdown: shutdown complete",
+    "params": {}
+  },
+  "server.plain_shutdown_hard_watchdog": {
+    "id": "7c9f6e6e",
+    "t": "plainShutdown: hard watchdog fired; forcing process.exit(0)",
+    "params": {}
+  },
+  "server.plain_shutdown_ingest_stop_failed": {
+    "id": "3bcaffb8",
+    "t": "plainShutdown: stopIngestDaemon failed: {error}",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.plain_shutdown_ingest_stop_result": {
+    "id": "d3cd3556",
+    "t": "plainShutdown: stopIngestDaemon returned {stopped}",
+    "params": {
+      "stopped": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.plain_shutdown_leave_ingest_demote": {
+    "id": "1ddebb6b",
+    "t": "plainShutdown: leaving ingest shutdown to its demotion path",
+    "params": {}
+  },
+  "server.plain_shutdown_triggered": {
+    "id": "749b6a5e",
+    "t": "plainShutdown triggered (pid={pid}, reason={reason}); removing {path}",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      },
+      "path": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "server.push_notify_failed": {
+    "id": "312cbfac",
+    "t": "push notify failed: {error}",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.push_service_unavailable": {
+    "id": "d7f7dd8d",
+    "t": "push service unavailable: {error}",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.request_shutdown_health_non_ok": {
+    "id": "fb8fc2b7",
+    "t": "requestServerShutdownViaHttp: health probe returned non-ok — server is down",
+    "params": {}
+  },
+  "server.request_shutdown_health_threw": {
+    "id": "5ef1b9a3",
+    "t": "requestServerShutdownViaHttp: health probe threw — server is down",
+    "params": {}
+  },
+  "server.request_shutdown_http_polling": {
+    "id": "205d986f",
+    "t": "requestServerShutdownViaHttp: POST returned 200; polling for shutdown",
+    "params": {}
+  },
+  "server.request_shutdown_http_post_failed": {
+    "id": "d34216d3",
+    "t": "requestServerShutdownViaHttp: POST failed: {error}",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.request_shutdown_http_posting": {
+    "id": "c6e1202f",
+    "t": "requestServerShutdownViaHttp: POSTing to {shutdownUrl}",
+    "params": {
+      "shutdownUrl": {
+        "redact": true,
+        "category": "url"
+      }
+    }
+  },
+  "server.request_shutdown_http_status_failure": {
+    "id": "c010f4c6",
+    "t": "requestServerShutdownViaHttp: POST returned {status} — treating as failure",
+    "params": {
+      "status": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.request_shutdown_timeout": {
+    "id": "b82477c0",
+    "t": "requestServerShutdownViaHttp: timed out waiting for server to stop",
+    "params": {}
+  },
+  "server.server_state_writing": {
+    "id": "320fb21c",
+    "t": "writing server.json: path={path}, content={content}",
+    "params": {
+      "path": {
+        "redact": true,
+        "category": "path"
+      },
+      "content": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.server_state_written": {
+    "id": "60846aae",
+    "t": "server.json written successfully",
+    "params": {}
+  },
+  "server.settle_dual_promote_no_peer": {
+    "id": "bb3f8b7d",
+    "t": "settleDualPromote: no competing peer server; staying host",
+    "params": {}
+  },
+  "server.settle_dual_promote_peer_decision": {
+    "id": "1e36aea2",
+    "t": "settleDualPromote: peer present; decision={decision} by {basis}",
+    "params": {
+      "decision": {
+        "redact": false,
+        "category": "generic"
+      },
+      "basis": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.settle_dual_promote_started": {
+    "id": "e231275e",
+    "t": "settleDualPromote: started (localIsWsl={localIsWsl}, localStartedAt={localStartedAt}, peerHome={peerHome}, settle={settleMs}ms)",
+    "params": {
+      "localIsWsl": {
+        "redact": false,
+        "category": "generic"
+      },
+      "localStartedAt": {
+        "redact": false,
+        "category": "generic"
+      },
+      "peerHome": {
+        "redact": true,
+        "category": "path"
+      },
+      "settleMs": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.settle_dual_promote_write_peer_shutdown": {
+    "id": "e9887ab3",
+    "t": "settleDualPromote: writing shutdown request to peerHome={peerHome}",
+    "params": {
+      "peerHome": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "server.settle_dual_promote_write_self_shutdown": {
+    "id": "7d2c7051",
+    "t": "settleDualPromote: LOSING — writing self-shutdown request to {climonHome}",
+    "params": {
+      "climonHome": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "server.shutdown_request_watcher_started": {
+    "id": "5b1b6bf4",
+    "t": "shutdown-request watcher started (no ingest, peer configured)",
+    "params": {}
+  },
+  "server.shutdown_request_watcher_valid_request": {
+    "id": "33124fa3",
+    "t": "shutdown-request watcher: received valid request from {requestedBy}; invoking shutdown",
+    "params": {
+      "requestedBy": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.shutdown_step_timeout": {
+    "id": "d2da2bda",
+    "t": "warning: {label} did not finish within {ms} ms; continuing shutdown.",
+    "params": {
+      "label": {
+        "redact": false,
+        "category": "generic"
+      },
+      "ms": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.startup_log_detail": {
+    "id": "0b59c514",
+    "t": "{detail}",
+    "params": {
+      "detail": {
+        "redact": true,
+        "category": "generic"
+      }
+    }
+  },
+  "server.stop_dashboard_ingest_stop_failed": {
+    "id": "770b145a",
+    "t": "stopDashboardServer: stopIngestDaemon failed: {error}",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.stop_dashboard_ingest_stop_result": {
+    "id": "d50d3a5a",
+    "t": "stopDashboardServer: stopIngestDaemon returned {ingestStopped}",
+    "params": {
+      "ingestStopped": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.stop_dashboard_read_live_pid": {
+    "id": "7f7ccbd7",
+    "t": "stopDashboardServer: readLiveServerPid returned {pid}",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.stop_dashboard_terminate_pid_result": {
+    "id": "15304733",
+    "t": "stopDashboardServer: terminatePidWithEscalation({pid}) returned {result}",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "result": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.tunnel_link_reestablish_failed": {
+    "id": "6075f83c",
+    "t": "Tunnel Link could not be re-established: {message}",
+    "params": {
+      "message": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.tunnel_link_reestablished": {
+    "id": "7f0a26c9",
+    "t": "Tunnel Link re-established at {url}",
+    "params": {
+      "url": {
+        "redact": true,
+        "category": "url"
+      }
+    }
+  },
+  "shell.detect_debug": {
+    "id": "6fcc8116",
+    "t": "{detail}",
+    "params": {
+      "detail": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "shell.detect_trace": {
+    "id": "6191d05a",
+    "t": "{detail}",
+    "params": {
+      "detail": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.beacon_retained_owner_alive": {
+    "id": "f6028bd9",
+    "t": "beacon retained; owning process still alive",
+    "params": {
+      "path": {
+        "redact": true,
+        "category": "path"
+      },
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.dashboard_server_stopped": {
+    "id": "5c02f584",
+    "t": "dashboard server stopped",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.failed_to_stop_daemon": {
+    "id": "0de8e4dd",
+    "t": "failed to stop daemon during teardown",
+    "params": {
+      "daemon": {
+        "redact": false,
+        "category": "generic"
+      },
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.ingest_daemon_stopped": {
+    "id": "482eff34",
+    "t": "ingest daemon stopped",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.local_dashboard_stack_teardown_complete": {
+    "id": "33380a6d",
+    "t": "local dashboard stack teardown complete",
+    "params": {
+      "serverStopped": {
+        "redact": false,
+        "category": "generic"
+      },
+      "ingestStopped": {
+        "redact": false,
+        "category": "generic"
+      },
+      "uplinkStopped": {
+        "redact": false,
+        "category": "generic"
+      },
+      "removed": {
+        "redact": false,
+        "category": "generic"
+      },
+      "failures": {
+        "redact": false,
+        "category": "generic"
+      },
+      "staleFiles": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.removed_beacon": {
+    "id": "b74289c3",
+    "t": "removed beacon",
+    "params": {
+      "path": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "teardown.starting_local_dashboard_stack_teardown": {
+    "id": "f3abf677",
+    "t": "starting local dashboard stack teardown",
+    "params": {}
+  },
+  "teardown.stopping_dashboard_server": {
+    "id": "b92c9f4b",
+    "t": "stopping dashboard server",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.stopping_ingest_daemon": {
+    "id": "c6d26187",
+    "t": "stopping ingest daemon",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.stopping_uplink_daemon": {
+    "id": "6992df5b",
+    "t": "stopping uplink daemon",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.stopping_uplink_daemon_via_pidfile": {
+    "id": "87dfa0d1",
+    "t": "stopping uplink daemon via pidfile",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.uplink_daemon_stopped": {
+    "id": "945f7668",
+    "t": "uplink daemon stopped",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
   "telemetry.example_seed": {
     "id": "0001a2b3",
     "t": "telemetry catalog initialized",
     "params": {}
+  },
+  "uplink.auth_rejected_bridge_closed": {
+    "id": "031af7cb",
+    "t": "auth rejected after bridge closed, stopping",
+    "params": {}
+  },
+  "uplink.auth_rejected_port_wait": {
+    "id": "848c59c4",
+    "t": "auth rejected during port wait, stopping",
+    "params": {}
+  },
+  "uplink.bridge_connected": {
+    "id": "6517714b",
+    "t": "bridge connected, sending hello (clientId={clientId}, keepAlive={keepAlive}ms)",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "keepAlive": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.channel_error": {
+    "id": "52b4d3d8",
+    "t": "channel error: {message}",
+    "params": {
+      "message": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.channel_idle_destroying_bridge": {
+    "id": "bec740e1",
+    "t": "channel idle for {idleTimeout}ms, destroying bridge",
+    "params": {
+      "idleTimeout": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.channel_teardown": {
+    "id": "1e36e29d",
+    "t": "channel {reason}, tearing down bridge (sent={bytesSent} recv={bytesReceived})",
+    "params": {
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      },
+      "bytesSent": {
+        "redact": false,
+        "category": "generic"
+      },
+      "bytesReceived": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.client_id": {
+    "id": "eff5df80",
+    "t": "clientId: {clientId}",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.connection_error": {
+    "id": "ad7a01df",
+    "t": "connection error: {message} (code={code})",
+    "params": {
+      "message": {
+        "redact": false,
+        "category": "generic"
+      },
+      "code": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.devtunnel_connect_spawning": {
+    "id": "7b29b6d0",
+    "t": "spawning devtunnel connect for tunnel {tunnelId}, forwarding port {port}",
+    "params": {
+      "tunnelId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.direct_target": {
+    "id": "e4ed89a3",
+    "t": "direct target: {host}:{port}",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.ingest_requested_attach": {
+    "id": "8579e733",
+    "t": "ingest requested attach for session {sessionId}",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.ingest_requested_detach": {
+    "id": "88140a51",
+    "t": "ingest requested detach for session {sessionId}",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.initial_reconcile_done": {
+    "id": "8cec1445",
+    "t": "initial reconcile done, advertised {advertisedCount} session(s), sent {bytesSent} bytes",
+    "params": {
+      "advertisedCount": {
+        "redact": false,
+        "category": "generic"
+      },
+      "bytesSent": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.mux_decode_error": {
+    "id": "b6b9691c",
+    "t": "mux decode error, destroying channel",
+    "params": {}
+  },
+  "uplink.no_reachable_target_resolved": {
+    "id": "4470c780",
+    "t": "no reachable target resolved{detail}",
+    "params": {
+      "detail": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.no_remote_target_configured": {
+    "id": "43230d4f",
+    "t": "no remote target configured (no peerHome, no enabled tunnel/direct), exiting",
+    "params": {}
+  },
+  "uplink.port_not_reachable": {
+    "id": "ba3fa775",
+    "t": "port {host}:{port} not reachable: {reason}",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.port_reachable_connecting": {
+    "id": "dae08426",
+    "t": "port reachable, connecting to {host}:{port}",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.reconnecting": {
+    "id": "acdfe4d4",
+    "t": "reconnecting in {backoff}ms...",
+    "params": {
+      "backoff": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.resolved_peer_target": {
+    "id": "96a3ac6d",
+    "t": "resolved peer target: {host}:{port}",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.singleton_acquired_supervisor_loop": {
+    "id": "4a216bbf",
+    "t": "singleton acquired, starting supervisor loop",
+    "params": {}
+  },
+  "uplink.singleton_already_running": {
+    "id": "d56c4771",
+    "t": "another uplink instance is already running (pid={pid}), exiting",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.tcp_channel_established": {
+    "id": "48ad278b",
+    "t": "TCP channel established, starting mux bridge",
+    "params": {}
+  },
+  "uplink.tunnel_port_not_found": {
+    "id": "f25bdcfa",
+    "t": "could not discover port for tunnel {tunnelId} (no port mapping found)",
+    "params": {
+      "tunnelId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.waiting_for_port": {
+    "id": "c6b39fa3",
+    "t": "waiting for port {host}:{port} to become reachable...",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
   }
 }

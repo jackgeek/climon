@@ -32,7 +32,7 @@ function captureStream(lines: string[]): Writable {
 afterEach(() => resetLoggerForTests());
 
 describe("logMsg integration with the real logger", () => {
-  test("emits a record carrying rendered msg, msgId, msgKey and args", async () => {
+  test("emits a record carrying rendered msg, msgId, msgKey and top-level params", async () => {
     const home = await makeTestHome();
     try {
       const lines: string[] = [];
@@ -46,7 +46,7 @@ describe("logMsg integration with the real logger", () => {
       expect(record.msg).toBe("probing https://x/health");
       expect(record.msgId).toBe("0000000b");
       expect(record.msgKey).toBe("srv.probe");
-      expect(record.args).toEqual({ url: "https://x/" });
+      expect(record.url).toBe("https://x/");
     } finally {
       await rm(home, { recursive: true, force: true });
     }

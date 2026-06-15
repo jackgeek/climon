@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { readlinkSync } from "node:fs";
 import { child } from "./logging/logger.js";
+import { logMsg } from "./i18n/log-msg.js";
 
 function debug(message: string): void {
-  child("shell-detect").debug(message);
+  logMsg(child("shell-detect"), "debug", "shell.detect_debug", { detail: message });
 }
 
 function trace(message: string): void {
-  child("shell-detect").trace(message);
+  logMsg(child("shell-detect"), "trace", "shell.detect_trace", { detail: message });
 }
 
 /**

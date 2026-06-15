@@ -21,6 +21,7 @@ import { ScreenIdleDetector } from "./idle-detector.js";
 import { patchSessionMeta, patchSessionMetaFromCurrent, readSessionMeta, writeScrollback } from "../store.js";
 import { cleanupSessionSocket, listenOnSessionSocket } from "../session-socket.js";
 import { initLogger, child } from "../logging/logger.js";
+import { logMsg } from "../i18n/log-msg.js";
 const ESC_CSI_PRIVATE_MODE_PREFIX = "\x1b[?";
 const CSI_PRIVATE_MODE_CONTROL = /\x1b\[\?([0-9;]*)([hl])/g;
 const INCOMPLETE_PRIVATE_MODE_SUFFIX = /\x1b\[\?[0-9;]*$/;
@@ -386,9 +387,9 @@ export async function runSessionDaemon(id: string): Promise<void> {
       currentAttentionMatchedAt = undefined;
       currentAttentionFingerprint = undefined;
       const now = new Date().toISOString();
-      statusLog.debug(`status=clearing-attention source=${source} fingerprint=${fpMatch ? "unchanged" : "changed"}`);
+      logMsg(statusLog, "debug", "daemon.clearing_attention_status", { source, fingerprint: fpMatch ? "unchanged" : "changed" });
       if (!fpMatch) {
-        statusLog.trace(`attention_fp=${JSON.stringify(prevAttentionFp)} current_fp=${JSON.stringify(currentFingerprint)}`);
+        logMsg(statusLog, "trace", "daemon.attention_fingerprint_mismatch", { attentionFp: JSON.stringify(prevAttentionFp), currentFp: JSON.stringify(currentFingerprint) });
       }
       void patchSessionMetaFromCurrent(id, (current) => ({
         status: current.status === "paused" ? "paused" : source === "user" ? "acknowledged" : "running",
@@ -403,7 +404,7 @@ export async function runSessionDaemon(id: string): Promise<void> {
       return;
     }
     const now = new Date().toISOString();
-    statusLog.debug(`status=needs-attention reason="${payload.reason}" fingerprint=${JSON.stringify(currentFingerprint)}`);
+    logMsg(statusLog, "debug", "daemon.needs_attention_status", { reason: payload.reason, fingerprint: JSON.stringify(currentFingerprint) });
     void patchSessionMetaFromCurrent(id, (current) => {
       if (current.status === "paused") {
         return undefined;
@@ -481,9 +482,9 @@ export async function runSessionDaemon(id: string): Promise<void> {
         if (transition) {
           const newStatus = transition.needsAttention ? "needs-attention" : "running";
           if (fpChanged) {
-            statusLog.trace(`status=${newStatus} fingerprint=changed prev=${JSON.stringify(lastSampledFingerprint)} curr=${JSON.stringify(currentFingerprint)}`);
+            logMsg(statusLog, "trace", "daemon.sampled_fingerprint_changed", { status: newStatus, prev: JSON.stringify(lastSampledFingerprint), curr: JSON.stringify(currentFingerprint) });
           } else {
-            statusLog.debug(`status=${newStatus} fingerprint=unchanged`);
+            logMsg(statusLog, "debug", "daemon.sampled_fingerprint_unchanged", { status: newStatus });
           }
           void applyAttention(transition, "detector", currentFingerprint);
         }

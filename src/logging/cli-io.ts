@@ -1,4 +1,5 @@
 import { child } from "./logger.js";
+import { logMsg } from "../i18n/log-msg.js";
 
 const ANSI_PATTERN = /\u001b\[[0-9;]*m/g;
 
@@ -12,7 +13,7 @@ function toLogMessage(text: string): string {
 
 function mirror(stream: "stdout" | "stderr", text: string): void {
   const msg = toLogMessage(text);
-  if (msg.length > 0) child("cli").debug({ stream }, msg);
+  if (msg.length > 0) logMsg(child("cli"), "debug", "cli.stream_output", { stream, detail: msg });
 }
 
 /**
@@ -39,5 +40,5 @@ export function writeStderr(text: string, options: { log?: boolean } = {}): void
 
 /** Records a CLI command invocation at debug level. */
 export function logCliCommand(command: string): void {
-  child("cli").debug({ command }, `cli command: ${command}`);
+  logMsg(child("cli"), "debug", "cli.command_invocation", { command });
 }

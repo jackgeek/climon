@@ -26,6 +26,7 @@ import { runSessionHost } from "./session-host.js";
 import type { AnsiColor, SessionColorMode, SessionMeta } from "./types.js";
 import { VERSION } from "./version.js";
 import { child, suspendTerminal, resumeTerminal } from "./logging/logger.js";
+import { logMsg } from "./i18n/log-msg.js";
 import { writeStdout, writeStderr } from "./logging/cli-io.js";
 
 const log = () => child("launcher");
@@ -90,7 +91,7 @@ async function ensureUplink(): Promise<void> {
   const port = resolveConfigSetting("remote.port", process.env, process.cwd());
   const peerHome = resolveConfigSetting("remote.peerHome", process.env, process.cwd());
 
-  log().debug(`ensureUplink: enabled=${enabled} host=${host ?? "unset"} tunnelId=${tunnelId ? "set" : "unset"} port=${port ?? "unset"} peerHome=${peerHome ? "set" : "unset"}`);
+  logMsg(log(), "debug", "launcher.ensure_uplink_config", { enabled, host: host ?? "unset", tunnelId: tunnelId ? "set" : "unset", port: port ?? "unset", peerHome: peerHome ? "set" : "unset" });
 
   let shouldSpawn = false;
 
@@ -112,14 +113,14 @@ async function ensureUplink(): Promise<void> {
     const plan = planUplinkStart({ enabled, host, tunnelId, port }, detect);
     if (plan.warning) writeStderr(plan.warning);
     shouldSpawn = plan.shouldSpawn;
-    log().debug(`ensureUplink: planUplinkStart → shouldSpawn=${shouldSpawn}${plan.warning ? " (with warning)" : ""}`);
+    logMsg(log(), "debug", "launcher.ensure_uplink_plan", { shouldSpawn, warningSuffix: plan.warning ? " (with warning)" : "" });
   }
 
   if (!shouldSpawn) {
-    log().debug("ensureUplink: not spawning uplink");
+    logMsg(log(), "debug", "launcher.uplink_not_spawned", {});
     return;
   }
-  log().debug("ensureUplink: spawning detached __uplink process");
+  logMsg(log(), "debug", "launcher.uplink_spawning_detached_process", {});
   const child = spawn(process.execPath, selfSpawnArgs(["__uplink"]), {
     detached: true,
     stdio: "ignore",
@@ -281,7 +282,7 @@ export async function startMonitoredCommand(
   await maybeAutoLink();
   await ensureUplink();
 
-  log().info(launchBanner(VERSION, id).trimEnd());
+  logMsg(log(), "info", "launcher.launch_banner", { version: VERSION, id });
 
   suspendTerminal();
   let exitCode: number;

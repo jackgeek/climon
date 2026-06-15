@@ -4,6 +4,7 @@ import { resolveConfigSetting } from "./config.js";
 import { ensureInstallId } from "./install-id.js";
 import { createAppInsightsStream } from "./logging/appinsights.js";
 import { getLogger, initLogger } from "./logging/logger.js";
+import { logMsg } from "./i18n/log-msg.js";
 import { writeStderr } from "./logging/cli-io.js";
 import { runIngestDaemon } from "./remote/ingest.js";
 import { startServer } from "./server/server.js";
@@ -37,9 +38,7 @@ async function initServerLogging(): Promise<void> {
   }
   initLogger("server", { installId, extraStreams: ai ? [ai] : [] });
   if (aiError) {
-    getLogger().warn(
-      `App Insights logging disabled: ${aiError instanceof Error ? aiError.message : String(aiError)}`,
-    );
+    logMsg(getLogger(), "warn", "boot.app_insights_logging_disabled", { err: aiError instanceof Error ? aiError.message : String(aiError) });
   }
 }
 

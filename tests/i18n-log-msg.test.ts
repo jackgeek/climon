@@ -54,10 +54,10 @@ describe("logMsg", () => {
     expect(calls[0].obj.msgKey).toBe("srv.connect_failed");
   });
 
-  test("attaches the raw args under 'args' for the AI emitter", () => {
+  test("attaches the params as top-level structured fields", () => {
     const calls: Call[] = [];
     logMsg(fakeLogger(calls) as never, "debug", "srv.connect_failed", { host: "h" }, CAT);
-    expect(calls[0].obj.args).toEqual({ host: "h" });
+    expect(calls[0].obj.host).toBe("h");
   });
 
   test("uses the sentinel id for an uncatalogued key and keeps the key as text", () => {
@@ -72,6 +72,6 @@ describe("logMsg", () => {
     const cat: Catalog = { "x.static": { id: "00000abc", t: "hi", params: {} } };
     logMsg(fakeLogger(calls) as never, "info", "x.static", undefined, cat);
     expect(calls[0].msg).toBe("hi");
-    expect(calls[0].obj.args).toEqual({});
+    expect(calls[0].obj.msgId).toBe("00000abc");
   });
 });

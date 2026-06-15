@@ -16,9 +16,15 @@ export const SENTINEL_MSG_ID = "00000000";
  * Logs a catalogued message.
  *
  * Local file/terminal streams receive the fully rendered text as the pino
- * message (unchanged developer experience). The record also carries `msgId`,
- * `msgKey`, and the raw `args` so the Application Insights stream can transmit
- * the compact id + per-parameter-redacted args instead of the rendered text.
+ * message (unchanged developer experience) and the params as ordinary top-level
+ * structured fields (so existing `{ field }`-style log assertions keep working).
+ * The record also carries `msgId` and `msgKey` so the Application Insights
+ * stream can transmit the compact id and per-parameter-redacted fields instead
+ * of the rendered text.
+ *
+ * `msgId`/`msgKey` are written after the params spread so they always win; avoid
+ * param names that collide with reserved pino fields (`level`, `time`, `pid`,
+ * `hostname`, `msg`).
  */
 export function logMsg(
   logger: Logger,
@@ -30,5 +36,5 @@ export function logMsg(
   const entry = lookupByKey(catalog, key);
   const msgId = entry?.id ?? SENTINEL_MSG_ID;
   const text = renderMessage(catalog, key, params);
-  logger[level]({ msgId, msgKey: key, args: params }, text);
+  logger[level]({ ...params, msgId, msgKey: key }, text);
 }

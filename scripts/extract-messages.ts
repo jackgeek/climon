@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { Glob } from "bun";
 import { catalogPath, templatePlaceholders, validateCatalog } from "../src/i18n/catalog.js";
 import { toCsv, toJsonLookup } from "../src/i18n/publish.js";
-import type { Catalog, CatalogEntry } from "../src/i18n/types.js";
+import type { Catalog, CatalogEntry, ParamMeta } from "../src/i18n/types.js";
 
 /**
  * Tooling that keeps the message catalog in sync with `logMsg(..)` call sites.
@@ -87,6 +87,37 @@ export function sensitiveParamWarnings(catalog: Catalog): string[] {
   return warnings;
 }
 
+/** A catalog fragment authored at migration time: key -> template + params (no id). */
+export type CatalogFragment = Record<string, { t: string; params?: Record<string, ParamMeta> }>;
+
+export interface MergeResult {
+  catalog: Catalog;
+  merged: number;
+}
+
+/**
+ * Merges every `*.json` fragment in `fragDir` into `catalog`. New keys get a
+ * freshly allocated id; existing keys keep their id but adopt the fragment's
+ * template and params. Fragments are authored per source file during migration
+ * so parallel workers never contend on the single catalog file.
+ */
+export function mergeFragments(catalog: Catalog, fragDir: string): MergeResult {
+  const next: Catalog = { ...catalog };
+  const used = new Set(Object.values(next).map((e) => e.id));
+  const glob = new Glob("*.json");
+  let merged = 0;
+  for (const rel of glob.scanSync(fragDir)) {
+    const frag = JSON.parse(readFileSync(join(fragDir, rel), "utf8")) as CatalogFragment;
+    for (const [key, partial] of Object.entries(frag)) {
+      const id = next[key]?.id ?? allocateId(used);
+      used.add(id);
+      next[key] = { id, t: partial.t, params: partial.params ?? {} };
+      merged++;
+    }
+  }
+  return { catalog: next, merged };
+}
+
 function repoRoot(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..");
 }
@@ -156,8 +187,24 @@ function runPublish(): number {
   return 0;
 }
 
+function runMerge(): number {
+  const fragDir = join(repoRoot(), ".copilot-tmp", "catalog-fragments");
+  const { catalog, merged } = mergeFragments(loadRawCatalog(), fragDir);
+  validateCatalog(catalog);
+  writeCatalog(catalog);
+  console.log(`messages:merge — merged ${merged} entries from ${fragDir}`);
+  return 0;
+}
+
 if (import.meta.main) {
   const mode = process.argv[2];
-  const run = mode === "check" ? runCheck : mode === "publish" ? runPublish : runExtract;
+  const run =
+    mode === "check"
+      ? runCheck
+      : mode === "publish"
+        ? runPublish
+        : mode === "merge"
+          ? runMerge
+          : runExtract;
   process.exit(run());
 }

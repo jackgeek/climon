@@ -1,12 +1,16 @@
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import bundledCatalog from "./messages.en.json";
 import type { Catalog, CatalogEntry, MessageParams } from "./types.js";
 
 const PLACEHOLDER_RE = /\{([a-zA-Z0-9_]+)\}/g;
 const ID_RE = /^[0-9a-f]{8}$/;
 
-/** Absolute path to the English source catalog. */
+/**
+ * Absolute path to the English source catalog on disk. Used by build-time
+ * tooling (extract/merge/publish); the runtime loader uses the bundled import
+ * below so compiled client/server binaries need no catalog file at runtime.
+ */
 export function catalogPath(): string {
   const here = dirname(fileURLToPath(import.meta.url));
   return join(here, "messages.en.json");
@@ -14,11 +18,13 @@ export function catalogPath(): string {
 
 let cached: Catalog | undefined;
 
-/** Loads (and caches) the English catalog from disk. */
+/**
+ * Returns the English catalog. The catalog is statically imported so the
+ * bundler embeds it into both binaries — runtime logging never touches disk and
+ * cannot fail when the source JSON is absent from a compiled binary.
+ */
 export function loadCatalog(): Catalog {
-  if (!cached) {
-    cached = JSON.parse(readFileSync(catalogPath(), "utf8")) as Catalog;
-  }
+  if (!cached) cached = bundledCatalog as Catalog;
   return cached;
 }
 

@@ -115,9 +115,10 @@ never receives rendered message text:
   maps back to the source template in `src/i18n/messages.en.json`, which a log
   viewer (Azure Workbook / KQL `externaldata` join, Grafana, or Seq) can stitch
   back in realtime — the same catalog also drives i18n.
-- Interpolation arguments are attached as properties, but any parameter the
-  catalog entry marks `redact: true` (hostnames, paths, URLs, config values,
-  tokens, PII) is replaced with `[REDACTED:<category>]` before sending.
+- Interpolation arguments are attached as flat top-level properties, but any
+  parameter the catalog entry marks `redact: true` (hostnames, paths, URLs,
+  config values, tokens, PII) is replaced with `[REDACTED:<category>]` before
+  sending. Non-redacted params stay as queryable properties.
 - Records that are not yet catalogued fall back to the sentinel id `00000000`
   and keep their rendered text, so emission stays correct during the migration.
 
