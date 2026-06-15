@@ -82,19 +82,24 @@ export async function runOnboarding(io: OnboardingIO): Promise<OnboardingResult>
   });
   if (!accepted) return { accepted: false };
 
-  // Telemetry opt-in (default OFF).
-  let telemetry: boolean;
+  // Telemetry opt-in (default OFF). An explicit option or interactive answer is
+  // persisted; a non-interactive run without the flag leaves the existing value
+  // (or registered default) untouched, so re-running setup never silently
+  // revokes a prior opt-in.
+  let telemetry: boolean | undefined;
   if (io.options.telemetry !== undefined) telemetry = io.options.telemetry;
   else if (interactive) telemetry = isYes(await prompt(t("telemetry.prompt")));
-  else telemetry = false;
-  writeConfigSetting("telemetry.enabled", String(telemetry), "global", env);
+  if (telemetry !== undefined) {
+    writeConfigSetting("telemetry.enabled", String(telemetry), "global", env);
+  }
 
-  // Auto-update opt-in (default OFF).
-  let autoUpdate: boolean;
+  // Auto-update opt-in (default OFF). Same leave-at-current semantics as above.
+  let autoUpdate: boolean | undefined;
   if (io.options.autoUpdate !== undefined) autoUpdate = io.options.autoUpdate;
   else if (interactive) autoUpdate = isYes(await prompt(t("autoUpdate.prompt")));
-  else autoUpdate = false;
-  writeConfigSetting("update.auto", String(autoUpdate), "global", env);
+  if (autoUpdate !== undefined) {
+    writeConfigSetting("update.auto", String(autoUpdate), "global", env);
+  }
 
   ensureInstallId(env);
   return { accepted: true };

@@ -41,6 +41,23 @@ describe("runOnboarding", () => {
     expect(result.accepted).toBe(false);
     // No telemetry/update writes when the EULA was not accepted.
     expect(readGlobalConfigSetting("telemetry.enabled", env)).toBeUndefined();
+    expect(readGlobalConfigSetting("update.auto", env)).toBeUndefined();
+    expect(readGlobalConfigSetting("install.id", env)).toBeUndefined();
+  });
+
+  test("non-interactive re-run without flags preserves a prior opt-in", async () => {
+    const { writeConfigSetting } = await import("../src/config.js");
+    writeConfigSetting("telemetry.enabled", "true", "global", env);
+    writeConfigSetting("update.auto", "true", "global", env);
+    const result = await runOnboarding({
+      env,
+      options: { apply: true, acceptEula: true },
+      print: () => {},
+      prompt: async () => "",
+    });
+    expect(result.accepted).toBe(true);
+    expect(readGlobalConfigSetting("telemetry.enabled", env)).toBe(true);
+    expect(readGlobalConfigSetting("update.auto", env)).toBe(true);
   });
 
   test("interactive: I AGREE then y/y enables both opt-ins", async () => {
