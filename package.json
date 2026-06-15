@@ -25,7 +25,8 @@
     "log-level": "bun scripts/log-level.ts",
     "docs:config": "bun scripts/generate-config-docs.ts",
     "messages:extract": "bun scripts/extract-messages.ts extract",
-    "messages:check": "bun scripts/extract-messages.ts check"
+    "messages:check": "bun scripts/extract-messages.ts check",
+    "messages:publish": "bun scripts/extract-messages.ts publish"
   },
   "engines": {
     "bun": ">=1.1.0"

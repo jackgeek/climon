@@ -124,6 +124,37 @@ never receives rendered message text:
 Local log streams (console, file) always keep the full rendered text; only the
 Application Insights stream is compacted and redacted.
 
+### Viewing compacted logs
+
+Because Application Insights stores the 8-hex id rather than the message text,
+re-attach the template at view time by joining against the published catalog —
+no custom viewer is needed. Publish the lookup whenever the catalog changes:
+
+```sh
+bun run messages:publish   # writes dist/messages.en.csv and dist/messages.en.lookup.json
+```
+
+Host `messages.en.csv` somewhere the viewer can read (e.g. an Azure blob with a
+read SAS URL), then use **Azure Monitor Workbooks** (or Grafana with the Azure
+Monitor data source) with a KQL query that joins on the id:
+
+```kusto
+let Catalog = externaldata(id:string, key:string, template:string, params:string, redacted:string)
+    [@"https://<your-blob>/messages.en.csv"] with(format='csv', ignoreFirstRecord=true);
+traces
+| extend msgId = tostring(customDimensions.msgId)
+| join kind=leftouter Catalog on $left.msgId == $right.id
+| project TimeGenerated, severityLevel, template, customDimensions
+| order by TimeGenerated asc
+```
+
+The workbook auto-refresh interval gives realtime tailing. Joining id → template
+is native; full `{param}` re-interpolation is not a KQL one-liner, so display the
+template alongside the `customDimensions` properties grid (redacted params already
+show as `[REDACTED:<category>]`). The `params`/`redacted` columns tell a query
+which properties map into a template and which were scrubbed. Queries run under
+the viewer's existing Azure RBAC — climon stores no read credentials.
+
 ## Logging during tests
 
 `bun test` sets the level to `silent` automatically (via `tests/log-silence.ts`,

@@ -1,9 +1,10 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Glob } from "bun";
 import { catalogPath, templatePlaceholders, validateCatalog } from "../src/i18n/catalog.js";
+import { toCsv, toJsonLookup } from "../src/i18n/publish.js";
 import type { Catalog, CatalogEntry } from "../src/i18n/types.js";
 
 /**
@@ -11,6 +12,7 @@ import type { Catalog, CatalogEntry } from "../src/i18n/types.js";
  *
  *   bun run messages:extract  — add missing keys (allocate ids), report orphans.
  *   bun run messages:check    — fail (non-zero) on any drift; used in lint/CI.
+ *   bun run messages:publish  — write the flat id/template lookup for log viewers.
  */
 
 const LOGMSG_RE =
@@ -139,8 +141,23 @@ function runCheck(): number {
   return 0;
 }
 
+function runPublish(): number {
+  const catalog = loadRawCatalog();
+  validateCatalog(catalog);
+  const outDir = join(repoRoot(), "dist");
+  mkdirSync(outDir, { recursive: true });
+  const csvPath = join(outDir, "messages.en.csv");
+  const jsonPath = join(outDir, "messages.en.lookup.json");
+  writeFileSync(csvPath, toCsv(catalog));
+  writeFileSync(jsonPath, toJsonLookup(catalog));
+  console.log(`messages:publish — wrote ${Object.keys(catalog).length} entries`);
+  console.log(`  ${csvPath}`);
+  console.log(`  ${jsonPath}`);
+  return 0;
+}
+
 if (import.meta.main) {
   const mode = process.argv[2];
-  const code = mode === "check" ? runCheck() : runExtract();
-  process.exit(code);
+  const run = mode === "check" ? runCheck : mode === "publish" ? runPublish : runExtract;
+  process.exit(run());
 }
