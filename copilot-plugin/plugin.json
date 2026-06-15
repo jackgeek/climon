@@ -1,0 +1,11 @@
+{
+  "name": "climon-tools",
+  "description": "climon-specific Copilot CLI skills, including release/changelog maintenance.",
+  "version": "0.1.0",
+  "author": {
+    "name": "jackgeek"
+  },
+  "license": "MIT",
+  "keywords": ["climon", "changelog", "release"],
+  "skills": ["skills/"]
+}
