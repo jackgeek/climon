@@ -1,26 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readGlobalConfigSetting, writeConfigSetting } from "../src/config.js";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
-let counter = 0;
-const testRoot = join(process.cwd(), ".test-data");
-
-function makeTestDir(prefix: string): string {
-  const dir = join(testRoot, `${prefix}-${process.pid}-${counter++}`);
-  mkdirSync(dir, { recursive: true });
-  return dir;
-}
 
 beforeEach(() => {
-  home = makeTestDir("climon-home");
+  home = mkdtempSync(join(tmpdir(), "climon-"));
   env = { ...process.env, CLIMON_HOME: home };
 });
 
 afterEach(() => {
-  rmSync(testRoot, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 describe("readGlobalConfigSetting", () => {
@@ -34,13 +27,10 @@ describe("readGlobalConfigSetting", () => {
   });
 
   test("ignores a value set only in a local cwd config", () => {
-    const cwd = makeTestDir("climon-cwd");
-    try {
-      writeConfigSetting("telemetry.enabled", "true", "local", env, cwd);
-      // Global home has nothing — global-only read must not see the local value.
-      expect(readGlobalConfigSetting("telemetry.enabled", env)).toBeUndefined();
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+    const cwd = mkdtempSync(join(tmpdir(), "climon-cwd-"));
+    writeConfigSetting("telemetry.enabled", "true", "local", env, cwd);
+    // Global home has nothing — global-only read must not see the local value.
+    expect(readGlobalConfigSetting("telemetry.enabled", env)).toBeUndefined();
+    rmSync(cwd, { recursive: true, force: true });
   });
 });
