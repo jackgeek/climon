@@ -3,6 +3,7 @@ dist/
 .worktrees/
 worktrees/
 .copilot-tmp/
+.test-tmp/
 *.log
 .DS_Store
 
