@@ -61,6 +61,7 @@ import { dualPromoteSettleDecision } from "./tie-break.js";
 import { getLogger } from "../logging/logger.js";
 import { createPushService, type PushService } from "./push/service.js";
 import { isValidSubscription } from "./push/subscriptions.js";
+import { isFeatureEnabled, resolveFeatureFlags } from "../features.js";
 
 
 interface StartServerOptions {
@@ -1123,6 +1124,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           ok: true,
           version: VERSION,
           remotesEnabled: options.enableRemotes === true,
+          features: resolveFeatureFlags(config),
           ports: await collectServerPorts()
         });
       }
@@ -1160,6 +1162,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/sessions" && request.method === "POST") {
+        if (!isFeatureEnabled(config, "sessionSpawning")) {
+          return new Response("Session spawning is disabled", { status: 403 });
+        }
         // Spawning processes is privileged: loopback only.
         if (!isLocal(request, srv)) {
           return new Response("Forbidden", { status: 403 });

@@ -261,6 +261,17 @@ home machine; otherwise keep `devtunnel host climon-tunnel` running yourself.
 Then copy the generated climon config script from the dialog and run it on the
 devbox. Ensure the devbox is also logged in (`devtunnel user login`).
 
+### Feature flags
+
+Major features can be gated behind feature flags stored under the `feature.` prefix in `config.jsonc` (for example `feature.sessionSpawning`). Each flag accepts `"enabled"` or `"disabled"`; any other value is treated as disabled.
+
+```
+climon config feature.sessionSpawning enabled
+climon config feature.sessionSpawning disabled
+```
+
+Every flag carries a maturity status — `experimental`, `incomplete`, `untested`, `known-issues`, or `ready`. Only `ready` features are considered safe; enabling a feature with any other status prints a warning. Some flags may be locked to a value by the application build, in which case your configured value has no effect until that build-level override is removed.
+
 <!-- BEGIN GENERATED CONFIG SETTINGS -->
 ### `climon config`
 
@@ -304,4 +315,5 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `tunnelLink.keepAlive` | number | `60` | server | Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel relay to prevent idle disconnection. Set to 0 to disable keep-alive pings. |
 | `logging.level` | string | `trace` | client, daemon, server | Minimum log level emitted by climon processes. One of: trace, debug, info, warn, error, fatal, silent. Defaults to trace (everything). Set to silent to disable logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable. |
 | `logging.appInsights.connectionString` | string | unset | server | Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable. (**sensitive**) |
+| `feature.sessionSpawning` | string | `disabled` | client, daemon, server, browser | Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled". [status: experimental] |
 <!-- END GENERATED CONFIG SETTINGS -->

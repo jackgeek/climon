@@ -16,6 +16,8 @@ import { isLiveStatus } from "../api.js";
 import { clampSizeMenuLabel } from "../view-mode.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
+import { bottomRowRightOffsets } from "./session-item-layout.js";
+import { useFeature } from "../hooks/useFeature.js";
 
 const useStyles = makeStyles({
   root: {
@@ -101,25 +103,21 @@ const useStyles = makeStyles({
   newBtn: {
     position: "absolute",
     bottom: "8px",
-    right: "8px",
     display: "none"
   },
   editBtn: {
     position: "absolute",
     bottom: "8px",
-    right: "36px",
     display: "none"
   },
   pauseBtn: {
     position: "absolute",
     bottom: "8px",
-    right: "64px",
     display: "none"
   },
   lockBtn: {
     position: "absolute",
     bottom: "8px",
-    right: "92px",
     display: "none"
   },
   maximize: {
@@ -179,6 +177,8 @@ export function SessionItem({
   const displayTitle = sessionDisplayTitle(session);
   const pauseTitle = session.status === "paused" ? "Resume session" : "Pause session";
   const showLiveControls = !compact && isLiveStatus(session.status);
+  const sessionSpawning = useFeature("sessionSpawning").enabled;
+  const rightOffsets = bottomRowRightOffsets(sessionSpawning);
   return (
     <div
       className={mergeClasses(styles.root, compact && styles.compactRoot, active && styles.active)}
@@ -220,9 +220,10 @@ export function SessionItem({
           aria-hidden="true"
         />
       )}
-      {showLiveControls && (
+      {showLiveControls && sessionSpawning && (
         <Button
           className={mergeClasses("climon-new", styles.newBtn)}
+          style={{ right: `${rightOffsets.new}px` }}
           appearance="subtle"
           size="small"
           icon={<Add16Regular />}
@@ -237,6 +238,7 @@ export function SessionItem({
       {showLiveControls && (
         <Button
           className={mergeClasses("climon-edit", styles.editBtn)}
+          style={{ right: `${rightOffsets.edit}px` }}
           appearance="subtle"
           size="small"
           icon={<Settings16Regular />}
@@ -251,6 +253,7 @@ export function SessionItem({
       {showLiveControls && (
         <Button
           className={mergeClasses("climon-lock", styles.lockBtn)}
+          style={{ right: `${rightOffsets.lock}px` }}
           appearance="subtle"
           size="small"
           icon={viewMode === "fill" && !viewModeLocked ? <LockOpen16Regular /> : <LockClosed16Regular />}
@@ -265,6 +268,7 @@ export function SessionItem({
       {showLiveControls && (
         <Button
           className={mergeClasses("climon-pause", styles.pauseBtn)}
+          style={{ right: `${rightOffsets.pause}px` }}
           appearance="subtle"
           size="small"
           icon={session.status === "paused" ? <Play16Regular /> : <Pause16Regular />}

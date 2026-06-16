@@ -40,7 +40,8 @@ describe("config settings registry", () => {
       "session.priority",
       "tunnelLink.keepAlive",
       "logging.level",
-      "logging.appInsights.connectionString"
+      "logging.appInsights.connectionString",
+      "feature.sessionSpawning"
     ]);
 
     for (const setting of CONFIG_SETTINGS) {
@@ -67,7 +68,8 @@ describe("config settings registry", () => {
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
       tunnelLink: { keepAlive: 60 },
-      logging: { level: "trace" }
+      logging: { level: "trace" },
+      feature: { sessionSpawning: "disabled" }
     });
   });
 
@@ -113,13 +115,14 @@ describe("config settings registry", () => {
       "session.priority",
       "tunnelLink.keepAlive",
       "logging.level",
-      "logging.appInsights.connectionString"
+      "logging.appInsights.connectionString",
+      "feature.sessionSpawning"
     ]);
   });
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(26);
+    expect(allConfigKeys().length).toBe(27);
   });
 
   test("coerces values through registry validators", () => {

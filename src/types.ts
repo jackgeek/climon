@@ -128,6 +128,8 @@ export interface ClimonConfig {
   session?: SessionDefaultsConfig;
   tunnelLink?: TunnelLinkConfig;
   logging?: LoggingConfig;
+  /** Feature flag values keyed by flag name; values are "enabled"/"disabled" (lenient on read). */
+  feature?: Record<string, string>;
 }
 
 export interface SessionMeta {
