@@ -147,6 +147,55 @@ Terminate a monitored session and its underlying process. Use this to clean up
 sessions you no longer need — finished builds, abandoned REPLs, or any process
 you want to stop.
 
+### `climon setup`
+
+Re-run the first-run onboarding flow at any time: licence acceptance, telemetry
+opt-in, and auto-update opt-in. Interactive by default; for non-interactive or
+scripted setup, pass flags:
+
+```bash
+climon setup --apply --accept-eula --telemetry=off --auto-update=off
+```
+
+- `--apply` — run non-interactively (no prompts); apply the provided flags.
+- `--accept-eula` — accept the licence (required for `--apply` to complete).
+- `--telemetry=on|off` — set anonymous usage telemetry (default **off**).
+- `--auto-update=on|off` — set background auto-update (default **off**).
+
+Choices are stored in your global config and can also be changed directly, e.g.
+`climon config telemetry.enabled false` or `climon config update.auto true`.
+
+### `climon update`
+
+Download, verify, and apply the latest released version. The downloaded
+artifact's Ed25519 signature is verified against the embedded public key before
+anything is replaced; tampered or unverifiable downloads are rejected with no
+changes made.
+
+Updates are **non-destructive**: `climon update` never kills running sessions or
+a running dashboard server. It swaps binaries atomically (rename-over on Unix,
+displace-to-`.old` on Windows) and defers when a file is locked. Already-running
+processes keep using the old code; newly started sessions and a restarted server
+pick up the new version.
+
+When auto-update is off (the default), climon prints a one-line banner when a
+newer version is available, suggesting you run `climon update`.
+
+## Install & onboarding
+
+On first run, climon walks you through a short onboarding flow:
+
+1. **Licence acceptance** — climon is proprietary freeware governed by Irish
+   law; the full text is in [`EULA.md`](EULA.md). You must accept to continue.
+2. **Telemetry opt-in** — anonymous usage telemetry, **off by default**. When
+   enabled, it is keyed only by a random install id and never includes session
+   output, command contents, file paths, or hostnames.
+3. **Auto-update opt-in** — background download/apply of signed updates, **off
+   by default**. When off, climon only suggests updates via a banner.
+
+Re-run onboarding anytime with `climon setup`. See [docs/setup.md](docs/setup.md)
+for where state is stored and how to change choices later.
+
 ## Windows/WSL same-machine bridge (no dev tunnel)
 
 The easiest setup is automatic: install climon on **Windows**, run `climon
@@ -427,6 +476,10 @@ Notes:
 - To cut a `minor`/`major` release instead, run `bun run release minor|major`
   locally and push with `git push --follow-tags`.
 
+For signed, auto-updatable releases — generating the signing keypair, embedding
+the public key, configuring the CI secret, and how the update trust chain works —
+see [`docs/deployment.md`](docs/deployment.md).
+
 ## Logging
 
 climon logs to `$CLIMON_HOME/logs/` using structured pino. Control verbosity with
@@ -440,5 +493,7 @@ flags.)
 
 See [`docs/setup.md`](docs/setup.md), [`docs/usage.md`](docs/usage.md),
 [`docs/architecture.md`](docs/architecture.md),
+[`docs/security.md`](docs/security.md),
+[`docs/deployment.md`](docs/deployment.md),
 [`docs/logging.md`](docs/logging.md), and
 [`docs/troubleshooting.md`](docs/troubleshooting.md) for details.

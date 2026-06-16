@@ -312,6 +312,19 @@ export function resolveConfigSetting(
   return undefined;
 }
 
+/**
+ * Reads a dotted config key from ONLY the global `$CLIMON_HOME/config.jsonc`,
+ * bypassing the cwd-upward cascade used by `resolveConfigSetting`. Use this for
+ * installer/EULA/update state, which is per-machine and must not be shadowed by
+ * a project-local `.climon/config.jsonc`. Returns undefined when unset.
+ */
+export function readGlobalConfigSetting(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env
+): unknown {
+  return readDottedKey(readSparseConfig(getClimonHome(env)), key);
+}
+
 export interface ConfigDebugKey {
   key: string;
   /** String representation of the value; redacted for sensitive settings. */

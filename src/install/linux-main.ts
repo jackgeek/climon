@@ -15,6 +15,7 @@ import {
   loadChangelog,
   readInstalledVersion,
 } from "./changelog.js";
+import { parseSetupOptions, runOnboarding } from "../setup/onboarding.js";
 
 export type SetupCliRuntime = {
   main?: () => void | Promise<void>;
@@ -53,6 +54,14 @@ export async function main(): Promise<void> {
 
   const installDir = getDefaultInstallDir();
   const previousVersion = readInstalledVersion(installDir);
+
+  const setupOptions = parseSetupOptions(process.argv.slice(2));
+  const onboarding = await runOnboarding({ options: setupOptions });
+  if (!onboarding.accepted) {
+    console.error("Licence not accepted; aborting installation.");
+    await pauseForExit();
+    process.exit(1);
+  }
 
   await installBinaries(installerSourceDir(), installDir, {
     confirmKillAndRetry,

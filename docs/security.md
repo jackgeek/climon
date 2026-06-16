@@ -190,6 +190,54 @@ atomically (temp file + `rename`) with `0700` directories and `0600` files, so a
 crash mid-write cannot corrupt or truncate them, and the ingest daemon's watcher
 never reads a partially-written file.
 
+## Telemetry
+
+Telemetry is **opt-in and off by default** (`telemetry.enabled`). When enabled,
+the only identifier attached is a random, anonymous `install.id` generated
+locally. climon does **not** collect:
+
+- session output or terminal scrollback,
+- command lines, arguments, or their contents,
+- file paths, working directories, or file contents,
+- hostnames, usernames, IP addresses, or other PII.
+
+Disable it at any time with `climon config telemetry.enabled false` or by
+re-running `climon setup`.
+
+## Update trust model
+
+Releases are signed with an **Ed25519** private key held only in CI (the
+`CLIMON_UPDATE_PRIVATE_KEY` secret, scoped to a single signing step). Each
+release artifact (`climon-<platform>.zip`) is published alongside a detached
+`.zip.sig` signature and a `manifest.json` listing the artifacts.
+
+When applying an update (`climon update`, or the background path when
+`update.auto` is enabled), the client:
+
+1. fetches the manifest and downloads the artifact and its detached signature
+   (downloads are size-capped to bound resource use),
+2. verifies the signature against the **embedded public key** before touching
+   any file, and
+3. rejects tampered or unverifiable downloads, making **no changes**.
+
+The private signing key is never logged or written to disk in CI, and is kept
+out of the environment of `curl | bash` and `bun install` steps so a compromised
+dependency cannot exfiltrate it.
+
+## Non-destructive update guarantee
+
+The updater **never kills running climon processes** — not sessions, daemons, or
+the dashboard server. It replaces binaries using:
+
+- **Unix:** atomic rename-over. Running processes keep the old inode/code; new
+  invocations use the new binary.
+- **Windows:** displace the target to a `.old` sibling, then rename the verified
+  temp file into place; on EBUSY/EPERM/EACCES it **defers** rather than killing
+  the holder, and restores the displaced binary if the final rename fails.
+
+Already-running sessions continue on the old code; newly started sessions and a
+restarted server pick up the new version.
+
 ## What a compromised devbox can and cannot do
 
 | Capability | Allowed? |

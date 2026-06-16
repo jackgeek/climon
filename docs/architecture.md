@@ -136,6 +136,44 @@ nesting). When there are no sessions at all, a single header **[+]** offers the
 same server-side creation. The HTML shell
 and asset serving live in `src/server/assets.ts`.
 
+## Onboarding, telemetry, and updates
+
+Several client-side module groups implement first-run onboarding and secure,
+non-destructive self-updates:
+
+- **`src/i18n/`** — message catalog (`messages.ts`) and `t(key, params)`
+  interpolation used by onboarding, banners, and update output.
+- **`src/eula/`** — embedded licence text, `EULA_VERSION`, and the acceptance
+  gate; a newer embedded version re-triggers acceptance.
+- **`src/setup/`** — `onboarding.ts` (EULA gate → telemetry opt-in → auto-update
+  opt-in, writing config state) and `setup-cmd.ts` (the `climon setup` entry,
+  with `--apply/--accept-eula/--telemetry=/--auto-update=` flags for
+  non-interactive use).
+- **`src/telemetry/`** — opt-in, anonymous telemetry keyed only by a random
+  `install.id`; gated on `telemetry.enabled` and attached before the AI client
+  starts.
+- **`src/install/install-manifest.ts`** — the data-driven mapping from release
+  zip entries to installed filenames, shared by the installer and the updater so
+  both agree on artifact layout.
+- **`src/update/`** — `manifest.ts` (semver compare + manifest fetch,
+  `currentArtifactKey()`), `state.ts` (check throttle via `update.lastCheck` and
+  cached `update.availableVersion`), `download.ts` (size-capped artifact/text
+  downloads), `pubkey.ts` (embedded Ed25519 public key), `verify.ts` (detached
+  signature verification), `swap.ts` (atomic non-destructive binary swap),
+  `update-cmd.ts` (download → verify → swap via `fflate`), `check.ts` (background
+  check), `update-cli.ts` (the `climon update` entry), and `launch-hooks.ts`
+  (the launch-time banner and detached background check/apply spawns).
+
+**Data flow.** Installer/onboarding writes config state (`eula.*`,
+`telemetry.enabled`, `update.auto`, `install.id`). On `shell`/`run` launches,
+launch hooks show a banner from the cached `update.availableVersion` and spawn a
+throttled background check that refreshes that cache (and, when `update.auto` is
+on, applies the update). `climon update` resolves the manifest, downloads the
+artifact + detached signature, verifies the signature against the embedded
+public key, and only then performs the atomic swap — never killing running
+processes. Signing tooling lives in `scripts/gen-update-keys.ts` and
+`scripts/sign-release.ts`, wired into `.github/workflows/release.yml`.
+
 ## Data locations (`$CLIMON_HOME`, default `~/.climon`)
 
 | Path | Purpose |
