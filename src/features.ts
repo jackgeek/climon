@@ -27,16 +27,22 @@ export interface FeatureFlag {
   override?: "enabled" | "disabled";
 }
 
-export type FeatureFlagName = "sessionSpawning";
+type FeatureFlagRegistry<T extends readonly FeatureFlag[]> = readonly (FeatureFlag & { readonly name: T[number]["name"] })[];
 
-export const FEATURE_FLAGS: readonly (FeatureFlag & { name: FeatureFlagName })[] = [
+function defineFeatureFlags<const T extends readonly FeatureFlag[]>(flags: T): FeatureFlagRegistry<T> {
+  return flags as unknown as FeatureFlagRegistry<T>;
+}
+
+export const FEATURE_FLAGS = defineFeatureFlags([
   {
     name: "sessionSpawning",
     default: "disabled",
     status: "experimental",
     description: "Allow spawning new sessions from the dashboard."
   }
-] as const;
+] as const satisfies readonly FeatureFlag[]);
+
+export type FeatureFlagName = (typeof FEATURE_FLAGS)[number]["name"];
 
 export interface FeatureFlagState {
   enabled: boolean;
@@ -84,7 +90,7 @@ export function getFeatureStatus(name: FeatureFlagName): FeatureStatus {
 export function resolveFeatureFlags(config: ClimonConfig): Record<FeatureFlagName, FeatureFlagState> {
   const map = {} as Record<FeatureFlagName, FeatureFlagState>;
   for (const flag of FEATURE_FLAGS) {
-    map[flag.name as FeatureFlagName] = resolveFlagState(flag, rawConfigValue(config, flag.name));
+    map[flag.name] = resolveFlagState(flag, rawConfigValue(config, flag.name));
   }
   return map;
 }
