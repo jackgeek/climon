@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeSessionMeta } from "../src/store.js";
@@ -69,6 +69,12 @@ describe("POST /api/sessions with a parentId", () => {
     const parentId = "parent-1";
     const longRunningCommand = `${process.execPath} -e setTimeout(()=>{},30000)`;
     await writeSessionMeta(parentMeta(parentId), env);
+    // Session spawning is gated behind the sessionSpawning feature flag (disabled
+    // by default); enable it so the spawn endpoint is reachable for this test.
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({ version: 1, feature: { sessionSpawning: "enabled" } })
+    );
 
     const port = await freePort();
     const server = Bun.spawn(
