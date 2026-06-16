@@ -29,6 +29,7 @@ import {
   type DashboardTunnelStatus
 } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
+import { FeatureFlagsProvider, type FeatureFlagsMap } from "./hooks/useFeature.js";
 import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { EditSessionDialog } from "./components/EditSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
@@ -431,6 +432,7 @@ export function App() {
   );
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remotesEnabled, setRemotesEnabled] = useState(false);
+  const [features, setFeatures] = useState<FeatureFlagsMap>({});
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
   const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);
@@ -664,9 +666,10 @@ export function App() {
 
   // Load the running server's version for the sidebar heading.
   useEffect(() => {
-    void fetchHealth().then(({ version, remotesEnabled: enabled }) => {
+    void fetchHealth().then(({ version, remotesEnabled: enabled, features: flags }) => {
       setServerVersion(version);
       setRemotesEnabled(enabled);
+      setFeatures(flags);
     });
   }, []);
 
@@ -1023,6 +1026,7 @@ export function App() {
   const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(serverConnectionState);
 
   return (
+    <FeatureFlagsProvider value={features}>
     <div className={styles.root}>
       {showSplash && <SplashScreen onDone={dismissSplash} />}
       <Dialog open={notificationMessage !== null} onOpenChange={(_, data) => !data.open && setNotificationMessage(null)}>
@@ -1193,5 +1197,6 @@ export function App() {
       />
       {serverReconnectOverlayVisible && <ServerReconnectOverlay />}
     </div>
+    </FeatureFlagsProvider>
   );
 }
