@@ -261,6 +261,17 @@ home machine; otherwise keep `devtunnel host climon-tunnel` running yourself.
 Then copy the generated climon config script from the dialog and run it on the
 devbox. Ensure the devbox is also logged in (`devtunnel user login`).
 
+### Feature flags
+
+Major features can be gated behind feature flags stored under the `feature.` prefix in `config.jsonc` (for example `feature.sessionSpawning`). Each flag accepts `"enabled"` or `"disabled"`; any other value is treated as disabled.
+
+```
+climon config feature.sessionSpawning enabled
+climon config feature.sessionSpawning disabled
+```
+
+Every flag carries a maturity status — `experimental`, `incomplete`, `untested`, `known-issues`, or `ready`. Only `ready` features are considered safe; enabling a feature with any other status prints a warning. Some flags may be locked to a value by the application build, in which case your configured value has no effect until that build-level override is removed.
+
 <!-- BEGIN GENERATED CONFIG SETTINGS -->
 ### `climon config`
 
