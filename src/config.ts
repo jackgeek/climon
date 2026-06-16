@@ -150,6 +150,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     const parsedTerminal = isObjectRecord(parsed.terminal) ? parsed.terminal : {};
     const parsedAttention = isObjectRecord(parsed.attention) ? parsed.attention : {};
     const parsedSession = isObjectRecord(parsed.session) ? parsed.session : {};
+    const parsedFeature = isObjectRecord(parsed.feature) ? (parsed.feature as Record<string, string>) : {};
     const parsedPriority = typeof parsedSession.priority === "number" ? { priority: parsedSession.priority } : {};
     const parsedColor = typeof parsedSession.color === "string" ? { color: parsedSession.color } : {};
     const parsedConfig = {
@@ -158,7 +159,8 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
       terminal: { ...defaults.terminal, ...parsedTerminal },
       attention: { ...defaults.attention, ...parsedAttention },
       remote: isObjectRecord(parsed.remote) ? parsed.remote : undefined,
-      session: { ...defaults.session, ...parsedPriority, ...parsedColor }
+      session: { ...defaults.session, ...parsedPriority, ...parsedColor },
+      feature: { ...(defaults.feature ?? {}), ...parsedFeature }
     };
     const parsedConfigObject = parsedConfig as ClimonConfig;
     // Backfill sections added after a config file was first written.

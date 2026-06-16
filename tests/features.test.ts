@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { loadConfig } from "../src/config.js";
 import {
   FEATURE_FLAGS,
   resolveFlagState,
@@ -85,5 +88,36 @@ describe("parseFeatureConfigKey", () => {
   test("returns undefined for non-feature or unknown keys", () => {
     expect(parseFeatureConfigKey("server.port")).toBeUndefined();
     expect(parseFeatureConfigKey("feature.nope")).toBeUndefined();
+  });
+});
+
+describe("loadConfig feature section", () => {
+  test("merges a feature section over registry defaults", async () => {
+    const base = join(process.cwd(), ".copilot-tmp");
+    await mkdir(base, { recursive: true });
+    const home = await mkdtemp(join(base, "climon-feature-"));
+    try {
+      await writeFile(
+        join(home, "config.jsonc"),
+        JSON.stringify({ version: 1, feature: { sessionSpawning: "enabled" } })
+      );
+      const config = await loadConfig({ CLIMON_HOME: home } as NodeJS.ProcessEnv);
+      expect(config.feature?.sessionSpawning).toBe("enabled");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("defaults the feature section when config omits it", async () => {
+    const base = join(process.cwd(), ".copilot-tmp");
+    await mkdir(base, { recursive: true });
+    const home = await mkdtemp(join(base, "climon-feature-"));
+    try {
+      await writeFile(join(home, "config.jsonc"), JSON.stringify({ version: 1 }));
+      const config = await loadConfig({ CLIMON_HOME: home } as NodeJS.ProcessEnv);
+      expect(config.feature?.sessionSpawning).toBe("disabled");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

@@ -1,5 +1,6 @@
 import type { ClimonConfig } from "./types.js";
 import { DEFAULT_PRIORITY } from "./session-meta.js";
+import { FEATURE_FLAGS } from "./features.js";
 
 export const CONFIG_VERSION = 1;
 export const DEFAULT_DETACH_PREFIX = 0x1c; // Ctrl-\
@@ -19,6 +20,27 @@ export interface ConfigSetting {
 }
 
 const TERMINAL_HELP_WIDTH = 88;
+
+function featureConfigSettings(): ConfigSetting[] {
+  return FEATURE_FLAGS.map((flag) => {
+    const overrideNote = flag.override
+      ? ` Overridden to "${flag.override}" by this build; config has no effect.`
+      : "";
+    return {
+      path: `feature.${flag.name}`,
+      type: "string",
+      defaultValue: flag.default,
+      purpose: `${flag.description} Set to "enabled" or "disabled". [status: ${flag.status}]${overrideNote}`,
+      scope: ["client", "daemon", "server", "browser"],
+      acceptInput: true,
+      validate: (value: unknown) => {
+        if (value !== "enabled" && value !== "disabled") {
+          throw new Error(`feature.${flag.name} must be "enabled" or "disabled"`);
+        }
+      }
+    } satisfies ConfigSetting;
+  });
+}
 
 export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
@@ -260,7 +282,8 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     scope: ["server"],
     sensitive: true,
     acceptInput: true
-  }
+  },
+  ...featureConfigSettings()
 ];
 
 /**
