@@ -11,6 +11,7 @@ import {
   type WriteScope
 } from "../config.js";
 import { renderConfigSettingsHelp } from "../config-settings.js";
+import { getFeatureStatus, isFeatureLocked, parseFeatureConfigKey } from "../features.js";
 import { writeStdout, writeStderr } from "../logging/cli-io.js";
 
 export type ConfigAction =
@@ -210,9 +211,23 @@ export function runConfigCommand(
         commandIO.stdout(`${String(value)}\n`);
         return 0;
       }
-      case "set":
+      case "set": {
         writeConfigSetting(action.key, action.value, action.scope, env, cwd);
+        const flagName = parseFeatureConfigKey(action.key);
+        if (flagName) {
+          if (isFeatureLocked(flagName)) {
+            commandIO.stderr(
+              `climon config: ${action.key} is overridden by this build and locked; your value has no effect until the override is removed.\n`
+            );
+          }
+          if (action.value === "enabled" && getFeatureStatus(flagName) !== "ready") {
+            commandIO.stderr(
+              `climon config: ${action.key} is marked "${getFeatureStatus(flagName)}" and may be unstable or incomplete; enabling it is not recommended for normal use.\n`
+            );
+          }
+        }
         return 0;
+      }
       case "unset":
         unsetConfigSetting(action.key, action.scope, env, cwd);
         return 0;
