@@ -88,21 +88,36 @@ describe("POST /api/sessions feature gate", () => {
       childId = body.id ?? "";
       expect(childId).toBeTruthy();
     } finally {
-      if (childId) {
-        const pid = await waitFor(async () => {
-          const raw = await readFile(join(home, "sessions", `${childId}.json`), "utf8");
-          return (JSON.parse(raw) as SessionMeta).daemonPid;
-        }, 5000).catch(() => undefined);
-        if (pid) {
-          try {
-            process.kill(pid);
-          } catch {
-            // already gone
-          }
-        }
-      }
+      const pid = childId
+        ? await waitFor(async () => {
+            const raw = await readFile(join(home, "sessions", `${childId}.json`), "utf8");
+            return (JSON.parse(raw) as SessionMeta).daemonPid;
+          }, 5000).catch(() => undefined)
+        : undefined;
+
+      // Stop the dashboard server first so the daemon's server.close() is not
+      // blocked by its bridge client; daemonPid is the PTY child whose death
+      // drives daemon shutdown.
       server.kill();
       await server.exited;
+
+      if (pid) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          try {
+            process.kill(pid, 0);
+          } catch {
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
     }
   }, 60000);
 });
