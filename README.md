@@ -476,6 +476,10 @@ Notes:
 - To cut a `minor`/`major` release instead, run `bun run release minor|major`
   locally and push with `git push --follow-tags`.
 
+For signed, auto-updatable releases — generating the signing keypair, embedding
+the public key, configuring the CI secret, and how the update trust chain works —
+see [`docs/deployment.md`](docs/deployment.md).
+
 ## Logging
 
 climon logs to `$CLIMON_HOME/logs/` using structured pino. Control verbosity with
@@ -489,5 +493,7 @@ flags.)
 
 See [`docs/setup.md`](docs/setup.md), [`docs/usage.md`](docs/usage.md),
 [`docs/architecture.md`](docs/architecture.md),
+[`docs/security.md`](docs/security.md),
+[`docs/deployment.md`](docs/deployment.md),
 [`docs/logging.md`](docs/logging.md), and
 [`docs/troubleshooting.md`](docs/troubleshooting.md) for details.
