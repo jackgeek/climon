@@ -4,4 +4,5 @@
  * before shipping signed releases. An empty value disables verification-backed
  * updates (the updater refuses to apply unverifiable downloads).
  */
-export const UPDATE_PUBLIC_KEY_B64 = "";
+export const UPDATE_PUBLIC_KEY_B64 =
+  "MTrrT1WssqQuGrVEBPqZWKqPifHo2xZXgByXLAX0l/o=";
