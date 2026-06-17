@@ -1,4 +1,5 @@
 import { dirname } from "node:path";
+import { t } from "../i18n/t.js";
 import { VERSION } from "../version.js";
 import { DEFAULT_MANIFEST_URL } from "./check.js";
 import { fetchManifest } from "./manifest.js";
@@ -22,7 +23,7 @@ export async function runUpdateCli(_argv: string[]): Promise<number> {
       ? 1
       : 0;
   } catch (err) {
-    process.stderr.write(`climon update failed: ${(err as Error).message}\n`);
+    process.stderr.write(t("update.failed", { detail: (err as Error).message }) + "\n");
     return 1;
   }
 }

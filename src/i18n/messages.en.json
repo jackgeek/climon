@@ -1,4 +1,10 @@
 {
+  "autoUpdate.prompt": {
+    "id": "f44372c1",
+    "t": "Automatically download and apply climon updates in the background? [y/N] ",
+    "hint": "Yes/no onboarding prompt asking the user to opt in to background auto-updates; default is No. Preserve the [y/N] hint convention (capital N marks the default).",
+    "params": {}
+  },
   "boot.app_insights_logging_disabled": {
     "id": "a124a281",
     "t": "App Insights logging disabled: {err}",
@@ -220,6 +226,24 @@
         "category": "hostname"
       }
     }
+  },
+  "eula.acceptPrompt": {
+    "id": "3336d792",
+    "t": "Type 'I AGREE' to accept the licence and continue: ",
+    "hint": "Interactive prompt shown during onboarding asking the user to type the exact phrase 'I AGREE' to accept the licence before installation continues. Keep the required phrase 'I AGREE' verbatim and untranslated since it is matched literally.",
+    "params": {}
+  },
+  "eula.declined": {
+    "id": "e6e0c5db",
+    "t": "Licence not accepted. Installation aborted.",
+    "hint": "Message printed when the user declines the licence during onboarding; installation stops as a result.",
+    "params": {}
+  },
+  "eula.needAcceptFlag": {
+    "id": "de99ba5d",
+    "t": "Non-interactive run requires --accept-eula to accept the licence.",
+    "hint": "Error guidance printed when onboarding runs non-interactively without licence acceptance; instructs the user to pass the --accept-eula flag. Keep the flag name --accept-eula verbatim.",
+    "params": {}
   },
   "ingest.client_disconnected_cleanup": {
     "id": "fd14537a",
@@ -1340,6 +1364,72 @@
     "id": "0001a2b3",
     "t": "telemetry catalog initialized",
     "hint": "Catalog bootstrap marker used when seeding telemetry messages; it is informational and has no placeholders.",
+    "params": {}
+  },
+  "telemetry.prompt": {
+    "id": "2b32d945",
+    "t": "Help improve climon by sending anonymous usage telemetry? [y/N] ",
+    "hint": "Yes/no onboarding prompt asking the user to opt in to anonymous usage telemetry; default is No. Preserve the [y/N] hint convention (capital N marks the default).",
+    "params": {}
+  },
+  "update.applied": {
+    "id": "06376c64",
+    "t": "Update applied. Start new sessions (or restart the server) to use {next}.",
+    "hint": "Confirmation printed after an update is applied successfully; {next} is the newly installed version the user will get after restarting.",
+    "params": {
+      "next": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "update.banner": {
+    "id": "93c086ae",
+    "t": "Update {current} → {next} available — run `climon --update`",
+    "hint": "One-line banner printed at session start when a newer version is available; {current} is the running version and {next} is the available version. Keep the command `climon --update` verbatim and untranslated.",
+    "params": {
+      "current": {
+        "redact": false,
+        "category": "generic"
+      },
+      "next": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "update.deferredLocked": {
+    "id": "9ba6f0a8",
+    "t": "Update could not be applied right now (files in use). Will retry later.",
+    "hint": "Message printed when an update is deferred because target files are locked or in use; the update will be retried automatically later.",
+    "params": {}
+  },
+  "update.failed": {
+    "id": "d886ef90",
+    "t": "climon update failed: {detail}",
+    "hint": "Error printed when `climon update` throws unexpectedly; {detail} is the underlying error message, which may contain filesystem paths, so it is redacted before telemetry transmission.",
+    "params": {
+      "detail": {
+        "redact": true,
+        "category": "generic"
+      }
+    }
+  },
+  "update.upToDate": {
+    "id": "6afe0b5e",
+    "t": "climon is already up to date ({current}).",
+    "hint": "Message printed by `climon update` when no newer version exists; {current} is the already-installed version.",
+    "params": {
+      "current": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "update.verifyFailed": {
+    "id": "8161c051",
+    "t": "Update aborted: signature verification failed. No changes were made.",
+    "hint": "Error printed when an update is rejected because its cryptographic signature could not be verified; nothing was installed.",
     "params": {}
   },
   "uplink.auth_rejected_bridge_closed": {

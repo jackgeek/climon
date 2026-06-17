@@ -18,14 +18,26 @@ import type { Catalog, CatalogEntry, ParamMeta } from "../src/i18n/types.js";
 const LOGMSG_RE =
   /logMsg\s*\(\s*[^,]+,\s*"(?:trace|debug|info|warn|error|fatal)"\s*,\s*"([^"]+)"/g;
 
+/**
+ * Matches user-facing `t("key", ...)` calls. The negative lookbehind excludes
+ * identifiers that merely end in `t` (e.g. `split(`, `assert(`, `setTimeout(`)
+ * so only the imported catalog helper is treated as a reference.
+ */
+const TFUNC_RE = /(?<![A-Za-z0-9_$])t\(\s*"([^"]+)"/g;
+
 /** Param names that should almost always be redacted before leaving the machine. */
 const SENSITIVE_PARAM_RE =
   /(host|hostname|path|url|user|username|token|secret|password|auth|connectionstring|ip|email)/i;
 
-/** Returns the message keys (3rd arg) referenced by `logMsg(..)` in source text. */
+/**
+ * Returns the message keys referenced in source text: the 3rd arg of `logMsg(..)`
+ * log calls and the 1st arg of user-facing `t("..")` calls. Both render from the
+ * single `messages.en.json` catalog, so both count as references.
+ */
 export function findMessageKeys(source: string): string[] {
   const keys = new Set<string>();
   for (const m of source.matchAll(LOGMSG_RE)) keys.add(m[1]);
+  for (const m of source.matchAll(TFUNC_RE)) keys.add(m[1]);
   return [...keys];
 }
 

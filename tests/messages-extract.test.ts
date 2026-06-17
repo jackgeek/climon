@@ -30,6 +30,21 @@ describe("findMessageKeys", () => {
   test("returns empty for source with no logMsg", () => {
     expect(findMessageKeys(`const a = 1;`)).toEqual([]);
   });
+
+  test("extracts the key from t() user-facing calls", () => {
+    const src = `print(t("eula.declined")); const s = t("update.banner", { current, next });`;
+    expect(findMessageKeys(src).sort()).toEqual(["eula.declined", "update.banner"]);
+  });
+
+  test("extracts keys from both logMsg and t in the same source", () => {
+    const src = `logMsg(l, "info", "srv.started"); print(t("eula.acceptPrompt"));`;
+    expect(findMessageKeys(src).sort()).toEqual(["eula.acceptPrompt", "srv.started"]);
+  });
+
+  test("does not match identifiers that merely end in t", () => {
+    const src = `const a = split("x.y"); assert("nope"); await fetch("z");`;
+    expect(findMessageKeys(src)).toEqual([]);
+  });
 });
 
 describe("allocateId", () => {

@@ -1,4 +1,4 @@
-import type { Locale } from "../i18n/messages.js";
+import type { Locale } from "../i18n/t.js";
 
 /** Bump when the licence text changes; a newer value re-triggers acceptance. */
 export const EULA_VERSION = "1";

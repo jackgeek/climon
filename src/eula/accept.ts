@@ -1,5 +1,5 @@
 import { readGlobalConfigSetting, writeConfigSetting } from "../config.js";
-import { t } from "../i18n/messages.js";
+import { t } from "../i18n/t.js";
 import { EULA_VERSION, getEula } from "./text.js";
 
 /**

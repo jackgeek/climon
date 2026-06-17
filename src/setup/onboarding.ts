@@ -1,7 +1,7 @@
 import { writeConfigSetting } from "../config.js";
 import { ensureEulaAccepted } from "../eula/accept.js";
 import { ensureInstallId } from "./install-id.js";
-import { t } from "../i18n/messages.js";
+import { t } from "../i18n/t.js";
 
 export type SetupOptions = {
   /** Run non-interactively (no prompts). */
