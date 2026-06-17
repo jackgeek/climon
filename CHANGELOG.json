@@ -1,5 +1,12 @@
 [
   {
+    "version": "1.0.4",
+    "changes": [
+      "Delay and reword the dashboard reconnect overlay so brief blips no longer flash a warning",
+      "Attach an anonymous per-install ID to telemetry for more accurate usage insights"
+    ]
+  },
+  {
     "version": "1.0.0",
     "changes": [
       "Add `climon update`: verify Ed25519-signed releases and swap binaries atomically without killing running sessions",
