@@ -316,8 +316,26 @@ export function shouldDeleteSessionWithoutDialog(session: Pick<SessionMeta, "sta
   return session.status === "completed" || session.status === "failed" || session.status === "disconnected";
 }
 
-export function shouldShowServerReconnectOverlay(state: ServerConnectionState): boolean {
-  return state === "reconnecting";
+export const RECONNECT_OVERLAY_DELAY_MS = 60_000;
+export const RECONNECT_VISIBILITY_GRACE_MS = 5_000;
+
+export function shouldShowServerReconnectOverlay(
+  state: ServerConnectionState,
+  armed: boolean
+): boolean {
+  return state === "reconnecting" && armed;
+}
+
+// "immediate" when the user just returned to the app (page became visible within
+// the grace window) so a known-broken connection is surfaced right away; otherwise
+// "delayed" so a drop while passively viewing waits out the 60s timer.
+export function reconnectOverlayEntryMode(opts: {
+  pageVisible: boolean;
+  msSinceVisible: number;
+}): "immediate" | "delayed" {
+  return opts.pageVisible && opts.msSinceVisible <= RECONNECT_VISIBILITY_GRACE_MS
+    ? "immediate"
+    : "delayed";
 }
 
 export interface KeyBarSwipeStart {
@@ -399,10 +417,10 @@ export function ServerReconnectOverlay() {
       <div className={styles.serverReconnectCard}>
         <Spinner size="medium" />
         <h2 id="server-reconnect-title" className={styles.serverReconnectTitle}>
-          Connection lost
+          Reconnecting
         </h2>
         <p id="server-reconnect-description" className={styles.serverReconnectMessage}>
-          The climon server connection was lost. Reconnecting automatically...
+          Re-establishing connection to the climon server...
         </p>
       </div>
     </div>
@@ -455,6 +473,11 @@ export function App() {
   const installAvailable = canInstallPwa({ isTunnelOrigin, isStandalone });
   const [serverConnectionState, setServerConnectionState] = useState<ServerConnectionState>("connecting");
   const [serverReconnectToken, setServerReconnectToken] = useState(0);
+  const [reconnectOverlayArmed, setReconnectOverlayArmed] = useState(false);
+  const reconnectOverlayArmedRef = useRef(false);
+  const reconnectOverlayTimerRef = useRef<number | null>(null);
+  const becameVisibleAtRef = useRef<number>(Date.now());
+  const pageVisibleRef = useRef(pageVisible);
   const dismissSplash = useCallback(() => setShowSplash(false), []);
   const adjustFontSize = useCallback((delta: number) => {
     setFontSize((prev) => {
@@ -470,6 +493,35 @@ export function App() {
   const swipeStartRef = useRef<KeyBarSwipeStart | null>(null);
   const serverConnectionStateRef = useRef<ServerConnectionState>("connecting");
   const hadServerConnectionRef = useRef(false);
+
+  const clearReconnectOverlayTimer = useCallback((): void => {
+    if (reconnectOverlayTimerRef.current !== null) {
+      window.clearTimeout(reconnectOverlayTimerRef.current);
+      reconnectOverlayTimerRef.current = null;
+    }
+  }, []);
+
+  const armReconnectOverlay = useCallback((): void => {
+    clearReconnectOverlayTimer();
+    if (!reconnectOverlayArmedRef.current) {
+      reconnectOverlayArmedRef.current = true;
+      setReconnectOverlayArmed(true);
+    }
+  }, [clearReconnectOverlayTimer]);
+
+  const disarmReconnectOverlay = useCallback((): void => {
+    clearReconnectOverlayTimer();
+    if (reconnectOverlayArmedRef.current) {
+      reconnectOverlayArmedRef.current = false;
+      setReconnectOverlayArmed(false);
+    }
+  }, [clearReconnectOverlayTimer]);
+
+  const handleLiveInteraction = useCallback((): void => {
+    if (serverConnectionStateRef.current === "reconnecting") {
+      armReconnectOverlay();
+    }
+  }, [armReconnectOverlay]);
 
   useEffect(() => {
     if (!pushSupported || !isTunnelOrigin) {
@@ -601,6 +653,7 @@ export function App() {
       hadServerConnectionRef.current = true;
       serverConnectionStateRef.current = "connected";
       setServerConnectionState("connected");
+      disarmReconnectOverlay();
       return wasReconnecting;
     };
     async function refreshSessionsAfterReconnect(): Promise<void> {
@@ -638,8 +691,26 @@ export function App() {
       if (closed || !hadServerConnectionRef.current) {
         return;
       }
+      // Only act on the transition into "reconnecting" so repeated EventSource
+      // error events do not restart/extend the 60s timer.
+      if (serverConnectionStateRef.current === "reconnecting") {
+        return;
+      }
       serverConnectionStateRef.current = "reconnecting";
       setServerConnectionState("reconnecting");
+      const mode = reconnectOverlayEntryMode({
+        pageVisible: pageVisibleRef.current,
+        msSinceVisible: Date.now() - becameVisibleAtRef.current
+      });
+      if (mode === "immediate") {
+        armReconnectOverlay();
+        return;
+      }
+      clearReconnectOverlayTimer();
+      reconnectOverlayTimerRef.current = window.setTimeout(() => {
+        reconnectOverlayTimerRef.current = null;
+        armReconnectOverlay();
+      }, RECONNECT_OVERLAY_DELAY_MS);
     };
     es.addEventListener("open", handleServerOpen);
     es.addEventListener("error", markServerReconnecting);
@@ -661,8 +732,9 @@ export function App() {
     return () => {
       closed = true;
       es.close();
+      clearReconnectOverlayTimer();
     };
-  }, []);
+  }, [armReconnectOverlay, disarmReconnectOverlay, clearReconnectOverlayTimer]);
 
   // Load the running server's version for the sidebar heading.
   useEffect(() => {
@@ -783,10 +855,22 @@ export function App() {
   // backgrounded on mobile) the WebSocket is dropped, which the daemon observes
   // as a viewer leaving and reverts the PTY to the host terminal's size.
   useEffect(() => {
-    const onVisibility = (): void => setPageVisible(document.visibilityState !== "hidden");
+    const onVisibility = (): void => {
+      const visible = document.visibilityState !== "hidden";
+      setPageVisible(visible);
+      pageVisibleRef.current = visible;
+      if (visible) {
+        becameVisibleAtRef.current = Date.now();
+        // Returning to the app with a known-broken connection should surface the
+        // overlay right away rather than waiting out the 60s timer.
+        if (serverConnectionStateRef.current === "reconnecting") {
+          armReconnectOverlay();
+        }
+      }
+    };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, []);
+  }, [armReconnectOverlay]);
 
   // The terminal panel is a flex child that shrinks the terminal pane when
   // shown. xterm does not reflow to the smaller pane on its own, so refit it
@@ -1023,7 +1107,10 @@ export function App() {
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
   const sidebarCompact = effectiveSidebarCollapsed(sidebarCollapsed, isMobile);
   const serverConnected = serverConnectionState === "connected";
-  const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(serverConnectionState);
+  const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(
+    serverConnectionState,
+    reconnectOverlayArmed
+  );
 
   return (
     <FeatureFlagsProvider value={features}>
@@ -1132,6 +1219,7 @@ export function App() {
           onFontSizeChange={adjustFontSize}
           serverConnected={serverConnected}
           serverReconnectToken={serverReconnectToken}
+          onLiveInteraction={handleLiveInteraction}
         />
         {panelView !== "closed" && maximized && activeSession && isLiveStatus(activeSession.status) && (
           <>
