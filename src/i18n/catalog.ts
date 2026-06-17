@@ -69,9 +69,13 @@ export function renderMessage(catalog: Catalog, key: string, params: MessagePara
 
 /**
  * Validates structural invariants of a catalog. Throws on the first problem:
- * non-8-hex ids, duplicate ids, or a template placeholder lacking param metadata.
+ * non-8-hex ids, duplicate ids, a template placeholder lacking param metadata,
+ * or (when `requireHints`) an entry missing its translator hint.
+ *
+ * `requireHints` defaults to true; build tooling passes false while scaffolding
+ * new keys whose hints have not been authored yet.
  */
-export function validateCatalog(catalog: Catalog): void {
+export function validateCatalog(catalog: Catalog, requireHints = true): void {
   const seenIds = new Map<string, string>();
   for (const [key, entry] of Object.entries(catalog)) {
     if (!ID_RE.test(entry.id)) {
@@ -82,6 +86,10 @@ export function validateCatalog(catalog: Catalog): void {
       throw new Error(`catalog: duplicate id "${entry.id}" on keys "${prev}" and "${key}"`);
     }
     seenIds.set(entry.id, key);
+
+    if (requireHints && (typeof entry.hint !== "string" || entry.hint.trim() === "")) {
+      throw new Error(`catalog key "${key}": missing required translation hint`);
+    }
 
     for (const name of templatePlaceholders(entry.t)) {
       if (!entry.params || !Object.prototype.hasOwnProperty.call(entry.params, name)) {

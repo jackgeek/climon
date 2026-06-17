@@ -58,7 +58,7 @@ export function reconcile(catalog: Catalog, referencedKeys: string[]): Reconcile
     if (next[key]) continue;
     const id = allocateId(used);
     used.add(id);
-    const entry: CatalogEntry = { id, t: key, params: {} };
+    const entry: CatalogEntry = { id, t: key, hint: "", params: {} };
     next[key] = entry;
     added.push(key);
   }
@@ -71,6 +71,13 @@ export function reconcile(catalog: Catalog, referencedKeys: string[]): Reconcile
 /** Returns keys referenced in source but missing from the catalog. */
 export function checkDrift(catalog: Catalog, referencedKeys: string[]): string[] {
   return referencedKeys.filter((k) => !catalog[k]);
+}
+
+/** Returns keys whose translator hint is missing or blank. */
+export function missingHintKeys(catalog: Catalog): string[] {
+  return Object.entries(catalog)
+    .filter(([, e]) => typeof e.hint !== "string" || e.hint.trim() === "")
+    .map(([k]) => k);
 }
 
 /** Returns warnings for sensitive-looking template params left un-redacted. */
@@ -87,8 +94,11 @@ export function sensitiveParamWarnings(catalog: Catalog): string[] {
   return warnings;
 }
 
-/** A catalog fragment authored at migration time: key -> template + params (no id). */
-export type CatalogFragment = Record<string, { t: string; params?: Record<string, ParamMeta> }>;
+/** A catalog fragment authored at migration time: key -> template + hint + params (no id). */
+export type CatalogFragment = Record<
+  string,
+  { t: string; hint?: string; params?: Record<string, ParamMeta> }
+>;
 
 export interface MergeResult {
   catalog: Catalog;
@@ -98,8 +108,8 @@ export interface MergeResult {
 /**
  * Merges every `*.json` fragment in `fragDir` into `catalog`. New keys get a
  * freshly allocated id; existing keys keep their id but adopt the fragment's
- * template and params. Fragments are authored per source file during migration
- * so parallel workers never contend on the single catalog file.
+ * template, hint, and params. Fragments are authored per source file during
+ * migration so parallel workers never contend on the single catalog file.
  */
 export function mergeFragments(catalog: Catalog, fragDir: string): MergeResult {
   const next: Catalog = { ...catalog };
@@ -111,7 +121,31 @@ export function mergeFragments(catalog: Catalog, fragDir: string): MergeResult {
     for (const [key, partial] of Object.entries(frag)) {
       const id = next[key]?.id ?? allocateId(used);
       used.add(id);
-      next[key] = { id, t: partial.t, params: partial.params ?? {} };
+      next[key] = {
+        id,
+        t: partial.t,
+        hint: partial.hint ?? next[key]?.hint ?? "",
+        params: partial.params ?? {},
+      };
+      merged++;
+    }
+  }
+  return { catalog: next, merged };
+}
+
+/**
+ * Applies hint-only fragments (`key -> hint string`) onto an existing catalog,
+ * keeping every other field. Throws if a fragment references an unknown key.
+ */
+export function mergeHintFragments(catalog: Catalog, fragDir: string): MergeResult {
+  const next: Catalog = { ...catalog };
+  const glob = new Glob("*.json");
+  let merged = 0;
+  for (const rel of glob.scanSync(fragDir)) {
+    const frag = JSON.parse(readFileSync(join(fragDir, rel), "utf8")) as Record<string, string>;
+    for (const [key, hint] of Object.entries(frag)) {
+      if (!next[key]) throw new Error(`hint fragment "${rel}": unknown key "${key}"`);
+      next[key] = { ...next[key], hint };
       merged++;
     }
   }
@@ -139,16 +173,22 @@ function loadRawCatalog(): Catalog {
 
 function writeCatalog(catalog: Catalog): void {
   const sorted: Catalog = {};
-  for (const key of Object.keys(catalog).sort()) sorted[key] = catalog[key];
+  for (const key of Object.keys(catalog).sort()) {
+    const e = catalog[key];
+    // Stable field order: id, t, hint, params.
+    sorted[key] = { id: e.id, t: e.t, hint: e.hint, params: e.params };
+  }
   writeFileSync(catalogPath(), `${JSON.stringify(sorted, null, 2)}\n`);
 }
 
 function runExtract(): number {
   const keys = scanReferencedKeys();
   const { catalog, added, orphaned } = reconcile(loadRawCatalog(), keys);
-  validateCatalog(catalog);
+  // Newly scaffolded keys have empty hints; don't fail extraction on them.
+  validateCatalog(catalog, false);
   writeCatalog(catalog);
   for (const w of sensitiveParamWarnings(catalog)) console.warn(`WARN ${w}`);
+  for (const k of missingHintKeys(catalog)) console.warn(`WARN ${k}: missing translation hint`);
   console.log(`messages:extract — ${added.length} added, ${orphaned.length} orphaned`);
   if (added.length) console.log(`  added: ${added.join(", ")}`);
   if (orphaned.length) console.log(`  orphaned (unused): ${orphaned.join(", ")}`);
@@ -157,15 +197,22 @@ function runExtract(): number {
 
 function runCheck(): number {
   const catalog = loadRawCatalog();
-  validateCatalog(catalog);
+  // Structural checks first; hints are reported as a dedicated failure below.
+  validateCatalog(catalog, false);
   const keys = scanReferencedKeys();
   const missing = checkDrift(catalog, keys);
+  const noHint = missingHintKeys(catalog);
   const warnings = sensitiveParamWarnings(catalog);
   for (const w of warnings) console.warn(`WARN ${w}`);
   if (missing.length) {
     console.error(`messages:check FAILED — ${missing.length} uncatalogued key(s):`);
     for (const k of missing) console.error(`  ${k}`);
     console.error(`Run "bun run messages:extract" to add them.`);
+    return 1;
+  }
+  if (noHint.length) {
+    console.error(`messages:check FAILED — ${noHint.length} key(s) missing a translation hint:`);
+    for (const k of noHint) console.error(`  ${k}`);
     return 1;
   }
   console.log(`messages:check OK — ${keys.length} keys, ${warnings.length} warning(s)`);
@@ -190,9 +237,18 @@ function runPublish(): number {
 function runMerge(): number {
   const fragDir = join(repoRoot(), ".copilot-tmp", "catalog-fragments");
   const { catalog, merged } = mergeFragments(loadRawCatalog(), fragDir);
-  validateCatalog(catalog);
+  validateCatalog(catalog, false);
   writeCatalog(catalog);
   console.log(`messages:merge — merged ${merged} entries from ${fragDir}`);
+  return 0;
+}
+
+function runMergeHints(): number {
+  const fragDir = join(repoRoot(), ".copilot-tmp", "hint-fragments");
+  const { catalog, merged } = mergeHintFragments(loadRawCatalog(), fragDir);
+  validateCatalog(catalog);
+  writeCatalog(catalog);
+  console.log(`messages:hints — applied ${merged} hint(s) from ${fragDir}`);
   return 0;
 }
 
@@ -205,6 +261,8 @@ if (import.meta.main) {
         ? runPublish
         : mode === "merge"
           ? runMerge
-          : runExtract;
+          : mode === "hints"
+            ? runMergeHints
+            : runExtract;
   process.exit(run());
 }

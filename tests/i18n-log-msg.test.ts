@@ -6,11 +6,13 @@ const CAT: Catalog = {
   "srv.probe": {
     id: "0000000b",
     t: "probing {url}health",
+    hint: "health-probe diagnostic",
     params: { url: { redact: false } },
   },
   "srv.connect_failed": {
     id: "0000000c",
     t: "connect to {host} failed",
+    hint: "connection failure to a host",
     params: { host: { redact: true, category: "hostname" } },
   },
 };
@@ -69,7 +71,7 @@ describe("logMsg", () => {
 
   test("works with no params argument", () => {
     const calls: Call[] = [];
-    const cat: Catalog = { "x.static": { id: "00000abc", t: "hi", params: {} } };
+    const cat: Catalog = { "x.static": { id: "00000abc", t: "hi", hint: "static greeting", params: {} } };
     logMsg(fakeLogger(calls) as never, "info", "x.static", undefined, cat);
     expect(calls[0].msg).toBe("hi");
     expect(calls[0].obj.msgId).toBe("00000abc");

@@ -6,13 +6,14 @@ const CAT: Catalog = {
   "srv.connect_failed": {
     id: "0000000c",
     t: "connect to {host}:{port} failed for {user}",
+    hint: "connection failure with host/port/user",
     params: {
       host: { redact: true, category: "hostname" },
       port: { redact: false },
       user: { redact: true, category: "pii" },
     },
   },
-  "srv.started": { id: "0000000d", t: "server started", params: {} },
+  "srv.started": { id: "0000000d", t: "server started", hint: "server boot completed", params: {} },
 };
 
 describe("redactParams", () => {
@@ -28,7 +29,7 @@ describe("redactParams", () => {
   });
 
   test("uses generic marker when a redacted param has no category", () => {
-    const entry = { id: "00000001", t: "x {v}", params: { v: { redact: true } } };
+    const entry = { id: "00000001", t: "x {v}", hint: "h", params: { v: { redact: true } } };
     expect(redactParams({ v: "secret" }, entry).v).toBe("[REDACTED:generic]");
   });
 

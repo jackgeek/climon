@@ -57,14 +57,14 @@ describe("reconcile", () => {
   });
 
   test("preserves the id of an existing key", () => {
-    const cat: Catalog = { "keep": { id: "0000abcd", t: "kept", params: {} } };
+    const cat: Catalog = { "keep": { id: "0000abcd", t: "kept", hint: "h", params: {} } };
     const result = reconcile(cat, ["keep"]);
     expect(result.catalog["keep"].id).toBe("0000abcd");
     expect(result.added).toEqual([]);
   });
 
   test("reports orphaned keys (in catalog but unreferenced)", () => {
-    const cat: Catalog = { "gone": { id: "0000abcd", t: "x", params: {} } };
+    const cat: Catalog = { "gone": { id: "0000abcd", t: "x", hint: "h", params: {} } };
     const result = reconcile(cat, []);
     expect(result.orphaned).toEqual(["gone"]);
   });
@@ -79,12 +79,12 @@ describe("reconcile", () => {
 
 describe("checkDrift", () => {
   test("returns keys referenced in source but missing from catalog", () => {
-    const cat: Catalog = { "present": { id: "0000abcd", t: "x", params: {} } };
+    const cat: Catalog = { "present": { id: "0000abcd", t: "x", hint: "h", params: {} } };
     expect(checkDrift(cat, ["present", "missing"])).toEqual(["missing"]);
   });
 
   test("returns empty when all referenced keys are present", () => {
-    const cat: Catalog = { "a": { id: "0000abcd", t: "x", params: {} } };
+    const cat: Catalog = { "a": { id: "0000abcd", t: "x", hint: "h", params: {} } };
     expect(checkDrift(cat, ["a"])).toEqual([]);
   });
 });
@@ -92,7 +92,7 @@ describe("checkDrift", () => {
 describe("sensitiveParamWarnings", () => {
   test("warns when a sensitive-looking param is not redacted", () => {
     const cat: Catalog = {
-      "x": { id: "0000abcd", t: "to {host}", params: { host: { redact: false } } },
+      "x": { id: "0000abcd", t: "to {host}", hint: "h", params: { host: { redact: false } } },
     };
     const warns = sensitiveParamWarnings(cat);
     expect(warns.some((w) => w.includes("host"))).toBe(true);
@@ -100,14 +100,14 @@ describe("sensitiveParamWarnings", () => {
 
   test("does not warn when the sensitive param is redacted", () => {
     const cat: Catalog = {
-      "x": { id: "0000abcd", t: "to {host}", params: { host: { redact: true, category: "hostname" } } },
+      "x": { id: "0000abcd", t: "to {host}", hint: "h", params: { host: { redact: true, category: "hostname" } } },
     };
     expect(sensitiveParamWarnings(cat)).toEqual([]);
   });
 
   test("does not warn for a clearly non-sensitive param", () => {
     const cat: Catalog = {
-      "x": { id: "0000abcd", t: "count {n}", params: { n: { redact: false } } },
+      "x": { id: "0000abcd", t: "count {n}", hint: "h", params: { n: { redact: false } } },
     };
     expect(sensitiveParamWarnings(cat)).toEqual([]);
   });

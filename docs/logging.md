@@ -115,6 +115,10 @@ never receives rendered message text:
   maps back to the source template in `src/i18n/messages.en.json`, which a log
   viewer (Azure Workbook / KQL `externaldata` join, Grafana, or Seq) can stitch
   back in realtime — the same catalog also drives i18n.
+- Every catalog entry carries a required `hint`: a short translator-facing note
+  describing the message's context, tone, and what each `{placeholder}` means. It
+  is enforced by `bun run messages:check` and published into the lookup so the
+  viewer can show it alongside the template.
 - Interpolation arguments are attached as flat top-level properties, but any
   parameter the catalog entry marks `redact: true` (hostnames, paths, URLs,
   config values, tokens, PII) is replaced with `[REDACTED:<category>]` before
@@ -140,7 +144,7 @@ read SAS URL), then use **Azure Monitor Workbooks** (or Grafana with the Azure
 Monitor data source) with a KQL query that joins on the id:
 
 ```kusto
-let Catalog = externaldata(id:string, key:string, template:string, params:string, redacted:string)
+let Catalog = externaldata(id:string, key:string, template:string, hint:string, params:string, redacted:string)
     [@"https://<your-blob>/messages.en.csv"] with(format='csv', ignoreFirstRecord=true);
 traces
 | extend msgId = tostring(customDimensions.msgId)

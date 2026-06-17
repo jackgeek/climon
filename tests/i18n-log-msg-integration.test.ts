@@ -10,6 +10,7 @@ const CAT: Catalog = {
   "srv.probe": {
     id: "0000000b",
     t: "probing {url}health",
+    hint: "health-probe diagnostic",
     params: { url: { redact: false } },
   },
 };

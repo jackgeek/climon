@@ -22,6 +22,13 @@ export interface CatalogEntry {
   id: string;
   /** Template text with `{named}` placeholders. */
   t: string;
+  /**
+   * Translator-facing hint: a short note giving the message's context, meaning,
+   * tone, or placeholder semantics. Required so the catalog is translatable
+   * without reading the source. Analogous to a gettext extracted comment /
+   * `msgctxt`, an ICU/Fluent comment, or an Android string `description`.
+   */
+  hint: string;
   /** Metadata for each placeholder name in `t`. */
   params: Record<string, ParamMeta>;
 }

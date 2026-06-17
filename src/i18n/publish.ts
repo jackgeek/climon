@@ -21,6 +21,8 @@ export interface LookupRow {
   key: string;
   /** Template text with `{named}` placeholders. */
   template: string;
+  /** Translator-facing context hint. */
+  hint: string;
   /** Comma-joined placeholder names, in template order, e.g. "host,port". */
   params: string;
   /** Comma-joined subset of `params` that are redacted before transmission. */
@@ -42,6 +44,7 @@ export function toLookupRows(catalog: Catalog): LookupRow[] {
         id: entry.id,
         key,
         template: entry.t,
+        hint: entry.hint,
         params: names.join(","),
         redacted: redacted.join(","),
       };
@@ -59,9 +62,9 @@ function csvField(value: string): string {
  * `externaldata(...) with(format='csv', ignoreFirstRecord=true)`.
  */
 export function toCsv(catalog: Catalog): string {
-  const header = "id,key,template,params,redacted";
+  const header = "id,key,template,hint,params,redacted";
   const rows = toLookupRows(catalog).map((r) =>
-    [r.id, r.key, r.template, r.params, r.redacted].map(csvField).join(","),
+    [r.id, r.key, r.template, r.hint, r.params, r.redacted].map(csvField).join(","),
   );
   return `${[header, ...rows].join("\n")}\n`;
 }
