@@ -4,6 +4,8 @@ export type ManifestArtifact = { url: string; sig: string };
 /** The release manifest published alongside signed artifacts. */
 export type Manifest = {
   version: string;
+  /** Envelope scheme id when artifacts are encrypted; absent for plaintext. */
+  encryption?: string;
   artifacts: Record<string, ManifestArtifact>;
 };
 
@@ -39,7 +41,8 @@ export async function fetchManifest(url: string): Promise<Manifest> {
     typeof data.version !== "string" ||
     !data.artifacts ||
     typeof data.artifacts !== "object" ||
-    Array.isArray(data.artifacts)
+    Array.isArray(data.artifacts) ||
+    (data.encryption !== undefined && typeof data.encryption !== "string")
   ) {
     throw new Error("Malformed manifest");
   }

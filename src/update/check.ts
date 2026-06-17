@@ -12,7 +12,7 @@ import {
 
 /** The manifest URL the background check polls. Override in tests. */
 export const DEFAULT_MANIFEST_URL =
-  "https://github.com/jackgeek/climon/releases/latest/download/manifest.json";
+  "https://github.com/jackgeek/climon-releases/releases/latest/download/manifest.json";
 
 export type BackgroundCheckOptions = {
   env?: NodeJS.ProcessEnv;

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { t } from "../i18n/t.js";
 import { installFilesForPlatform } from "../install/install-manifest.js";
+import { decryptEnvelope } from "./crypto-envelope.js";
 import { downloadToFile, downloadText } from "./download.js";
 import { currentArtifactKey, isNewer, type Manifest } from "./manifest.js";
 import { cleanupOldFiles, replaceFileAtomic } from "./swap.js";
@@ -13,6 +14,7 @@ export type UpdateStatus =
   | "updated"
   | "up-to-date"
   | "verify-failed"
+  | "decrypt-failed"
   | "deferred"
   | "no-artifact";
 
@@ -23,6 +25,8 @@ export type UpdateCommandOptions = {
   currentVersion: string;
   manifest: Manifest;
   publicKeyB64: string;
+  /** Shared password to decrypt artifacts when the manifest is encrypted. */
+  decryptPassword?: string;
   platform?: NodeJS.Platform;
   arch?: string;
   print?: (s: string) => void;
@@ -51,16 +55,26 @@ export async function runUpdateCommand(
   const work = mkdtempSync(join(tmpdir(), "climon-update-"));
   try {
     const zipPath = join(work, "artifact.zip");
-    const bytes = await downloadToFile(artifact.url, zipPath);
+    const downloaded = await downloadToFile(artifact.url, zipPath);
     const sigB64 = await downloadText(artifact.sig);
 
-    const ok = await verifySignature(bytes, sigB64, opts.publicKeyB64);
+    let zipBytes = downloaded;
+    if (opts.manifest.encryption) {
+      const decrypted = decryptEnvelope(downloaded, opts.decryptPassword ?? "");
+      if (!decrypted.ok) {
+        print(t("update.decryptFailed") + "\n");
+        return { status: "decrypt-failed" };
+      }
+      zipBytes = decrypted.bytes;
+    }
+
+    const ok = await verifySignature(zipBytes, sigB64, opts.publicKeyB64);
     if (!ok) {
       print(t("update.verifyFailed") + "\n");
       return { status: "verify-failed" };
     }
 
-    const unzipped = unzipSync(bytes);
+    const unzipped = unzipSync(zipBytes);
     const files = installFilesForPlatform(platform);
     let deferred = false;
     for (const { source, dest } of files) {

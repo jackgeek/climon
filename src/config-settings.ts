@@ -327,6 +327,15 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     acceptInput: true
   },
   {
+    path: "update.password",
+    type: "string",
+    purpose:
+      "Shared password used to decrypt encrypted release artifacts when auto-updating from the gated public release repo. Provided out-of-band by the maintainer. Stored locally; treat as a secret.",
+    scope: ["client"],
+    sensitive: true,
+    acceptInput: true,
+  },
+  {
     path: "update.lastCheck",
     type: "string",
     purpose:

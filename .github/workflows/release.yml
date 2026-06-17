@@ -30,6 +30,9 @@ jobs:
       # until the signing key secret is provisioned, which keeps releases working
       # meanwhile.
       HAS_SIGNING_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY != '' && 'yes' || '' }}
+      # Set only when the signing key, encryption password, and public-repo
+      # publish token all exist, so encrypted publishing is all-or-nothing.
+      HAS_DISTRIBUTION_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY != '' && secrets.CLIMON_DISTRIBUTION_PASSWORD != '' && secrets.RELEASES_PUBLISH_TOKEN != '' && 'yes' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -99,8 +102,14 @@ jobs:
         env:
           CLIMON_UPDATE_PRIVATE_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY }}
           RELEASE_VERSION: ${{ steps.release-tag.outputs.tag }}
-          RELEASE_BASE_URL: https://github.com/jackgeek/climon/releases/download/${{ steps.release-tag.outputs.tag }}
+          RELEASE_BASE_URL: https://github.com/jackgeek/climon-releases/releases/download/${{ steps.release-tag.outputs.tag }}
         run: bun run sign-release
+
+      - name: Encrypt release artifacts
+        if: ${{ env.HAS_DISTRIBUTION_KEY != '' }}
+        env:
+          CLIMON_DISTRIBUTION_PASSWORD: ${{ secrets.CLIMON_DISTRIBUTION_PASSWORD }}
+        run: bun run encrypt-release
 
       - name: Verify release artifacts
         run: |
@@ -127,6 +136,12 @@ jobs:
           test -f dist/manifest.json
           for z in dist/climon-*.zip; do test -f "$z.sig"; done
 
+      - name: Verify encrypted artifacts present
+        if: ${{ env.HAS_DISTRIBUTION_KEY != '' }}
+        run: |
+          set -euo pipefail
+          for z in dist/climon-*.zip; do test -f "$z.enc"; done
+
       - name: Push bump commit and tag
         if: ${{ steps.existing-release.outputs.tag == '' }}
         run: git push --follow-tags origin HEAD:main
@@ -143,11 +158,19 @@ jobs:
             gh release create "$TAG" dist/*.zip --title "$TAG" --notes "Release $TAG"
           fi
 
-      - name: Publish update manifest + signatures
-        if: ${{ env.HAS_SIGNING_KEY != '' }}
+      - name: Publish encrypted update artifacts to public repo
+        if: ${{ env.HAS_DISTRIBUTION_KEY != '' }}
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_PUBLISH_TOKEN }}
           TAG: ${{ steps.release-tag.outputs.tag }}
+          REPO: jackgeek/climon-releases
         run: |
           set -euo pipefail
-          gh release upload "$TAG" dist/*.zip.sig dist/manifest.json --clobber
+          shopt -s failglob
+          assets=(dist/climon-*.zip.enc dist/climon-*.zip.sig dist/manifest.json)
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" "${assets[@]}" --repo "$REPO" \
+              --title "$TAG" --notes "Release $TAG"
+          fi

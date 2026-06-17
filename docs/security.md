@@ -224,6 +224,40 @@ The private signing key is never logged or written to disk in CI, and is kept
 out of the environment of `curl | bash` and `bun install` steps so a compromised
 dependency cannot exfiltrate it.
 
+### Encrypted gated distribution
+
+On top of the Ed25519 signing layer, climon adds a **casual gating** mechanism
+to restrict update downloads to authorized users. This uses a single shared
+password to encrypt release artifacts; the password is:
+
+- stored in client config (`update.password`, marked `sensitive: true` and
+  redacted to `[REDACTED]` in `climon config list` output and logs),
+- (in a future out-of-band installer, not yet implemented) embedded in installers,
+  so an authorized holder *can* extract it.
+
+**This is NOT cryptographic per-user access control.** The shared password is
+extractable by any authorized user, and there is no per-user revocation —
+rotating the password (`CLIMON_DISTRIBUTION_PASSWORD` in CI) revokes everyone
+at once. Clients with the old password freeze at their current version until
+they receive and configure the new password.
+
+**Encryption is a convenience layer on top of Ed25519 integrity**, not a
+replacement. The client flow is:
+
+1. fetch the manifest from the public releases repository
+   (`jackgeek/climon-releases`),
+2. download the encrypted `.enc` artifact,
+3. **decrypt** using the password from `update.password`,
+4. **verify the Ed25519 signature** over the decrypted plaintext zip (the
+   signature is still computed over plaintext, not ciphertext),
+5. unzip and atomically swap the binary.
+
+If decryption or signature verification fails, the client rejects the download
+and makes no changes. The encryption scheme is `aes-256-gcm-scrypt-v1`
+(AES-256-GCM with an scrypt-derived key); see
+[deployment.md](./deployment.md#encrypted-gated-distribution) for the full
+operator runbook and rotation procedure.
+
 ## Non-destructive update guarantee
 
 The updater **never kills running climon processes** — not sessions, daemons, or

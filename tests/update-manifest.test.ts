@@ -77,6 +77,7 @@ describe("fetchManifest", () => {
     ["array artifacts", { version: "1.0.0", artifacts: [] }],
     ["null artifacts", { version: "1.0.0", artifacts: null }],
     ["missing version", { artifacts: {} }],
+    ["non-string encryption", { version: "1.0.0", encryption: 5, artifacts: {} }],
   ])("rejects malformed manifest (%s)", async (_label, body) => {
     await expect(
       withFetch(
@@ -84,5 +85,18 @@ describe("fetchManifest", () => {
         () => fetchManifest("https://example.test/manifest.json")
       )
     ).rejects.toThrow("Malformed manifest");
+  });
+
+  test("accepts an optional string encryption field", async () => {
+    const manifest = {
+      version: "1.0.0",
+      encryption: "aes-256-gcm-scrypt-v1",
+      artifacts: { "linux-x64": { url: "u", sig: "s" } },
+    };
+    const result = await withFetch(
+      (async () => jsonResponse(manifest)) as unknown as typeof fetch,
+      () => fetchManifest("https://example.test/manifest.json")
+    );
+    expect(result.encryption).toBe("aes-256-gcm-scrypt-v1");
   });
 });
