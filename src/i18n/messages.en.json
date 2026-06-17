@@ -1,0 +1,1728 @@
+{
+  "autoUpdate.prompt": {
+    "id": "f44372c1",
+    "t": "Automatically download and apply climon updates in the background? [y/N] ",
+    "hint": "Yes/no onboarding prompt asking the user to opt in to background auto-updates; default is No. Preserve the [y/N] hint convention (capital N marks the default).",
+    "params": {}
+  },
+  "boot.app_insights_logging_disabled": {
+    "id": "a124a281",
+    "t": "App Insights logging disabled: {err}",
+    "hint": "Warning logged during dashboard server startup when Application Insights cannot initialize; {err} is the initialization error and the server falls back to local logging.",
+    "params": {
+      "err": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "cli.command_invocation": {
+    "id": "0b82ce8c",
+    "t": "cli command: {command}",
+    "hint": "Debug log emitted when a CLI command is invoked; {command} is the command line being recorded.",
+    "params": {
+      "command": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "cli.stream_output": {
+    "id": "9b3b4c83",
+    "t": "{detail}",
+    "hint": "Debug log mirroring user-facing CLI output; {stream} identifies stdout or stderr and {detail} is the emitted text chunk.",
+    "params": {
+      "stream": {
+        "redact": false,
+        "category": "generic"
+      },
+      "detail": {
+        "redact": true,
+        "category": "pii"
+      }
+    }
+  },
+  "daemon.attention_fingerprint_mismatch": {
+    "id": "896ef823",
+    "t": "attention_fp={attentionFp} current_fp={currentFp}",
+    "hint": "Trace diagnostic logged while clearing attention when the stored and current screen fingerprints differ; {attentionFp} is the prior attention fingerprint and {currentFp} is the current fingerprint.",
+    "params": {
+      "attentionFp": {
+        "redact": true,
+        "category": "pii"
+      },
+      "currentFp": {
+        "redact": true,
+        "category": "pii"
+      }
+    }
+  },
+  "daemon.clearing_attention_status": {
+    "id": "e9270940",
+    "t": "status=clearing-attention source={source} fingerprint={fingerprint}",
+    "hint": "Debug log emitted when the daemon clears a session's needs-attention state; {source} is detector or user and {fingerprint} says whether the screen fingerprint changed.",
+    "params": {
+      "source": {
+        "redact": false,
+        "category": "generic"
+      },
+      "fingerprint": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "daemon.needs_attention_status": {
+    "id": "d2753865",
+    "t": "status=needs-attention reason=\"{reason}\" fingerprint={fingerprint}",
+    "hint": "Debug log emitted when the daemon marks a session as needing attention; {reason} explains why and {fingerprint} is the current screen fingerprint.",
+    "params": {
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      },
+      "fingerprint": {
+        "redact": true,
+        "category": "pii"
+      }
+    }
+  },
+  "daemon.sampled_fingerprint_changed": {
+    "id": "0b9bbdd9",
+    "t": "status={status} fingerprint=changed prev={prev} curr={curr}",
+    "hint": "Trace diagnostic from the idle sampler when a status transition occurs after the screen fingerprint changed; {status} is the new status and {prev} and {curr} are the old and new fingerprints.",
+    "params": {
+      "status": {
+        "redact": false,
+        "category": "generic"
+      },
+      "prev": {
+        "redact": true,
+        "category": "pii"
+      },
+      "curr": {
+        "redact": true,
+        "category": "pii"
+      }
+    }
+  },
+  "daemon.sampled_fingerprint_unchanged": {
+    "id": "c975d378",
+    "t": "status={status} fingerprint=unchanged",
+    "hint": "Debug log from the idle sampler when a status transition occurs without a screen fingerprint change; {status} is the new status.",
+    "params": {
+      "status": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "discovery.checking_peer_home": {
+    "id": "9705e8b0",
+    "t": "checking peer at {peerHome}",
+    "hint": "Debug message while inspecting a configured peer CLIMON_HOME; {peerHome} is the peer home directory path being checked.",
+    "params": {
+      "peerHome": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "discovery.discovering_dashboard": {
+    "id": "2a5495d1",
+    "t": "discovering dashboard...",
+    "hint": "Debug message emitted when dashboard discovery begins before checking local state and peer endpoints.",
+    "params": {}
+  },
+  "discovery.found_local_dashboard": {
+    "id": "9a3bd0cb",
+    "t": "found local dashboard: pid={pid} port={port} ingest={ingest}",
+    "hint": "Debug message confirming a live local dashboard was found; {pid} is its process ID, {port} is its HTTP port, and {ingest} is the local ingest port or 'none'.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "ingest": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "discovery.local_server_pid_not_alive": {
+    "id": "5cf73def",
+    "t": "local server.json exists (pid={pid}) but process not alive",
+    "hint": "Debug warning that a local server beacon exists but its process is dead; {pid} is the recorded dashboard server process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "discovery.no_peer_home_configured": {
+    "id": "d858ca48",
+    "t": "no peerHome configured, no dashboard found",
+    "hint": "Debug message indicating discovery stopped because no peerHome setting is configured after no local dashboard was found.",
+    "params": {}
+  },
+  "discovery.no_peer_ingest_found": {
+    "id": "7599f386",
+    "t": "no peer ingest.json found (peer ingest not running?)",
+    "hint": "Debug message indicating the configured peer home has no active ingest beacon, so the peer ingest service may not be running.",
+    "params": {}
+  },
+  "discovery.no_reachable_peer_host_found": {
+    "id": "fb4c3393",
+    "t": "no reachable peer host found",
+    "hint": "Debug message indicating all candidate peer hosts were probed and none could be reached.",
+    "params": {}
+  },
+  "discovery.peer_host_probe_result": {
+    "id": "862ffc45",
+    "t": "  {host}:{port} → {reachability}",
+    "hint": "Debug line for one peer host TCP probe; {host} is the candidate hostname or address, {port} is the ingest port, and {reachability} says whether it was reachable.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reachability": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "discovery.peer_ingest_state": {
+    "id": "c0339827",
+    "t": "peer ingest.json: port={port} host={host}",
+    "hint": "Debug message showing the peer ingest beacon contents; {port} is the advertised ingest port and {host} is the advertised host or 'unset'.",
+    "params": {
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      }
+    }
+  },
+  "discovery.probing_peer_host_candidates": {
+    "id": "91eee210",
+    "t": "probing peer host candidates: [{candidates}]",
+    "hint": "Debug message before probing peer hosts; {candidates} is the comma-separated list of hostnames or addresses to try.",
+    "params": {
+      "candidates": {
+        "redact": true,
+        "category": "hostname"
+      }
+    }
+  },
+  "eula.acceptPrompt": {
+    "id": "3336d792",
+    "t": "Type 'I AGREE' to accept the licence and continue: ",
+    "hint": "Interactive prompt shown during onboarding asking the user to type the exact phrase 'I AGREE' to accept the licence before installation continues. Keep the required phrase 'I AGREE' verbatim and untranslated since it is matched literally.",
+    "params": {}
+  },
+  "eula.declined": {
+    "id": "e6e0c5db",
+    "t": "Licence not accepted. Installation aborted.",
+    "hint": "Message printed when the user declines the licence during onboarding; installation stops as a result.",
+    "params": {}
+  },
+  "eula.needAcceptFlag": {
+    "id": "de99ba5d",
+    "t": "Non-interactive run requires --accept-eula to accept the licence.",
+    "hint": "Error guidance printed when onboarding runs non-interactively without licence acceptance; instructs the user to pass the --accept-eula flag. Keep the flag name --accept-eula verbatim.",
+    "params": {}
+  },
+  "ingest.client_disconnected_cleanup": {
+    "id": "fd14537a",
+    "t": "client {clientId} disconnected, cleaning up {sessionCount} session(s)",
+    "hint": "Debug message logged when a remote ingest client disconnects and its sessions are cleaned up; {clientId} is the remote client identifier and {sessionCount} is how many sessions will be torn down.",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "sessionCount": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.client_idle_destroying_channel": {
+    "id": "414efde0",
+    "t": "client {clientId} idle for {idleTimeout}ms, destroying channel",
+    "hint": "Debug message logged when an ingest client has been silent too long and the channel is closed; {clientId} is the remote client identifier and {idleTimeout} is the idle limit in milliseconds.",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "idleTimeout": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.evicting_previous_connection": {
+    "id": "f632385a",
+    "t": "evicting previous connection for clientId={clientId}",
+    "hint": "Debug message logged when a reconnect replaces an existing ingest connection; {clientId} identifies the remote client whose older connection is being closed.",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.hello_received": {
+    "id": "18fa1535",
+    "t": "hello received, clientId={clientId}",
+    "hint": "Debug message logged after the ingest daemon receives the initial hello handshake; {clientId} is the remote client identifier from that handshake.",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.inbound_connection": {
+    "id": "37853b5b",
+    "t": "new inbound connection from {host}:{port}",
+    "hint": "Debug message logged for a new TCP connection to the ingest daemon; {host} and {port} are the peer address and port reported by the socket.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.listening": {
+    "id": "2c06ad99",
+    "t": "listening on {host}:{port} (pid {pid})",
+    "hint": "Debug message logged when the ingest daemon starts listening for remote uplink connections; {host} and {port} are the bind address and {pid} is the daemon process ID.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.loopback_bind_failed": {
+    "id": "8caec904",
+    "t": "warning: could not bind loopback 127.0.0.1:{port} after {attempts} attempts ({code})",
+    "hint": "Warning logged when the extra loopback listener for dev tunnels could not be opened; {port} is the loopback port, {attempts} is the retry count, and {code} is the bind error code.",
+    "params": {
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "attempts": {
+        "redact": false,
+        "category": "generic"
+      },
+      "code": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.loopback_bind_retry": {
+    "id": "ae015f71",
+    "t": "loopback bind attempt {attempt}/{maxAttempts} failed ({code}), retrying in {delay}ms...",
+    "hint": "Debug message logged before retrying a failed loopback bind for dev tunnels; {attempt} is the current try, {maxAttempts} is the limit, {code} is the error code, and {delay} is the wait in milliseconds.",
+    "params": {
+      "attempt": {
+        "redact": false,
+        "category": "generic"
+      },
+      "maxAttempts": {
+        "redact": false,
+        "category": "generic"
+      },
+      "code": {
+        "redact": false,
+        "category": "generic"
+      },
+      "delay": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.loopback_listener_added": {
+    "id": "37cfcb57",
+    "t": "loopback listener added on 127.0.0.1:{port} (for devtunnel)",
+    "hint": "Debug message logged when a secondary loopback listener is added for dev tunnel forwarding; {port} is the local loopback port now accepting tunnel traffic.",
+    "params": {
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.mux_decode_error_from_client": {
+    "id": "168bcaa8",
+    "t": "mux decode error from client {clientId}, destroying channel",
+    "hint": "Error logged when a remote client sends invalid mux data and its channel is destroyed; {clientId} identifies the offending client or is unknown before handshake.",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.port_unavailable_using_alternative": {
+    "id": "03074e83",
+    "t": "port {port} unavailable, using {newPort} instead",
+    "hint": "Debug message logged when the requested ingest port is busy and another port is chosen; {port} is the original port and {newPort} is the replacement.",
+    "params": {
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "newPort": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.remote_session_file_deleted": {
+    "id": "f8c5ad79",
+    "t": "sessions watcher: remote session file deleted externally: {localId}",
+    "hint": "Debug message logged when the sessions watcher sees a remote session metadata file removed externally; {localId} is the local namespaced session ID being dismissed.",
+    "params": {
+      "localId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.resolved_bind_address": {
+    "id": "c5ad8f8d",
+    "t": "resolved bind address: {host}:{port}",
+    "hint": "Debug message logged after resolving where the ingest daemon should bind; {host} is the chosen interface and {port} is the configured starting port.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.session_added": {
+    "id": "ddbd2f3d",
+    "t": "session-added: {sessionId} ({displayCommand}) [{status}]",
+    "hint": "Debug message logged when a remote client advertises a session to materialize locally; {sessionId} is the remote session ID, {displayCommand} is its shown command, and {status} is its current state.",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "displayCommand": {
+        "redact": true,
+        "category": "config"
+      },
+      "status": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.session_removed": {
+    "id": "9cda3bf3",
+    "t": "session-removed: {sessionId}",
+    "hint": "Debug message logged when a remote client reports that a session ended or disappeared; {sessionId} is the remote session ID to disconnect locally.",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "ingest.session_updated": {
+    "id": "89286e2c",
+    "t": "session-updated: {sessionId} patch={patch}",
+    "hint": "Trace message logged when a remote session metadata update is applied; {sessionId} is the remote session ID and {patch} is the JSON patch being sanitized and stored.",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "patch": {
+        "redact": true,
+        "category": "config"
+      }
+    }
+  },
+  "ingest.singleton_acquired_daemon": {
+    "id": "6d2087f1",
+    "t": "singleton acquired, starting ingest daemon",
+    "hint": "Debug message logged when this process obtains the singleton lock and proceeds to run the ingest daemon; there are no placeholders.",
+    "params": {}
+  },
+  "ingest.singleton_already_running": {
+    "id": "3ee241e8",
+    "t": "another ingest instance is already running (pid={pid}), exiting",
+    "hint": "Debug message logged when another ingest daemon already holds the singleton lock and this process exits; {pid} is the existing daemon process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "launcher.ensure_uplink_config": {
+    "id": "f8a7d98f",
+    "t": "ensureUplink: enabled={enabled} host={host} tunnelId={tunnelId} port={port} peerHome={peerHome}",
+    "hint": "Debug log emitted while the launcher reads remote uplink settings; {enabled}, {host}, {tunnelId}, {port}, and {peerHome} show the resolved configuration values or set/unset markers.",
+    "params": {
+      "enabled": {
+        "redact": false,
+        "category": "generic"
+      },
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "tunnelId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "peerHome": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "launcher.ensure_uplink_plan": {
+    "id": "afc0c350",
+    "t": "ensureUplink: planUplinkStart → shouldSpawn={shouldSpawn}{warningSuffix}",
+    "hint": "Debug log emitted after planning whether to start the remote uplink bridge; {shouldSpawn} says if it will start and {warningSuffix} notes whether a warning was shown.",
+    "params": {
+      "shouldSpawn": {
+        "redact": false,
+        "category": "generic"
+      },
+      "warningSuffix": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "launcher.launch_banner": {
+    "id": "18768226",
+    "t": "climon v{version} monitoring session {id}",
+    "hint": "Informational launch banner when climon starts monitoring a session; {version} is the climon version and {id} is the session identifier.",
+    "params": {
+      "version": {
+        "redact": false,
+        "category": "generic"
+      },
+      "id": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "launcher.uplink_not_spawned": {
+    "id": "3972cb6d",
+    "t": "ensureUplink: not spawning uplink",
+    "hint": "Debug log emitted when the launcher decides not to start the remote uplink bridge; there are no placeholders.",
+    "params": {}
+  },
+  "launcher.uplink_spawning_detached_process": {
+    "id": "0a018893",
+    "t": "ensureUplink: spawning detached __uplink process",
+    "hint": "Debug log emitted when the launcher starts the remote uplink bridge as a detached process; there are no placeholders.",
+    "params": {}
+  },
+  "push.send_failed": {
+    "id": "f684f7b2",
+    "t": "send failed",
+    "hint": "Warning logged when sending a web push notification fails for an active subscription; {endpoint} is the subscription URL and {err} is the send error.",
+    "params": {
+      "endpoint": {
+        "redact": true,
+        "category": "url"
+      },
+      "err": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.climon_server_listening": {
+    "id": "a5071ad6",
+    "t": "climon server v{version} listening on http://127.0.0.1:{port}/",
+    "hint": "Info log when the dashboard HTTP server is bound and ready; {version} is the climon version and {port} is the loopback TCP port.",
+    "params": {
+      "version": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.climon_server_shutting_down": {
+    "id": "df84b352",
+    "t": "climon server shutting down ({reason}).",
+    "hint": "Info log when the dashboard server begins graceful shutdown; {reason} explains the trigger such as a signal or internal HTTP request.",
+    "params": {
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.climon_server_starting": {
+    "id": "eca18625",
+    "t": "climon server starting...",
+    "hint": "Info log emitted at the beginning of dashboard server startup.",
+    "params": {}
+  },
+  "server.closing_dashboard_listener_streams": {
+    "id": "d4acf7ee",
+    "t": "closing dashboard listener and streams...",
+    "hint": "Debug log during shutdown while the HTTP listener, SSE streams, and dashboard tunnel are being closed.",
+    "params": {}
+  },
+  "server.find_existing_dashboard_probe": {
+    "id": "ccb43663",
+    "t": "findExistingDashboardServer: probing {url}health",
+    "hint": "Debug log before checking for an already-running dashboard; {url} is the base dashboard URL whose health endpoint will be probed.",
+    "params": {
+      "url": {
+        "redact": true,
+        "category": "url"
+      }
+    }
+  },
+  "server.find_existing_health_probe_failed": {
+    "id": "a6f0cf1b",
+    "t": "findExistingDashboardServer: health probe failed: {error}",
+    "hint": "Debug log when the existing-dashboard health probe throws; {error} is the probe failure message.",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.find_existing_health_response": {
+    "id": "66336dec",
+    "t": "findExistingDashboardServer: health response ok={ok}, healthy={healthy}",
+    "hint": "Debug log after the health probe response; {ok} is the HTTP success flag and {healthy} says whether the JSON body reported ok true.",
+    "params": {
+      "ok": {
+        "redact": false,
+        "category": "generic"
+      },
+      "healthy": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.find_existing_healthy_server_found": {
+    "id": "139eadad",
+    "t": "findExistingDashboardServer: healthy server found, pid={pid}",
+    "hint": "Debug log when an existing healthy dashboard is detected; {pid} is the live process id or unknown if no live pid was found.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.find_existing_not_healthy": {
+    "id": "5dd4362c",
+    "t": "findExistingDashboardServer: not healthy — no existing server",
+    "hint": "Debug log when the health check shows there is no usable existing dashboard server.",
+    "params": {}
+  },
+  "server.handle_existing_dashboard_state": {
+    "id": "0f18ede1",
+    "t": "handleExistingDashboardServer: existing={existing}, tty={tty}",
+    "hint": "Debug log before resolving a conflict with an already-running dashboard; {existing} is serialized server URL and PID data and {tty} says whether stdin is interactive.",
+    "params": {
+      "existing": {
+        "redact": true,
+        "category": "url"
+      },
+      "tty": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.handle_existing_http_shutdown_attempt": {
+    "id": "7b41bc00",
+    "t": "handleExistingDashboardServer: trying HTTP shutdown for {url}",
+    "hint": "Debug log before attempting graceful shutdown via the internal HTTP endpoint; {url} is the existing dashboard base URL.",
+    "params": {
+      "url": {
+        "redact": true,
+        "category": "url"
+      }
+    }
+  },
+  "server.handle_existing_http_shutdown_succeeded": {
+    "id": "b937c22f",
+    "t": "handleExistingDashboardServer: HTTP shutdown succeeded",
+    "hint": "Debug log when the existing dashboard server was stopped through the internal HTTP endpoint.",
+    "params": {}
+  },
+  "server.handle_existing_non_interactive_exit": {
+    "id": "b07709c0",
+    "t": "handleExistingDashboardServer: non-interactive — exiting",
+    "hint": "Debug log when startup cannot prompt in a noninteractive terminal and leaves the existing dashboard running.",
+    "params": {}
+  },
+  "server.handle_existing_pid_stop_attempt": {
+    "id": "c04eece6",
+    "t": "handleExistingDashboardServer: attempting PID-based stop (pid={pid})",
+    "hint": "Debug log before trying to stop an existing dashboard by process id; {pid} is the target server process id.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.handle_existing_pid_stop_failed": {
+    "id": "638db3c6",
+    "t": "handleExistingDashboardServer: PID-based stop failed",
+    "hint": "Error log when PID-based termination of the existing dashboard server did not succeed.",
+    "params": {}
+  },
+  "server.handle_existing_pid_stop_succeeded": {
+    "id": "a8baec51",
+    "t": "handleExistingDashboardServer: PID-based stop succeeded",
+    "hint": "Debug log when PID-based termination of the existing dashboard server succeeded.",
+    "params": {}
+  },
+  "server.handle_existing_termination_failed": {
+    "id": "7ed96578",
+    "t": "handleExistingDashboardServer: all termination methods failed",
+    "hint": "Error log when all attempted methods to terminate the existing dashboard server failed.",
+    "params": {}
+  },
+  "server.handle_existing_user_confirmed": {
+    "id": "07867e59",
+    "t": "handleExistingDashboardServer: user confirmed termination",
+    "hint": "Debug log when the user confirms that the existing dashboard server should be terminated.",
+    "params": {}
+  },
+  "server.handle_existing_user_declined": {
+    "id": "e0232fee",
+    "t": "handleExistingDashboardServer: user declined (answer={answer})",
+    "hint": "Debug log when the user chooses not to terminate the existing dashboard server; {answer} is the normalized prompt response.",
+    "params": {
+      "answer": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.ingest_daemon_already_running": {
+    "id": "adc32b4f",
+    "t": "ingest daemon already running (pid {pid}, port {port}).",
+    "hint": "Debug log when the remote ingest daemon is already alive and correctly bound; {pid} is its process id and {port} is its listening port.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.ingest_daemon_ready": {
+    "id": "06c46483",
+    "t": "ingest daemon ready (pid {pid}, port {port}).",
+    "hint": "Debug log when a newly spawned ingest daemon becomes live; {pid} is its process id and {port} is its listening port.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.ingest_daemon_recycling_stale": {
+    "id": "835b8748",
+    "t": "ingest daemon is stale or wrong-bound; recycling it...",
+    "hint": "Debug log when an existing ingest daemon is stale or bound to the wrong host and will be restarted.",
+    "params": {}
+  },
+  "server.ingest_daemon_starting": {
+    "id": "85a741cf",
+    "t": "starting ingest daemon...",
+    "hint": "Debug log before spawning the detached remote ingest daemon.",
+    "params": {}
+  },
+  "server.internal_shutdown_accepted": {
+    "id": "0a75b289",
+    "t": "/__internal/shutdown: accepted from {address}; scheduling shutdown",
+    "hint": "Debug log when the loopback-only internal shutdown endpoint accepts a request; {address} is the requester IP address.",
+    "params": {
+      "address": {
+        "redact": true,
+        "category": "hostname"
+      }
+    }
+  },
+  "server.internal_shutdown_rejected_non_local": {
+    "id": "59c37d87",
+    "t": "/__internal/shutdown: rejected non-local request from {address}",
+    "hint": "Warning log when the internal shutdown endpoint rejects a non-loopback request; {address} is the requester IP address.",
+    "params": {
+      "address": {
+        "redact": true,
+        "category": "hostname"
+      }
+    }
+  },
+  "server.persist_dashboard_tunnel_enabled_failed": {
+    "id": "b01c50c7",
+    "t": "persistDashboardTunnelEnabled({enabled}) failed: {error}",
+    "hint": "Debug log when saving the persisted Tunnel Link enabled flag fails; {enabled} is the desired boolean value and {error} is the failure message.",
+    "params": {
+      "enabled": {
+        "redact": false,
+        "category": "generic"
+      },
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.plain_shutdown_complete": {
+    "id": "fe774625",
+    "t": "plainShutdown: shutdown complete",
+    "hint": "Debug log after graceful shutdown cleanup has completed.",
+    "params": {}
+  },
+  "server.plain_shutdown_hard_watchdog": {
+    "id": "7c9f6e6e",
+    "t": "plainShutdown: hard watchdog fired; forcing process.exit(0)",
+    "hint": "Debug log when shutdown cleanup exceeds the hard timeout and the process will force-exit.",
+    "params": {}
+  },
+  "server.plain_shutdown_ingest_stop_failed": {
+    "id": "3bcaffb8",
+    "t": "plainShutdown: stopIngestDaemon failed: {error}",
+    "hint": "Error log during graceful shutdown when stopping the colocated ingest daemon throws; {error} is the failure message.",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.plain_shutdown_ingest_stop_result": {
+    "id": "d3cd3556",
+    "t": "plainShutdown: stopIngestDaemon returned {stopped}",
+    "hint": "Debug log during graceful shutdown after attempting to stop the colocated ingest daemon; {stopped} indicates whether it stopped.",
+    "params": {
+      "stopped": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.plain_shutdown_leave_ingest_demote": {
+    "id": "1ddebb6b",
+    "t": "plainShutdown: leaving ingest shutdown to its demotion path",
+    "hint": "Debug log during demotion-initiated shutdown when the ingest daemon is left to finish its own exit path.",
+    "params": {}
+  },
+  "server.plain_shutdown_triggered": {
+    "id": "749b6a5e",
+    "t": "plainShutdown triggered (pid={pid}, reason={reason}); removing {path}",
+    "hint": "Debug log when graceful shutdown starts; {pid} is the server process id, {reason} is the trigger, and {path} is the server state file being removed.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      },
+      "path": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "server.push_notify_failed": {
+    "id": "312cbfac",
+    "t": "push notify failed: {error}",
+    "hint": "Error log when the push service fails to send an attention notification; {error} is the failure message.",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.push_service_unavailable": {
+    "id": "d7f7dd8d",
+    "t": "push service unavailable: {error}",
+    "hint": "Error log when the push service cannot initialize; {error} is the initialization failure message.",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.request_shutdown_health_non_ok": {
+    "id": "fb8fc2b7",
+    "t": "requestServerShutdownViaHttp: health probe returned non-ok — server is down",
+    "hint": "Debug log while polling after a shutdown request when the health endpoint returns non-OK, meaning the server is down.",
+    "params": {}
+  },
+  "server.request_shutdown_health_threw": {
+    "id": "5ef1b9a3",
+    "t": "requestServerShutdownViaHttp: health probe threw — server is down",
+    "hint": "Debug log while polling after a shutdown request when the health probe throws, meaning the server is down.",
+    "params": {}
+  },
+  "server.request_shutdown_http_polling": {
+    "id": "205d986f",
+    "t": "requestServerShutdownViaHttp: POST returned 200; polling for shutdown",
+    "hint": "Debug log after the internal shutdown POST succeeds and the client begins polling for the server to exit.",
+    "params": {}
+  },
+  "server.request_shutdown_http_post_failed": {
+    "id": "d34216d3",
+    "t": "requestServerShutdownViaHttp: POST failed: {error}",
+    "hint": "Error log when the HTTP request to the shutdown endpoint fails; {error} is the request failure message.",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.request_shutdown_http_posting": {
+    "id": "c6e1202f",
+    "t": "requestServerShutdownViaHttp: POSTing to {shutdownUrl}",
+    "hint": "Debug log before POSTing to the internal shutdown endpoint; {shutdownUrl} is the full endpoint URL.",
+    "params": {
+      "shutdownUrl": {
+        "redact": true,
+        "category": "url"
+      }
+    }
+  },
+  "server.request_shutdown_http_status_failure": {
+    "id": "c010f4c6",
+    "t": "requestServerShutdownViaHttp: POST returned {status} — treating as failure",
+    "hint": "Error log when the shutdown endpoint returns an unsuccessful status; {status} is the HTTP status code.",
+    "params": {
+      "status": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.request_shutdown_timeout": {
+    "id": "b82477c0",
+    "t": "requestServerShutdownViaHttp: timed out waiting for server to stop",
+    "hint": "Error log when the server remains reachable beyond the shutdown wait window.",
+    "params": {}
+  },
+  "server.server_state_writing": {
+    "id": "320fb21c",
+    "t": "writing server.json: path={path}, content={content}",
+    "hint": "Debug log before writing the server state file; {path} is the destination path and {content} is the serialized state JSON with pid and port data.",
+    "params": {
+      "path": {
+        "redact": true,
+        "category": "path"
+      },
+      "content": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.server_state_written": {
+    "id": "60846aae",
+    "t": "server.json written successfully",
+    "hint": "Debug log after the server state file has been written successfully.",
+    "params": {}
+  },
+  "server.settle_dual_promote_no_peer": {
+    "id": "bb3f8b7d",
+    "t": "settleDualPromote: no competing peer server; staying host",
+    "hint": "Debug log when the cross-OS dual-promote settle window finds no competing peer server, so the local server remains host.",
+    "params": {}
+  },
+  "server.settle_dual_promote_peer_decision": {
+    "id": "1e36aea2",
+    "t": "settleDualPromote: peer present; decision={decision} by {basis}",
+    "hint": "Debug log when dual-promote compares local and peer servers; {decision} is the win or lose outcome and {basis} explains the tie-break reason.",
+    "params": {
+      "decision": {
+        "redact": false,
+        "category": "generic"
+      },
+      "basis": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.settle_dual_promote_started": {
+    "id": "e231275e",
+    "t": "settleDualPromote: started (localIsWsl={localIsWsl}, localStartedAt={localStartedAt}, peerHome={peerHome}, settle={settleMs}ms)",
+    "hint": "Debug log at the start of the dual-promote settle window; {localIsWsl} identifies the local OS, {localStartedAt} is the local start timestamp, {peerHome} is the peer CLIMON_HOME path, and {settleMs} is the wait duration.",
+    "params": {
+      "localIsWsl": {
+        "redact": false,
+        "category": "generic"
+      },
+      "localStartedAt": {
+        "redact": false,
+        "category": "generic"
+      },
+      "peerHome": {
+        "redact": true,
+        "category": "path"
+      },
+      "settleMs": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.settle_dual_promote_write_peer_shutdown": {
+    "id": "e9887ab3",
+    "t": "settleDualPromote: writing shutdown request to peerHome={peerHome}",
+    "hint": "Debug log when the local server wins dual-promote and writes a shutdown request for the peer; {peerHome} is the peer CLIMON_HOME path.",
+    "params": {
+      "peerHome": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "server.settle_dual_promote_write_self_shutdown": {
+    "id": "7d2c7051",
+    "t": "settleDualPromote: LOSING — writing self-shutdown request to {climonHome}",
+    "hint": "Debug log when the local server loses dual-promote and writes a shutdown request to itself; {climonHome} is the local CLIMON_HOME path.",
+    "params": {
+      "climonHome": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "server.shutdown_request_watcher_started": {
+    "id": "5b1b6bf4",
+    "t": "shutdown-request watcher started (no ingest, peer configured)",
+    "hint": "Debug log when the server starts a filesystem watcher for peer shutdown requests because no ingest daemon is running.",
+    "params": {}
+  },
+  "server.shutdown_request_watcher_valid_request": {
+    "id": "33124fa3",
+    "t": "shutdown-request watcher: received valid request from {requestedBy}; invoking shutdown",
+    "hint": "Debug log when the shutdown-request watcher receives an authorized peer request; {requestedBy} identifies the peer side that requested shutdown.",
+    "params": {
+      "requestedBy": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.shutdown_step_timeout": {
+    "id": "d2da2bda",
+    "t": "warning: {label} did not finish within {ms} ms; continuing shutdown.",
+    "hint": "Debug warning log when one shutdown substep takes too long; {label} names the substep and {ms} is the timeout in milliseconds.",
+    "params": {
+      "label": {
+        "redact": false,
+        "category": "generic"
+      },
+      "ms": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.startup_log_detail": {
+    "id": "0b59c514",
+    "t": "{detail}",
+    "hint": "Debug log for granular dashboard server startup progress; {detail} is the current startup step or status message.",
+    "params": {
+      "detail": {
+        "redact": true,
+        "category": "generic"
+      }
+    }
+  },
+  "server.stop_dashboard_ingest_stop_failed": {
+    "id": "770b145a",
+    "t": "stopDashboardServer: stopIngestDaemon failed: {error}",
+    "hint": "Debug log when stopDashboardServer cannot stop the associated ingest daemon; {error} is the failure message.",
+    "params": {
+      "error": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.stop_dashboard_ingest_stop_result": {
+    "id": "d50d3a5a",
+    "t": "stopDashboardServer: stopIngestDaemon returned {ingestStopped}",
+    "hint": "Debug log after stopDashboardServer attempts to stop the associated ingest daemon; {ingestStopped} indicates whether it stopped.",
+    "params": {
+      "ingestStopped": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.stop_dashboard_read_live_pid": {
+    "id": "7f7ccbd7",
+    "t": "stopDashboardServer: readLiveServerPid returned {pid}",
+    "hint": "Debug log after reading the current live dashboard pid; {pid} is the process id or undefined when no live server was found.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.stop_dashboard_terminate_pid_result": {
+    "id": "15304733",
+    "t": "stopDashboardServer: terminatePidWithEscalation({pid}) returned {result}",
+    "hint": "Debug log after attempting PID-based dashboard termination; {pid} is the target process id and {result} says whether it exited.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "result": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.tunnel_link_reestablish_failed": {
+    "id": "6075f83c",
+    "t": "Tunnel Link could not be re-established: {message}",
+    "hint": "Warning log when a persisted dashboard Tunnel Link cannot be restored; {message} is the failure explanation shown to the user.",
+    "params": {
+      "message": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "server.tunnel_link_reestablished": {
+    "id": "7f0a26c9",
+    "t": "Tunnel Link re-established at {url}",
+    "hint": "Info log when a persisted dashboard Tunnel Link is restored; {url} is the public tunnel URL.",
+    "params": {
+      "url": {
+        "redact": true,
+        "category": "url"
+      }
+    }
+  },
+  "shell.detect_debug": {
+    "id": "6fcc8116",
+    "t": "{detail}",
+    "hint": "Debug log from parent-shell detection; {detail} is the diagnostic message about the detected or fallback shell.",
+    "params": {
+      "detail": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "shell.detect_trace": {
+    "id": "6191d05a",
+    "t": "{detail}",
+    "hint": "Trace log from parent-shell detection; {detail} is a fine-grained diagnostic message about process-tree probing.",
+    "params": {
+      "detail": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.beacon_retained_owner_alive": {
+    "id": "f6028bd9",
+    "t": "beacon retained; owning process still alive",
+    "hint": "Warning that a beacon file was left in place because its owner still appears alive; {path} is the beacon file path and {pid} is the owner process ID.",
+    "params": {
+      "path": {
+        "redact": true,
+        "category": "path"
+      },
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.dashboard_server_stopped": {
+    "id": "5c02f584",
+    "t": "dashboard server stopped",
+    "hint": "Debug message confirming the dashboard server stopped; {pid} is the dashboard server process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.failed_to_stop_daemon": {
+    "id": "0de8e4dd",
+    "t": "failed to stop daemon during teardown",
+    "hint": "Warning that teardown could not stop a daemon; {daemon} names the component, {pid} is its process ID, and {reason} explains the failure.",
+    "params": {
+      "daemon": {
+        "redact": false,
+        "category": "generic"
+      },
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.ingest_daemon_stopped": {
+    "id": "482eff34",
+    "t": "ingest daemon stopped",
+    "hint": "Debug message confirming the ingest daemon stopped; {pid} is the ingest daemon process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.local_dashboard_stack_teardown_complete": {
+    "id": "33380a6d",
+    "t": "local dashboard stack teardown complete",
+    "hint": "Debug summary after local dashboard stack teardown; {serverStopped}, {ingestStopped}, and {uplinkStopped} are stop results, while {removed}, {failures}, and {staleFiles} are counts.",
+    "params": {
+      "serverStopped": {
+        "redact": false,
+        "category": "generic"
+      },
+      "ingestStopped": {
+        "redact": false,
+        "category": "generic"
+      },
+      "uplinkStopped": {
+        "redact": false,
+        "category": "generic"
+      },
+      "removed": {
+        "redact": false,
+        "category": "generic"
+      },
+      "failures": {
+        "redact": false,
+        "category": "generic"
+      },
+      "staleFiles": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.removed_beacon": {
+    "id": "b74289c3",
+    "t": "removed beacon",
+    "hint": "Debug message confirming a stale or safe-to-remove beacon file was deleted; {path} is the removed beacon path.",
+    "params": {
+      "path": {
+        "redact": true,
+        "category": "path"
+      }
+    }
+  },
+  "teardown.starting_local_dashboard_stack_teardown": {
+    "id": "f3abf677",
+    "t": "starting local dashboard stack teardown",
+    "hint": "Debug message emitted when teardown starts for the local dashboard server, ingest daemon, uplink daemon, and related beacon files.",
+    "params": {}
+  },
+  "teardown.stopping_dashboard_server": {
+    "id": "b92c9f4b",
+    "t": "stopping dashboard server",
+    "hint": "Debug message before attempting to stop the dashboard server; {pid} is its process ID and {port} is its HTTP port.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.stopping_ingest_daemon": {
+    "id": "c6d26187",
+    "t": "stopping ingest daemon",
+    "hint": "Debug message before attempting to stop the ingest daemon; {pid} is the daemon process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.stopping_uplink_daemon": {
+    "id": "6992df5b",
+    "t": "stopping uplink daemon",
+    "hint": "Debug message before attempting to stop the uplink daemon during full teardown; {pid} is the daemon process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.stopping_uplink_daemon_via_pidfile": {
+    "id": "87dfa0d1",
+    "t": "stopping uplink daemon via pidfile",
+    "hint": "Debug message before stopping an uplink daemon found from the pidfile; {pid} is the daemon process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "teardown.uplink_daemon_stopped": {
+    "id": "945f7668",
+    "t": "uplink daemon stopped",
+    "hint": "Debug message confirming the uplink daemon stopped; {pid} is the uplink daemon process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "telemetry.example_seed": {
+    "id": "0001a2b3",
+    "t": "telemetry catalog initialized",
+    "hint": "Catalog bootstrap marker used when seeding telemetry messages; it is informational and has no placeholders.",
+    "params": {}
+  },
+  "telemetry.prompt": {
+    "id": "2b32d945",
+    "t": "Help improve climon by sending anonymous usage telemetry? [y/N] ",
+    "hint": "Yes/no onboarding prompt asking the user to opt in to anonymous usage telemetry; default is No. Preserve the [y/N] hint convention (capital N marks the default).",
+    "params": {}
+  },
+  "update.applied": {
+    "id": "06376c64",
+    "t": "Update applied. Start new sessions (or restart the server) to use {next}.",
+    "hint": "Confirmation printed after an update is applied successfully; {next} is the newly installed version the user will get after restarting.",
+    "params": {
+      "next": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "update.banner": {
+    "id": "93c086ae",
+    "t": "Update {current} → {next} available — run `climon --update`",
+    "hint": "One-line banner printed at session start when a newer version is available; {current} is the running version and {next} is the available version. Keep the command `climon --update` verbatim and untranslated.",
+    "params": {
+      "current": {
+        "redact": false,
+        "category": "generic"
+      },
+      "next": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "update.deferredLocked": {
+    "id": "9ba6f0a8",
+    "t": "Update could not be applied right now (files in use). Will retry later.",
+    "hint": "Message printed when an update is deferred because target files are locked or in use; the update will be retried automatically later.",
+    "params": {}
+  },
+  "update.failed": {
+    "id": "d886ef90",
+    "t": "climon update failed: {detail}",
+    "hint": "Error printed when `climon update` throws unexpectedly; {detail} is the underlying error message, which may contain filesystem paths, so it is redacted before telemetry transmission.",
+    "params": {
+      "detail": {
+        "redact": true,
+        "category": "generic"
+      }
+    }
+  },
+  "update.upToDate": {
+    "id": "6afe0b5e",
+    "t": "climon is already up to date ({current}).",
+    "hint": "Message printed by `climon update` when no newer version exists; {current} is the already-installed version.",
+    "params": {
+      "current": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "update.verifyFailed": {
+    "id": "8161c051",
+    "t": "Update aborted: signature verification failed. No changes were made.",
+    "hint": "Error printed when an update is rejected because its cryptographic signature could not be verified; nothing was installed.",
+    "params": {}
+  },
+  "uplink.auth_rejected_bridge_closed": {
+    "id": "031af7cb",
+    "t": "auth rejected after bridge closed, stopping",
+    "hint": "Error logged when dev tunnel authentication is detected as rejected after an uplink bridge closes, telling translators this is a stopping condition.",
+    "params": {}
+  },
+  "uplink.auth_rejected_port_wait": {
+    "id": "848c59c4",
+    "t": "auth rejected during port wait, stopping",
+    "hint": "Error logged when dev tunnel authentication is rejected while waiting for the forwarded port, telling translators the uplink will stop.",
+    "params": {}
+  },
+  "uplink.bridge_connected": {
+    "id": "6517714b",
+    "t": "bridge connected, sending hello (clientId={clientId}, keepAlive={keepAlive}ms)",
+    "hint": "Informational debug log emitted when the uplink bridge opens and sends its hello frame; {clientId} is the stable remote client identifier and {keepAlive} is the ping interval in milliseconds.",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "keepAlive": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.channel_error": {
+    "id": "52b4d3d8",
+    "t": "channel error: {message}",
+    "hint": "Error logged when the active uplink socket reports a channel failure; {message} is the low-level socket error text.",
+    "params": {
+      "message": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.channel_idle_destroying_bridge": {
+    "id": "bec740e1",
+    "t": "channel idle for {idleTimeout}ms, destroying bridge",
+    "hint": "Informational debug log emitted when the mux channel has been silent too long and will be closed; {idleTimeout} is the idle limit in milliseconds.",
+    "params": {
+      "idleTimeout": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.channel_teardown": {
+    "id": "1e36e29d",
+    "t": "channel {reason}, tearing down bridge (sent={bytesSent} recv={bytesReceived})",
+    "hint": "Informational debug log emitted while shutting down an uplink bridge; {reason} explains why it ended, and {bytesSent} and {bytesReceived} are traffic counters.",
+    "params": {
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      },
+      "bytesSent": {
+        "redact": false,
+        "category": "generic"
+      },
+      "bytesReceived": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.client_id": {
+    "id": "eff5df80",
+    "t": "clientId: {clientId}",
+    "hint": "Informational debug log that records the stable uplink identity; {clientId} is the generated or configured client identifier.",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.connection_error": {
+    "id": "ad7a01df",
+    "t": "connection error: {message} (code={code})",
+    "hint": "Error logged after an uplink connection attempt fails; {message} is the failure text and {code} is the Node or socket error code, or none.",
+    "params": {
+      "message": {
+        "redact": false,
+        "category": "generic"
+      },
+      "code": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.devtunnel_connect_spawning": {
+    "id": "7b29b6d0",
+    "t": "spawning devtunnel connect for tunnel {tunnelId}, forwarding port {port}",
+    "hint": "Informational debug log emitted before starting devtunnel forwarding; {tunnelId} is the Microsoft dev tunnel identifier and {port} is the forwarded port.",
+    "params": {
+      "tunnelId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.direct_target": {
+    "id": "e4ed89a3",
+    "t": "direct target: {host}:{port}",
+    "hint": "Informational debug log showing a configured direct remote ingest target; {host} is the target hostname and {port} is its TCP port.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.ingest_requested_attach": {
+    "id": "8579e733",
+    "t": "ingest requested attach for session {sessionId}",
+    "hint": "Informational debug log emitted when the ingest side asks to attach to a local session; {sessionId} identifies that session.",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.ingest_requested_detach": {
+    "id": "88140a51",
+    "t": "ingest requested detach for session {sessionId}",
+    "hint": "Informational debug log emitted when the ingest side asks to detach from a local session; {sessionId} identifies that session.",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.initial_reconcile_done": {
+    "id": "8cec1445",
+    "t": "initial reconcile done, advertised {advertisedCount} session(s), sent {bytesSent} bytes",
+    "hint": "Informational debug log after the bridge advertises current local sessions; {advertisedCount} is the number of sessions announced and {bytesSent} is the bytes written so far.",
+    "params": {
+      "advertisedCount": {
+        "redact": false,
+        "category": "generic"
+      },
+      "bytesSent": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.mux_decode_error": {
+    "id": "b6b9691c",
+    "t": "mux decode error, destroying channel",
+    "hint": "Error logged when incoming mux data cannot be decoded and the uplink channel is destroyed.",
+    "params": {}
+  },
+  "uplink.no_reachable_target_resolved": {
+    "id": "4470c780",
+    "t": "no reachable target resolved{detail}",
+    "hint": "Informational debug log when no uplink destination can be selected; {detail} says whether this is a retry because a peer may start later or a final exit.",
+    "params": {
+      "detail": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.no_remote_target_configured": {
+    "id": "43230d4f",
+    "t": "no remote target configured (no peerHome, no enabled tunnel/direct), exiting",
+    "hint": "Informational debug log emitted when uplink has no peer, tunnel, or direct target configured and exits without connecting.",
+    "params": {}
+  },
+  "uplink.port_not_reachable": {
+    "id": "ba3fa775",
+    "t": "port {host}:{port} not reachable: {reason}",
+    "hint": "Informational debug log when the selected ingest endpoint cannot be reached; {host} and {port} identify it and {reason} explains the likely cause.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.port_reachable_connecting": {
+    "id": "dae08426",
+    "t": "port reachable, connecting to {host}:{port}",
+    "hint": "Informational debug log emitted after a target port probe succeeds and before connecting; {host} is the endpoint hostname and {port} is its TCP port.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.reconnecting": {
+    "id": "acdfe4d4",
+    "t": "reconnecting in {backoff}ms...",
+    "hint": "Informational debug log emitted before retrying a failed uplink connection; {backoff} is the delay in milliseconds.",
+    "params": {
+      "backoff": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.resolved_peer_target": {
+    "id": "96a3ac6d",
+    "t": "resolved peer target: {host}:{port}",
+    "hint": "Informational debug log when peer discovery finds a reachable ingest target; {host} is the peer hostname and {port} is the ingest port.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.singleton_acquired_supervisor_loop": {
+    "id": "4a216bbf",
+    "t": "singleton acquired, starting supervisor loop",
+    "hint": "Informational debug log emitted after this process wins the uplink singleton lock and starts the supervisor retry loop.",
+    "params": {}
+  },
+  "uplink.singleton_already_running": {
+    "id": "d56c4771",
+    "t": "another uplink instance is already running (pid={pid}), exiting",
+    "hint": "Informational debug log emitted when another uplink process already holds the singleton lock; {pid} is that process ID.",
+    "params": {
+      "pid": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.tcp_channel_established": {
+    "id": "48ad278b",
+    "t": "TCP channel established, starting mux bridge",
+    "hint": "Informational debug log emitted when the TCP connection to ingest succeeds and the mux bridge is about to start.",
+    "params": {}
+  },
+  "uplink.tunnel_port_not_found": {
+    "id": "f25bdcfa",
+    "t": "could not discover port for tunnel {tunnelId} (no port mapping found)",
+    "hint": "Informational debug log emitted when a dev tunnel has no discoverable port mapping; {tunnelId} is the tunnel being inspected.",
+    "params": {
+      "tunnelId": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
+  "uplink.waiting_for_port": {
+    "id": "c6b39fa3",
+    "t": "waiting for port {host}:{port} to become reachable...",
+    "hint": "Informational debug log emitted while polling for the selected ingest endpoint to accept connections; {host} is the endpoint hostname and {port} is its TCP port.",
+    "params": {
+      "host": {
+        "redact": true,
+        "category": "hostname"
+      },
+      "port": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  }
+}

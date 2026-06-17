@@ -19,8 +19,11 @@ export function initLogger(role: LogRole, options: LoggerInitOptions = {}): Logg
   const env = options.env ?? process.env;
   const level = options.level ?? resolveEffectiveLevel(env);
 
+  const base: Record<string, unknown> = { role, pid: process.pid, version: VERSION };
+  if (options.installId) base.installId = options.installId;
+
   if (level === "silent") {
-    root = pino({ level: "silent", enabled: false, base: { role, pid: process.pid, version: VERSION } });
+    root = pino({ level: "silent", enabled: false, base });
     return root;
   }
 
@@ -32,7 +35,7 @@ export function initLogger(role: LogRole, options: LoggerInitOptions = {}): Logg
 
   const dest = streams.length === 1 ? streams[0].stream : pino.multistream(streams, { dedupe: false });
   root = pino(
-    { level, redact: REDACT_OPTIONS, base: { role, pid: process.pid, version: VERSION } },
+    { level, redact: REDACT_OPTIONS, base },
     dest,
   );
   return root;

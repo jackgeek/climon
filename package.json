@@ -16,7 +16,7 @@
     "compile": "bun scripts/compile.ts",
     "sign-release": "bun scripts/sign-release.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "bun run typecheck",
+    "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",
     "release": "bun scripts/release.ts",
     "dev": "bun src/index.ts",
@@ -24,7 +24,12 @@
     "start": "bun src/index.ts",
     "logs": "bun scripts/logs.ts",
     "log-level": "bun scripts/log-level.ts",
-    "docs:config": "bun scripts/generate-config-docs.ts"
+    "docs:config": "bun scripts/generate-config-docs.ts",
+    "messages:extract": "bun scripts/extract-messages.ts extract",
+    "messages:check": "bun scripts/extract-messages.ts check",
+    "messages:merge": "bun scripts/extract-messages.ts merge",
+    "messages:hints": "bun scripts/extract-messages.ts hints",
+    "messages:publish": "bun scripts/extract-messages.ts publish"
   },
   "engines": {
     "bun": ">=1.1.0"

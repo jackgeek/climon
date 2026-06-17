@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { t } from "../i18n/messages.js";
+import { t } from "../i18n/t.js";
 import { VERSION } from "../version.js";
 import { compareSemver } from "./manifest.js";
 import { getAvailableVersion, isAutoUpdate, shouldCheck } from "./state.js";

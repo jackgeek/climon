@@ -96,6 +96,70 @@ connection string and it is enabled automatically (off by default):
 
 This sends log data over the network and is opt-in only.
 
+Every record forwarded to Application Insights carries an anonymous
+`installId` — a random UUID stored in `$CLIMON_HOME/install.json`, generated on
+first server start. It contains no personal information and exists only so logs
+from one installation can be distinguished from another.
+
+Forwarding can be turned off without removing the connection string by setting
+`telemetry.enabled` to `false`. Any other value (including absent) leaves the
+"connection string present ⇒ enabled" behavior unchanged.
+
+### Compact emission
+
+Records are rewritten before they leave the process so Application Insights
+never receives rendered message text:
+
+- Catalogued messages (logged via the `logMsg` helper) are sent as their 8-hex
+  message id in the trace `message` field instead of the full string. The hex id
+  maps back to the source template in `src/i18n/messages.en.json`, which a log
+  viewer (Azure Workbook / KQL `externaldata` join, Grafana, or Seq) can stitch
+  back in realtime — the same catalog also drives i18n.
+- Every catalog entry carries a required `hint`: a short translator-facing note
+  describing the message's context, tone, and what each `{placeholder}` means. It
+  is enforced by `bun run messages:check` and published into the lookup so the
+  viewer can show it alongside the template.
+- Interpolation arguments are attached as flat top-level properties, but any
+  parameter the catalog entry marks `redact: true` (hostnames, paths, URLs,
+  config values, tokens, PII) is replaced with `[REDACTED:<category>]` before
+  sending. Non-redacted params stay as queryable properties.
+- Records that are not yet catalogued fall back to the sentinel id `00000000`
+  and keep their rendered text, so emission stays correct during the migration.
+
+Local log streams (console, file) always keep the full rendered text; only the
+Application Insights stream is compacted and redacted.
+
+### Viewing compacted logs
+
+Because Application Insights stores the 8-hex id rather than the message text,
+re-attach the template at view time by joining against the published catalog —
+no custom viewer is needed. Publish the lookup whenever the catalog changes:
+
+```sh
+bun run messages:publish   # writes dist/messages.en.csv and dist/messages.en.lookup.json
+```
+
+Host `messages.en.csv` somewhere the viewer can read (e.g. an Azure blob with a
+read SAS URL), then use **Azure Monitor Workbooks** (or Grafana with the Azure
+Monitor data source) with a KQL query that joins on the id:
+
+```kusto
+let Catalog = externaldata(id:string, key:string, template:string, hint:string, params:string, redacted:string)
+    [@"https://<your-blob>/messages.en.csv"] with(format='csv', ignoreFirstRecord=true);
+traces
+| extend msgId = tostring(customDimensions.msgId)
+| join kind=leftouter Catalog on $left.msgId == $right.id
+| project TimeGenerated, severityLevel, template, customDimensions
+| order by TimeGenerated asc
+```
+
+The workbook auto-refresh interval gives realtime tailing. Joining id → template
+is native; full `{param}` re-interpolation is not a KQL one-liner, so display the
+template alongside the `customDimensions` properties grid (redacted params already
+show as `[REDACTED:<category>]`). The `params`/`redacted` columns tell a query
+which properties map into a template and which were scrubbed. Queries run under
+the viewer's existing Azure RBAC — climon stores no read credentials.
+
 ## Logging during tests
 
 `bun test` sets the level to `silent` automatically (via `tests/log-silence.ts`,

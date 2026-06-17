@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { t, MESSAGES } from "../src/i18n/messages.js";
+import { t } from "../src/i18n/t.js";
+import { loadCatalog } from "../src/i18n/catalog.js";
 
-describe("i18n messages", () => {
-  test("returns the English string for a known key", () => {
-    expect(t("eula.acceptPrompt")).toBe(MESSAGES.en["eula.acceptPrompt"]);
+describe("i18n user-facing messages (t)", () => {
+  test("returns the catalogued English string for a known key", () => {
+    expect(t("eula.acceptPrompt")).toBe(loadCatalog()["eula.acceptPrompt"].t);
   });
 
   test("interpolates named params", () => {
@@ -13,7 +14,6 @@ describe("i18n messages", () => {
   });
 
   test("missing key falls back to the key itself", () => {
-    // @ts-expect-error intentionally unknown key
     expect(t("does.not.exist")).toBe("does.not.exist");
   });
 });

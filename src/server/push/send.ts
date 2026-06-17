@@ -1,5 +1,6 @@
 import { listSubscriptions, removeSubscription, type StoredPushSubscription } from "./subscriptions.js";
 import { child } from "../../logging/logger.js";
+import { logMsg } from "../../i18n/log-msg.js";
 
 export interface WebPushClient {
   sendNotification(subscription: StoredPushSubscription, payload: string): Promise<unknown>;
@@ -29,7 +30,7 @@ export async function sendPushToAll(
         if (status === 404 || status === 410) {
           await removeSubscription(climonHome, subscription.endpoint);
         } else {
-          child("push").warn({ endpoint: subscription.endpoint, err: error instanceof Error ? error.message : String(error) }, "send failed");
+          logMsg(child("push"), "warn", "push.send_failed", { endpoint: subscription.endpoint, err: error instanceof Error ? error.message : String(error) });
         }
       }
     }),

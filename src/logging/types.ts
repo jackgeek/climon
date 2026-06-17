@@ -16,4 +16,6 @@ export interface LoggerInitOptions {
   extraStreams?: StreamEntry[];
   /** Override for the climon home / env (testing). */
   env?: NodeJS.ProcessEnv;
+  /** Anonymous installation id, added to the logger base when provided. */
+  installId?: string;
 }

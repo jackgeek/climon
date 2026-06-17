@@ -1,0 +1,92 @@
+import { Transform } from "node:stream";
+import { lookupByKey } from "../i18n/catalog.js";
+import { SENTINEL_MSG_ID } from "../i18n/log-msg.js";
+import type { Catalog, CatalogEntry } from "../i18n/types.js";
+
+/**
+ * Transforms pino records into a compact form for Application Insights so the
+ * variable, potentially sensitive rendered text never leaves the machine:
+ *
+ *  - catalogued records (with `msgId`) send the 8-hex id as the trace message
+ *    and replace each redact:true parameter field with a typed marker, per the
+ *    catalog's per-parameter metadata; non-redacted params stay as flat
+ *    properties so they remain queryable in Application Insights;
+ *  - uncatalogued records (legacy `logger.x(...)` sites not yet migrated) get a
+ *    sentinel id and keep their text for now, per the migration plan.
+ */
+
+/**
+ * Returns a copy of `record` with every redact:true catalog parameter present
+ * at the top level replaced by a typed marker. Other fields are untouched.
+ */
+export function redactParams(
+  record: Record<string, unknown>,
+  entry: CatalogEntry | undefined,
+): Record<string, unknown> {
+  const out = { ...record };
+  if (!entry) return out;
+  for (const [name, meta] of Object.entries(entry.params)) {
+    if (meta.redact && Object.prototype.hasOwnProperty.call(out, name)) {
+      out[name] = `[REDACTED:${meta.category ?? "generic"}]`;
+    }
+  }
+  return out;
+}
+
+/** Returns a new, compacted copy of a pino record for App Insights. */
+export function compactRecord(
+  record: Record<string, unknown>,
+  catalog: Catalog,
+): Record<string, unknown> {
+  const msgId = typeof record.msgId === "string" ? record.msgId : undefined;
+
+  if (!msgId) {
+    // Keep the rendered `msg` until the call-site migration is complete.
+    return { ...record, msgId: SENTINEL_MSG_ID };
+  }
+
+  const entry = lookupByKey(catalog, String(record.msgKey ?? ""));
+  const out = redactParams(record, entry);
+  // The trace message becomes the stable id; the rendered text is discarded.
+  out.msg = msgId;
+  return out;
+}
+
+/**
+ * A Transform that rewrites the NDJSON pino stream line-by-line into compacted
+ * records, suitable to pipe into pino-applicationinsights' write stream.
+ */
+export function createCompactingTransform(catalog: Catalog): Transform {
+  let buffer = "";
+  return new Transform({
+    transform(chunk, _enc, cb) {
+      buffer += chunk.toString();
+      let nl: number;
+      while ((nl = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (line.trim() === "") continue;
+        try {
+          const compacted = compactRecord(JSON.parse(line), catalog);
+          this.push(`${JSON.stringify(compacted)}\n`);
+        } catch {
+          // Forward unparseable lines unchanged rather than dropping telemetry.
+          this.push(`${line}\n`);
+        }
+      }
+      cb();
+    },
+    flush(cb) {
+      if (buffer.trim() !== "") {
+        try {
+          const compacted = compactRecord(JSON.parse(buffer), catalog);
+          this.push(`${JSON.stringify(compacted)}\n`);
+        } catch {
+          this.push(buffer);
+        }
+        buffer = "";
+      }
+      cb();
+    },
+  });
+}

@@ -5,6 +5,7 @@ import { readServerState, readServerStateFromDir } from "../server-state.js";
 import { readIngestStateFromDir, resolveIngestPort } from "./ingest-state.js";
 import { peerHostCandidates } from "./peer.js";
 import { child } from "../logging/logger.js";
+import { logMsg } from "../i18n/log-msg.js";
 
 const log = () => child("discovery");
 
@@ -62,11 +63,15 @@ export async function discoverDashboard(
   const isAlive = deps.isAlive ?? isProcessAlive;
   const probeTcp = deps.probeTcp ?? probeTcpDefault;
 
-  log().debug("discovering dashboard...");
+  logMsg(log(), "debug", "discovery.discovering_dashboard", {});
   const local = await readServerState(env);
   if (local && isAlive(local.pid)) {
     const ingest = await resolveIngestPort(env, { isAlive });
-    log().debug(`found local dashboard: pid=${local.pid} port=${local.port} ingest=${ingest ?? "none"}`);
+    logMsg(log(), "debug", "discovery.found_local_dashboard", {
+      pid: local.pid,
+      port: local.port,
+      ingest: ingest ?? "none"
+    });
     return {
       location: "local",
       host: "127.0.0.1",
@@ -75,20 +80,23 @@ export async function discoverDashboard(
       url: `http://127.0.0.1:${local.port}/`
     };
   }
-  if (local) log().debug(`local server.json exists (pid=${local.pid}) but process not alive`);
+  if (local) logMsg(log(), "debug", "discovery.local_server_pid_not_alive", { pid: local.pid });
 
   const peerHome = asString(resolveConfigSetting("remote.peerHome", env, cwd));
   if (!peerHome) {
-    log().debug("no peerHome configured, no dashboard found");
+    logMsg(log(), "debug", "discovery.no_peer_home_configured", {});
     return undefined;
   }
-  log().debug(`checking peer at ${peerHome}`);
+  logMsg(log(), "debug", "discovery.checking_peer_home", { peerHome });
   const peerIngest = await readIngestStateFromDir(peerHome);
   if (!peerIngest) {
-    log().debug("no peer ingest.json found (peer ingest not running?)");
+    logMsg(log(), "debug", "discovery.no_peer_ingest_found", {});
     return undefined;
   }
-  log().debug(`peer ingest.json: port=${peerIngest.port} host=${peerIngest.host ?? "unset"}`);
+  logMsg(log(), "debug", "discovery.peer_ingest_state", {
+    port: peerIngest.port,
+    host: peerIngest.host ?? "unset"
+  });
 
   const override = asString(resolveConfigSetting("remote.peerHost", env, cwd));
   const candidates: string[] = [];
@@ -96,11 +104,15 @@ export async function discoverDashboard(
   for (const host of override ? [override] : peerHostCandidates(env)) {
     if (!candidates.includes(host)) candidates.push(host);
   }
-  log().debug(`probing peer host candidates: [${candidates.join(", ")}]`);
+  logMsg(log(), "debug", "discovery.probing_peer_host_candidates", { candidates: candidates.join(", ") });
 
   for (const host of candidates) {
     const reachable = await probeTcp(host, peerIngest.port);
-    log().debug(`  ${host}:${peerIngest.port} → ${reachable ? "reachable" : "unreachable"}`);
+    logMsg(log(), "debug", "discovery.peer_host_probe_result", {
+      host,
+      port: peerIngest.port,
+      reachability: reachable ? "reachable" : "unreachable"
+    });
     if (reachable) {
       const peerServer = await readServerStateFromDir(peerHome);
       const dashboardPort = peerServer?.port ?? peerIngest.port;
@@ -113,6 +125,6 @@ export async function discoverDashboard(
       };
     }
   }
-  log().debug("no reachable peer host found");
+  logMsg(log(), "debug", "discovery.no_reachable_peer_host_found", {});
   return undefined;
 }

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
-import { t } from "../i18n/messages.js";
+import { t } from "../i18n/t.js";
 import { installFilesForPlatform } from "../install/install-manifest.js";
 import { downloadToFile, downloadText } from "./download.js";
 import { currentArtifactKey, isNewer, type Manifest } from "./manifest.js";
