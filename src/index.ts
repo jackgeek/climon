@@ -20,6 +20,12 @@ import {
 import { VERSION } from "./version.js";
 import { initLogger } from "./logging/logger.js";
 import { writeStdout, writeStderr, logCliCommand } from "./logging/cli-io.js";
+import { runUpdateCli } from "./update/update-cli.js";
+import { runSetupCommand } from "./setup/setup-cmd.js";
+import {
+  maybeShowUpdateBanner,
+  maybeSpawnBackgroundCheck
+} from "./update/launch-hooks.js";
 
 const INSTALLER_BUNDLE_NAME = "climon-alpha";
 
@@ -62,7 +68,12 @@ async function main(): Promise<number> {
 
   const parsed = parseArgs(process.argv.slice(2));
 
-  if (parsed.command !== "uplink") {
+  if (parsed.command === "shell" || parsed.command === "run") {
+    await maybeShowUpdateBanner(process.env);
+    maybeSpawnBackgroundCheck(process.execPath, process.env);
+  }
+
+  if (parsed.command !== "uplink" && parsed.command !== "update-check") {
     initLogger("client");
     logCliCommand(parsed.command);
   }
@@ -119,6 +130,15 @@ async function main(): Promise<number> {
         throw new Error(`No session found with id '${parsed.id}'.`);
       }
       return await runSessionHost(parsed.id, meta, { headless: true });
+    }
+    case "update":
+      return await runUpdateCli(parsed.argv);
+    case "setup":
+      return await runSetupCommand(parsed.argv);
+    case "update-check": {
+      const { runBackgroundCheck } = await import("./update/check.js");
+      await runBackgroundCheck({ env: process.env, currentVersion: VERSION });
+      return 0;
     }
     default:
       writeStderr(helpText, { log: false });

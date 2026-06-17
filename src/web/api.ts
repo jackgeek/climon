@@ -1,4 +1,5 @@
 import type { AnsiColor, SessionColorMode, SessionMeta } from "../types.js";
+import type { FeatureFlagState } from "../features.js";
 
 const DEV_TUNNELS_HOST_SUFFIX = ".devtunnels.ms";
 export const TUNNEL_SKIP_ANTI_PHISHING_PARAM = "X-Tunnel-Skip-AntiPhishing-Page";
@@ -163,19 +164,28 @@ export function eventsUrl(): string {
   return withQuery("/api/events");
 }
 
-export async function fetchHealth(): Promise<{ version: string | null; remotesEnabled: boolean }> {
+export async function fetchHealth(): Promise<{
+  version: string | null;
+  remotesEnabled: boolean;
+  features: Record<string, FeatureFlagState>;
+}> {
   try {
     const res = await fetch(withQuery("/health"));
     if (!res.ok) {
-      return { version: null, remotesEnabled: false };
+      return { version: null, remotesEnabled: false, features: {} };
     }
-    const data = (await res.json()) as { version?: string; remotesEnabled?: boolean };
+    const data = (await res.json()) as {
+      version?: string;
+      remotesEnabled?: boolean;
+      features?: Record<string, FeatureFlagState>;
+    };
     return {
       version: typeof data.version === "string" ? data.version : null,
-      remotesEnabled: data.remotesEnabled === true
+      remotesEnabled: data.remotesEnabled === true,
+      features: data.features && typeof data.features === "object" ? data.features : {}
     };
   } catch {
-    return { version: null, remotesEnabled: false };
+    return { version: null, remotesEnabled: false, features: {} };
   }
 }
 

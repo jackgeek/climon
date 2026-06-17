@@ -1,11 +1,9 @@
 import { copyFileSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { installFilesForPlatform } from "./install-manifest.js";
 
 /** Files in the source (zip) directory and their installed names. */
-const INSTALL_FILES: { source: string; dest: string }[] = [
-  { source: "install.exe", dest: "climon.exe" },
-  { source: "climon-beta", dest: "climon-beta" },
-];
+const INSTALL_FILES = installFilesForPlatform("win32");
 const LOCKED_COPY_ERROR_CODES = new Set(["EBUSY", "EACCES", "EPERM"]);
 
 export type CopyFile = (source: string, destination: string) => void;

@@ -1,5 +1,30 @@
 [
   {
+    "version": "1.0.0",
+    "changes": [
+      "Add `climon update`: verify Ed25519-signed releases and swap binaries atomically without killing running sessions",
+      "Check for new releases in the background and show an update-available banner",
+      "Add guided onboarding with opt-ins when installing on all platforms",
+      "Add a licence acceptance prompt on first run",
+      "Add opt-in anonymous telemetry",
+      "Add a feature-flag system in config.jsonc to gate experimental features such as session spawning",
+      "Add an installable mobile PWA dashboard with Web Push notifications for needs-attention sessions",
+      "Suppress and auto-acknowledge attention notifications for the session you are currently viewing",
+      "Use human-readable IDs for new sessions",
+      "Show a client ID badge on local sessions, defaulting to the hostname",
+      "Fix terminal corruption in browser viewers by delivering SIGWINCH to child processes and nested descendants on resize",
+      "Preserve and restore mouse tracking across dashboard reconnects and replays",
+      "Recover the terminal WebSocket and remote sessions after a server restart",
+      "Make unclamped (fill) sizing the default for new sessions",
+      "Fix Tunnel Link not restoring after a server restart",
+      "Restore the nested-session warning instead of blocking new sessions",
+      "Don't clear attention when a viewer resize reflows the screen",
+      "Restore attention acknowledgement when input is sent from the browser",
+      "Fix cross-OS server and ingest shutdown with newest-wins promote",
+      "Refine sidebar layout and active session item styling"
+    ]
+  },
+  {
     "version": "0.12.0",
     "changes": [
       "Refresh terminal rendering when sessions are focused or shown on mobile",
@@ -59,9 +84,7 @@
   },
   {
     "version": "0.9.0",
-    "changes": [
-      "Promote remote dev tunnel support to stable"
-    ]
+    "changes": ["Promote remote dev tunnel support to stable"]
   },
   {
     "version": "0.8.4",
@@ -101,15 +124,11 @@
   },
   {
     "version": "0.8.0",
-    "changes": [
-      "Dashboard tunnel persistence for stable remote URLs"
-    ]
+    "changes": ["Dashboard tunnel persistence for stable remote URLs"]
   },
   {
     "version": "0.7.0",
-    "changes": [
-      "Authenticated tunnel link support"
-    ]
+    "changes": ["Authenticated tunnel link support"]
   },
   {
     "version": "0.6.0",
@@ -148,9 +167,7 @@
   },
   {
     "version": "0.3.1",
-    "changes": [
-      "Gate remotes menu behind server flag"
-    ]
+    "changes": ["Gate remotes menu behind server flag"]
   },
   {
     "version": "0.3.0",
@@ -162,9 +179,7 @@
   },
   {
     "version": "0.2.0",
-    "changes": [
-      "Polish dashboard terminal edge cases"
-    ]
+    "changes": ["Polish dashboard terminal edge cases"]
   },
   {
     "version": "0.1.17",
@@ -211,15 +226,11 @@
   },
   {
     "version": "0.1.12",
-    "changes": [
-      "Use loopback TCP session sockets"
-    ]
+    "changes": ["Use loopback TCP session sockets"]
   },
   {
     "version": "0.1.11",
-    "changes": [
-      "Bulk kill command for local sessions"
-    ]
+    "changes": ["Bulk kill command for local sessions"]
   },
   {
     "version": "0.1.10",
@@ -264,9 +275,7 @@
   },
   {
     "version": "0.1.5",
-    "changes": [
-      "Mobile special-key bar component"
-    ]
+    "changes": ["Mobile special-key bar component"]
   },
   {
     "version": "0.1.4",

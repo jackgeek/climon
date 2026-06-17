@@ -109,6 +109,34 @@ export interface LoggingConfig {
   appInsights?: LoggingAppInsightsConfig;
 }
 
+export interface EulaConfig {
+  /** Whether the current EULA version has been accepted. */
+  accepted?: boolean;
+  /** The EULA_VERSION the user accepted. */
+  version?: string;
+  /** ISO-8601 timestamp recording when the EULA was accepted. */
+  acceptedAt?: string;
+}
+
+export interface TelemetryConfig {
+  /** Whether anonymous, opt-in usage telemetry is enabled. */
+  enabled?: boolean;
+}
+
+export interface UpdateConfig {
+  /** Whether signed updates are automatically downloaded and applied in the background. */
+  auto?: boolean;
+  /** ISO-8601 timestamp of the last background update check. */
+  lastCheck?: string;
+  /** Latest version discovered by the background update check, if newer than the installed version. */
+  availableVersion?: string;
+}
+
+export interface InstallConfig {
+  /** Anonymous, randomly generated install identifier used only when telemetry is enabled. */
+  id?: string;
+}
+
 export interface AttentionConfig {
   /**
    * Number of seconds the rendered terminal grid must remain unchanged before
@@ -128,6 +156,12 @@ export interface ClimonConfig {
   session?: SessionDefaultsConfig;
   tunnelLink?: TunnelLinkConfig;
   logging?: LoggingConfig;
+  /** Feature flag values keyed by flag name; values are "enabled"/"disabled" (lenient on read). */
+  feature?: Record<string, string>;
+  eula?: EulaConfig;
+  telemetry?: TelemetryConfig;
+  update?: UpdateConfig;
+  install?: InstallConfig;
 }
 
 export interface SessionMeta {

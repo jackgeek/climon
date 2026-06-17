@@ -150,6 +150,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     const parsedTerminal = isObjectRecord(parsed.terminal) ? parsed.terminal : {};
     const parsedAttention = isObjectRecord(parsed.attention) ? parsed.attention : {};
     const parsedSession = isObjectRecord(parsed.session) ? parsed.session : {};
+    const parsedFeature = isObjectRecord(parsed.feature) ? (parsed.feature as Record<string, string>) : {};
     const parsedPriority = typeof parsedSession.priority === "number" ? { priority: parsedSession.priority } : {};
     const parsedColor = typeof parsedSession.color === "string" ? { color: parsedSession.color } : {};
     const parsedConfig = {
@@ -158,7 +159,8 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
       terminal: { ...defaults.terminal, ...parsedTerminal },
       attention: { ...defaults.attention, ...parsedAttention },
       remote: isObjectRecord(parsed.remote) ? parsed.remote : undefined,
-      session: { ...defaults.session, ...parsedPriority, ...parsedColor }
+      session: { ...defaults.session, ...parsedPriority, ...parsedColor },
+      feature: { ...(defaults.feature ?? {}), ...parsedFeature }
     };
     const parsedConfigObject = parsedConfig as ClimonConfig;
     // Backfill sections added after a config file was first written.
@@ -308,6 +310,19 @@ export function resolveConfigSetting(
     if (value !== undefined) return value;
   }
   return undefined;
+}
+
+/**
+ * Reads a dotted config key from ONLY the global `$CLIMON_HOME/config.jsonc`,
+ * bypassing the cwd-upward cascade used by `resolveConfigSetting`. Use this for
+ * installer/EULA/update state, which is per-machine and must not be shadowed by
+ * a project-local `.climon/config.jsonc`. Returns undefined when unset.
+ */
+export function readGlobalConfigSetting(
+  key: string,
+  env: NodeJS.ProcessEnv = process.env
+): unknown {
+  return readDottedKey(readSparseConfig(getClimonHome(env)), key);
 }
 
 export interface ConfigDebugKey {

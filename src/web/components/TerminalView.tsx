@@ -258,6 +258,7 @@ interface Props {
   onFontSizeChange: (delta: number) => void;
   serverConnected: boolean;
   serverReconnectToken: number;
+  onLiveInteraction?: () => void;
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
@@ -271,7 +272,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     fontSize,
     onFontSizeChange,
     serverConnected,
-    serverReconnectToken
+    serverReconnectToken,
+    onLiveInteraction
   },
   ref
 ) {
@@ -297,6 +299,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const awaitingReplayRef = useRef(false);
   const replayAfterNextResizeRef = useRef(false);
   const lastServerReconnectTokenRef = useRef(serverReconnectToken);
+  const onLiveInteractionRef = useRef(onLiveInteraction);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -306,7 +309,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     selectedSessionRef.current = session;
     visibleRef.current = visible;
     serverConnectedRef.current = serverConnected;
-  }, [session, visible, serverConnected]);
+    onLiveInteractionRef.current = onLiveInteraction;
+  }, [session, visible, serverConnected, onLiveInteraction]);
 
   useEffect(() => {
     onViewModeChangeRef.current = onViewModeChange;
@@ -692,6 +696,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // Register input handling once and route to the current socket. Registering
     // this per-connection would duplicate every keystroke.
     const dataDisposable = term.onData((data) => {
+      const liveSession = selectedSessionRef.current;
+      if (liveSession && isLiveStatus(liveSession.status)) {
+        // Signal interaction even if the socket is closed: the user is actively
+        // trying to use a live session, which should surface the reconnect
+        // overlay immediately while the server is unreachable.
+        onLiveInteractionRef.current?.();
+      }
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "input", data }));
@@ -790,6 +801,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     },
     refit,
     sendInput: (data: string) => {
+      const liveSession = selectedSessionRef.current;
+      if (liveSession && isLiveStatus(liveSession.status)) {
+        onLiveInteractionRef.current?.();
+      }
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "input", data }));

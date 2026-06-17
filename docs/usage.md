@@ -57,6 +57,45 @@ climon attach <id>        # reattach a running session
 climon kill <id>          # terminate a session and remove its metadata
 ```
 
+## Onboarding, telemetry, and updates
+
+### `climon setup`
+
+Re-run the first-run onboarding flow (licence, telemetry, auto-update) at any
+time. Interactive by default; use flags for non-interactive setup:
+
+```bash
+climon setup                                            # interactive prompts
+climon setup --apply --accept-eula --telemetry=on --auto-update=off
+```
+
+- `--apply` — non-interactive; apply flags without prompting.
+- `--accept-eula` — accept the licence (required to complete `--apply`).
+- `--telemetry=on|off` — anonymous usage telemetry (default **off**).
+- `--auto-update=on|off` — background auto-update (default **off**).
+
+You can also change these later with `climon config telemetry.enabled <bool>`
+and `climon config update.auto <bool>`.
+
+### `climon update`
+
+Manually download, verify, and apply the latest release:
+
+```bash
+climon update
+```
+
+The artifact's Ed25519 detached signature is verified against the embedded
+public key before any file is replaced; unverifiable or tampered downloads are
+rejected and nothing changes. Updates are **non-destructive** — they never kill
+running sessions or a running dashboard server. Binaries are swapped atomically
+(rename-over on Unix, displace-to-`.old` on Windows) and deferred when locked.
+Running processes keep the old code; newly started sessions and a restarted
+server use the new version.
+
+When `update.auto` is off (default), climon prints a one-line banner when a
+newer version is available instead of applying it automatically.
+
 ## The dashboard
 
 - **Session list** (left): every monitored session with a status badge —
@@ -261,6 +300,17 @@ home machine; otherwise keep `devtunnel host climon-tunnel` running yourself.
 Then copy the generated climon config script from the dialog and run it on the
 devbox. Ensure the devbox is also logged in (`devtunnel user login`).
 
+### Feature flags
+
+Major features can be gated behind feature flags stored under the `feature.` prefix in `config.jsonc` (for example `feature.sessionSpawning`). Each flag accepts `"enabled"` or `"disabled"`; any other value is treated as disabled.
+
+```
+climon config feature.sessionSpawning enabled
+climon config feature.sessionSpawning disabled
+```
+
+Every flag carries a maturity status — `experimental`, `incomplete`, `untested`, `known-issues`, or `ready`. Only `ready` features are considered safe; enabling a feature with any other status prints a warning. Some flags may be locked to a value by the application build, in which case your configured value has no effect until that build-level override is removed.
+
 <!-- BEGIN GENERATED CONFIG SETTINGS -->
 ### `climon config`
 
@@ -304,4 +354,13 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `tunnelLink.keepAlive` | number | `60` | server | Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel relay to prevent idle disconnection. Set to 0 to disable keep-alive pings. |
 | `logging.level` | string | `trace` | client, daemon, server | Minimum log level emitted by climon processes. One of: trace, debug, info, warn, error, fatal, silent. Defaults to trace (everything). Set to silent to disable logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable. |
 | `logging.appInsights.connectionString` | string | unset | server | Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable. (**sensitive**) |
+| `feature.sessionSpawning` | string | `disabled` | client, daemon, server, browser | Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled". [status: experimental] |
+| `eula.accepted` | boolean | `false` | client | Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing. (**internal**) |
+| `eula.version` | string | unset | client | The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance. (**internal**) |
+| `eula.acceptedAt` | string | unset | client | ISO-8601 timestamp recording when the EULA was accepted. (**internal**) |
+| `telemetry.enabled` | boolean | `false` | client, server | When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default. |
+| `update.auto` | boolean | `false` | client | When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`. |
+| `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |
+| `update.availableVersion` | string | unset | client | Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update. (**internal**) |
+| `install.id` | string | unset | client, server | Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information. (**internal**) |
 <!-- END GENERATED CONFIG SETTINGS -->

@@ -8,7 +8,8 @@ import {
   MainHeader,
   ServerReconnectOverlay,
   shouldShowServerReconnectOverlay,
-  type ServerConnectionState
+  reconnectOverlayEntryMode,
+  RECONNECT_VISIBILITY_GRACE_MS,
 } from "../src/web/App.js";
 import { shouldDeleteSessionWithoutDialog } from "../src/web/App.js";
 
@@ -141,25 +142,33 @@ describe("scheduleTerminalRefit", () => {
   });
 
   describe("ServerReconnectOverlay", () => {
-    test("is only shown after an established server connection is lost", () => {
-      const visibleStates: ServerConnectionState[] = ["reconnecting"];
-      const hiddenStates: ServerConnectionState[] = ["connecting", "connected"];
-
-      for (const state of visibleStates) {
-        expect(shouldShowServerReconnectOverlay(state)).toBe(true);
-      }
-      for (const state of hiddenStates) {
-        expect(shouldShowServerReconnectOverlay(state)).toBe(false);
-      }
+    test("is only shown while reconnecting and armed", () => {
+      expect(shouldShowServerReconnectOverlay("reconnecting", true)).toBe(true);
+      expect(shouldShowServerReconnectOverlay("reconnecting", false)).toBe(false);
+      expect(shouldShowServerReconnectOverlay("connecting", true)).toBe(false);
+      expect(shouldShowServerReconnectOverlay("connecting", false)).toBe(false);
+      expect(shouldShowServerReconnectOverlay("connected", true)).toBe(false);
+      expect(shouldShowServerReconnectOverlay("connected", false)).toBe(false);
     });
 
-    test("alerts that the server connection was lost and reconnects automatically", () => {
+    test("entry mode is immediate only when the page recently became visible", () => {
+      expect(reconnectOverlayEntryMode({ pageVisible: true, msSinceVisible: 0 })).toBe("immediate");
+      expect(
+        reconnectOverlayEntryMode({ pageVisible: true, msSinceVisible: RECONNECT_VISIBILITY_GRACE_MS })
+      ).toBe("immediate");
+      expect(
+        reconnectOverlayEntryMode({ pageVisible: true, msSinceVisible: RECONNECT_VISIBILITY_GRACE_MS + 1 })
+      ).toBe("delayed");
+      expect(reconnectOverlayEntryMode({ pageVisible: false, msSinceVisible: 0 })).toBe("delayed");
+    });
+
+    test("shows a calm reconnecting message", () => {
       const markup = renderToStaticMarkup(createElement(ServerReconnectOverlay));
 
       expect(markup).toContain('role="alert"');
       expect(markup).toContain('tabindex="-1"');
-      expect(markup).toContain("Connection lost");
-      expect(markup).toContain("The climon server connection was lost. Reconnecting automatically...");
+      expect(markup).toContain("Reconnecting");
+      expect(markup).toContain("Re-establishing connection to the climon server...");
     });
 
     test("refreshes all sessions before reattaching terminals after a server reconnect", () => {

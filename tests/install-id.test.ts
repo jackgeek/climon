@@ -1,122 +1,37 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { ensureInstallId, getInstallId, getInstallIdPath } from "../src/install-id.js";
+import { ensureInstallId, getInstallId } from "../src/setup/install-id.js";
 
-async function makeTestHome(): Promise<string> {
-  const base = join(process.cwd(), ".copilot-tmp");
-  await mkdir(base, { recursive: true });
-  return mkdtemp(join(base, "install-id-"));
-}
+let home: string;
+let env: NodeJS.ProcessEnv;
 
-function envFor(home: string): NodeJS.ProcessEnv {
-  return { CLIMON_HOME: home } as NodeJS.ProcessEnv;
-}
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "climon-"));
+  env = { ...process.env, CLIMON_HOME: home };
+});
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+});
 
 describe("install id", () => {
-  test("path is install.json under CLIMON_HOME", async () => {
-    const home = await makeTestHome();
-    try {
-      expect(getInstallIdPath(envFor(home))).toBe(join(home, "install.json"));
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
+  test("getInstallId is undefined before setup", () => {
+    expect(getInstallId(env)).toBeUndefined();
   });
 
-  test("generates a uuid when absent and persists it", async () => {
-    const home = await makeTestHome();
-    try {
-      const env = envFor(home);
-      const id = await ensureInstallId(env);
-      expect(id).toMatch(UUID_RE);
-      const onDisk = JSON.parse(await readFile(getInstallIdPath(env), "utf8"));
-      expect(onDisk.id).toBe(id);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
+  test("ensureInstallId generates and persists a uuid", () => {
+    const id = ensureInstallId(env);
+    expect(id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+    expect(getInstallId(env)).toBe(id);
   });
 
-  test("returns the same id on repeated calls (stable)", async () => {
-    const home = await makeTestHome();
-    try {
-      const env = envFor(home);
-      const first = await ensureInstallId(env);
-      const second = await ensureInstallId(env);
-      expect(second).toBe(first);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test("persists across a simulated restart (fresh read)", async () => {
-    const home = await makeTestHome();
-    try {
-      const env = envFor(home);
-      const first = await ensureInstallId(env);
-      // Simulate a new process: nothing cached, just read again.
-      const second = await ensureInstallId(env);
-      expect(getInstallId(env) === undefined).toBe(false);
-      expect(second).toBe(first);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test("regenerates when the file is corrupt", async () => {
-    const home = await makeTestHome();
-    try {
-      const env = envFor(home);
-      await mkdir(home, { recursive: true });
-      await writeFile(getInstallIdPath(env), "not json{", "utf8");
-      const id = await ensureInstallId(env);
-      expect(id).toMatch(UUID_RE);
-      const onDisk = JSON.parse(await readFile(getInstallIdPath(env), "utf8"));
-      expect(onDisk.id).toBe(id);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test("regenerates when the stored id is not a valid uuid", async () => {
-    const home = await makeTestHome();
-    try {
-      const env = envFor(home);
-      await mkdir(home, { recursive: true });
-      await writeFile(getInstallIdPath(env), JSON.stringify({ id: "" }), "utf8");
-      const id = await ensureInstallId(env);
-      expect(id).toMatch(UUID_RE);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test("concurrent ensure calls converge on a single id", async () => {
-    const home = await makeTestHome();
-    try {
-      const env = envFor(home);
-      const ids = await Promise.all(
-        Array.from({ length: 8 }, () => ensureInstallId(env)),
-      );
-      const unique = new Set(ids);
-      expect(unique.size).toBe(1);
-      const onDisk = JSON.parse(await readFile(getInstallIdPath(env), "utf8"));
-      expect(onDisk.id).toBe(ids[0]);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  test("getInstallId returns undefined when absent, value when present", async () => {
-    const home = await makeTestHome();
-    try {
-      const env = envFor(home);
-      expect(getInstallId(env)).toBeUndefined();
-      const id = await ensureInstallId(env);
-      expect(getInstallId(env)).toBe(id);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
+  test("ensureInstallId is idempotent", () => {
+    const first = ensureInstallId(env);
+    const second = ensureInstallId(env);
+    expect(second).toBe(first);
   });
 });

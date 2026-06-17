@@ -21,6 +21,7 @@ import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
+import { useFeature } from "../hooks/useFeature.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
 import {
@@ -190,6 +191,7 @@ export function Sidebar({
   onMaximize
 }: Props) {
   const styles = useStyles();
+  const sessionSpawning = useFeature("sessionSpawning").enabled;
   const animatedList = useAnimatedListReorder(sessions.map((session) => session.id));
   const itemRefRegistry = useRef<StableSessionItemRefRegistry>({ refs: {}, animatedRefs: {}, elements: {} });
 
@@ -234,7 +236,7 @@ export function Sidebar({
             {serverVersion && <span className={styles.version}>v{serverVersion}</span>}
           </Text>
         </div>
-        {!collapsed && (
+        {!collapsed && sessionSpawning && (
           <Button
             appearance="subtle"
             icon={<Add20Regular />}

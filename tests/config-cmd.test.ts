@@ -75,7 +75,7 @@ describe("parseConfigArgs", () => {
   });
 });
 
-describe("runConfigCommand", () => {
+describe.serial("runConfigCommand", () => {
   test("set then get round-trips through the cascade", () => {
     expect(runConfigCommand(["remote.port", "6666"], env(), root)).toBe(0);
     expect(runConfigCommand(["remote.port"], env(), root)).toBe(0);
@@ -426,5 +426,41 @@ describe("runConfigCommand", () => {
 
     expect(result).toBe(0);
     expect(out.join("")).toContain("No climon config files found.");
+  });
+
+  test("warns when enabling a non-ready feature flag", () => {
+    const errors: string[] = [];
+    const code = runConfigCommand(
+      ["feature.sessionSpawning", "enabled"],
+      env(),
+      root,
+      { stderr: (chunk) => errors.push(chunk) }
+    );
+    expect(code).toBe(0);
+    expect(errors.join("")).toContain('feature.sessionSpawning is marked "experimental"');
+  });
+
+  test("does not warn when disabling a non-ready feature flag", () => {
+    const errors: string[] = [];
+    const code = runConfigCommand(
+      ["feature.sessionSpawning", "disabled"],
+      env(),
+      root,
+      { stderr: (chunk) => errors.push(chunk) }
+    );
+    expect(code).toBe(0);
+    expect(errors.join("")).toBe("");
+  });
+
+  test("rejects an invalid feature flag value", () => {
+    const errors: string[] = [];
+    const code = runConfigCommand(
+      ["feature.sessionSpawning", "on"],
+      env(),
+      root,
+      { stderr: (chunk) => errors.push(chunk) }
+    );
+    expect(code).toBe(2);
+    expect(errors.join("")).toContain('must be "enabled" or "disabled"');
   });
 });

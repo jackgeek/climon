@@ -8,10 +8,31 @@ afterEach(() => {
 });
 
 describe("fetchHealth", () => {
-  test("parses remotesEnabled from the health response", async () => {
+  test("parses remotesEnabled and features from the health response", async () => {
     globalThis.fetch = Object.assign(
       async () =>
-        new Response(JSON.stringify({ version: "1.2.3", remotesEnabled: true }), {
+        new Response(
+          JSON.stringify({
+            version: "1.2.3",
+            remotesEnabled: true,
+            features: { sessionSpawning: { enabled: true, locked: false, status: "experimental" } }
+          }),
+          { headers: { "content-type": "application/json" } }
+        ),
+      { preconnect: originalFetch.preconnect }
+    ) as typeof fetch;
+
+    await expect(fetchHealth()).resolves.toEqual({
+      version: "1.2.3",
+      remotesEnabled: true,
+      features: { sessionSpawning: { enabled: true, locked: false, status: "experimental" } }
+    });
+  });
+
+  test("defaults features to an empty object when absent", async () => {
+    globalThis.fetch = Object.assign(
+      async () =>
+        new Response(JSON.stringify({ version: "1.2.3", remotesEnabled: false }), {
           headers: { "content-type": "application/json" }
         }),
       { preconnect: originalFetch.preconnect }
@@ -19,7 +40,8 @@ describe("fetchHealth", () => {
 
     await expect(fetchHealth()).resolves.toEqual({
       version: "1.2.3",
-      remotesEnabled: true
+      remotesEnabled: false,
+      features: {}
     });
   });
 });
