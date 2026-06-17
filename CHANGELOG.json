@@ -2,8 +2,7 @@
   {
     "version": "1.0.4",
     "changes": [
-      "Delay and reword the dashboard reconnect overlay so brief blips no longer flash a warning",
-      "Attach an anonymous per-install ID to telemetry for more accurate usage insights"
+      "Delay and reword the dashboard reconnect overlay so brief blips no longer flash a warning"
     ]
   },
   {
