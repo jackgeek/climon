@@ -98,7 +98,10 @@ mod tests {
     #[test]
     fn password_returns_none_when_unset() {
         let (_d, env) = temp_env();
-        assert_eq!(get_configured_update_password(&env), None);
+        // Use the pure resolver with no embedded value so this assertion holds
+        // regardless of whether the test binary was built with an embedded
+        // distribution password.
+        assert_eq!(resolve_update_password(&env, None), None);
     }
 
     #[test]
