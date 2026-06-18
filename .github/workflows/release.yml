@@ -113,7 +113,7 @@ jobs:
         if: ${{ matrix.cross }}
         uses: mlugg/setup-zig@v1
         with:
-          version: latest
+          version: 0.13.0
 
       - name: Install cargo-zigbuild (cross targets)
         if: ${{ matrix.cross }}
