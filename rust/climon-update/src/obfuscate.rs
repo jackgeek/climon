@@ -66,12 +66,17 @@ mod tests {
 
     #[test]
     fn obfuscated_output_hides_plaintext() {
-        // 'S', 'P', 'W', '!', '-' are not lowercase hex digits, so the
-        // plaintext substring cannot appear in the hex output.
         let pw = "Secret-PW!";
         let obf = obfuscate(pw.as_bytes());
+        // The plaintext must not survive verbatim in the output.
         assert!(!obf.contains(pw));
-        assert_ne!(obf, pw);
+        // Stronger guard: the output must differ from a plain (un-obfuscated)
+        // hex encoding, proving the XOR actually transformed the bytes rather
+        // than merely hex-encoding them.
+        let plain_hex: String = pw.bytes().map(|b| format!("{b:02x}")).collect();
+        assert_ne!(obf, plain_hex);
+        // ...and it must still recover exactly.
+        assert_eq!(deobfuscate(&obf).as_deref(), Some(pw));
     }
 
     #[test]
