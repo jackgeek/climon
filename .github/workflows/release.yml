@@ -108,11 +108,16 @@ jobs:
 
       # linux-arm64 is cross-compiled on the x86_64 ubuntu runner. cargo-zigbuild
       # uses zig as the cross linker so we don't need a GCC cross-toolchain.
-      - name: Install cargo-zigbuild + zig (cross targets)
+
+      - name: Setup Zig (cross targets)
         if: ${{ matrix.cross }}
-        run: |
-          pipx install ziglang || pip install ziglang
-          cargo install --locked cargo-zigbuild
+        uses: mlugg/setup-zig@v1
+        with:
+          version: latest
+
+      - name: Install cargo-zigbuild (cross targets)
+        if: ${{ matrix.cross }}
+        run: cargo install --locked cargo-zigbuild
 
       - name: Build climon client (native)
         if: ${{ !matrix.cross }}
