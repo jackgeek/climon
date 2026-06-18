@@ -108,15 +108,6 @@ const useStyles = makeStyles({
   },
   collapsedFooter: {
     justifyContent: "center"
-  },
-  bugLink: {
-    marginRight: "auto",
-    fontSize: "12px",
-    color: tokens.colorNeutralForeground3,
-    textDecoration: "none",
-    ":hover": {
-      textDecoration: "underline"
-    }
   }
 });
 
@@ -287,11 +278,6 @@ export function Sidebar({
       </div>
       {collapsible && (
         <div className={mergeClasses(styles.footer, collapsed && styles.collapsedFooter)}>
-          {!collapsed && (
-            <a className={styles.bugLink} href="mailto://jackallan@microsoft.com">
-              File a bug
-            </a>
-          )}
           <Button
             appearance="subtle"
             size="small"
