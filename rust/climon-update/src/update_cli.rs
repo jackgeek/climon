@@ -9,16 +9,29 @@ use crate::check::DEFAULT_MANIFEST_URL;
 use crate::manifest::fetch_manifest;
 use crate::pubkey::UPDATE_PUBLIC_KEY_B64;
 use crate::state::clear_available_version;
+use crate::distribution::embedded_distribution_password;
 use crate::update_cmd::{run_update_command, UpdateCommandOptions, UpdateStatus};
 use crate::version::VERSION;
 
-/// Reads the shared decryption password from the global config (per-machine;
-/// never shadowed by a project-local config). Returns `None` when unset.
-pub fn get_configured_update_password(env: &Env) -> Option<String> {
-    match read_global_config_setting("update.password", env) {
-        Some(Value::String(s)) if !s.is_empty() => Some(s),
-        _ => None,
+/// Resolves the release decryption password: an explicit global
+/// `update.password` (manual override / rotation) wins; otherwise the password
+/// embedded into a gated build is used. Returns `None` when neither is present.
+/// Split from [`get_configured_update_password`] so precedence is unit-testable
+/// regardless of how the test binary was built.
+fn resolve_update_password(env: &Env, embedded: Option<String>) -> Option<String> {
+    if let Some(Value::String(s)) = read_global_config_setting("update.password", env) {
+        if !s.is_empty() {
+            return Some(s);
+        }
     }
+    embedded
+}
+
+/// Reads the release decryption password (per-machine; never shadowed by a
+/// project-local config). Prefers an explicit `update.password`, then falls back
+/// to the password embedded into gated builds. Returns `None` when unset.
+pub fn get_configured_update_password(env: &Env) -> Option<String> {
+    resolve_update_password(env, embedded_distribution_password())
 }
 
 /// `climon update` entrypoint: resolves the install dir and applies an update.
@@ -85,7 +98,10 @@ mod tests {
     #[test]
     fn password_returns_none_when_unset() {
         let (_d, env) = temp_env();
-        assert_eq!(get_configured_update_password(&env), None);
+        // Use the pure resolver with no embedded value so this assertion holds
+        // regardless of whether the test binary was built with an embedded
+        // distribution password.
+        assert_eq!(resolve_update_password(&env, None), None);
     }
 
     #[test]
@@ -103,5 +119,37 @@ mod tests {
             get_configured_update_password(&env).as_deref(),
             Some("shared-pw")
         );
+    }
+
+    #[test]
+    fn resolve_prefers_config_over_embedded() {
+        let (_d, env) = temp_env();
+        write_config_setting(
+            "update.password",
+            "config-pw",
+            WriteScope::Global,
+            &env,
+            std::path::Path::new("."),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_update_password(&env, Some("embedded-pw".to_string())).as_deref(),
+            Some("config-pw")
+        );
+    }
+
+    #[test]
+    fn resolve_falls_back_to_embedded_when_config_unset() {
+        let (_d, env) = temp_env();
+        assert_eq!(
+            resolve_update_password(&env, Some("embedded-pw".to_string())).as_deref(),
+            Some("embedded-pw")
+        );
+    }
+
+    #[test]
+    fn resolve_returns_none_when_neither_present() {
+        let (_d, env) = temp_env();
+        assert_eq!(resolve_update_password(&env, None), None);
     }
 }

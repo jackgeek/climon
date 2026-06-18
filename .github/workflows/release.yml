@@ -122,11 +122,21 @@ jobs:
       - name: Build climon client (native)
         if: ${{ !matrix.cross }}
         working-directory: rust
+        # Baked into gated builds by climon-update/build.rs (XOR-obfuscated).
+        # Empty when the secret is absent (forks) -> no embedded password.
+        # Scoped to the build step only, matching the signing-key pattern below.
+        env:
+          CLIMON_DISTRIBUTION_PASSWORD: ${{ secrets.CLIMON_DISTRIBUTION_PASSWORD }}
         run: cargo build --release -p climon-cli --target ${{ matrix.target }}
 
       - name: Build climon client (cross via zigbuild)
         if: ${{ matrix.cross }}
         working-directory: rust
+        # Baked into gated builds by climon-update/build.rs (XOR-obfuscated).
+        # Empty when the secret is absent (forks) -> no embedded password.
+        # Scoped to the build step only, matching the signing-key pattern below.
+        env:
+          CLIMON_DISTRIBUTION_PASSWORD: ${{ secrets.CLIMON_DISTRIBUTION_PASSWORD }}
         run: cargo zigbuild --release -p climon-cli --target ${{ matrix.target }}
 
       # Stage the binary under the bare `install` name the packager expects.
