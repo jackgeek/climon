@@ -1,4 +1,16 @@
 #!/usr/bin/env bun
+/**
+ * LEGACY / DEVELOPMENT CLIENT.
+ *
+ * As of the Phase-12 cutover, the **shipped** `climon` client is the Rust binary
+ * built from `rust/climon-cli` and packaged by `scripts/compile.ts`. This Bun
+ * entrypoint is retained for local development (`bun run dev` / `bun run start`
+ * / `bun src/index.ts …`) and is still imported by the Bun test suite, but it is
+ * no longer published as the `climon` binary (see `package.json` `bin`). The Bun
+ * dashboard **server** (`src/server.ts` → `climon-server`) remains canonical and
+ * is never rewritten. Keep this file working so the test suite stays green, but
+ * make user-facing client behaviour changes in the Rust crates first.
+ */
 import { basename, dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";

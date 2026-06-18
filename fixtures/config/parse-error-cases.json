@@ -1,0 +1,32 @@
+[
+  {
+    "name": "truncated-object",
+    "input": "{",
+    "errorContains": "Invalid JSONC in"
+  },
+  {
+    "name": "array-root",
+    "input": "[]",
+    "errorContains": "Invalid JSONC in"
+  },
+  {
+    "name": "string-root",
+    "input": "\"value\"",
+    "errorContains": "Invalid JSONC in"
+  },
+  {
+    "name": "number-root",
+    "input": "1",
+    "errorContains": "Invalid JSONC in"
+  },
+  {
+    "name": "null-root",
+    "input": "null",
+    "errorContains": "Invalid JSONC in"
+  },
+  {
+    "name": "unterminated-block-comment",
+    "input": "{\"a\": 1 /* unterminated",
+    "errorContains": "Unterminated block comment"
+  }
+]

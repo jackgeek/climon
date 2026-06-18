@@ -1,0 +1,20 @@
+[package]
+name = "climon-session"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "climon session host: PTY relay + per-session IPC server + idle/attention detection + replay/title/frame protocol + lifecycle (Rust port of the TS client)"
+
+[dependencies]
+climon-proto = { path = "../climon-proto", version = "0.1.0" }
+climon-store = { path = "../climon-store", version = "0.1.0" }
+climon-pty = { path = "../climon-pty", version = "0.1.0" }
+climon-config = { path = "../climon-config", version = "0.1.0" }
+climon-logging = { path = "../climon-logging", version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+vt100 = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+signal-hook = { workspace = true }

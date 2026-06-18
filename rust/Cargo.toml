@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["climon-rs", "climon-proto", "climon-logging", "climon-config", "climon-store", "climon-pty", "climon-session", "climon-remote", "climon-cli", "climon-install", "climon-update"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+climon-proto = { path = "climon-proto" }
+human_id = "0.1"
+getrandom = "0.1"
+libc = "0.2"
+portable-pty = "0.8"
+signal-hook = "0.3"
+vt100 = "0.16"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+opt-level = 2

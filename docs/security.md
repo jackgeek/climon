@@ -4,6 +4,18 @@ Security is the top design priority for climon's remote-client feature. This
 document describes the threat model and every hardening measure so reviewers can
 audit the design.
 
+> **Implementation note (Phase-12 cutover).** The shipped `climon` *client* — and
+> therefore all of the untrusted-input handling described here (mux frame caps,
+> remote-id validation, metadata namespacing/sanitization, patch allowlists, and
+> loopback-only privileged dashboard APIs) — is the native **Rust** binary built
+> from the `rust/` workspace (the `climon-remote` crate owns the remote
+> ingest/uplink trust boundary). The dashboard **server** (`climon-server`) remains
+> the Bun binary. The two implementations enforce the same boundaries over the same
+> wire/metadata formats; the controls below apply to the shipped Rust client and
+> the legacy Bun client alike. The native Rust self-installer (`climon-install`)
+> performs the same atomic, non-destructive file placement described under
+> *Integrity of managed files* and *Non-destructive update guarantee*.
+
 ## Threat model
 
 climon lets a session running on a remote machine (a "devbox") appear on a

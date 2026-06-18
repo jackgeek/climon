@@ -1,0 +1,16 @@
+[package]
+name = "climon-install"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "climon client install/setup logic: install-manifest, file placement, PATH setup, EULA/onboarding (Rust port of the TS client)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+getrandom = { workspace = true }
+climon-config = { path = "../climon-config", version = "0.1.0" }
+climon-store = { path = "../climon-store", version = "0.1.0" }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

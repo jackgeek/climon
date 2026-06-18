@@ -1,0 +1,1 @@
+{"id":"abc","command":["bash"],"displayCommand":"bash","cwd":"/","status":"running","priorityReason":"running","cols":80,"rows":24,"socketPath":"tcp://127.0.0.1:9000","createdAt":"2026-06-18T00:00:00.000Z","updatedAt":"2026-06-18T00:00:00.000Z","lastActivityAt":"2026-06-18T00:00:00.000Z"}

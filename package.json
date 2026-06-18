@@ -1,10 +1,9 @@
 {
   "name": "climon",
-  "version": "1.0.6",
+  "version": "2.0.0",
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
   "type": "module",
   "bin": {
-    "climon": "./src/index.ts",
     "climon-server": "./src/server.ts"
   },
   "scripts": {

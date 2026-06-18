@@ -83,6 +83,26 @@ describe("resolveServerInvocation", () => {
   });
 });
 
+describe("resolveServerInvocation: canonical climon-server contract (Rust client)", () => {
+  test("resolves the installed sibling climon-server with no override or dev entrypoint", () => {
+    const dir = tmp();
+    const sibling = join(dir, "climon-server");
+    writeFileSync(sibling, "");
+    const execPath = join(dir, "climon");
+    expect(
+      resolveServerInvocation(["server"], {} as NodeJS.ProcessEnv, execPath, undefined, "linux")
+    ).toEqual({ file: sibling, args: ["server"] });
+  });
+
+  test("falls back to the bare climon-server name when no sibling is installed", () => {
+    const dir = tmp();
+    const execPath = join(dir, "climon");
+    expect(
+      resolveServerInvocation(["server"], {} as NodeJS.ProcessEnv, execPath, undefined, "linux")
+    ).toEqual({ file: "climon-server", args: ["server"] });
+  });
+});
+
 describe("resolveServerEnv", () => {
   test("passes the current client executable to the server for dashboard-spawned child sessions", () => {
     const env = { PATH: "/usr/bin" } as NodeJS.ProcessEnv;

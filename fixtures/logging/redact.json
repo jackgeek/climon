@@ -1,0 +1,67 @@
+{
+  "_comment": "Shared Bun <-> Rust redaction corpus. Each case logs `input` as the merge object; after redaction every sensitive path (see src/logging/redact.ts) must equal the censor string and non-sensitive fields must be unchanged. The Rust suite asserts redact(input) == expected; the Bun suite logs input through pino with REDACT_OPTIONS, strips pino-added fields (level/time/pid/hostname/msg), and deep-equals expected.",
+  "censor": "[REDACTED]",
+  "cases": [
+    {
+      "name": "top-level connection string and nested token",
+      "input": {
+        "connectionString": "InstrumentationKey=secret",
+        "nested": { "token": "abc" },
+        "user": "alice"
+      },
+      "expected": {
+        "connectionString": "[REDACTED]",
+        "nested": { "token": "[REDACTED]" },
+        "user": "alice"
+      }
+    },
+    {
+      "name": "all top-level secret keys censored",
+      "input": {
+        "authorization": "Bearer xyz",
+        "password": "hunter2",
+        "token": "t0ken",
+        "auth": "creds",
+        "accessToken": "at",
+        "tunnelToken": "tt",
+        "keep": "visible"
+      },
+      "expected": {
+        "authorization": "[REDACTED]",
+        "password": "[REDACTED]",
+        "token": "[REDACTED]",
+        "auth": "[REDACTED]",
+        "accessToken": "[REDACTED]",
+        "tunnelToken": "[REDACTED]",
+        "keep": "visible"
+      }
+    },
+    {
+      "name": "one-level-deep secret keys censored via wildcard",
+      "input": {
+        "remote": {
+          "tunnelToken": "tt",
+          "accessToken": "at",
+          "host": "example.com"
+        }
+      },
+      "expected": {
+        "remote": {
+          "tunnelToken": "[REDACTED]",
+          "accessToken": "[REDACTED]",
+          "host": "example.com"
+        }
+      }
+    },
+    {
+      "name": "non-string secret value still censored",
+      "input": { "password": 1234, "count": 3 },
+      "expected": { "password": "[REDACTED]", "count": 3 }
+    },
+    {
+      "name": "no secrets present is unchanged",
+      "input": { "user": "bob", "session": "rare-geckos-jam", "ok": true },
+      "expected": { "user": "bob", "session": "rare-geckos-jam", "ok": true }
+    }
+  ]
+}

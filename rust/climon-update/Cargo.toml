@@ -1,0 +1,27 @@
+[package]
+name = "climon-update"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "climon self-update: Ed25519 verify, AES-256-GCM/scrypt envelope, manifest, atomic no-kill binary swap (Rust port of the TS client updater)"
+build = "build.rs"
+
+[lib]
+name = "climon_update"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+climon-config = { path = "../climon-config", version = "0.1.0" }
+ed25519-dalek = "2"
+aes-gcm = "0.10"
+scrypt = { version = "0.11", default-features = false }
+base64 = "0.22"
+ureq = { version = "2", default-features = false, features = ["native-tls", "gzip"] }
+native-tls = "0.2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

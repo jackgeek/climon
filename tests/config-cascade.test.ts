@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import {
   candidateConfigDirs,
@@ -59,7 +60,7 @@ describe("config cascade", () => {
     expect(resolveConfigSetting("remote.tunnelId", env(), repo)).toBeUndefined();
   });
 
-  test("walks ancestors up to filesystem root", () => {
+  test("walks ancestors up toward the home boundary", () => {
     const deep = join(root, "a", "b", "c");
     mkdirSync(deep, { recursive: true });
     writeSetting(join(root, "a", ".climon"), { remote: { port: 6666 } });
@@ -71,6 +72,16 @@ describe("config cascade", () => {
     mkdirSync(deep, { recursive: true });
     const dirs = candidateConfigDirs(env(), deep);
     expect(dirs[0]).toBe(join(deep, ".climon"));
+    expect(dirs[dirs.length - 1]).toBe(join(home, ".climon"));
+  });
+
+  test("does not climb above the OS home directory into ancestor .climon dirs", () => {
+    // A cwd nested under the real OS home dir must not pull the user's real
+    // ~/.climon (or anything above home) into the local cascade. The global
+    // config is still appended separately from CLIMON_HOME.
+    const nested = join(homedir(), "proj", "nested", "work");
+    const dirs = candidateConfigDirs({ CLIMON_HOME: join(home, ".climon") }, nested);
+    expect(dirs).not.toContain(join(homedir(), ".climon"));
     expect(dirs[dirs.length - 1]).toBe(join(home, ".climon"));
   });
 

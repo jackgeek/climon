@@ -1,0 +1,36 @@
+[package]
+name = "climon-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "climon client CLI: arg parsing, launcher, attach client, config/server delegation (Rust port of the TS client)"
+build = "build.rs"
+
+[[bin]]
+name = "climon"
+path = "src/main.rs"
+
+[lib]
+name = "climon_cli"
+path = "src/lib.rs"
+
+[dependencies]
+climon-proto = { path = "../climon-proto", version = "0.1.0" }
+climon-config = { path = "../climon-config", version = "0.1.0" }
+climon-store = { path = "../climon-store", version = "0.1.0" }
+climon-session = { path = "../climon-session", version = "0.1.0" }
+climon-logging = { path = "../climon-logging", version = "0.1.0" }
+climon-install = { path = "../climon-install", version = "0.1.0" }
+climon-update = { path = "../climon-update", version = "0.1.0" }
+climon-remote = { path = "../climon-remote", version = "0.1.0" }
+serde_json = { workspace = true }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "sync",
+    "signal",
+    "time",
+    "macros",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

@@ -1,0 +1,60 @@
+{
+  // Schema version for the persisted config.json format. Always 1 for the current release.
+  "version": 1,
+  "server": {
+    // IP address the dashboard server binds to. Defaults to loopback for local-only access.
+    "host": "127.0.0.1",
+    // TCP port the dashboard server listens on. Change if 3131 conflicts with another service.
+    "port": 3131
+  },
+  "terminal": {
+    // When false (default), a browser viewer may grow the shared PTY beyond the host terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent content mangling.
+    "clampBrowserToHost": false,
+    // Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255].
+    "detachPrefix": 28,
+    // When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.
+    "setTitle": true
+  },
+  "attention": {
+    // Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.
+    "idleSeconds": 10
+  },
+  "remote": {
+    // How many consecutive ports the ingest daemon will try, starting at its preferred port, before giving up. Raise it if many ports near the default are already in use.
+    "ingestPortRetryAttempts": 100,
+    // Interval in seconds between mux keepalive pings sent over the remote uplink/ingest connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0 to disable.
+    "keepAlive": 60,
+    // When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking.
+    "autoLink": true
+  },
+  "session": {
+    // Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment.
+    "color": "auto",
+    // Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group.
+    "priority": 500
+  },
+  "tunnelLink": {
+    // Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel relay to prevent idle disconnection. Set to 0 to disable keep-alive pings.
+    "keepAlive": 60
+  },
+  "logging": {
+    // Minimum log level emitted by climon processes. One of: trace, debug, info, warn, error, fatal, silent. Defaults to trace (everything). Set to silent to disable logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable.
+    "level": "trace"
+  },
+  "feature": {
+    // Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled". [status: experimental]
+    "sessionSpawning": "disabled"
+  },
+  "eula": {
+    // Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.
+    "accepted": false
+  },
+  "telemetry": {
+    // When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default.
+    "enabled": false
+  },
+  "update": {
+    // When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`.
+    "auto": false
+  }
+}

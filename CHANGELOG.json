@@ -1,5 +1,11 @@
 [
   {
+    "version": "2.0.0",
+    "changes": [
+      "Rewrote client entirely in Rust. Client now significantly more memory efficient."
+    ]
+  },
+  {
     "version": "1.0.4",
     "changes": [
       "Delay and reword the dashboard reconnect overlay so brief blips no longer flash a warning"

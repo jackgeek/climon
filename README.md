@@ -121,7 +121,9 @@ creation only works from the machine running the server (loopback); remote/LAN
 clients cannot create sessions.
 
 The client and dashboard server ship as two binaries: a lean `climon` (client) and
-`climon-server` (dashboard). Running `climon server` locates and runs `climon-server`
+`climon-server` (dashboard). The shipped `climon` client is a native **Rust** binary
+(built from the `rust/` workspace); the `climon-server` dashboard is the **Bun** binary
+built from `src/server.ts`. Running `climon server` locates and runs `climon-server`
 — looked up via `CLIMON_SERVER_BIN`, then a sibling binary next to `climon`, then your
 `PATH`. The dashboard is a React + Fluent UI single-page app (`src/web/`) bundled and
 embedded into `climon-server`; keeping it out of `climon` means client-only usage stays
@@ -419,23 +421,38 @@ To produce self-contained executables that run without Bun or this repository:
 
 ```bash
 bun install                  # ensure dependencies are present
-bun run compile              # builds for all platforms
+bun run compile              # packages the host platform's zip
 ```
+
+The shipped `climon` client is a native **Rust** binary. `bun run compile` builds
+the host target's Rust client (`cargo build --release -p climon-cli`) and packages
+`dist/climon-<host>.zip`. Building all five platform zips at once requires the
+prebuilt Rust clients for each target staged under `dist/.rust-clients/<platform>/`
+and `CLIMON_ASSEMBLE=1`; the release pipeline cross-compiles those clients on native
+runners (`.github/workflows/release.yml`). The Bun `climon-server` dashboard is built
+unchanged.
 
 This outputs per-platform zip archives to `dist/`:
 
 | File | Platform | Contents |
 | --- | --- | --- |
-| `climon-linux-x64.zip` | Linux x86_64 | `climon`, `climon-server` |
-| `climon-linux-arm64.zip` | Linux aarch64 | `climon`, `climon-server` |
-| `climon-darwin-x64.zip` | macOS Intel | `climon`, `climon-server` |
-| `climon-darwin-arm64.zip` | macOS Apple Silicon | `climon`, `climon-server` |
-| `climon-windows-x64.zip` | Windows x86_64 | `climon.exe`, `climon-server.exe` |
+| `climon-linux-x64.zip` | Linux x86_64 | `install` (Rust client), `climon-server`, `climon-beta`, `climon-alpha` |
+| `climon-linux-arm64.zip` | Linux aarch64 | `install` (Rust client), `climon-server`, `climon-beta`, `climon-alpha` |
+| `climon-darwin-x64.zip` | macOS Intel | `install` (Rust client), `climon-server`, `climon-beta`, `climon-alpha` |
+| `climon-darwin-arm64.zip` | macOS Apple Silicon | `install` (Rust client), `climon-server`, `climon-beta`, `climon-alpha` |
+| `climon-windows-x64.zip` | Windows x86_64 | `install.exe` (Rust client), `climon-server.exe`, `climon-beta`, `climon-alpha` |
+
+Inside each zip the `install` binary is the Rust `climon` client. The `climon-alpha`
+entry is a small **sentinel marker**: when `install` runs and finds `climon-alpha`
+beside it, it runs the native Rust self-installer (copies itself to `climon`, places
+`climon-server`/`climon-beta`, sets up PATH, writes `.version`, prints the changelog).
+`climon-beta` is the in-process server bundle used only by the legacy Bun client.
 
 Each binary is fully standalone — no Bun installation or `node_modules` needed.
-Unzip the archive for your platform and place both binaries side by side (the
-`climon` client locates `climon-server` as a sibling). On Linux and macOS the
-extracted binaries keep their executable bit; on Windows use `climon.exe`.
+Unzip the archive for your platform and run `install` (it self-installs `climon`
+and `climon-server` side by side; the `climon` client locates `climon-server` as a
+sibling). On Linux and macOS the extracted binaries keep their executable bit; on
+Windows use `install.exe`.
 
 ## Releasing
 

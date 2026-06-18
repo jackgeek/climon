@@ -43,6 +43,14 @@ export function resolveServerBundle(
  * Resolves how to launch the dashboard server, without spawning it.
  * Order: CLIMON_SERVER_BIN override → dev source entrypoint (when present) →
  * sibling of the running executable → bare name on PATH.
+ *
+ * Canonical contract: the spawned standalone `climon-server` binary is the
+ * canonical server path, and the *only* path available to the future Rust
+ * client (which cannot load the JS bundle in-process). The in-process bundle
+ * preferred by `delegateToServer` is a Bun-client-only optimization that is
+ * retired at Phase 12 of the Rust rewrite. Keep this resolution stable: the
+ * Rust client relies on finding `climon-server[.exe]` as an installed sibling
+ * (or via CLIMON_SERVER_BIN) exactly as resolved here.
  */
 export function resolveServerInvocation(
   forwardArgs: string[],

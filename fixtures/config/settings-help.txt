@@ -1,0 +1,189 @@
+  version
+    Type: number; Default: 1; Scope: client, daemon, server; internal
+    Schema version for the persisted config.json format. Always 1 for the current
+    release.
+
+  server.host
+    Type: string; Default: 127.0.0.1; Scope: server
+    IP address the dashboard server binds to. Defaults to loopback for local-only
+    access.
+
+  server.port
+    Type: number; Default: 3131; Scope: server
+    TCP port the dashboard server listens on. Change if 3131 conflicts with another
+    service.
+
+  terminal.clampBrowserToHost
+    Type: boolean; Default: false; Scope: daemon
+    When false (default), a browser viewer may grow the shared PTY beyond the host
+    terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent
+    content mangling.
+
+  terminal.detachPrefix
+    Type: number; Default: 28; Scope: client
+    Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd'
+    to detach without stopping the command. Must be an integer in [0, 255].
+
+  terminal.setTitle
+    Type: boolean; Default: true; Scope: client
+    When true (default), climon sets the attached local terminal's title to the session
+    name and updates it live on rename. Disables the whole title feature when false.
+
+  attention.idleSeconds
+    Type: number; Default: 10; Scope: daemon
+    Number of seconds the rendered terminal grid must remain unchanged before the
+    session is flagged as needing attention. Set to 0 or negative to disable
+    static-screen detection.
+
+  remote.enabled
+    Type: boolean; Default: unset; Scope: client
+    Enables remote uplink so the local devbox forwards session metadata and I/O to a
+    remote dashboard over a dev tunnel or direct connection.
+
+  remote.host
+    Type: string; Default: unset; Scope: client
+    Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev
+    tunnel forwarding when set.
+
+  remote.ingestHost
+    Type: string; Default: unset; Scope: client
+    Host address where the dashboard-side ingest daemon should listen for incoming
+    remote session connections.
+
+  remote.tunnelId
+    Type: string; Default: unset; Scope: client
+    Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward
+    local climon traffic to a remote dashboard.
+
+  remote.dashboardTunnelId
+    Type: string; Default: unset; Scope: server; internal
+    Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel
+    link sessions.
+
+  remote.dashboardTunnelCluster
+    Type: string; Default: unset; Scope: server; internal
+    Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for
+    tunnel link sessions.
+
+  remote.dashboardTunnelEnabled
+    Type: boolean; Default: unset; Scope: server; internal
+    Server-owned flag recording whether the Tunnel Link is enabled, so the server
+    re-establishes the dashboard tunnel automatically on startup.
+
+  remote.port
+    Type: number; Default: unset; Scope: client
+    Local port the devbox forwards and the ingest daemon listens on. Defaults to
+    server.port if not explicitly set.
+
+  remote.ingestPortRetryAttempts
+    Type: number; Default: 100; Scope: server
+    How many consecutive ports the ingest daemon will try, starting at its preferred
+    port, before giving up. Raise it if many ports near the default are already in use.
+
+  remote.clientId
+    Type: string; Default: unset; Scope: client
+    Stable, non-secret client namespace identifying this machine's sessions. Defaults to
+    the machine hostname when unset; set it to a value that is unique per host to avoid
+    session ID collisions across machines.
+
+  remote.keepAlive
+    Type: number; Default: 60; Scope: client
+    Interval in seconds between mux keepalive pings sent over the remote uplink/ingest
+    connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0
+    to disable.
+
+  remote.peerHome
+    Type: string; Default: unset; Scope: client, server
+    Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g.
+    /mnt/c/Users/<you>/.climon from WSL, or \\wsl.localhost\<distro>\home\<you>\.climon
+    from Windows). When set, climon reads the peer's server.json to find a dashboard
+    running on the other OS and auto-wires sessions to it. Usually set automatically by
+    `climon link`.
+
+  remote.peerHost
+    Type: string; Default: unset; Scope: client, server
+    Optional host override used to reach the peer dashboard/ingest. Leave unset to
+    auto-detect (localhost, or the WSL gateway IP under NAT networking).
+
+  remote.autoLink
+    Type: boolean; Default: true; Scope: client
+    When true (default), the first `climon` run inside WSL attempts to auto-link to a
+    Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both
+    sides. Set false to disable auto-linking.
+
+  session.color
+    Type: string; Default: auto; Scope: client, daemon, server
+    Specifies the default accent color for new sessions. Accepts ANSI color names (red,
+    green, etc.), 'none', or 'auto' for automatic assignment.
+
+  session.priority
+    Type: number; Default: 500; Scope: client, daemon, server
+    Default sort priority (0-1000) for new sessions. Lower numbers sort first within
+    each status group.
+
+  tunnelLink.keepAlive
+    Type: number; Default: 60; Scope: server
+    Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel
+    relay to prevent idle disconnection. Set to 0 to disable keep-alive pings.
+
+  logging.level
+    Type: string; Default: trace; Scope: client, daemon, server
+    Minimum log level emitted by climon processes. One of: trace, debug, info, warn,
+    error, fatal, silent. Defaults to trace (everything). Set to silent to disable
+    logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable.
+
+  logging.appInsights.connectionString
+    Type: string; Default: unset; Scope: server; sensitive
+    Azure Application Insights connection string. When set, the dashboard server also
+    forwards structured logs to Application Insights. Leave unset to disable (the
+    default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING
+    environment variable.
+
+  feature.sessionSpawning
+    Type: string; Default: disabled; Scope: client, daemon, server, browser
+    Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled".
+    [status: experimental]
+
+  eula.accepted
+    Type: boolean; Default: false; Scope: client; internal
+    Whether the current EULA version has been accepted. Set by the installer/setup flow;
+    not intended for manual editing.
+
+  eula.version
+    Type: string; Default: unset; Scope: client; internal
+    The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance.
+
+  eula.acceptedAt
+    Type: string; Default: unset; Scope: client; internal
+    ISO-8601 timestamp recording when the EULA was accepted.
+
+  telemetry.enabled
+    Type: boolean; Default: false; Scope: client, server
+    When true, climon sends anonymous, opt-in usage telemetry keyed only by a random
+    install id (no PII, session output, commands, paths, or hostnames). Off by default.
+
+  update.auto
+    Type: boolean; Default: false; Scope: client
+    When true, climon downloads and applies signed updates automatically in the
+    background. When false (default), it only prints a one-line banner suggesting
+    `climon --update`.
+
+  update.password
+    Type: string; Default: unset; Scope: client; sensitive
+    Shared password used to decrypt encrypted release artifacts when auto-updating from
+    the gated public release repo. Provided out-of-band by the maintainer. Stored
+    locally; treat as a secret.
+
+  update.lastCheck
+    Type: string; Default: unset; Scope: client; internal
+    ISO-8601 timestamp of the last background update check. Used to throttle checks.
+
+  update.availableVersion
+    Type: string; Default: unset; Scope: client; internal
+    Latest version discovered by the background update check, if newer than the
+    installed version. Cleared after a successful update.
+
+  install.id
+    Type: string; Default: unset; Scope: client, server; internal
+    Anonymous, randomly generated install identifier used only when telemetry is
+    enabled. Contains no personal information.

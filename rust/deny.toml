@@ -1,0 +1,41 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# `serial` (transitive via portable-pty, the chosen PTY backend) is unmaintained
+# with no safe upgrade available. It is a build-time/PTY dependency, not a
+# network-facing vulnerability. Revisit when portable-pty drops it.
+ignore = [
+    { id = "RUSTSEC-2017-0008", reason = "serial is unmaintained; transitive via portable-pty with no upstream fix" },
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.9
+# The allowlist is a curated set of acceptable permissive licenses; not every
+# entry must be present in the current dependency tree.
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace-internal path dependencies (climon-proto) have no published version.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

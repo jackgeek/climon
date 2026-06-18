@@ -14,6 +14,7 @@ export function installFilesForPlatform(
   const exe = isWindows ? ".exe" : "";
   return [
     { source: `install${exe}`, dest: `climon${exe}` },
+    { source: `climon-server${exe}`, dest: `climon-server${exe}` },
     { source: "climon-beta", dest: "climon-beta" },
   ];
 }

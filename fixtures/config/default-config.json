@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3131
+  },
+  "terminal": {
+    "clampBrowserToHost": false,
+    "detachPrefix": 28,
+    "setTitle": true
+  },
+  "attention": {
+    "idleSeconds": 10
+  },
+  "remote": {
+    "ingestPortRetryAttempts": 100,
+    "keepAlive": 60,
+    "autoLink": true
+  },
+  "session": {
+    "color": "auto",
+    "priority": 500
+  },
+  "tunnelLink": {
+    "keepAlive": 60
+  },
+  "logging": {
+    "level": "trace"
+  },
+  "feature": {
+    "sessionSpawning": "disabled"
+  },
+  "eula": {
+    "accepted": false
+  },
+  "telemetry": {
+    "enabled": false
+  },
+  "update": {
+    "auto": false
+  }
+}

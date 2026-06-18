@@ -4,6 +4,11 @@ name: Release
 # i.e. when a pull request is merged. This replaces the old local husky
 # `post-merge` hook so the bump happens for every merge style (merge commit,
 # squash, or rebase), not just local `--no-ff` merges.
+#
+# The shipped client is the Rust `climon` binary. It is cross-compiled for every
+# target on a native runner in the `build-client` matrix, then the `release` job
+# assembles the five zips (with the Bun server + climon-alpha sentinel), signs,
+# encrypts, verifies, and publishes them.
 on:
   push:
     branches: [main]
@@ -17,10 +22,136 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  # Compute the release version up front so the client matrix embeds the bumped
+  # version (the bump commit itself only lands in the `release` job).
+  version:
     runs-on: ubuntu-latest
     # Skip the bump commit the release itself pushes, otherwise it would loop.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+      existing: ${{ steps.compute.outputs.existing }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      - name: Compute next release version
+        id: compute
+        run: |
+          set -euo pipefail
+          next_tag="$(bun -e '
+            const { readFileSync } = require("node:fs");
+            const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+            const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(pkg.version);
+            if (!match) throw new Error(`Invalid package version: ${pkg.version}`);
+            console.log(`v${match[1]}.${match[2]}.${Number(match[3]) + 1}`);
+          ')"
+          git fetch --tags --force origin
+          if git rev-parse "refs/tags/$next_tag" >/dev/null 2>&1; then
+            existing="$next_tag"
+          else
+            existing=""
+          fi
+          echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
+          echo "version=${next_tag#v}" >> "$GITHUB_OUTPUT"
+          echo "existing=$existing" >> "$GITHUB_OUTPUT"
+
+  # Cross-compile the Rust client for every target on a native runner. Each leg
+  # uploads its `install`/`install.exe` binary as an artifact for the assemble
+  # step. CLIMON_VERSION pins the bumped version into the binary (build.rs).
+  build-client:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            cross: false
+          - platform: linux-arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
+          - platform: darwin-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            cross: false
+          - platform: darwin-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            cross: false
+          - platform: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cross: false
+    runs-on: ${{ matrix.os }}
+    env:
+      CLIMON_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      # linux-arm64 is cross-compiled on the x86_64 ubuntu runner. cargo-zigbuild
+      # uses zig as the cross linker so we don't need a GCC cross-toolchain.
+      - name: Install cargo-zigbuild + zig (cross targets)
+        if: ${{ matrix.cross }}
+        run: |
+          pipx install ziglang || pip install ziglang
+          cargo install --locked cargo-zigbuild
+
+      - name: Build climon client (native)
+        if: ${{ !matrix.cross }}
+        working-directory: rust
+        run: cargo build --release -p climon-cli --target ${{ matrix.target }}
+
+      - name: Build climon client (cross via zigbuild)
+        if: ${{ matrix.cross }}
+        working-directory: rust
+        run: cargo zigbuild --release -p climon-cli --target ${{ matrix.target }}
+
+      # Stage the binary under the bare `install` name the packager expects.
+      - name: Stage install binary (Unix)
+        if: ${{ matrix.platform != 'windows-x64' }}
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          mkdir -p staged
+          cp "target/${{ matrix.target }}/release/climon" "staged/install"
+
+      - name: Stage install binary (Windows)
+        if: ${{ matrix.platform == 'windows-x64' }}
+        working-directory: rust
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staged | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/climon.exe" "staged/install.exe"
+
+      - name: Upload client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-client-${{ matrix.platform }}
+          path: rust/staged/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: [version, build-client]
+    runs-on: ubuntu-latest
     env:
       # Non-sensitive boolean mapped at job level so the `if:` guards on the
       # signing steps can read it (step-level env is not visible to a step's own
@@ -52,36 +183,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Detect existing release tag
-        id: existing-release
-        run: |
-          set -euo pipefail
-          next_tag="$(bun -e '
-            const { readFileSync } = require("node:fs");
-            const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-            const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(pkg.version);
-            if (!match) throw new Error(`Invalid package version: ${pkg.version}`);
-            console.log(`v${match[1]}.${match[2]}.${Number(match[3]) + 1}`);
-          ')"
-          git fetch --tags --force origin
-          if git rev-parse "refs/tags/$next_tag" >/dev/null 2>&1; then
-            echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Check out existing release tag
-        if: ${{ steps.existing-release.outputs.tag != '' }}
-        run: git checkout "${{ steps.existing-release.outputs.tag }}"
+        if: ${{ needs.version.outputs.existing != '' }}
+        run: |
+          git fetch --tags --force origin
+          git checkout "${{ needs.version.outputs.existing }}"
 
       - name: Patch release (bump + commit + tag)
-        if: ${{ steps.existing-release.outputs.tag == '' }}
+        if: ${{ needs.version.outputs.existing == '' }}
         run: bun run release
 
       - name: Capture release tag
         id: release-tag
         env:
-          EXISTING_TAG: ${{ steps.existing-release.outputs.tag }}
+          EXISTING_TAG: ${{ needs.version.outputs.existing }}
         run: |
           set -euo pipefail
           if [ -n "$EXISTING_TAG" ]; then
@@ -91,10 +206,32 @@ jobs:
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Download prebuilt Rust clients
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rust-client-*
+          path: dist/.rust-clients-artifacts
+
+      # download-artifact lays out artifacts as
+      # dist/.rust-clients-artifacts/rust-client-<platform>/install[.exe];
+      # reshape into dist/.rust-clients/<platform>/install[.exe] for the packager.
+      - name: Stage Rust clients for packaging
+        run: |
+          set -euo pipefail
+          for dir in dist/.rust-clients-artifacts/rust-client-*; do
+            platform="$(basename "$dir" | sed 's/^rust-client-//')"
+            mkdir -p "dist/.rust-clients/$platform"
+            cp "$dir"/* "dist/.rust-clients/$platform/"
+          done
+          rm -rf dist/.rust-clients-artifacts
+          ls -R dist/.rust-clients
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Compile release binaries
+      - name: Assemble release binaries
+        env:
+          CLIMON_ASSEMBLE: "1"
         run: bun run compile
 
       - name: Sign release artifacts + emit manifest
@@ -143,7 +280,7 @@ jobs:
           for z in dist/climon-*.zip; do test -f "$z.enc"; done
 
       - name: Push bump commit and tag
-        if: ${{ steps.existing-release.outputs.tag == '' }}
+        if: ${{ needs.version.outputs.existing == '' }}
         run: git push --follow-tags origin HEAD:main
 
       - name: Publish GitHub Release

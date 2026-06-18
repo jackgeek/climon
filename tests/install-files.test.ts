@@ -21,15 +21,17 @@ afterEach(() => {
 });
 
 describe("installBinaries", () => {
-  test("copies install.exe as climon.exe and climon-beta into the install directory", async () => {
+  test("copies install.exe as climon.exe, climon-server.exe, and climon-beta into the install directory", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), "Programs", "climon");
     writeFileSync(join(sourceDir, "install.exe"), "client");
+    writeFileSync(join(sourceDir, "climon-server.exe"), "server");
     writeFileSync(join(sourceDir, "climon-beta"), "server");
 
     await installBinaries(sourceDir, installDir);
 
     expect(readFileSync(join(installDir, "climon.exe"), "utf8")).toBe("client");
+    expect(readFileSync(join(installDir, "climon-server.exe"), "utf8")).toBe("server");
     expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 
@@ -40,7 +42,7 @@ describe("installBinaries", () => {
     writeFileSync(join(sourceDir, "install.exe"), "client");
 
     await expect(installBinaries(sourceDir, installDir))
-      .rejects.toThrow("Required installer sibling is missing: climon-beta");
+      .rejects.toThrow("Required installer sibling is missing: climon-server.exe");
   });
 
   test("identifies Windows locked-file copy errors", () => {
@@ -54,6 +56,7 @@ describe("installBinaries", () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), "Programs", "climon");
     writeFileSync(join(sourceDir, "install.exe"), "client");
+    writeFileSync(join(sourceDir, "climon-server.exe"), "server");
     writeFileSync(join(sourceDir, "climon-beta"), "server");
     const copied: string[] = [];
     let climonAttempts = 0;
@@ -82,6 +85,7 @@ describe("installBinaries", () => {
     expect(killed).toBe(1);
     expect(copied.filter((path) => path.endsWith("climon.exe")).length).toBe(2);
     expect(readFileSync(join(installDir, "climon.exe"), "utf8")).toBe("client");
+    expect(readFileSync(join(installDir, "climon-server.exe"), "utf8")).toBe("server");
     expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 

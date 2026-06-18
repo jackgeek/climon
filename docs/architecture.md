@@ -5,6 +5,21 @@ climon is a built-in, cross-platform session manager. There are three roles: the
 They are decoupled through the filesystem (session metadata) and per-session
 sockets.
 
+> **Client = Rust, server = Bun (Phase-12 cutover complete).** The shipped
+> `climon` *client* (launcher, attach client, `run`/`shell`/`ls`/`kill`,
+> `config`, `setup`, `update`, remote `uplink`/`ingest`/`link`/`cleanup`, and the
+> native self-installer) is the Rust binary built from the `rust/` workspace
+> (crates `climon-cli`, `climon-session`, `climon-store`, `climon-config`,
+> `climon-logging`, `climon-pty`, `climon-proto`, `climon-remote`,
+> `climon-install`, `climon-update`). The **dashboard server** (`climon-server`)
+> is still the Bun binary built from `src/server.ts` and is never rewritten; the
+> Rust client interoperates with it byte-for-byte over the shared
+> metadata/socket/config surfaces. The TypeScript modules under `src/` (client
+> `src/index.ts`, `src/cli/`, `src/install/`, `src/remote/`, …) are retained as
+> the legacy/development client and the source of the Bun test suite. The
+> component descriptions below describe the architecture both implementations
+> share.
+
 ```
 climon <cmd>  ──spawn(detached)──►  session daemon  ──Bun.Terminal──►  user command
      │  (local attach client)            │  owns PTY + scrollback ring buffer
@@ -111,13 +126,26 @@ A `Bun.serve` server, stateless with respect to PTYs:
 - `GET /assets/xterm.css` — xterm's stylesheet, embedded in the binary or resolved
   from `node_modules` via `Bun.resolveSync`.
 
-The server is compiled from its own entrypoint (`src/server.ts`) into a separate
-`climon-server` binary. The client entrypoint (`src/index.ts`) never imports server
-code; its `server` subcommand resolves and execs `climon-server`
-(`src/cli/server-exec.ts`, looked up via `CLIMON_SERVER_BIN` → sibling binary → dev
-source entrypoint → `PATH`). This keeps the embedded dashboard bundle
-(`src/server/embedded-assets.ts`) and the React/Fluent/`@xterm/*` dependencies out of
-the client binary, so server-side growth never inflates the client.
+The client entrypoint (`src/index.ts`) never imports server code, so the React/
+Fluent/`@xterm/*` dependencies and the embedded dashboard bundle
+(`src/server/embedded-assets.ts`) stay out of the client binary and server-side
+growth never inflates the client. The server is shipped two ways, and a release zip
+contains both:
+
+- **Compiled `climon-server` binary** — `src/server.ts` compiled with
+  `bun build --compile` (per target in `scripts/compile.ts`) and installed alongside
+  `climon`. This is the **canonical** server path, and the **only** path usable by the
+  future Rust client, which cannot load a JS bundle in-process. The client's `server`
+  subcommand resolves and spawns it via `src/cli/server-exec.ts`
+  (`resolveServerInvocation`: `CLIMON_SERVER_BIN` → sibling `climon-server[.exe]` → dev
+  source entrypoint → `PATH`).
+- **In-process `climon-beta` JS bundle** — a minified server bundle loaded inside the
+  Bun client process by `delegateToServer` (`runServerInProcess`) to avoid spawning a
+  second process. This is a Bun-client-only optimization; `delegateToServer` prefers it
+  when present and falls back to spawning the `climon-server` binary otherwise. The
+  shipped Rust client always spawns the `climon-server` binary (it cannot load a JS
+  bundle in-process), but `climon-beta` is still packaged so the legacy Bun client and
+  the updater's install-manifest layout stay unchanged.
 
 ### Dashboard UI (`src/web/`)
 
@@ -154,7 +182,11 @@ non-destructive self-updates:
   starts.
 - **`src/install/install-manifest.ts`** — the data-driven mapping from release
   zip entries to installed filenames, shared by the installer and the updater so
-  both agree on artifact layout.
+  both agree on artifact layout. The shipped installer is now native Rust
+  (`rust/climon-install`, mirroring this manifest); a release zip's
+  `install`/`install.exe` is the Rust client, and a tiny `climon-alpha` **sentinel
+  marker** (replacing the former JS installer bundle) is what triggers the native
+  self-install when the client runs and finds it next to the executable.
 - **`src/update/`** — `manifest.ts` (semver compare + manifest fetch,
   `currentArtifactKey()`), `state.ts` (check throttle via `update.lastCheck` and
   cached `update.availableVersion`), `download.ts` (size-capped artifact/text

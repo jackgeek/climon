@@ -1,5 +1,16 @@
 # Usage
 
+## Install
+
+Download the release zip for your platform, unzip it, and run the bundled
+`install` binary (`install.exe` on Windows). It is the native Rust `climon`
+client; when run from the unzipped folder it finds the `climon-alpha` sentinel
+marker beside it and runs the **native self-installer** — it copies itself to
+`climon`, places `climon-server` (and `climon-beta`), updates your shell profile
+or user PATH, writes the installed `.version`, and prints the changelog. After
+that, `climon` and `climon server` are on your PATH. Commands below are identical
+regardless of how climon was installed.
+
 ## Start the dashboard
 
 ```bash
@@ -314,7 +325,7 @@ Every flag carries a maturity status — `experimental`, `incomplete`, `untested
 <!-- BEGIN GENERATED CONFIG SETTINGS -->
 ### `climon config`
 
-`climon config` works like `git config`. It reads project-local config first, then ancestor directories, then the global config under `$CLIMON_HOME`.
+`climon config` works like `git config`. It reads project-local config first, then ancestor directories up to (but not past) your home directory, then the global config under `$CLIMON_HOME`.
 
 - `climon config remote.tunnelId <id>` — set a value.
 - `climon config remote.tunnelId` — print a value (exit 1 if unset).

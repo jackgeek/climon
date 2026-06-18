@@ -27,20 +27,25 @@ This fetches `@xterm/xterm` and `@xterm/addon-fit` (vendored for the dashboard).
 
 ## Making `climon` available on your PATH
 
-The CLI entrypoint is `src/index.ts` (declared as the `climon` bin in
-`package.json`). For local development you can run it directly:
+The shipped `climon` client is the native **Rust** binary built from the `rust/`
+workspace; install it by unzipping a release archive and running its `install`
+binary, which self-installs `climon` (and `climon-server`) and sets up your PATH.
+
+For local development, the legacy Bun client entrypoint is `src/index.ts`. You can
+run it directly:
 
 ```bash
 bun src/index.ts <args>
 ```
 
-To get a real `climon` command, link the package:
+or build the Rust client and run it from the workspace:
 
 ```bash
-bun link        # in the project root
+cargo run -p climon-cli -- <args>     # from rust/
 ```
 
-Then `climon ...` is available globally (so you can prefix any command with it).
+`bun link` still exposes the `climon-server` dashboard binary globally for local
+development.
 
 ## Configuration
 

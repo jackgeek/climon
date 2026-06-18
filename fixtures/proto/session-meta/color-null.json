@@ -1,0 +1,1 @@
+{"id":"c","command":["sh"],"displayCommand":"sh","cwd":"/","status":"completed","priorityReason":"completed","cols":80,"rows":24,"socketPath":"tcp://127.0.0.1:9200","createdAt":"2026-06-18T00:00:00.000Z","updatedAt":"2026-06-18T00:00:00.000Z","lastActivityAt":"2026-06-18T00:00:00.000Z","exitCode":0,"completedAt":"2026-06-18T00:00:05.000Z","color":null}

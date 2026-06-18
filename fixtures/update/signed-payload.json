@@ -1,0 +1,6 @@
+{
+  "description": "Bun-produced detached Ed25519 signature over `data` (base64).",
+  "publicKeyB64": "/kyg1B8G/jbSu8aKdPOJ3Xj8YqkdWQnVPvlNVeCyezQ=",
+  "dataB64": "Y2xpbW9uIHVwZGF0ZSBmaXh0dXJlIHBheWxvYWQgdjE=",
+  "signatureB64": "8030bXgop5HfWsYj8SDm4cHsCRPMDRA+T3FDDdtVufWhu/mFBLHYHVU+vYK2a39CL+DQ+tAPtem35HTZtx8yCQ=="
+}

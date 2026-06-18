@@ -234,14 +234,20 @@ export async function assertConfigReadable(env: NodeJS.ProcessEnv = process.env)
   await access(getConfigPath(env), constants.R_OK);
 }
 
-/** Ordered candidate `.climon` dirs for per-setting resolution: cwd, ancestors, then the global home. */
+/** Ordered candidate `.climon` dirs for per-setting resolution: cwd, ancestors up
+ * to (but not past) the OS home directory, then the global home. The upward walk
+ * stops at the user's home directory so directories at or above `$HOME` are never
+ * treated as project-local config sources; the home `.climon` is the global config
+ * and is appended separately below. */
 export function candidateConfigDirs(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): string[] {
   const dirs: string[] = [];
+  const homeBoundary = resolve(homedir());
   let dir = resolve(cwd);
   for (;;) {
+    if (dir === homeBoundary) break;
     dirs.push(join(dir, ".climon"));
     const parent = dirname(dir);
     if (parent === dir) break;

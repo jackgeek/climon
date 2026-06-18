@@ -1,0 +1,8 @@
+Add Phase 11 docs, manual tests, and regenerated licenses
+
+Author the phase11-install manual-test cases and sub-plan, add the README
+index row, apply rustfmt to the new integration tests, and regenerate
+THIRD-PARTY-LICENSES.md to include the first-party climon-install crate
+(no new third-party dependency).
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

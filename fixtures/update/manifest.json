@@ -1,0 +1,14 @@
+{
+  "version": "0.99.0",
+  "encryption": "aes-256-gcm-scrypt-v1",
+  "artifacts": {
+    "linux-x64": {
+      "url": "https://example.test/linux-x64.zip.enc",
+      "sig": "https://example.test/linux-x64.zip.sig"
+    },
+    "darwin-arm64": {
+      "url": "https://example.test/darwin-arm64.zip.enc",
+      "sig": "https://example.test/darwin-arm64.zip.sig"
+    }
+  }
+}

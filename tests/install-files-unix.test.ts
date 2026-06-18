@@ -21,15 +21,17 @@ afterEach(() => {
 });
 
 describe("installBinaries (Unix)", () => {
-  test("copies install as climon and climon-beta into the install directory", async () => {
+  test("copies install as climon, climon-server, and climon-beta into the install directory", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), ".local", "bin");
     writeFileSync(join(sourceDir, "install"), "client");
+    writeFileSync(join(sourceDir, "climon-server"), "server");
     writeFileSync(join(sourceDir, "climon-beta"), "server");
 
     await installBinaries(sourceDir, installDir);
 
     expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("client");
+    expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("server");
     expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 
@@ -39,7 +41,7 @@ describe("installBinaries (Unix)", () => {
     writeFileSync(join(sourceDir, "install"), "client");
 
     await expect(installBinaries(sourceDir, installDir))
-      .rejects.toThrow("Required installer sibling is missing: climon-beta");
+      .rejects.toThrow("Required installer sibling is missing: climon-server");
   });
 
   test("identifies Unix locked-file copy errors including ETXTBSY", () => {
@@ -54,6 +56,7 @@ describe("installBinaries (Unix)", () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), ".local", "bin");
     writeFileSync(join(sourceDir, "install"), "client");
+    writeFileSync(join(sourceDir, "climon-server"), "server");
     writeFileSync(join(sourceDir, "climon-beta"), "server");
     let climonAttempts = 0;
     let prompted = 0;
@@ -78,6 +81,7 @@ describe("installBinaries (Unix)", () => {
     expect(prompted).toBe(1);
     expect(killed).toBe(1);
     expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("client");
+    expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("server");
     expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 });

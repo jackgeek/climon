@@ -1,0 +1,32 @@
+[package]
+name = "climon-remote"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "climon remote uplink/ingest bridge: mux protocol, devbox uplink, dashboard ingest, WSL<->Windows discovery (Rust port of src/remote)"
+
+[lib]
+name = "climon_remote"
+path = "src/lib.rs"
+
+[dependencies]
+climon-proto = { path = "../climon-proto", version = "0.1.0" }
+climon-config = { path = "../climon-config", version = "0.1.0" }
+climon-store = { path = "../climon-store", version = "0.1.0" }
+climon-session = { path = "../climon-session", version = "0.1.0" }
+climon-logging = { path = "../climon-logging", version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+getrandom = { workspace = true }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "macros",
+    "process",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

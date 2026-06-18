@@ -1,0 +1,22 @@
+[package]
+name = "climon-store"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "climon metadata store: atomic session-metadata IO, per-process patch serialization, session ids, and server state (Rust port of the TS client)"
+
+[dependencies]
+climon-proto = { path = "../climon-proto", version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+human_id = { workspace = true }
+getrandom = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

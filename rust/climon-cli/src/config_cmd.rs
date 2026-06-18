@@ -1,0 +1,398 @@
+//! `climon config` subcommand. Port of `src/cli/config-cmd.ts`.
+//!
+//! A thin wrapper over `climon-config`: parses the config argv, then gets/sets/
+//! unsets/lists/debugs/purges settings, reusing the crate's settings-help
+//! renderer for a byte-exact `config --help`.
+
+use std::io::Write;
+use std::path::Path;
+
+use climon_config::config::{
+    coerce_config_value, is_known_config_key, known_config_keys, list_config_debug_entries,
+    list_existing_config_files, resolve_config_setting, unset_config_setting, write_config_setting,
+    Env, WriteScope,
+};
+use climon_config::config_settings::render_config_settings_help;
+use climon_config::features::{
+    feature_status, is_feature_locked, parse_feature_config_key, FeatureStatus,
+};
+use serde_json::Value;
+
+/// A parsed `climon config` action. Mirrors the TS `ConfigAction` union.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigAction {
+    Help,
+    Debug,
+    Purge,
+    List {
+        scope: WriteScope,
+    },
+    Get {
+        scope: WriteScope,
+        key: String,
+    },
+    Set {
+        scope: WriteScope,
+        key: String,
+        value: String,
+    },
+    Unset {
+        scope: WriteScope,
+        key: String,
+    },
+}
+
+fn validate_key(key: &str) -> Result<(), String> {
+    if !is_known_config_key(key) {
+        return Err(format!(
+            "Unknown config key '{key}'. Known keys: {}.",
+            known_config_keys().join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// Returns the full `climon config --help` text, embedding the settings help.
+/// Byte-identical to the TS `configHelpText`.
+pub fn config_help_text() -> String {
+    format!(
+        "climon config — inspect and update climon configuration
+
+Usage:
+  climon config <key>              Get the value of a config setting
+  climon config <key> <value>      Set a config setting
+  climon config --unset <key>      Remove a config setting
+  climon config --list             List all set configuration values
+  climon config --debug            Show config files, keys, and values (redacted) in resolution order
+  climon config --purge            Delete config files from cwd ancestry and $CLIMON_HOME
+  climon config --help             Show this help
+
+Scope (where the setting is written):
+  --local      Write to the nearest .climon/config.jsonc (repository-specific)
+  --global     Write to $CLIMON_HOME/config.jsonc (user-wide default)
+  (no scope)   Automatically choose --local if a .climon/ directory exists nearby,
+               otherwise --global
+
+Configuration files and cascade:
+  climon uses config.jsonc as the canonical filename. Legacy config.json files
+  are automatically migrated to config.jsonc (with comments) when you run a set
+  operation. The original file is backed up as config.json.bak.
+
+  Config resolution checks local .climon/config.jsonc files from the current
+  working directory upward, then falls back to the global $CLIMON_HOME/config.jsonc.
+  Settings from more specific (local) files override global ones.
+
+  Use climon config --purge to walk the same cascade, prompting before deleting
+  each existing config.jsonc or legacy config.json file. Declining a prompt stops
+  the purge without checking later files.
+
+Settings:
+
+{}
+",
+        render_config_settings_help()
+    )
+}
+
+/// Parses the `climon config` argv. Mirrors `parseConfigArgs`. Returns an error
+/// string for invalid combinations (the caller maps it to exit code 2).
+pub fn parse_config_args(argv: &[String]) -> Result<ConfigAction, String> {
+    let mut scope = WriteScope::Auto;
+    let mut debug = false;
+    let mut purge = false;
+    let mut list = false;
+    let mut unset = false;
+    let mut help = false;
+    let mut positional: Vec<String> = Vec::new();
+    for arg in argv {
+        match arg.as_str() {
+            "--global" => scope = WriteScope::Global,
+            "--local" => scope = WriteScope::Local,
+            "--debug" => debug = true,
+            "--purge" => purge = true,
+            "--list" | "-l" => list = true,
+            "--unset" => unset = true,
+            "--help" | "-h" => help = true,
+            other => positional.push(other.to_string()),
+        }
+    }
+
+    if help {
+        if scope != WriteScope::Auto || debug || purge || list || unset || !positional.is_empty() {
+            return Err("Use `climon config --help` without other config arguments.".to_string());
+        }
+        return Ok(ConfigAction::Help);
+    }
+    if debug {
+        if purge || list || unset || !positional.is_empty() {
+            return Err("Use `climon config --debug` without other config arguments.".to_string());
+        }
+        return Ok(ConfigAction::Debug);
+    }
+    if purge {
+        if scope != WriteScope::Auto || list || unset || !positional.is_empty() {
+            return Err("Use `climon config --purge` without other config arguments.".to_string());
+        }
+        return Ok(ConfigAction::Purge);
+    }
+    if list {
+        return Ok(ConfigAction::List { scope });
+    }
+    if unset {
+        let key = positional
+            .first()
+            .ok_or("Provide a key to unset, e.g. `climon config --unset remote.enabled`.")?;
+        validate_key(key)?;
+        return Ok(ConfigAction::Unset {
+            scope,
+            key: key.clone(),
+        });
+    }
+
+    let key = positional
+        .first()
+        .ok_or("Provide a key, e.g. `climon config remote.tunnelId`.")?;
+    validate_key(key)?;
+    match positional.get(1) {
+        None => Ok(ConfigAction::Get {
+            scope,
+            key: key.clone(),
+        }),
+        Some(value) => {
+            // Validate type eagerly so errors surface before any write.
+            coerce_config_value(key, value)?;
+            Ok(ConfigAction::Set {
+                scope,
+                key: key.clone(),
+                value: value.clone(),
+            })
+        }
+    }
+}
+
+/// JS `String(value)` coercion for printing config values.
+fn js_string_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// IO sinks for [`run_config_command`], allowing tests to capture output and
+/// drive the purge confirmation.
+pub struct ConfigCommandIo<'a> {
+    pub stdout: &'a mut dyn Write,
+    pub stderr: &'a mut dyn Write,
+    pub confirm: &'a mut dyn FnMut(&str) -> bool,
+}
+
+/// Runs the `climon config` command. Mirrors `runConfigCommand`. Exit codes:
+/// parse error → 2, get-miss → 1, runtime error → 2.
+pub fn run_config_command(
+    argv: &[String],
+    env: &Env,
+    cwd: &Path,
+    io: &mut ConfigCommandIo<'_>,
+) -> i32 {
+    let action = match parse_config_args(argv) {
+        Ok(a) => a,
+        Err(msg) => {
+            let _ = writeln!(io.stderr, "climon config: {msg}");
+            return 2;
+        }
+    };
+
+    match run_action(action, env, cwd, io) {
+        Ok(code) => code,
+        Err(msg) => {
+            let _ = writeln!(io.stderr, "climon config: {msg}");
+            2
+        }
+    }
+}
+
+fn run_action(
+    action: ConfigAction,
+    env: &Env,
+    cwd: &Path,
+    io: &mut ConfigCommandIo<'_>,
+) -> Result<i32, String> {
+    match action {
+        ConfigAction::Help => {
+            let _ = io.stdout.write_all(config_help_text().as_bytes());
+            Ok(0)
+        }
+        ConfigAction::Debug => {
+            let mut lines: Vec<String> = Vec::new();
+            for entry in list_config_debug_entries(env, cwd) {
+                lines.push(entry.path.to_string_lossy().into_owned());
+                if !entry.exists {
+                    lines.push("  (missing)".to_string());
+                } else if let Some(err) = &entry.error {
+                    lines.push(format!("  (error: {err})"));
+                } else if entry.keys.is_empty() {
+                    lines.push("  (no keys)".to_string());
+                } else {
+                    for k in &entry.keys {
+                        lines.push(format!("  {} = {}", k.key, k.value));
+                    }
+                }
+            }
+            let _ = writeln!(io.stdout, "{}", lines.join("\n"));
+            Ok(0)
+        }
+        ConfigAction::Purge => {
+            let files = list_existing_config_files(env, cwd);
+            if files.is_empty() {
+                let _ = io.stdout.write_all(b"No climon config files found.\n");
+                return Ok(0);
+            }
+            for file in files {
+                let path = file.to_string_lossy().into_owned();
+                let _ = write!(io.stdout, "Delete {path}? [y/N] ");
+                if !(io.confirm)(&path) {
+                    let _ = io.stdout.write_all(b"\n");
+                    let _ = io.stdout.write_all(b"Purge cancelled.\n");
+                    return Ok(0);
+                }
+                let _ = io.stdout.write_all(b"\n");
+                std::fs::remove_file(&file).map_err(|e| e.to_string())?;
+                let _ = writeln!(io.stdout, "Deleted {path}");
+            }
+            Ok(0)
+        }
+        ConfigAction::List { .. } => {
+            let mut lines: Vec<String> = Vec::new();
+            for key in known_config_keys() {
+                if let Some(value) = resolve_config_setting(&key, env, cwd) {
+                    lines.push(format!("{key}={}", js_string_value(&value)));
+                }
+            }
+            if !lines.is_empty() {
+                let _ = writeln!(io.stdout, "{}", lines.join("\n"));
+            }
+            Ok(0)
+        }
+        ConfigAction::Get { key, .. } => match resolve_config_setting(&key, env, cwd) {
+            None => Ok(1),
+            Some(value) => {
+                let _ = writeln!(io.stdout, "{}", js_string_value(&value));
+                Ok(0)
+            }
+        },
+        ConfigAction::Set { scope, key, value } => {
+            write_config_setting(&key, &value, scope, env, cwd)?;
+            if let Some(flag) = parse_feature_config_key(&key) {
+                if is_feature_locked(flag) {
+                    let _ = writeln!(
+                        io.stderr,
+                        "climon config: {key} is overridden by this build and locked; your value has no effect until the override is removed."
+                    );
+                }
+                if value == "enabled" {
+                    if let Ok(status) = feature_status(flag) {
+                        if status != FeatureStatus::Ready {
+                            let _ = writeln!(
+                                io.stderr,
+                                "climon config: {key} is marked \"{}\" and may be unstable or incomplete; enabling it is not recommended for normal use.",
+                                status.as_str()
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(0)
+        }
+        ConfigAction::Unset { scope, key } => {
+            unset_config_setting(&key, scope, env, cwd)?;
+            Ok(0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parses_help() {
+        assert_eq!(parse_config_args(&v(&["--help"])), Ok(ConfigAction::Help));
+        assert_eq!(parse_config_args(&v(&["-h"])), Ok(ConfigAction::Help));
+    }
+
+    #[test]
+    fn help_with_other_args_errors() {
+        assert!(parse_config_args(&v(&["--help", "--debug"])).is_err());
+    }
+
+    #[test]
+    fn parses_debug_and_purge() {
+        assert_eq!(parse_config_args(&v(&["--debug"])), Ok(ConfigAction::Debug));
+        assert_eq!(parse_config_args(&v(&["--purge"])), Ok(ConfigAction::Purge));
+    }
+
+    #[test]
+    fn parses_list_with_scope() {
+        assert_eq!(
+            parse_config_args(&v(&["--list", "--global"])),
+            Ok(ConfigAction::List {
+                scope: WriteScope::Global
+            })
+        );
+    }
+
+    #[test]
+    fn parses_get_and_set() {
+        assert_eq!(
+            parse_config_args(&v(&["remote.host"])),
+            Ok(ConfigAction::Get {
+                scope: WriteScope::Auto,
+                key: "remote.host".to_string()
+            })
+        );
+        assert_eq!(
+            parse_config_args(&v(&["--global", "remote.host", "h"])),
+            Ok(ConfigAction::Set {
+                scope: WriteScope::Global,
+                key: "remote.host".to_string(),
+                value: "h".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_unset() {
+        assert_eq!(
+            parse_config_args(&v(&["--unset", "remote.enabled"])),
+            Ok(ConfigAction::Unset {
+                scope: WriteScope::Auto,
+                key: "remote.enabled".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_key_errors() {
+        assert!(parse_config_args(&v(&["not.a.key"])).is_err());
+        assert!(parse_config_args(&v(&["not.a.key", "x"])).is_err());
+    }
+
+    #[test]
+    fn missing_key_errors() {
+        assert!(parse_config_args(&v(&[])).is_err());
+        assert!(parse_config_args(&v(&["--unset"])).is_err());
+    }
+
+    #[test]
+    fn config_help_text_embeds_settings() {
+        let text = config_help_text();
+        assert!(text.starts_with("climon config — inspect and update climon configuration"));
+        assert!(text.contains("Settings:\n\n"));
+        assert!(text.ends_with('\n'));
+    }
+}

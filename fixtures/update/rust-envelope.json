@@ -1,0 +1,7 @@
+{
+  "description": "Rust-produced aes-256-gcm-scrypt-v1 envelope; Bun must decrypt to plaintext.",
+  "envelopeHex": "434c4d454e56310fd76bde6597fbff0fd8d3df0c864e49c8da3904db05460a13ce80c1b9afc0605ce7c38c2653b221d9b67cbe2b98191888d3eb3e6cc94cd246fb35edb52a1a2926a0cf73f07eb4",
+  "password": "fixture-shared-pw",
+  "plaintextB64": "bGF6eSBjbGltb24ganVtcHMgdGhlIGZlbmNl",
+  "scheme": "aes-256-gcm-scrypt-v1"
+}

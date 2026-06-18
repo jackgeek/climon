@@ -1,0 +1,27 @@
+[
+  {
+    "name": "none",
+    "enabledModes": [],
+    "suffixHex": ""
+  },
+  {
+    "name": "sgr-tracking",
+    "enabledModes": [
+      "1000",
+      "1006"
+    ],
+    "suffixHex": "1b5b3f31303030681b5b3f3130303668"
+  },
+  {
+    "name": "all-tracked",
+    "enabledModes": [
+      "1000",
+      "1002",
+      "1003",
+      "1005",
+      "1006",
+      "1015"
+    ],
+    "suffixHex": "1b5b3f31303030681b5b3f31303032681b5b3f31303033681b5b3f31303035681b5b3f31303036681b5b3f3130313568"
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "name": "resize",
+    "type": 3,
+    "payloadJson": "{\"cols\":100,\"rows\":40}",
+    "hex": "00000016037b22636f6c73223a3130302c22726f7773223a34307d"
+  },
+  {
+    "name": "attention",
+    "type": 7,
+    "payloadJson": "{\"needsAttention\":true,\"reason\":\"Screen idle for 10s\"}",
+    "hex": "00000036077b226e65656473417474656e74696f6e223a747275652c22726561736f6e223a2253637265656e2069646c6520666f7220313073227d"
+  },
+  {
+    "name": "title",
+    "type": 8,
+    "payloadJson": "{\"name\":\"dev server\"}",
+    "hex": "00000015087b226e616d65223a2264657620736572766572227d"
+  },
+  {
+    "name": "terminal-mode",
+    "type": 9,
+    "payloadJson": "{\"mode\":\"clamped\"}",
+    "hex": "00000012097b226d6f6465223a22636c616d706564227d"
+  },
+  {
+    "name": "terminal-warning",
+    "type": 10,
+    "payloadJson": "{\"kind\":\"overgrown\",\"cols\":140,\"rows\":40,\"hostCols\":80,\"hostRows\":24}",
+    "hex": "000000450a7b226b696e64223a226f76657267726f776e222c22636f6c73223a3134302c22726f7773223a34302c22686f7374436f6c73223a38302c22686f7374526f7773223a32347d"
+  },
+  {
+    "name": "exit",
+    "type": 4,
+    "payloadJson": "{\"exitCode\":0}",
+    "hex": "0000000e047b2265786974436f6465223a307d"
+  }
+]

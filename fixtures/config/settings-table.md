@@ -1,0 +1,38 @@
+| Path | Type | Default | Scope | Description |
+|------|------|---------|-------|-------------|
+| `version` | number | `1` | client, daemon, server | Schema version for the persisted config.json format. Always 1 for the current release. (**internal**) |
+| `server.host` | string | `127.0.0.1` | server | IP address the dashboard server binds to. Defaults to loopback for local-only access. |
+| `server.port` | number | `3131` | server | TCP port the dashboard server listens on. Change if 3131 conflicts with another service. |
+| `terminal.clampBrowserToHost` | boolean | `false` | daemon | When false (default), a browser viewer may grow the shared PTY beyond the host terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent content mangling. |
+| `terminal.detachPrefix` | number | `28` | client | Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255]. |
+| `terminal.setTitle` | boolean | `true` | client | When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false. |
+| `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |
+| `remote.enabled` | boolean | unset | client | Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection. |
+| `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
+| `remote.ingestHost` | string | unset | client | Host address where the dashboard-side ingest daemon should listen for incoming remote session connections. |
+| `remote.tunnelId` | string | unset | client | Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward local climon traffic to a remote dashboard. |
+| `remote.dashboardTunnelId` | string | unset | server | Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions. (**internal**) |
+| `remote.dashboardTunnelCluster` | string | unset | server | Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions. (**internal**) |
+| `remote.dashboardTunnelEnabled` | boolean | unset | server | Server-owned flag recording whether the Tunnel Link is enabled, so the server re-establishes the dashboard tunnel automatically on startup. (**internal**) |
+| `remote.port` | number | unset | client | Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set. |
+| `remote.ingestPortRetryAttempts` | number | `100` | server | How many consecutive ports the ingest daemon will try, starting at its preferred port, before giving up. Raise it if many ports near the default are already in use. |
+| `remote.clientId` | string | unset | client | Stable, non-secret client namespace identifying this machine's sessions. Defaults to the machine hostname when unset; set it to a value that is unique per host to avoid session ID collisions across machines. |
+| `remote.keepAlive` | number | `60` | client | Interval in seconds between mux keepalive pings sent over the remote uplink/ingest connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0 to disable. |
+| `remote.peerHome` | string | unset | client, server | Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\wsl.localhost\<distro>\home\<you>\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`. |
+| `remote.peerHost` | string | unset | client, server | Optional host override used to reach the peer dashboard/ingest. Leave unset to auto-detect (localhost, or the WSL gateway IP under NAT networking). |
+| `remote.autoLink` | boolean | `true` | client | When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking. |
+| `session.color` | string | `auto` | client, daemon, server | Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment. |
+| `session.priority` | number | `500` | client, daemon, server | Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group. |
+| `tunnelLink.keepAlive` | number | `60` | server | Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel relay to prevent idle disconnection. Set to 0 to disable keep-alive pings. |
+| `logging.level` | string | `trace` | client, daemon, server | Minimum log level emitted by climon processes. One of: trace, debug, info, warn, error, fatal, silent. Defaults to trace (everything). Set to silent to disable logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable. |
+| `logging.appInsights.connectionString` | string | unset | server | Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable. (**sensitive**) |
+| `feature.sessionSpawning` | string | `disabled` | client, daemon, server, browser | Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled". [status: experimental] |
+| `eula.accepted` | boolean | `false` | client | Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing. (**internal**) |
+| `eula.version` | string | unset | client | The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance. (**internal**) |
+| `eula.acceptedAt` | string | unset | client | ISO-8601 timestamp recording when the EULA was accepted. (**internal**) |
+| `telemetry.enabled` | boolean | `false` | client, server | When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default. |
+| `update.auto` | boolean | `false` | client | When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`. |
+| `update.password` | string | unset | client | Shared password used to decrypt encrypted release artifacts when auto-updating from the gated public release repo. Provided out-of-band by the maintainer. Stored locally; treat as a secret. (**sensitive**) |
+| `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |
+| `update.availableVersion` | string | unset | client | Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update. (**internal**) |
+| `install.id` | string | unset | client, server | Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information. (**internal**) |

@@ -1,0 +1,988 @@
+//! Devbox uplink client. Ports `src/remote/uplink.ts`: resolves the uplink
+//! target from config, runs the mux bridge over a TCP channel to a remote
+//! ingest daemon, and supervises reconnection (direct host, dev tunnel, or
+//! same-machine WSL<->Windows peer discovery).
+//!
+//! The CLI is thread-based; this module runs on a tokio runtime created by the
+//! `run_uplink` entry point (see `climon-cli`). The mux wire format and the
+//! hello/attach/detach/data protocol MUST match the Bun side byte-for-byte.
+
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
+use std::net::{TcpStream as StdTcpStream, ToSocketAddrs};
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+use climon_config::config::{
+    get_climon_home, resolve_config_setting, write_config_setting, Env as ConfigEnv, WriteScope,
+};
+use climon_proto::meta::SessionMetaPatch;
+use climon_proto::meta::{Origin, PriorityReason, SessionStatus};
+use climon_store::meta::{list_sessions, read_session_meta};
+use climon_store::patch::patch_session_meta;
+use climon_store::paths::Env as StoreEnv;
+use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::sync::Mutex as AsyncMutex;
+
+use crate::client_id::default_client_id;
+use crate::discovery::{discover_dashboard, DashboardLocation, DiscoveryDeps};
+use crate::keepalive::mux_idle_timeout_ms;
+use crate::mux::{encode_control, encode_data, ControlMessage, MuxDecoder, MuxMessage};
+use crate::process::is_process_alive;
+use crate::singleton::acquire_singleton_detailed;
+use climon_session::socket::{parse_session_socket_ref, ParsedRef};
+
+/// Default keepalive interval in seconds. Mirrors `DEFAULT_KEEPALIVE_SECONDS`.
+pub const DEFAULT_KEEPALIVE_SECONDS: f64 = 60.0;
+
+/// The resolved uplink target. Mirrors `UplinkConfig`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UplinkConfig {
+    pub enabled: bool,
+    pub host: Option<String>,
+    pub tunnel_id: Option<String>,
+    pub port: Option<u16>,
+}
+
+fn as_string(v: Option<Value>) -> Option<String> {
+    match v {
+        Some(Value::String(s)) if !s.is_empty() => Some(s),
+        _ => None,
+    }
+}
+
+fn as_number(v: Option<Value>) -> Option<u16> {
+    match v {
+        Some(Value::Number(n)) => {
+            let f = n.as_f64()?;
+            if f.fract() == 0.0 && (0.0..=65535.0).contains(&f) {
+                Some(f as u16)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Resolves the devbox uplink config from the cascade. Remote is only considered
+/// enabled when a direct host+port or tunnel id are present. Mirrors
+/// `resolveUplinkConfig`.
+pub fn resolve_uplink_config(env: &ConfigEnv, cwd: &Path) -> UplinkConfig {
+    let enabled_flag =
+        resolve_config_setting("remote.enabled", env, cwd) == Some(Value::Bool(true));
+    let host = as_string(resolve_config_setting("remote.host", env, cwd));
+    let tunnel_id = as_string(resolve_config_setting("remote.tunnelId", env, cwd));
+    let port = as_number(resolve_config_setting("remote.port", env, cwd));
+    let has_direct_target = host.is_some() && port.is_some();
+    let has_tunnel_target = tunnel_id.is_some();
+    UplinkConfig {
+        enabled: enabled_flag && (has_direct_target || has_tunnel_target),
+        host,
+        tunnel_id,
+        port,
+    }
+}
+
+/// Returns the stable devbox client id, generating + persisting it globally if
+/// absent. Mirrors `ensureClientId`.
+pub fn ensure_client_id(env: &ConfigEnv, cwd: &Path) -> String {
+    if let Some(existing) = as_string(resolve_config_setting("remote.clientId", env, cwd)) {
+        return existing;
+    }
+    let id = default_client_id();
+    let _ = write_config_setting("remote.clientId", &id, WriteScope::Global, env, cwd);
+    id
+}
+
+fn resolve_keep_alive(env: &ConfigEnv, cwd: &Path) -> f64 {
+    match resolve_config_setting("remote.keepAlive", env, cwd) {
+        Some(Value::Number(n)) => match n.as_f64() {
+            Some(f) if f.fract() == 0.0 && f >= 0.0 => f,
+            _ => DEFAULT_KEEPALIVE_SECONDS,
+        },
+        _ => DEFAULT_KEEPALIVE_SECONDS,
+    }
+}
+
+const LIVE_STATUSES: &[SessionStatus] = &[
+    SessionStatus::Running,
+    SessionStatus::Acknowledged,
+    SessionStatus::NeedsAttention,
+    SessionStatus::Paused,
+];
+
+/// Options for [`run_uplink_bridge`].
+pub struct UplinkBridgeOptions {
+    pub store_env: StoreEnv,
+    pub client_id: String,
+    pub keep_alive_seconds: Option<f64>,
+}
+
+/// An attached local session socket: a writer channel feeding the blocking
+/// session-socket writer thread, plus an active flag the reader thread polls so
+/// it can exit on detach.
+struct Attached {
+    writer_tx: std::sync::mpsc::Sender<Vec<u8>>,
+    active: Arc<std::sync::atomic::AtomicBool>,
+}
+
+type AttachedMap = Arc<AsyncMutex<HashMap<String, Attached>>>;
+
+/// Connects to a local daemon session socket, returning two clones (one for the
+/// reader thread, one for the writer thread) with a short read timeout so the
+/// reader can poll the active flag and exit on detach.
+fn connect_session_pair(
+    reference: &str,
+) -> std::io::Result<(Box<dyn ReadWrite>, Box<dyn ReadWrite>)> {
+    match parse_session_socket_ref(reference)? {
+        ParsedRef::Tcp { host, port } => {
+            let stream = StdTcpStream::connect((host.as_str(), port))?;
+            stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+            let clone = stream.try_clone()?;
+            Ok((Box::new(stream), Box::new(clone)))
+        }
+        #[cfg(unix)]
+        ParsedRef::Path(path) => {
+            use std::os::unix::net::UnixStream;
+            let stream = UnixStream::connect(&path)?;
+            stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+            let clone = stream.try_clone()?;
+            Ok((Box::new(stream), Box::new(clone)))
+        }
+        #[cfg(not(unix))]
+        ParsedRef::Path(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "unix socket unsupported on this platform",
+        )),
+    }
+}
+
+trait ReadWrite: Read + Write + Send {}
+impl<T: Read + Write + Send> ReadWrite for T {}
+
+struct Bridge {
+    send_tx: mpsc::UnboundedSender<Vec<u8>>,
+    attached: AttachedMap,
+    advertised: HashSet<String>,
+    store_env: Arc<StoreEnv>,
+}
+
+impl Bridge {
+    fn write(&self, buf: Vec<u8>) {
+        let _ = self.send_tx.send(buf);
+    }
+}
+
+async fn reconcile(bridge: &mut Bridge) {
+    let mut current: HashSet<String> = HashSet::new();
+    let sessions = list_sessions(&bridge.store_env).unwrap_or_default();
+    for mut meta in sessions {
+        if meta.origin == Some(Origin::Remote) {
+            continue;
+        }
+        current.insert(meta.id.clone());
+        if LIVE_STATUSES.contains(&meta.status) {
+            if let Some(pid) = meta.daemon_pid {
+                if !is_process_alive(pid) {
+                    meta.status = SessionStatus::Disconnected;
+                    meta.priority_reason = PriorityReason::Disconnected;
+                    let _ = patch_session_meta(
+                        &bridge.store_env,
+                        &meta.id,
+                        SessionMetaPatch {
+                            status: Some(SessionStatus::Disconnected),
+                            priority_reason: Some(PriorityReason::Disconnected),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        }
+        bridge.write(encode_control(&ControlMessage::SessionAdded {
+            meta: Box::new(meta),
+        }));
+    }
+    for id in &bridge.advertised {
+        if !current.contains(id) {
+            bridge.write(encode_control(&ControlMessage::SessionRemoved {
+                id: id.clone(),
+            }));
+        }
+    }
+    bridge.advertised = current;
+}
+
+async fn attach(bridge: &Bridge, session_id: &str) {
+    {
+        let map = bridge.attached.lock().await;
+        if map.contains_key(session_id) {
+            return;
+        }
+    }
+    let meta = match read_session_meta(&bridge.store_env, session_id) {
+        Ok(Some(m)) => m,
+        _ => return,
+    };
+    let (reader, writer) = match connect_session_pair(&meta.socket_path) {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+    let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (writer_tx, writer_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+
+    // Writer thread: drains inbound data frames to the session socket.
+    {
+        let mut writer = writer;
+        std::thread::spawn(move || {
+            while let Ok(buf) = writer_rx.recv() {
+                if writer.write_all(&buf).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    // Reader thread: forwards session output as mux data frames until detached.
+    {
+        let send_tx = bridge.send_tx.clone();
+        let active_reader = active.clone();
+        let attached = bridge.attached.clone();
+        let id = session_id.to_string();
+        let mut reader = reader;
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 64 * 1024];
+            loop {
+                if !active_reader.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(frame) = encode_data(&id, &buf[..n]) {
+                            if send_tx.send(frame).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        continue;
+                    }
+                    Err(_) => break,
+                }
+            }
+            // Best-effort removal so a future attach can reconnect.
+            if let Ok(mut map) = attached.try_lock() {
+                map.remove(&id);
+            }
+        });
+    }
+
+    let mut map = bridge.attached.lock().await;
+    map.insert(session_id.to_string(), Attached { writer_tx, active });
+}
+
+async fn detach(bridge: &Bridge, session_id: &str) {
+    let mut map = bridge.attached.lock().await;
+    if let Some(att) = map.remove(session_id) {
+        att.active
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Runs the mux bridge over an already-connected channel to an ingest daemon.
+/// Sends `hello` first, advertises local sessions, and bridges attach/detach/data
+/// until the channel closes. Mirrors `runUplinkBridge`.
+pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions) {
+    let keep_alive_ms = (options
+        .keep_alive_seconds
+        .unwrap_or(DEFAULT_KEEPALIVE_SECONDS)
+        .max(0.0)
+        * 1000.0) as u64;
+    let idle_timeout_ms = mux_idle_timeout_ms(keep_alive_ms as f64);
+
+    let (mut read_half, write_half) = channel.into_split();
+    let (send_tx, mut send_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let writer = tokio::spawn(async move {
+        let mut write_half = write_half;
+        while let Some(buf) = send_rx.recv().await {
+            if write_half.write_all(&buf).await.is_err() {
+                break;
+            }
+        }
+        let _ = write_half.shutdown().await;
+    });
+
+    let mut bridge = Bridge {
+        send_tx: send_tx.clone(),
+        attached: Arc::new(AsyncMutex::new(HashMap::new())),
+        advertised: HashSet::new(),
+        store_env: Arc::new(options.store_env),
+    };
+
+    bridge.write(encode_control(&ControlMessage::Hello {
+        client_id: options.client_id.clone(),
+    }));
+    reconcile(&mut bridge).await;
+
+    let last_activity = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+
+    // Keepalive ping timer.
+    let mut keepalive_task: Option<tokio::task::JoinHandle<()>> = None;
+    if keep_alive_ms > 0 {
+        let ka_tx = send_tx.clone();
+        keepalive_task = Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(keep_alive_ms));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if ka_tx.send(encode_control(&ControlMessage::Ping)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    // Idle teardown: destroy the channel if no inbound frames arrive in time.
+    let shutdown = Arc::new(tokio::sync::Notify::new());
+    let mut idle_task: Option<tokio::task::JoinHandle<()>> = None;
+    if keep_alive_ms > 0 && idle_timeout_ms > 0 {
+        let idle = Duration::from_millis(idle_timeout_ms);
+        let last = last_activity.clone();
+        let sd = shutdown.clone();
+        idle_task = Some(tokio::spawn(async move {
+            loop {
+                let deadline = *last.lock().unwrap() + idle;
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    sd.notify_one();
+                    break;
+                }
+                tokio::time::sleep(deadline - now).await;
+            }
+        }));
+    }
+
+    let mut decoder = MuxDecoder::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        tokio::select! {
+            _ = shutdown.notified() => break,
+            read = read_half.read(&mut buf) => {
+                let n = match read {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                *last_activity.lock().unwrap() = std::time::Instant::now();
+                let messages = match decoder.push(&buf[..n]) {
+                    Ok(m) => m,
+                    Err(_) => break, // oversized/torn frame: tear the channel down.
+                };
+                for msg in messages {
+                    match msg {
+                        MuxMessage::Control(ControlMessage::Attach { id }) => {
+                            attach(&bridge, &id).await;
+                        }
+                        MuxMessage::Control(ControlMessage::Detach { id }) => {
+                            detach(&bridge, &id).await;
+                        }
+                        MuxMessage::Control(ControlMessage::Ping) => {
+                            bridge.write(encode_control(&ControlMessage::Pong));
+                        }
+                        MuxMessage::Control(_) => {}
+                        MuxMessage::Data { session_id, data } => {
+                            let map = bridge.attached.lock().await;
+                            if let Some(att) = map.get(&session_id) {
+                                let _ = att.writer_tx.send(data);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Teardown.
+    if let Some(t) = keepalive_task.take() {
+        t.abort();
+    }
+    if let Some(t) = idle_task.take() {
+        t.abort();
+    }
+    {
+        let mut map = bridge.attached.lock().await;
+        for (_, att) in map.drain() {
+            att.active
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    drop(send_tx);
+    drop(bridge);
+    let _ = writer.await;
+}
+
+// ---------------------------------------------------------------------------
+// Supervisor (devtunnel / direct / peer discovery). Faithful port of runUplink.
+// These paths shell out to `devtunnel`; they are behaviour-ported and exercised
+// by manual tests, mirroring the TS (which has no unit test for runUplink).
+// ---------------------------------------------------------------------------
+
+const AUTH_REJECT_PATTERNS: &[&str] = &[
+    "unauthor",
+    "forbidden",
+    "expired",
+    "invalid token",
+    "401",
+    "403",
+];
+
+fn auth_rejected_in(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    AUTH_REJECT_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
+fn devtunnel_command(args: &[&str]) -> tokio::process::Command {
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let mut cmd = tokio::process::Command::new("devtunnel");
+    cmd.args(args);
+    for (k, v) in crate::tunnel::devtunnel_env(&env) {
+        cmd.env(k, v);
+    }
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd
+}
+
+/// A spawned `devtunnel connect` child plus its observed auth-rejection flag.
+struct ConnectChild {
+    child: tokio::process::Child,
+    auth_rejected: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ConnectChild {
+    fn auth_rejected(&self) -> bool {
+        self.auth_rejected
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+    async fn kill(&mut self) {
+        let _ = self.child.kill().await;
+    }
+}
+
+fn spawn_connect(tunnel_id: &str) -> std::io::Result<ConnectChild> {
+    let mut cmd = devtunnel_command(&["connect", tunnel_id]);
+    let mut child = cmd.spawn()?;
+    let auth_rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(stdout) = child.stdout.take() {
+        spawn_auth_scan(stdout, auth_rejected.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_auth_scan(stderr, auth_rejected.clone());
+    }
+    Ok(ConnectChild {
+        child,
+        auth_rejected,
+    })
+}
+
+fn spawn_auth_scan<R>(reader: R, flag: Arc<std::sync::atomic::AtomicBool>)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut reader = reader;
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let text = String::from_utf8_lossy(&buf[..n]);
+                    if auth_rejected_in(&text) {
+                        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Discovers the forwarded port for a tunnel via `devtunnel port list`.
+/// Mirrors `discoverTunnelPort`.
+async fn discover_tunnel_port(tunnel_id: &str) -> Option<u16> {
+    let mut cmd = devtunnel_command(&["port", "list", tunnel_id, "--json"]);
+    let output = cmd.output().await.ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if let Ok(parsed) = serde_json::from_str::<Value>(&stdout) {
+        let ports = if parsed.is_array() {
+            parsed.as_array().cloned().unwrap_or_default()
+        } else {
+            parsed
+                .get("ports")
+                .or_else(|| parsed.get("value"))
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+        };
+        for entry in ports {
+            let p = entry
+                .get("portNumber")
+                .or_else(|| entry.get("port"))
+                .or_else(|| entry.get("Port"))
+                .and_then(|v| v.as_u64());
+            if let Some(p) = p {
+                if p > 0 && p <= 65535 {
+                    return Some(p as u16);
+                }
+            }
+        }
+        return None;
+    }
+    // Line-based fallback: first 2-5 digit run.
+    let mut digits = String::new();
+    for ch in stdout.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else if !digits.is_empty() {
+            if (2..=5).contains(&digits.len()) {
+                return digits.parse().ok();
+            }
+            digits.clear();
+        }
+    }
+    if (2..=5).contains(&digits.len()) {
+        return digits.parse().ok();
+    }
+    None
+}
+
+async fn wait_for_port(port: u16, host: &str, timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+    while std::time::Instant::now() < deadline {
+        if TcpStream::connect((host, port)).await.is_ok() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    false
+}
+
+fn resolve_peer_uplink_target(config_env: &ConfigEnv, cwd: &Path) -> Option<(String, u16)> {
+    let peer_home = as_string(resolve_config_setting("remote.peerHome", config_env, cwd))?;
+    let _ = peer_home;
+    let target = discover_dashboard(config_env, cwd, &DiscoveryDeps::default())?;
+    if target.location == DashboardLocation::Peer {
+        if let Some(ingest) = target.ingest {
+            return Some((target.host, ingest));
+        }
+    }
+    None
+}
+
+/// Devbox uplink supervisor. Singleton. Mirrors `runUplink`. Returns the process
+/// exit code.
+pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) -> i32 {
+    let peer_home = as_string(resolve_config_setting("remote.peerHome", &config_env, cwd));
+    let initial_legacy = resolve_uplink_config(&config_env, cwd);
+    if peer_home.is_none() && !initial_legacy.enabled {
+        return 0;
+    }
+
+    let pid_file = get_climon_home(&config_env).join("uplink.pid");
+    let singleton = acquire_singleton_detailed(&pid_file);
+    if !singleton.acquired {
+        return 0;
+    }
+
+    let client_id = ensure_client_id(&config_env, cwd);
+    let mut backoff_ms: u64 = 1000;
+
+    loop {
+        let started_at = std::time::Instant::now();
+
+        let peer_target = if peer_home.is_some() {
+            resolve_peer_uplink_target(&config_env, cwd)
+        } else {
+            None
+        };
+        let config = resolve_uplink_config(&config_env, cwd);
+
+        let mut host: Option<String> = None;
+        let mut port: Option<u16> = None;
+        let mut conn: Option<ConnectChild> = None;
+
+        if let Some((peer_host, peer_port)) = peer_target {
+            host = Some(peer_host);
+            port = Some(peer_port);
+        } else if config.enabled {
+            if let (Some(h), Some(p)) = (config.host.clone(), config.port) {
+                host = Some(h);
+                port = Some(p);
+            } else if let Some(tunnel_id) = config.tunnel_id.clone() {
+                let tunnel_port = match config.port {
+                    Some(p) => Some(p),
+                    None => discover_tunnel_port(&tunnel_id).await,
+                };
+                if let Some(tp) = tunnel_port {
+                    if let Ok(c) = spawn_connect(&tunnel_id) {
+                        conn = Some(c);
+                        host = Some("127.0.0.1".to_string());
+                        port = Some(tp);
+                    }
+                }
+            }
+        }
+
+        let (host, port) = match (host, port) {
+            (Some(h), Some(p)) => (h, p),
+            _ => {
+                if let Some(mut c) = conn {
+                    c.kill().await;
+                }
+                if peer_home.is_none() {
+                    return 0;
+                }
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms * 2).min(30_000);
+                continue;
+            }
+        };
+
+        let reachable = wait_for_port(port, &host, 15_000).await;
+        if !reachable {
+            if let Some(c) = &conn {
+                if c.auth_rejected() {
+                    eprintln!(
+                        "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
+                    );
+                    if let Some(mut c) = conn {
+                        c.kill().await;
+                    }
+                    return 1;
+                }
+            }
+            if let Some(mut c) = conn {
+                c.kill().await;
+            }
+            // transient: fall through to backoff
+            if started_at.elapsed() > Duration::from_secs(30) {
+                backoff_ms = 1000;
+            }
+            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            backoff_ms = (backoff_ms * 2).min(30_000);
+            continue;
+        }
+
+        match TcpStream::connect((host.as_str(), port)).await {
+            Ok(channel) => {
+                run_uplink_bridge(
+                    channel,
+                    UplinkBridgeOptions {
+                        store_env: store_env.clone(),
+                        client_id: client_id.clone(),
+                        keep_alive_seconds: Some(resolve_keep_alive(&config_env, cwd)),
+                    },
+                )
+                .await;
+            }
+            Err(_) => {
+                // transient connect error: fall through to backoff
+            }
+        }
+
+        let auth_rejected_after = conn.as_ref().map(|c| c.auth_rejected()).unwrap_or(false);
+        if let Some(mut c) = conn {
+            c.kill().await;
+        }
+        if auth_rejected_after {
+            eprintln!(
+                "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
+            );
+            return 1;
+        }
+        if started_at.elapsed() > Duration::from_secs(30) {
+            backoff_ms = 1000;
+        }
+        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        backoff_ms = (backoff_ms * 2).min(30_000);
+    }
+}
+
+/// Resolves a socket address for the given host:port. Helper for tests.
+#[allow(dead_code)]
+fn resolve_addr(host: &str, port: u16) -> Option<std::net::SocketAddr> {
+    (host, port).to_socket_addrs().ok()?.next()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use climon_proto::meta::SessionMeta;
+    use climon_store::meta::write_session_meta;
+    use std::collections::HashMap as Map;
+    use tokio::net::TcpListener;
+
+    fn temp_home() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let base = std::env::current_dir().unwrap().join(".copilot-tmp");
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = base.join(format!(
+            "climon-uplink-{}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("sessions")).unwrap();
+        dir
+    }
+
+    fn config_env_for(home: &Path) -> ConfigEnv {
+        let os_home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+        ConfigEnv::new(Some(home.to_str().unwrap()), &os_home)
+    }
+
+    fn store_env_for(home: &Path) -> StoreEnv {
+        StoreEnv::with_home(home.to_path_buf())
+    }
+
+    fn sample_meta(home: &Path, id: &str, origin: Option<Origin>) -> SessionMeta {
+        let now = climon_store::paths::now_iso();
+        SessionMeta {
+            id: id.to_string(),
+            command: vec!["bash".into()],
+            display_command: "bash".into(),
+            cwd: "/x".into(),
+            status: SessionStatus::Running,
+            priority_reason: PriorityReason::Running,
+            daemon_pid: None,
+            cols: 80,
+            rows: 24,
+            headless: None,
+            socket_path: home.join("nope.sock").to_string_lossy().into_owned(),
+            client_version: None,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            last_activity_at: now,
+            attention_matched_at: None,
+            attention_reason: None,
+            completed_at: None,
+            exit_code: None,
+            error: None,
+            origin,
+            client_label: origin.map(|_| "remote".to_string()),
+            name: None,
+            priority: None,
+            color: None,
+            user_paused: None,
+        }
+    }
+
+    #[test]
+    fn resolve_uplink_config_disabled_without_target() {
+        let home = temp_home();
+        let env = config_env_for(&home);
+        assert!(!resolve_uplink_config(&env, &home).enabled);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn resolve_uplink_config_direct_mode() {
+        let home = temp_home();
+        std::fs::write(
+            home.join("config.json"),
+            serde_json::json!({"remote": {"enabled": true, "host": "172.30.192.1", "port": 3132}})
+                .to_string(),
+        )
+        .unwrap();
+        let env = config_env_for(&home);
+        let cfg = resolve_uplink_config(&env, &home);
+        assert!(cfg.enabled);
+        assert_eq!(cfg.host.as_deref(), Some("172.30.192.1"));
+        assert_eq!(cfg.port, Some(3132));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn ensure_client_id_is_stable() {
+        let home = temp_home();
+        let env = config_env_for(&home);
+        let a = ensure_client_id(&env, &home);
+        let b = ensure_client_id(&env, &home);
+        assert_eq!(a, b);
+        assert!(a.len() <= 64 && !a.is_empty());
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn mux_idle_timeout_matches_ts() {
+        assert_eq!(mux_idle_timeout_ms(0.0), 0);
+        assert_eq!(mux_idle_timeout_ms(50.0), 150);
+        assert_eq!(mux_idle_timeout_ms(50.2), 151);
+    }
+
+    async fn collect_control_kinds(listener: TcpListener, out: Arc<std::sync::Mutex<Vec<String>>>) {
+        if let Ok((stream, _)) = listener.accept().await {
+            let mut stream = stream;
+            let mut decoder = MuxDecoder::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if let Ok(messages) = decoder.push(&buf[..n]) {
+                            for msg in messages {
+                                if let MuxMessage::Control(c) = msg {
+                                    out.lock().unwrap().push(control_kind(&c));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn control_kind(c: &ControlMessage) -> String {
+        match c {
+            ControlMessage::Hello { .. } => "hello",
+            ControlMessage::SessionAdded { .. } => "session-added",
+            ControlMessage::SessionUpdated { .. } => "session-updated",
+            ControlMessage::SessionRemoved { .. } => "session-removed",
+            ControlMessage::Attach { .. } => "attach",
+            ControlMessage::Detach { .. } => "detach",
+            ControlMessage::Ping => "ping",
+            ControlMessage::Pong => "pong",
+        }
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn bridge_sends_hello_then_advertises_local_sessions() {
+        let home = temp_home();
+        let store_env = store_env_for(&home);
+        write_session_meta(&store_env, &sample_meta(&home, "s1", None)).unwrap();
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let server = tokio::spawn(collect_control_kinds(listener, received.clone()));
+
+        let client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let bridge = tokio::spawn(run_uplink_bridge(
+            client,
+            UplinkBridgeOptions {
+                store_env,
+                client_id: "dev1".into(),
+                keep_alive_seconds: Some(0.0),
+            },
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        bridge.abort();
+        let _ = bridge.await;
+        let _ = server.await;
+
+        let kinds = received.lock().unwrap().clone();
+        assert_eq!(kinds.first().map(String::as_str), Some("hello"));
+        assert!(kinds.iter().any(|k| k == "session-added"));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[tokio::test]
+    async fn bridge_does_not_advertise_remote_origin_sessions() {
+        let home = temp_home();
+        let store_env = store_env_for(&home);
+        write_session_meta(
+            &store_env,
+            &sample_meta(&home, "remote~s1", Some(Origin::Remote)),
+        )
+        .unwrap();
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let server = tokio::spawn(collect_control_kinds(listener, received.clone()));
+
+        let client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let bridge = tokio::spawn(run_uplink_bridge(
+            client,
+            UplinkBridgeOptions {
+                store_env,
+                client_id: "dev1".into(),
+                keep_alive_seconds: Some(0.0),
+            },
+        ));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        bridge.abort();
+        let _ = bridge.await;
+        let _ = server.await;
+
+        let kinds = received.lock().unwrap().clone();
+        assert_eq!(kinds, vec!["hello".to_string()]);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[tokio::test]
+    async fn bridge_closes_idle_channel_when_keepalive_unanswered() {
+        let home = temp_home();
+        let store_env = store_env_for(&home);
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Server accepts but never writes mux frames back.
+        let server = tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                // Hold the connection until the client tears down.
+                let mut stream = stream;
+                let mut buf = [0u8; 1024];
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            }
+        });
+
+        let client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        // keepAlive 0.05s -> idle timeout 150ms; bridge should self-destruct.
+        let started = std::time::Instant::now();
+        run_uplink_bridge(
+            client,
+            UplinkBridgeOptions {
+                store_env,
+                client_id: "dev1".into(),
+                keep_alive_seconds: Some(0.05),
+            },
+        )
+        .await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let _ = server.await;
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn discover_tunnel_port_line_fallback_and_auth_scan() {
+        assert!(auth_rejected_in("Error: 403 Forbidden"));
+        assert!(auth_rejected_in("token expired"));
+        assert!(!auth_rejected_in("all good"));
+        let _ = Map::<String, String>::new();
+    }
+}

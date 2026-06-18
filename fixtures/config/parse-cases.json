@@ -1,0 +1,49 @@
+[
+  {
+    "name": "line-and-block-comments",
+    "input": "{\n      // Dashboard host.\n      \"server\": {\n        \"host\": \"127.0.0.1\",\n        /* Dashboard port. */\n        \"port\": 3131\n      }\n    }",
+    "expected": {
+      "server": {
+        "host": "127.0.0.1",
+        "port": 3131
+      }
+    }
+  },
+  {
+    "name": "comment-like-text-in-strings",
+    "input": "{\n      \"url\": \"http://example.com/path\",\n      \"lineComment\": \"// not a comment\",\n      \"blockComment\": \"/* not a comment */\",\n      \"escapedQuote\": \"quote: \\\" // still text\"\n    }",
+    "expected": {
+      "url": "http://example.com/path",
+      "lineComment": "// not a comment",
+      "blockComment": "/* not a comment */",
+      "escapedQuote": "quote: \" // still text"
+    }
+  },
+  {
+    "name": "nested-and-unknown-keys",
+    "input": "{\n      \"version\": 1,\n      \"remote\": { \"enabled\": true, \"tunnelId\": \"abc123\", \"port\": 3132 },\n      \"custom\": { \"value\": true, \"nested\": { \"deep\": [1, 2, 3] } }\n    }",
+    "expected": {
+      "version": 1,
+      "remote": {
+        "enabled": true,
+        "tunnelId": "abc123",
+        "port": 3132
+      },
+      "custom": {
+        "value": true,
+        "nested": {
+          "deep": [
+            1,
+            2,
+            3
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "empty-object",
+    "input": "{}",
+    "expected": {}
+  }
+]
