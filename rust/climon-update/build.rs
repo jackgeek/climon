@@ -6,6 +6,13 @@
 
 use std::path::Path;
 
+// Shared obfuscation helper, loaded via #[path] so build-time obfuscation and
+// runtime de-obfuscation cannot drift. `dead_code` because build.rs only uses
+// `obfuscate` (runtime only uses `deobfuscate`).
+#[allow(dead_code)]
+#[path = "src/obfuscate.rs"]
+mod obf;
+
 fn main() {
     // pubkey.ts lives at the repository root, two levels above this crate
     // (rust/climon-update/ -> rust/ -> repo root).
@@ -31,6 +38,18 @@ fn main() {
     let version = extract_version(&pkg)
         .unwrap_or_else(|| panic!("no \"version\" field found in {}", pkg_path.display()));
     println!("cargo:rustc-env=CLIMON_VERSION={version}");
+
+    // Embed the shared distribution password, obfuscated, when this is a gated
+    // build. Absent/empty in local, dev, and public builds -> empty marker ->
+    // no embedded password (see distribution.rs). Plaintext is consumed here
+    // and never written into the binary; only the XOR'd hex bytes are.
+    println!("cargo:rerun-if-env-changed=CLIMON_DISTRIBUTION_PASSWORD");
+    println!("cargo:rerun-if-changed=src/obfuscate.rs");
+    let obf_password = match std::env::var("CLIMON_DISTRIBUTION_PASSWORD") {
+        Ok(pw) if !pw.is_empty() => obf::obfuscate(pw.as_bytes()),
+        _ => String::new(),
+    };
+    println!("cargo:rustc-env=CLIMON_DISTRIBUTION_PASSWORD_OBF={obf_password}");
 }
 
 /// Extracts the first top-level `"version": "..."` string from package.json.
