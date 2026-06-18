@@ -95,6 +95,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CLIMON_VERSION: ${{ needs.version.outputs.version }}
+      # Baked into gated builds by climon-update/build.rs (XOR-obfuscated).
+      # Empty in forks/PRs without the secret -> no embedded password.
+      CLIMON_DISTRIBUTION_PASSWORD: ${{ secrets.CLIMON_DISTRIBUTION_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
