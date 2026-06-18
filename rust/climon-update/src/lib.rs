@@ -14,6 +14,8 @@
 
 pub mod check;
 pub mod clock;
+#[allow(dead_code)]
+mod obfuscate;
 pub mod crypto_envelope;
 pub mod download;
 pub mod install_manifest;
