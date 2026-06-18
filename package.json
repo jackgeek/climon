@@ -21,6 +21,7 @@
     "release": "bun scripts/release.ts",
     "dev": "bun src/index.ts",
     "server": "bun src/server.ts server",
+    "server:loop": "bun scripts/server-loop.ts",
     "start": "bun src/index.ts",
     "logs": "bun scripts/logs.ts",
     "log-level": "bun scripts/log-level.ts",
