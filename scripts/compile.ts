@@ -51,6 +51,17 @@ const INSTALLER_SENTINEL =
 
 const assembleMode = process.env.CLIMON_ASSEMBLE === "1";
 
+/**
+ * `bun build` flags that activate the embedded-asset code path in
+ * `src/server/assets.ts` (the `__CLIMON_EMBEDDED__` define). EVERY build that
+ * ships a self-contained server — the `climon-beta` JS bundle AND the compiled
+ * `climon-server` binary — must pass these, otherwise the server falls back to
+ * an on-the-fly source build that does not exist on an end user's machine and
+ * the dashboard assets 404. Exported so the server smoke test compiles the
+ * binary the same way and can never silently desync from the real pipeline.
+ */
+export const EMBEDDED_DEFINE_ARGS: string[] = ["--define", "__CLIMON_EMBEDDED__=true"];
+
 type BuildTarget = {
   platform: string;
   /** Bun cross-compile target used for the climon-server binary. */
@@ -208,7 +219,7 @@ async function main() {
     // minified bundle is shared across all platform zips.
     const serverBundleOut = resolve(stageRoot, "climon-beta");
     console.log("→ Bundling climon-beta...");
-    await $`bun build ${serverBundleEntrypoint} --define __CLIMON_EMBEDDED__=true --target bun --format esm --minify --outfile ${serverBundleOut}`;
+    await $`bun build ${serverBundleEntrypoint} ${EMBEDDED_DEFINE_ARGS} --target bun --format esm --minify --outfile ${serverBundleOut}`;
     console.log(`  ✓ climon-beta (${(readFileSync(serverBundleOut).length / 1024).toFixed(0)} KB)`);
 
     // The installer is now native (in the Rust client). Ship a tiny sentinel
@@ -231,7 +242,7 @@ async function main() {
       const execPathArgs = crossBin
         ? ["--compile-executable-path", crossBin]
         : [];
-      await $`bun build ${serverEntrypoint} --compile --target ${target} ${execPathArgs} --outfile ${serverOut}`;
+      await $`bun build ${serverEntrypoint} --compile --target ${target} ${EMBEDDED_DEFINE_ARGS} ${execPathArgs} --outfile ${serverOut}`;
 
       // Read the produced binaries back and zip them under bare names. On Unix,
       // set os=3 + 0o755 perms so extracted binaries keep their executable bit.

@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EMBEDDED_DEFINE_ARGS } from "../scripts/compile.js";
 
 // Opt-in only: this test runs the real, slow `bun build --compile` of
 // src/server.ts for the native target and boots the resulting binary. CI runs
@@ -40,9 +41,13 @@ describe.skipIf(!RUN)("compiled climon-server binary", () => {
           spawnSync("bun", ["scripts/embed-assets.ts"], { stdio: "inherit" }).status
         ).toBe(0);
         expect(
-          spawnSync("bun", ["build", "src/server.ts", "--compile", "--outfile", out], {
-            stdio: "inherit",
-          }).status
+          spawnSync(
+            "bun",
+            ["build", "src/server.ts", "--compile", ...EMBEDDED_DEFINE_ARGS, "--outfile", out],
+            {
+              stdio: "inherit",
+            }
+          ).status
         ).toBe(0);
         expect(existsSync(out)).toBe(true);
 
@@ -70,6 +75,19 @@ describe.skipIf(!RUN)("compiled climon-server binary", () => {
             await new Promise((r) => setTimeout(r, 200));
           }
           expect(healthy).toBe(true);
+
+          // Regression guard: the compiled binary must serve the embedded
+          // dashboard assets. A binary built without the embedded-asset define
+          // falls back to an on-the-fly source build, which fails on a machine
+          // that only has the shipped binary (e.g. a fresh Windows install),
+          // so these requests 404. Assert the assets reached by the dashboard
+          // HTML + manifest (app.js, xterm.css, an icon) all serve real bytes.
+          for (const path of ["/assets/app.js", "/assets/xterm.css", "/assets/icon-192.png"]) {
+            const res = await fetch(`${base}${path}`);
+            expect(res.status).toBe(200);
+            const body = await res.arrayBuffer();
+            expect(body.byteLength).toBeGreaterThan(0);
+          }
         } finally {
           child.kill();
         }
