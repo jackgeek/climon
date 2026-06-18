@@ -1,8 +1,8 @@
 //! Shared XOR + hex obfuscation for the embedded distribution password.
 //!
-//! This file is `include!`d by `build.rs` (to obfuscate the password at build
-//! time) AND compiled into the crate as `mod obfuscate` (to de-obfuscate it at
-//! runtime), so the two halves can never drift. It must stay dependency-free
+//! This file is loaded by `build.rs` (via `#[path]`, to obfuscate the password
+//! at build time) AND compiled into the crate as `mod obfuscate` (to
+//! de-obfuscate it at runtime), so the two halves can never drift. It must stay dependency-free
 //! (std only) because build scripts do not share the crate's dependencies.
 //!
 //! NOTE: XOR against a fixed, in-binary key is OBFUSCATION, not encryption. It
