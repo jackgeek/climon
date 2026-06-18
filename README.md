@@ -508,7 +508,8 @@ flags.)
 
 ## Further reading
 
-See [`docs/setup.md`](docs/setup.md), [`docs/usage.md`](docs/usage.md),
+See [`docs/cheat-sheet.md`](docs/cheat-sheet.md),
+[`docs/setup.md`](docs/setup.md), [`docs/usage.md`](docs/usage.md),
 [`docs/architecture.md`](docs/architecture.md),
 [`docs/security.md`](docs/security.md),
 [`docs/deployment.md`](docs/deployment.md),
