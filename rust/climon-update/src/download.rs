@@ -1,10 +1,10 @@
 //! Bounded HTTP downloads for update artifacts. Port of `src/update/download.ts`.
 //!
-//! Uses a blocking `ureq` agent configured with the platform's native TLS stack
-//! (OS trust store), so no bundled CA roots are required.
+//! Uses a blocking `ureq` agent with the Rustls TLS backend (bundled CA roots),
+//! which avoids a dependency on the platform's native OpenSSL and enables
+//! cross-compilation for targets such as linux-arm64.
 
 use std::io::Read;
-use std::sync::Arc;
 
 use ureq::Agent;
 
@@ -15,11 +15,8 @@ pub const MAX_TEXT_BYTES: u64 = 64 * 1024;
 /// Max bytes for a manifest JSON document.
 pub const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 
-fn agent() -> Result<Agent, String> {
-    let connector = native_tls::TlsConnector::new().map_err(|e| format!("TLS init failed: {e}"))?;
-    Ok(ureq::AgentBuilder::new()
-        .tls_connector(Arc::new(connector))
-        .build())
+fn agent() -> Agent {
+    ureq::AgentBuilder::new().build()
 }
 
 /// Reads a response body, aborting if it exceeds `max` bytes. The Content-Length
@@ -50,7 +47,7 @@ fn read_bounded(resp: ureq::Response, max: u64, url: &str) -> Result<Vec<u8>, St
 }
 
 fn get(url: &str) -> Result<ureq::Response, String> {
-    let agent = agent()?;
+    let agent = agent();
     match agent.get(url).call() {
         Ok(resp) => Ok(resp),
         Err(ureq::Error::Status(code, _)) => Err(format!("Download failed: HTTP {code} for {url}")),
