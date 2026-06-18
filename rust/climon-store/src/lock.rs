@@ -230,28 +230,67 @@ fn is_process_alive(_pid: i64) -> bool {
     false
 }
 
+#[cfg(unix)]
 fn identity_of(meta: &fs::Metadata) -> PatchLockIdentity {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        PatchLockIdentity {
-            dev: meta.dev(),
-            ino: meta.ino(),
-        }
+    use std::os::unix::fs::MetadataExt;
+    PatchLockIdentity {
+        dev: meta.dev(),
+        ino: meta.ino(),
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        PatchLockIdentity {
-            dev: u64::from(meta.volume_serial_number().unwrap_or(0)),
-            ino: meta.file_index().unwrap_or(0),
-        }
+}
+
+#[cfg(windows)]
+fn identity_of(path: &Path) -> io::Result<PatchLockIdentity> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let mut wide = path.as_os_str().encode_wide().collect::<Vec<u16>>();
+    wide.push(0);
+
+    // SAFETY: `wide` is a valid, NUL-terminated UTF-16 path for the duration of the call.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
     }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = meta;
-        PatchLockIdentity { dev: 0, ino: 0 }
+
+    let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: `handle` is valid on this branch and `info` points to writable storage.
+    let ok = unsafe { GetFileInformationByHandle(handle, info.as_mut_ptr()) };
+    // SAFETY: `handle` was returned by `CreateFileW` and must be closed once.
+    unsafe {
+        CloseHandle(handle);
     }
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // SAFETY: `GetFileInformationByHandle` succeeded, so `info` is fully initialized.
+    let info = unsafe { info.assume_init() };
+    Ok(PatchLockIdentity {
+        dev: u64::from(info.dwVolumeSerialNumber),
+        ino: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn identity_of(meta: &fs::Metadata) -> PatchLockIdentity {
+    let _ = meta;
+    PatchLockIdentity { dev: 0, ino: 0 }
 }
 
 fn mtime_ms(meta: &fs::Metadata) -> i64 {
@@ -285,7 +324,14 @@ fn read_owner_file(path: &Path) -> io::Result<Option<PartialOwner>> {
 }
 
 fn get_identity(path: &Path) -> io::Result<PatchLockIdentity> {
-    Ok(identity_of(&fs::metadata(path)?))
+    #[cfg(windows)]
+    {
+        identity_of(path)
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(identity_of(&fs::metadata(path)?))
+    }
 }
 
 fn get_owner_file_snapshot(path: &Path) -> io::Result<Option<OwnerFileSnapshot>> {
@@ -297,6 +343,9 @@ fn get_owner_file_snapshot(path: &Path) -> io::Result<Option<OwnerFileSnapshot>>
     let owner_raw = fs::read_to_string(path)?;
     let owner = serde_json::from_str::<PartialOwner>(&owner_raw).ok();
     Ok(Some(OwnerFileSnapshot {
+        #[cfg(windows)]
+        identity: identity_of(path)?,
+        #[cfg(not(windows))]
         identity: identity_of(&meta),
         mtime_ms: mtime_ms(&meta),
         owner,
@@ -316,6 +365,9 @@ fn get_snapshot(lock_path: &Path) -> io::Result<Option<PatchLockSnapshot>> {
         Err(e) => return Err(e),
     };
     Ok(Some(PatchLockSnapshot {
+        #[cfg(windows)]
+        identity: identity_of(lock_path)?,
+        #[cfg(not(windows))]
         identity: identity_of(&meta),
         mtime_ms: mtime_ms(&meta),
         owner,
