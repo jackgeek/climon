@@ -22,6 +22,19 @@ describe("parseDashboardTunnelUrl", () => {
       parseDashboardTunnelUrl("Hosting port 3131 at https://climon-test-3131.eun1.devtunnels.ms/")
     ).toBe("https://climon-test-3131.eun1.devtunnels.ms/");
   });
+
+  test("returns only the URL matching the expected port when one is given", () => {
+    const output =
+      "Hosting port 39999 at https://climon-test-39999.eun1.devtunnels.ms/\n" +
+      "Hosting port 39997 at https://climon-test-39997.eun1.devtunnels.ms/\n";
+    expect(parseDashboardTunnelUrl(output, 39997)).toBe("https://climon-test-39997.eun1.devtunnels.ms/");
+  });
+
+  test("ignores URLs for other ports when an expected port is given", () => {
+    expect(
+      parseDashboardTunnelUrl("https://climon-test-39999.eun1.devtunnels.ms/", 39997)
+    ).toBeUndefined();
+  });
 });
 
 describe("splitTunnelId", () => {
@@ -703,6 +716,69 @@ describe("createDashboardTunnelManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(hostCount).toBe(3);
+  });
+
+  test("reports the live dashboard port even when host output lists a stale port first", async () => {
+    const manager = createManager({
+      port: 39997,
+      persisted: { tunnelId: "climon-test", cluster: "eun1" },
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        // `devtunnel host` prints a browser URL for every mapped port; a stale
+        // one (no local listener) can come first and must not be reported.
+        handlers.onStdout(
+          "Hosting port 39999 at https://climon-test-39999.eun1.devtunnels.ms/\n" +
+            "Hosting port 39997 at https://climon-test-39997.eun1.devtunnels.ms/\n"
+        );
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await expect(manager.ensure()).resolves.toMatchObject({
+      url: "https://climon-test-39997.eun1.devtunnels.ms/",
+      running: true
+    });
+  });
+
+  test("prunes stale port mappings, keeping only the live dashboard port", async () => {
+    const portCommands: string[] = [];
+    const manager = createManager({
+      port: 39997,
+      persisted: { tunnelId: "climon-test", cluster: "eun1" },
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "port") {
+          portCommands.push(args.join(" "));
+          if (args[1] === "list") {
+            return {
+              status: 0,
+              stdout: JSON.stringify({
+                ports: [{ portNumber: 39997 }, { portNumber: 39998 }, { portNumber: 39999 }]
+              }),
+              stderr: ""
+            };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Hosting port 39997 at https://climon-test-39997.eun1.devtunnels.ms/\n");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await manager.ensure();
+
+    expect(portCommands).toContain("port delete climon-test -p 39998");
+    expect(portCommands).toContain("port delete climon-test -p 39999");
+    expect(portCommands).not.toContain("port delete climon-test -p 39997");
   });
 });
 

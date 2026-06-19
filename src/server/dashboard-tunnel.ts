@@ -163,8 +163,13 @@ const defaultHostSpawner: HostSpawner = (cmd, args, handlers) => {
   };
 };
 
-export function parseDashboardTunnelUrl(output: string): string | undefined {
-  return output.match(/https:\/\/[a-z0-9][a-z0-9-]*-\d+\.[^\s/]+\.devtunnels\.ms\/?/i)?.[0];
+export function parseDashboardTunnelUrl(output: string, expectedPort?: number): string | undefined {
+  const matches = output.match(/https:\/\/[a-z0-9][a-z0-9-]*-\d+\.[^\s/]+\.devtunnels\.ms\/?/gi);
+  if (!matches) return undefined;
+  if (expectedPort === undefined) return matches[0];
+  // `devtunnel host` prints a browser URL for every mapped port; only the URL whose
+  // port segment matches the live dashboard port forwards to a real listener.
+  return matches.find((url) => url.includes(`-${expectedPort}.`));
 }
 
 /**
@@ -313,6 +318,30 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     ]);
   }
 
+  /**
+   * Removes any port mappings on the tunnel other than the live dashboard port.
+   * The dashboard binds the next free port on each restart, so re-using a persisted
+   * tunnel accumulates stale mappings that forward to dead local ports (502s).
+   * Best-effort: a failed list or delete leaves the tunnel usable on the live port.
+   */
+  async function pruneStalePorts(id: string): Promise<void> {
+    const list = await runner("devtunnel", ["port", "list", id, "--json"]);
+    if (list.status !== 0) return;
+    let ports: number[];
+    try {
+      const parsed = JSON.parse(list.stdout) as { ports?: Array<{ portNumber?: number }> };
+      ports = (parsed.ports ?? [])
+        .map((entry) => entry.portNumber)
+        .filter((value): value is number => typeof value === "number");
+    } catch {
+      return;
+    }
+    for (const port of ports) {
+      if (port === options.port) continue;
+      await runner("devtunnel", ["port", "delete", id, "-p", String(port)]);
+    }
+  }
+
   async function forgetTunnel(id: string): Promise<void> {
     tunnelId = undefined;
     cluster = undefined;
@@ -369,6 +398,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
       }
     }
     const attemptedTunnelId = tunnelId;
+    await pruneStalePorts(attemptedTunnelId);
     url = undefined;
     let startupStdout = "";
     let startupStderr = "";
@@ -376,11 +406,11 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     const startedHost = hostSpawner("devtunnel", args, {
       onStdout: (text) => {
         startupStdout += text;
-        url = parseDashboardTunnelUrl(text) ?? url;
+        url = parseDashboardTunnelUrl(text, options.port) ?? url;
       },
       onStderr: (text) => {
         startupStderr += text;
-        url = parseDashboardTunnelUrl(text) ?? url;
+        url = parseDashboardTunnelUrl(text, options.port) ?? url;
       },
       onExit: () => {
         host = undefined;
