@@ -25,6 +25,17 @@ pub enum ColorFlag {
     Color(AnsiColor),
 }
 
+impl ColorFlag {
+    /// The wire string climon emits for `--color` (mirrors `BuildColor`).
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            ColorFlag::None => "none",
+            ColorFlag::Auto => "auto",
+            ColorFlag::Color(color) => color.name(),
+        }
+    }
+}
+
 /// The parsed top-level command. Mirrors the TS `ParsedCommand` union.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedCommand {
@@ -51,6 +62,19 @@ pub enum ParsedCommand {
         priority: Option<i64>,
         color: Option<ColorFlag>,
         name: Option<String>,
+    },
+    /// `climon __spawn [--headless] [--cwd D] [--cols N] [--rows N] [meta] <cmd>`
+    /// — internal command used by the dashboard server to create a session on
+    /// this machine, either headless or in a visible terminal window.
+    Spawn {
+        argv: Vec<String>,
+        headless: bool,
+        cwd: Option<String>,
+        cols: Option<u16>,
+        rows: Option<u16>,
+        name: Option<String>,
+        color: Option<ColorFlag>,
+        priority: Option<i64>,
     },
     Config {
         argv: Vec<String>,
@@ -323,6 +347,55 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
             }
             Ok(run_from_flags(run_argv, headless, flags))
         }
+        "__spawn" => {
+            let mut headless = false;
+            let mut cwd: Option<String> = None;
+            let mut cols: Option<u16> = None;
+            let mut rows: Option<u16> = None;
+            let mut rest_tokens: Vec<String> = Vec::new();
+            let mut it = rest.into_iter();
+            while let Some(tok) = it.next() {
+                match tok.as_str() {
+                    "--headless" if rest_tokens.is_empty() => headless = true,
+                    "--cwd" if rest_tokens.is_empty() => {
+                        cwd = Some(it.next().ok_or("Missing value for --cwd.".to_string())?);
+                    }
+                    "--cols" if rest_tokens.is_empty() => {
+                        cols = Some(
+                            it.next()
+                                .ok_or("Missing value for --cols.".to_string())?
+                                .parse()
+                                .map_err(|_| "Invalid --cols.".to_string())?,
+                        );
+                    }
+                    "--rows" if rest_tokens.is_empty() => {
+                        rows = Some(
+                            it.next()
+                                .ok_or("Missing value for --rows.".to_string())?
+                                .parse()
+                                .map_err(|_| "Invalid --rows.".to_string())?,
+                        );
+                    }
+                    _ => rest_tokens.push(tok),
+                }
+            }
+            let (flags, argv) = parse_session_flags(&rest_tokens)?;
+            if argv.is_empty() {
+                return Err(
+                    "Provide a command to spawn, e.g. `climon __spawn npm test`.".to_string(),
+                );
+            }
+            Ok(ParsedCommand::Spawn {
+                argv,
+                headless,
+                cwd,
+                cols,
+                rows,
+                name: flags.name,
+                color: flags.color,
+                priority: flags.priority,
+            })
+        }
         "config" => Ok(ParsedCommand::Config { argv: rest }),
         "cleanup" => Ok(ParsedCommand::Cleanup),
         "link" => Ok(ParsedCommand::Link { argv: rest }),
@@ -410,6 +483,43 @@ mod tests {
     #[test]
     fn help_text_includes_version() {
         assert!(help_text().contains(&format!("v{VERSION}")));
+    }
+
+    #[test]
+    fn parse_spawn_headless_with_cwd_and_command() {
+        assert_eq!(
+            parse(&[
+                "__spawn", "--headless", "--cwd", "/work", "--cols", "100", "--rows", "30", "npm",
+                "test"
+            ]),
+            ParsedCommand::Spawn {
+                argv: vec!["npm".into(), "test".into()],
+                headless: true,
+                cwd: Some("/work".into()),
+                cols: Some(100),
+                rows: Some(30),
+                name: None,
+                priority: None,
+                color: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_spawn_visible_default_with_meta_flags() {
+        assert_eq!(
+            parse(&["__spawn", "--cwd", "/w", "--name", "build", "--priority", "800", "bash"]),
+            ParsedCommand::Spawn {
+                argv: vec!["bash".into()],
+                headless: false,
+                cwd: Some("/w".into()),
+                cols: None,
+                rows: None,
+                name: Some("build".into()),
+                priority: Some(800),
+                color: None,
+            }
+        );
     }
 
     #[test]

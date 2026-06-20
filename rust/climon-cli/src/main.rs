@@ -132,6 +132,33 @@ fn run() -> Result<i32, String> {
             },
         ),
         ParsedCommand::Config { argv } => Ok(run_config(&argv)),
+        ParsedCommand::Spawn {
+            argv,
+            headless,
+            cwd,
+            cols,
+            rows,
+            name,
+            color,
+            priority,
+        } => {
+            let req = climon_cli::spawn_command::SpawnRequest {
+                argv,
+                headless,
+                cwd: cwd.unwrap_or_else(|| {
+                    std::env::current_dir()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|_| ".".to_string())
+                }),
+                cols: cols.unwrap_or(80),
+                rows: rows.unwrap_or(24),
+                name,
+                color,
+                priority,
+                terminal_program: climon_cli::spawn_command::resolve_terminal_program(),
+            };
+            climon_cli::spawn_command::run_spawn_command(req)
+        }
         ParsedCommand::Cleanup => Ok(run_cleanup()),
         ParsedCommand::Link { argv } => Ok(run_link(&argv)),
         ParsedCommand::Uplink => Ok(run_uplink_entry()),
@@ -327,6 +354,7 @@ fn command_name(parsed: &ParsedCommand) -> &'static str {
         ParsedCommand::Kill { .. } => "kill",
         ParsedCommand::KillAll => "kill-all",
         ParsedCommand::Run { .. } => "run",
+        ParsedCommand::Spawn { .. } => "spawn",
         ParsedCommand::Config { .. } => "config",
         ParsedCommand::Cleanup => "cleanup",
         ParsedCommand::Link { .. } => "link",
