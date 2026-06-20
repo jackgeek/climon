@@ -249,7 +249,52 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
-## MT-P7-06 — Dashboard rename → Title broadcast (+ OSC title when attached)
+## MT-P7-10 — Acknowledged survives a switch-away resize redraw (clamp off)
+
+- **ID:** MT-P7-10
+- **Feature / phase:** Phase 7 — `ScreenIdleDetector` post-resize settle window
+  (`absorb_resize` + `RESIZE_SETTLE_MS`)
+- **Preconditions:** `terminal.clampBrowserToHost = false` and a small
+  `attention.idleSeconds` (e.g. `2`) in `$CLIMON_HOME/config.jsonc`. The dashboard
+  open with at least two sessions. Use an interactive shell (e.g. `zsh` or `bash`)
+  as the session command so it **redraws its prompt on `SIGWINCH`**.
+- **Config-matrix cell:** `clampBrowserToHost = false`
+- **Platforms:** macOS, Linux, Windows
+
+**Background:** This reproduces the real "Acknowledged → Running" report. With
+clamp **off**, viewing a session resizes the PTY larger; switching away
+disconnects the last viewer, so the host reverts the PTY to its terminal size.
+That revert delivers a `SIGWINCH` whose **redraw output lands asynchronously** on
+the PTY reader thread, *after* the synchronous re-baseline — previously it was
+misread as activity and reverted the acknowledged session to `running`.
+
+**Steps:**
+1. Start an interactive-shell session and let it sit at a static prompt; wait
+   `idleSeconds` so it flips to `status: needs-attention`.
+2. In the dashboard, view that session in a browser **wider than the host
+   terminal** (clamp off grows the PTY) and acknowledge it. Confirm
+   `status: acknowledged`.
+3. **Switch away** to another session (disconnecting the last viewer of the first
+   one). This reverts its PTY back to the host size and triggers the shell's
+   `SIGWINCH` prompt redraw.
+4. Watch the first session's status for several seconds.
+
+**Expected result:**
+- The acknowledged session **stays `acknowledged`**. The trailing async redraw
+  from the switch-away resize is absorbed by the post-resize settle window and
+  never flips it to `running`.
+- Only a genuine screen-content change (real program output, well after the
+  resize settles) resumes normal detection (`running`, then re-flag after a fresh
+  idle window).
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---
+
 
 - **ID:** MT-P7-06
 - **Feature / phase:** Phase 7 — title watch thread

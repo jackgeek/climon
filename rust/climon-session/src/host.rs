@@ -306,7 +306,8 @@ impl HostState {
         if changed {
             self.grid.resize(cols, rows);
             let fp = self.fingerprint();
-            self.idle_detector.absorb_resize(&fp);
+            let now_ms = self.started_at.elapsed().as_millis() as i64;
+            self.idle_detector.absorb_resize(&fp, now_ms);
             let _ = climon_store::patch::patch_session_meta(
                 &self.env,
                 &self.id,
@@ -347,7 +348,8 @@ impl HostState {
         self.resizer.resize(target.cols, target.rows);
         self.grid.resize(target.cols, target.rows);
         let fp = self.fingerprint();
-        self.idle_detector.absorb_resize(&fp);
+        let now_ms = self.started_at.elapsed().as_millis() as i64;
+        self.idle_detector.absorb_resize(&fp, now_ms);
         let _ = climon_store::patch::patch_session_meta(
             &self.env,
             &self.id,

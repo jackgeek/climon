@@ -18,6 +18,15 @@ pub struct IdleTransition {
     pub reason: Option<String>,
 }
 
+/// How long after a viewer resize the detector keeps absorbing screen-content
+/// changes as reflow rather than program activity. A resize delivers a `SIGWINCH`
+/// to the child, whose redraw output arrives asynchronously on the PTY reader
+/// thread *after* the synchronous re-baseline. Without a settle window that
+/// trailing redraw is misread as activity and reverts an acknowledged or flagged
+/// session to `running`. Two idle samples (the loop ticks once a second) is ample
+/// for a shell to finish repainting.
+const RESIZE_SETTLE_MS: i64 = 2_000;
+
 /// Tracks a stream of screen fingerprints over time and decides when a session
 /// transitions into or out of the "needs attention" state.
 pub struct ScreenIdleDetector {
@@ -26,6 +35,7 @@ pub struct ScreenIdleDetector {
     last_change_at: i64,
     flagged: bool,
     acknowledged: bool,
+    settle_until: i64,
 }
 
 impl ScreenIdleDetector {
@@ -38,6 +48,7 @@ impl ScreenIdleDetector {
             last_change_at: 0,
             flagged: false,
             acknowledged: false,
+            settle_until: 0,
         }
     }
 
@@ -58,6 +69,14 @@ impl ScreenIdleDetector {
         };
 
         if fingerprint_body(last) != fingerprint_body(fingerprint) {
+            // Within the post-resize settle window a body change is the child's
+            // asynchronous reflow/redraw, not program activity: re-baseline to it
+            // and preserve `flagged`/`acknowledged` and the idle countdown so the
+            // session does not revert to `running`.
+            if now < self.settle_until {
+                self.last_fingerprint = Some(fingerprint.to_string());
+                return None;
+            }
             self.last_fingerprint = Some(fingerprint.to_string());
             self.last_change_at = now;
             let was_active = self.flagged || self.acknowledged;
@@ -110,13 +129,16 @@ impl ScreenIdleDetector {
 
     /// Re-baselines the tracked fingerprint after a viewer resize reflows the
     /// screen. A resize is not program activity, so `flagged`, `acknowledged`
-    /// and the idle countdown are preserved. No-op when disabled or before the
-    /// first update.
-    pub fn absorb_resize(&mut self, fingerprint: &str) {
+    /// and the idle countdown are preserved. It also opens a [`RESIZE_SETTLE_MS`]
+    /// window (anchored at `now`) during which any further body change is treated
+    /// as the child's asynchronous `SIGWINCH` redraw rather than activity. No-op
+    /// when disabled or before the first update.
+    pub fn absorb_resize(&mut self, fingerprint: &str, now: i64) {
         if self.idle_ms <= 0 || self.last_fingerprint.is_none() {
             return;
         }
         self.last_fingerprint = Some(fingerprint.to_string());
+        self.settle_until = now + RESIZE_SETTLE_MS;
     }
 }
 
@@ -206,20 +228,21 @@ mod tests {
             attention("Screen idle for 10s")
         );
 
-        detector.absorb_resize("120x30\nidle screen reflowed");
+        detector.absorb_resize("120x30\nidle screen reflowed", 10_500);
         assert_eq!(
             detector.update("120x30\nidle screen reflowed", 11_000),
             None
         );
 
-        assert_eq!(detector.update("120x30\nNEW OUTPUT", 12_000), running());
+        // Genuine output arriving after the post-resize settle window reverts.
+        assert_eq!(detector.update("120x30\nNEW OUTPUT", 13_000), running());
     }
 
     #[test]
     fn absorbing_a_resize_before_flagging_preserves_the_idle_countdown() {
         let mut detector = ScreenIdleDetector::new(10);
         detector.update("80x24\nidle screen", 0);
-        detector.absorb_resize("120x30\nidle screen reflowed");
+        detector.absorb_resize("120x30\nidle screen reflowed", 1_000);
         assert_eq!(
             detector.update("120x30\nidle screen reflowed", 10_000),
             attention("Screen idle for 10s")
@@ -273,7 +296,7 @@ mod tests {
         // A dimension-only switch must not emit a revert or a re-flag.
         assert_eq!(detector.update("120x30\nidle screen", 12_000), None);
         // A reflow absorbed on resize is likewise quiet.
-        detector.absorb_resize("120x30\nidle screen reflowed");
+        detector.absorb_resize("120x30\nidle screen reflowed", 12_500);
         assert_eq!(
             detector.update("120x30\nidle screen reflowed", 30_000),
             None
@@ -294,6 +317,54 @@ mod tests {
             detector.update("80x24\nNEW OUTPUT", 22_000),
             attention("Screen idle for 10s")
         );
+    }
+
+    #[test]
+    fn a_resize_redraw_arriving_after_acknowledgement_does_not_revert_to_running() {
+        let mut detector = ScreenIdleDetector::new(10);
+        detector.update("269x68\n$ prompt", 0);
+        detector.update("269x68\n$ prompt", 10_000);
+        detector.acknowledge("269x68\n$ prompt", 11_000);
+
+        // Switching away disconnects the last viewer, so the host reverts the PTY
+        // to its terminal size and re-baselines the detector synchronously.
+        detector.absorb_resize("269x68\n$ prompt", 12_000);
+
+        // The shell's SIGWINCH redraw output then arrives asynchronously on the
+        // PTY reader thread, changing the rendered body. A resize-induced reflow
+        // is not program activity and must not revert the acknowledged session.
+        assert_eq!(detector.update("269x68\n$ prompt redrawn", 12_200), None);
+
+        // Once the reflow settles, the session stays acknowledged.
+        assert_eq!(detector.update("269x68\n$ prompt redrawn", 20_000), None);
+    }
+
+    #[test]
+    fn a_resize_redraw_arriving_after_flagging_does_not_revert_to_running() {
+        let mut detector = ScreenIdleDetector::new(10);
+        detector.update("80x24\nidle", 0);
+        assert_eq!(
+            detector.update("80x24\nidle", 10_000),
+            attention("Screen idle for 10s")
+        );
+
+        detector.absorb_resize("100x30\nidle", 11_000);
+        // Async reflow output after the resize must keep the session flagged.
+        assert_eq!(detector.update("100x30\nidle reflowed", 11_200), None);
+        assert_eq!(detector.update("100x30\nidle reflowed", 12_000), None);
+    }
+
+    #[test]
+    fn genuine_output_after_the_resize_settle_window_still_reverts() {
+        let mut detector = ScreenIdleDetector::new(10);
+        detector.update("80x24\nidle", 0);
+        detector.update("80x24\nidle", 10_000);
+        detector.acknowledge("80x24\nidle", 11_000);
+        detector.absorb_resize("80x24\nidle", 12_000);
+
+        // Well past the settle window, real program output is genuine activity
+        // and resumes normal detection.
+        assert_eq!(detector.update("80x24\nNEW OUTPUT", 30_000), running());
     }
 
     #[test]
