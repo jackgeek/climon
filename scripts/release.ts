@@ -54,7 +54,29 @@ async function main(): Promise<void> {
   }
   writeFileSync(pkgPath, updated);
 
-  await $`git add ${pkgPath}`.cwd(projectRoot);
+  // The golden CLI fixtures embed the version on line 1 (`climon v<semver>…`)
+  // and the cli_fixtures tests (Rust + Bun) assert them byte-for-byte against
+  // the binary built from this package.json version. Bump them in lockstep so
+  // the release commit never leaves CI red.
+  const fixturePaths = [
+    resolve(projectRoot, "fixtures/cli/version.txt"),
+    resolve(projectRoot, "fixtures/cli/help.txt"),
+  ];
+  for (const fixturePath of fixturePaths) {
+    const fixtureRaw = readFileSync(fixturePath, "utf8");
+    const fixtureUpdated = fixtureRaw.replace(
+      /(climon v)\d+\.\d+\.\d+/,
+      `$1${next}`
+    );
+    if (fixtureUpdated === fixtureRaw) {
+      throw new Error(
+        `Failed to rewrite the version in ${fixturePath}; CLI fixtures would drift out of sync.`
+      );
+    }
+    writeFileSync(fixturePath, fixtureUpdated);
+  }
+
+  await $`git add ${pkgPath} ${fixturePaths}`.cwd(projectRoot);
   await $`git commit -m ${`chore(release): ${tag}`}`.cwd(projectRoot);
   await $`git tag -a ${tag} -m ${tag}`.cwd(projectRoot);
 

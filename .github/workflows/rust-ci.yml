@@ -2,10 +2,10 @@ name: rust-ci
 
 on:
   pull_request:
-    paths: ["rust/**", "fixtures/proto/**", ".github/workflows/rust-ci.yml"]
+    paths: ["rust/**", "fixtures/proto/**", "fixtures/cli/**", ".github/workflows/rust-ci.yml"]
   push:
     branches: [main]
-    paths: ["rust/**", "fixtures/proto/**", ".github/workflows/rust-ci.yml"]
+    paths: ["rust/**", "fixtures/proto/**", "fixtures/cli/**", ".github/workflows/rust-ci.yml"]
 
 defaults:
   run:
