@@ -104,8 +104,9 @@ climon --priority 100 --color red --name "dev server" npm run dev
   `cyan`, `white` (or `none`); shown as a colored accent on the session.
 - `--name S` — a friendly label shown instead of the command. It is also used as
   the local terminal's title, and updates live if you rename the session from the
-  dashboard. When omitted, climon adopts the terminal's current title (falling
-  back to the command). Disable all title behavior by setting
+  dashboard. When omitted, climon adopts the terminal's current title if the
+  terminal reports one; otherwise the name is left blank (the dashboard and
+  `climon ls` then show the command). Disable all title behavior by setting
   `terminal.setTitle` to `false` in `~/.climon/config.json`.
 
 All three can also be set or changed from the dashboard by clicking the **cog**
