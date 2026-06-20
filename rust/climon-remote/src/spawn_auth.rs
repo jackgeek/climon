@@ -206,4 +206,18 @@ mod tests {
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
     }
+
+    #[test]
+    fn signature_matches_pinned_cross_impl_vector() {
+        // Must equal the Bun-computed value in tests/spawn-auth.test.ts.
+        let env = sign_control("sekret", &ControlMessage::Ping, "nonce-1", 1_000);
+        let ControlMessage::Signed { payload, sig, .. } = env else {
+            panic!("expected signed envelope");
+        };
+        assert_eq!(payload, "{\"kind\":\"ping\"}");
+        assert_eq!(
+            sig,
+            "cf7054af7f0345dcb46571ec4cce6174c1411a68261e8d523ff2bac185f37aa7"
+        );
+    }
 }
