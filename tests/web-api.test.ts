@@ -213,4 +213,16 @@ describe("buildSetupScript", () => {
     const script = buildSetupScript({ ...BASE, tunnelId: "a b$c" });
     expect(script).toContain("climon config remote.tunnelId 'a b$c'");
   });
+
+  test("appends remoteSpawn lines when enabled with a secret", () => {
+    const script = buildSetupScript({ ...BASE, clientId: "dev", remoteSpawn: true, spawnSecret: "deadbeef" });
+    expect(script).toContain("climon config feature.remoteSpawn enabled");
+    expect(script).toContain("climon config remote.spawnSecret deadbeef");
+  });
+
+  test("omits remoteSpawn lines when disabled", () => {
+    const script = buildSetupScript(BASE);
+    expect(script).not.toContain("remoteSpawn");
+    expect(script).not.toContain("spawnSecret");
+  });
 });

@@ -34,6 +34,8 @@ pub mod query_title;
 pub mod self_spawn;
 pub mod server_exec;
 pub mod spawn;
+pub mod spawn_command;
+pub mod terminal_launch;
 pub mod title;
 pub mod uplink_spawn;
 pub mod version;

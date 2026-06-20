@@ -54,6 +54,8 @@ export interface CreateSessionBody {
   name?: string;
   priority?: number;
   color?: SessionColorMode | null;
+  /** When true, spawn the session headless (no GUI window). Default false (visible). */
+  headless?: boolean;
 }
 
 export async function fetchSessions(): Promise<SessionMeta[]> {
@@ -82,7 +84,7 @@ export async function createSession(body: CreateSessionBody): Promise<CreateSess
       const text = await res.text();
       return { ok: false, error: text || `Failed (${res.status})` };
     }
-    const data = (await res.json()) as { id?: string };
+    const data = (await res.json().catch(() => ({}))) as { id?: string };
     return { ok: true, id: data.id };
   } catch {
     return { ok: false, error: "Network error." };
@@ -291,6 +293,8 @@ export interface RemoteStatus {
   ingestPort: number;
   tunnel?: RemoteTunnelInfo;
   canHost: boolean;
+  remoteSpawn?: boolean;
+  spawnSecret?: string;
 }
 
 export async function fetchRemoteStatus(): Promise<RemoteStatus> {
@@ -346,6 +350,8 @@ export interface SetupScriptParams {
   color?: SessionColorMode;
   priority?: number;
   clientId?: string;
+  remoteSpawn?: boolean;
+  spawnSecret?: string;
 }
 
 /** A single-quoted shell literal (handles embedded single quotes safely). */
@@ -384,6 +390,10 @@ export function buildSetupScript(params: SetupScriptParams): string {
   }
   if (typeof params.priority === "number") {
     lines.push(`climon config session.priority ${params.priority}`);
+  }
+  if (params.remoteSpawn && params.spawnSecret) {
+    lines.push("climon config feature.remoteSpawn enabled");
+    lines.push(`climon config remote.spawnSecret ${arg(params.spawnSecret)}`);
   }
   return lines.join("\n");
 }

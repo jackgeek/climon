@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { encodeControl, encodeData, MuxDecoder, MAX_MUX_PAYLOAD } from "../src/remote/mux.js";
+import type { ControlMessage } from "../src/remote/mux.js";
 import type { SessionMeta } from "../src/types.js";
 
 const meta = { id: "s1", displayCommand: "npm test" } as unknown as SessionMeta;
@@ -66,5 +67,36 @@ describe("mux round-trip", () => {
     const msgs = decoder.push(frame);
     expect(msgs).toHaveLength(1);
     expect(msgs[0]).toEqual({ type: "control", message: { kind: "hello", clientId: "devbox-abc" } });
+  });
+
+  test("encodes and decodes spawn, spawn-result and signed control frames", () => {
+    const decoder = new MuxDecoder();
+    const spawn: ControlMessage = {
+      kind: "spawn",
+      requestId: "r1",
+      command: ["bash", "-lc", "top"],
+      cwd: "/home/me",
+      cols: 80,
+      rows: 24,
+      name: "build",
+      priority: 5,
+      color: "red",
+      headless: false
+    };
+    const result: ControlMessage = { kind: "spawn-result", requestId: "r1", id: "dev~abc" };
+    const signed: ControlMessage = {
+      kind: "signed",
+      payload: '{"kind":"ping"}',
+      nonce: "deadbeef",
+      ts: 1718900000000,
+      sig: "abc123"
+    };
+    const buf = Buffer.concat([encodeControl(spawn), encodeControl(result), encodeControl(signed)]);
+    const out = decoder.push(buf);
+    expect(out).toEqual([
+      { type: "control", message: spawn },
+      { type: "control", message: result },
+      { type: "control", message: signed }
+    ]);
   });
 });

@@ -104,8 +104,9 @@ climon --priority 100 --color red --name "dev server" npm run dev
   `cyan`, `white` (or `none`); shown as a colored accent on the session.
 - `--name S` — a friendly label shown instead of the command. It is also used as
   the local terminal's title, and updates live if you rename the session from the
-  dashboard. When omitted, climon adopts the terminal's current title (falling
-  back to the command). Disable all title behavior by setting
+  dashboard. When omitted, climon adopts the terminal's current title if the
+  terminal reports one; otherwise the name is left blank (the dashboard and
+  `climon ls` then show the command). Disable all title behavior by setting
   `terminal.setTitle` to `false` in `~/.climon/config.json`.
 
 All three can also be set or changed from the dashboard by clicking the **cog**
@@ -130,12 +131,28 @@ Once the server is running you can also start new sessions directly from the
 dashboard. Session creation is **per-session**: hover any live session
 (`running`, `acknowledged`, `needs-attention`, `paused`, or `disconnected`) and
 click its **[+]** button to launch a new session from it. The server spawns the
-new session directly, inheriting the selected session's working directory, so you
-are prompted only for the command. Because this no longer depends on an attached
-terminal, you can launch a session from any live session — including ones that
-were themselves spawned this way (arbitrary nesting). Hover a session row to
-pause or resume its dashboard status; pausing does not suspend the underlying
-process or terminal input.
+new session on the **machine that session lives on**, inheriting the selected
+session's working directory, so you are prompted only for the command. Because
+this no longer depends on an attached terminal, you can launch a session from any
+live session — including ones that were themselves spawned this way (arbitrary
+nesting). Hover a session row to pause or resume its dashboard status; pausing
+does not suspend the underlying process or terminal input.
+
+The New Session dialog has a **Headless** checkbox (unchecked by default). When
+left unchecked (visible), the spawn opens a GUI terminal window on that machine's
+desktop, attached to the new session (Terminal.app, Windows Terminal, or a Linux
+terminal emulator — override with the `session.terminalProgram` config setting).
+When checked (headless), the session runs in the background with no window.
+
+When the selected session lives on a **remote devbox**, the spawn happens on the
+devbox (a visible terminal opens on the devbox desktop, or a headless session
+appears under that devbox's namespace). This requires enabling the opt-in
+`feature.remoteSpawn` flag on the dashboard host — `climon config
+feature.remoteSpawn enabled` — and then pasting the remotes-screen setup script
+on the devbox, which now also enables the flag there and plants the shared
+`remote.spawnSecret` used to sign the command. While the flag is off, the
+per-session **[+]** on a remote session does nothing privileged. See
+[`docs/security.md`](docs/security.md) for the signed command channel.
 
 When there are **no** sessions at all, a global **[+]** appears in the
 sidebar header instead. It asks the dashboard server to spawn a session for you

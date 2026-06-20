@@ -353,6 +353,14 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .accept_input()
         .with_validate(v_client_id),
         ConfigSetting::new(
+            "remote.spawnSecret",
+            String,
+            "Shared HMAC secret authenticating dashboard→devbox spawn commands. Generated automatically on the dashboard host when feature.remoteSpawn is enabled, and planted on the devbox by the remotes-screen setup script. Keep it secret.",
+            vec![Client, Server],
+        )
+        .accept_input()
+        .sensitive(),
+        ConfigSetting::new(
             "remote.keepAlive",
             Number,
             "Interval in seconds between mux keepalive pings sent over the remote uplink/ingest connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0 to disable.",
@@ -401,6 +409,13 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .default(Value::from(DEFAULT_PRIORITY))
         .accept_input()
         .with_validate(v_session_priority),
+        ConfigSetting::new(
+            "session.terminalProgram",
+            String,
+            "Command template used to open a terminal window for a non-headless (visible) session spawned from the dashboard. Use the {cmd} placeholder for the climon command to run. When unset, climon auto-detects a terminal per OS (Terminal.app, Windows Terminal, or x-terminal-emulator/gnome-terminal/konsole/xterm).",
+            vec![Client],
+        )
+        .accept_input(),
         ConfigSetting::new(
             "tunnelLink.keepAlive",
             Number,
@@ -754,16 +769,19 @@ mod tests {
                 "remote.port",
                 "remote.ingestPortRetryAttempts",
                 "remote.clientId",
+                "remote.spawnSecret",
                 "remote.keepAlive",
                 "remote.peerHome",
                 "remote.peerHost",
                 "remote.autoLink",
                 "session.color",
                 "session.priority",
+                "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
                 "logging.appInsights.connectionString",
                 "feature.sessionSpawning",
+                "feature.remoteSpawn",
                 "eula.accepted",
                 "eula.version",
                 "eula.acceptedAt",
@@ -779,7 +797,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 36);
+        assert_eq!(all_config_keys().len(), 39);
     }
 
     #[test]
@@ -808,7 +826,7 @@ mod tests {
                 "session": { "color": "auto", "priority": 500 },
                 "tunnelLink": { "keepAlive": 60 },
                 "logging": { "level": "trace" },
-                "feature": { "sessionSpawning": "disabled" },
+                "feature": { "sessionSpawning": "disabled", "remoteSpawn": "disabled" },
                 "eula": { "accepted": false },
                 "telemetry": { "enabled": false },
                 "update": { "auto": false }
@@ -829,6 +847,16 @@ mod tests {
     }
 
     #[test]
+    fn remote_spawn_secret_is_sensitive_string_client_and_server() {
+        let s = find_config_setting("remote.spawnSecret").expect("setting exists");
+        assert_eq!(s.kind, ConfigType::String);
+        assert!(s.sensitive);
+        assert!(s.accept_input);
+        assert!(s.scope.contains(&ConfigProcessScope::Client));
+        assert!(s.scope.contains(&ConfigProcessScope::Server));
+    }
+
+    #[test]
     fn accepted_keys_exclude_internal_and_default_only() {
         assert_eq!(
             accepted_config_keys(),
@@ -839,16 +867,19 @@ mod tests {
                 "remote.tunnelId",
                 "remote.port",
                 "remote.clientId",
+                "remote.spawnSecret",
                 "remote.keepAlive",
                 "remote.peerHome",
                 "remote.peerHost",
                 "remote.autoLink",
                 "session.color",
                 "session.priority",
+                "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
                 "logging.appInsights.connectionString",
                 "feature.sessionSpawning",
+                "feature.remoteSpawn",
                 "telemetry.enabled",
                 "update.auto",
                 "update.password",
