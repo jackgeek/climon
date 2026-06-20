@@ -45,6 +45,78 @@ const SESSION_ENV_VAR: &str = "CLIMON_SESSION_ID";
 const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
 const SCROLLBACK_CAP: usize = 256 * 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the local terminal stays suppressed after a browser viewer shrinks
+/// back to (or under) the local size before the restore watcher repaints it from
+/// the parsed grid's current screen. This delay lets the PTY's resize-repaint
+/// burst (notably Windows ConPTY's clear-and-repaint, delivered asynchronously
+/// on the reader thread after the resize call) drain first, so the clean grid
+/// repaint lands last and the local terminal is not left blank or corrupted. The
+/// screen is rendered when the watcher fires, so it reflects the latest output.
+const LOCAL_RESTORE_DELAY: Duration = Duration::from_millis(250);
+
+/// Returns whether the `CLIMON_DEBUG_RESTORE` restore diagnostics are enabled
+/// (any non-empty, non-`0` value). Cached for the process lifetime.
+fn debug_restore_enabled() -> bool {
+    use std::sync::OnceLock;
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("CLIMON_DEBUG_RESTORE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+/// Appends a timestamped line to `$CLIMON_HOME/logs/restore-debug.log` when the
+/// `CLIMON_DEBUG_RESTORE` diagnostics are enabled. Best-effort: silently ignores
+/// any IO error. Used to capture the exact sizes and bytes around a Fill-mode
+/// restore so one Windows run reveals the corruption source.
+fn debug_restore_log(env: &StoreEnv, line: &str) {
+    if !debug_restore_enabled() {
+        return;
+    }
+    let dir = env.logs_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("restore-debug.log"))
+    {
+        let _ = writeln!(f, "{} {}", now_iso(), line);
+    }
+}
+
+/// Escapes control bytes for the restore debug log and caps the length so a
+/// large repaint burst does not flood the log.
+fn debug_escape(bytes: &[u8], cap: usize) -> String {
+    let mut s = String::new();
+    for &b in bytes.iter().take(cap) {
+        match b {
+            0x1b => s.push_str("\\e"),
+            b'\r' => s.push_str("\\r"),
+            b'\n' => s.push_str("\\n"),
+            b'\t' => s.push_str("\\t"),
+            0x20..=0x7e => s.push(b as char),
+            other => s.push_str(&format!("\\x{other:02x}")),
+        }
+    }
+    if bytes.len() > cap {
+        s.push_str(&format!("...(+{} bytes)", bytes.len() - cap));
+    }
+    s
+}
+
+/// Reads the *real* local console size for the restore diagnostics. On Windows
+/// this is `GetConsoleScreenBufferInfo`'s visible viewport (a null handle falls
+/// back to `STD_OUTPUT_HANDLE`); on Unix it reads stdin's `TIOCGWINSZ`.
+#[cfg(windows)]
+fn debug_console_size() -> (u16, u16) {
+    climon_pty::terminal_size(std::ptr::null_mut())
+}
+
+#[cfg(unix)]
+fn debug_console_size() -> (u16, u16) {
+    climon_pty::terminal_size(0)
+}
 
 /// Options controlling the session host.
 #[derive(Debug, Clone, Default)]
@@ -100,6 +172,31 @@ struct HostState {
     current_attention_matched_at: Option<String>,
     current_attention_fingerprint: Option<String>,
     host_warning_active: bool,
+    /// True when an interactive local terminal is attached (non-headless, stdin
+    /// and stdout are real consoles). The in-process local terminal is the
+    /// session host, so it counts as a host presence for overgrown detection
+    /// even though it is not a socket `Client`.
+    local_attached: bool,
+    /// True while local PTY output is paused because a browser viewer grew the
+    /// shared PTY beyond the local terminal (Fill mode). Mirrors the client's
+    /// `LocalTerminalOutputGate`; prevents oversized output from corrupting the
+    /// local screen.
+    local_output_suppressed: bool,
+    /// When set, a restore (browser shrank back to/under the local size) is
+    /// pending: the local terminal stays suppressed until this instant, then the
+    /// restore watcher thread repaints it from the parsed grid's current screen
+    /// and resumes live output. Deferring the repaint past the PTY's
+    /// resize-repaint burst is load-bearing on Windows ConPTY, whose resize
+    /// clears the screen and repaints only the current grid asynchronously after
+    /// the resize call — an immediate repaint would be clobbered by that, leaving
+    /// the local terminal blank. The grid is rendered at fire time, so it
+    /// reflects the latest output.
+    local_restore_at: Option<Instant>,
+    /// Diagnostics-only (`CLIMON_DEBUG_RESTORE`): while set, the reader thread
+    /// logs every chunk it writes to the local terminal so a single Windows run
+    /// captures the PTY's post-unsuppress live output (the suspected ConPTY
+    /// resize-repaint corrupter). Set by the restore watcher when it fires.
+    local_debug_capture_until: Option<Instant>,
 
     exited: bool,
     exit_code: Option<i32>,
@@ -203,8 +300,19 @@ impl HostState {
         }
     }
 
+    /// Whether the shared PTY currently exceeds the local terminal's console in
+    /// either dimension. This is the *real*, mode-independent condition under
+    /// which the local Windows console corrupts: ConPTY positions its live output
+    /// absolutely for the (larger) PTY grid, so any byte it writes can land off
+    /// the bottom/right of the smaller real console. The local pause + notice and
+    /// the restore repaint are gated on this — NOT on `overgrown_warning_payload`,
+    /// which is Fill-mode-gated and only describes the dashboard-facing warning.
+    fn local_terminal_exceeded(&self) -> bool {
+        self.applied_cols > self.host_cols.max(1) || self.applied_rows > self.host_rows.max(1)
+    }
+
     fn overgrown_warning_payload(&self) -> Option<TerminalWarningPayload> {
-        let has_host = self.clients.values().any(|c| c.is_host);
+        let has_host = self.local_attached || self.clients.values().any(|c| c.is_host);
         let overgrown = self.terminal_mode == TerminalResizeMode::Fill
             && has_host
             && (self.applied_cols > self.host_cols.max(1)
@@ -221,8 +329,9 @@ impl HostState {
     }
 
     fn update_overgrown_warning(&mut self) {
-        if let Some(payload) = self.overgrown_warning_payload() {
-            self.write_host_warning(&payload);
+        let payload = self.overgrown_warning_payload();
+        if let Some(payload) = &payload {
+            self.write_host_warning(payload);
             self.host_warning_active = true;
         } else {
             if self.host_warning_active {
@@ -243,6 +352,71 @@ impl HostState {
             self.host_warning_active = false;
             for client in self.clients.values_mut() {
                 client.warned = false;
+            }
+        }
+
+        // In-process local terminal: there is no socket `Client` to receive the
+        // warning frame and apply a gate, so pause/resume local rendering here.
+        // This is *level-triggered* on `local_terminal_exceeded()` — the real,
+        // mode-independent corruption condition (PTY larger than the local
+        // console) — rather than edge-triggered on the Fill-gated dashboard
+        // warning. Edge-triggering drifted: the local terminal could end up
+        // resumed while the PTY was still larger than the console (no notice +
+        // ConPTY corruption). Evaluating the condition itself every time keeps
+        // suppression and the notice in lock-step with the actual PTY size.
+        //
+        // On pause, print a host-appropriate notice (the in-process host has no
+        // detach chord, unlike the standalone client's `renderTerminalWarning`).
+        // On resume, the local terminal — unlike a dashboard client, which gets
+        // a fresh Replay via `write_initial_frames` on every resize/mode change
+        // — has missed all output while paused and the PTY's resize-repaint only
+        // redraws the current grid, so it must repaint. The repaint is *deferred*
+        // (see `local_restore_at`) and sourced from the parsed grid's current
+        // screen via `render_screen()` (NOT the raw scrollback, which corrupts
+        // on Windows ConPTY): the terminal stays suppressed until the restore
+        // watcher fires, so the PTY's resize-repaint burst is dropped locally and
+        // the clean grid repaint lands last instead of being clobbered.
+        if self.local_attached {
+            if self.local_terminal_exceeded() {
+                // PTY larger than the local console: pause local output and show
+                // the notice. Cancel any pending restore.
+                self.local_restore_at = None;
+                if !self.local_output_suppressed {
+                    let notice = TerminalWarningPayload::Overgrown {
+                        cols: self.applied_cols,
+                        rows: self.applied_rows,
+                        host_cols: self.host_cols.max(1),
+                        host_rows: self.host_rows.max(1),
+                    };
+                    debug_restore_log(
+                        &self.env,
+                        &format!(
+                            "overgrow-suppress host={}x{} applied={}x{} real_console={:?}",
+                            self.host_cols,
+                            self.host_rows,
+                            self.applied_cols,
+                            self.applied_rows,
+                            debug_console_size(),
+                        ),
+                    );
+                    write_local_stdout(render_host_overgrown(&notice).as_bytes());
+                    self.local_output_suppressed = true;
+                }
+            } else if self.local_output_suppressed && self.local_restore_at.is_none() {
+                // PTY now fits the local console: schedule the deferred repaint.
+                self.local_restore_at = Some(Instant::now() + LOCAL_RESTORE_DELAY);
+                debug_restore_log(
+                    &self.env,
+                    &format!(
+                        "restore-schedule host={}x{} applied={}x{} real_console={:?} delay={}ms",
+                        self.host_cols,
+                        self.host_rows,
+                        self.applied_cols,
+                        self.applied_rows,
+                        debug_console_size(),
+                        LOCAL_RESTORE_DELAY.as_millis(),
+                    ),
+                );
             }
         }
     }
@@ -693,6 +867,10 @@ pub fn run_session_host(
         current_attention_matched_at: None,
         current_attention_fingerprint: None,
         host_warning_active: false,
+        local_attached: false,
+        local_output_suppressed: false,
+        local_restore_at: None,
+        local_debug_capture_until: None,
         exited: false,
         exit_code: None,
         scrollback: climon_pty::Scrollback::new(SCROLLBACK_CAP),
@@ -725,6 +903,55 @@ pub fn run_session_host(
         Arc::clone(&pty_writer),
         Arc::clone(&shutdown),
     );
+
+    #[cfg(windows)]
+    let _local = local_relay::setup(
+        headless,
+        Arc::clone(&state),
+        Arc::clone(&pty_writer),
+        Arc::clone(&shutdown),
+    );
+
+    // --- Local-terminal restore watcher ---
+    // Fires the deferred clear+replay after a browser viewer shrinks back to the
+    // local size (Fill mode). Only needed when an interactive local terminal is
+    // attached; headless daemons have no local screen to restore.
+    let local_attached = state.lock().unwrap().local_attached;
+    let restore_handle = if local_attached {
+        if debug_restore_enabled() {
+            let logfile = env.logs_dir().join("restore-debug.log");
+            // Visible confirmation that the flag is active and where the log
+            // lives, so a missing log immediately means "env var not set / not
+            // an attached console" rather than "nothing happened yet".
+            eprintln!(
+                "[climon] CLIMON_DEBUG_RESTORE active -> {}",
+                logfile.display()
+            );
+            let (hc, hr) = {
+                let s = state.lock().unwrap();
+                (s.host_cols, s.host_rows)
+            };
+            debug_restore_log(
+                &env,
+                &format!(
+                    "session-start id={id} local_attached=true host={hc}x{hr} real_console={:?}",
+                    debug_console_size(),
+                ),
+            );
+        }
+        Some(spawn_restore_thread(
+            Arc::clone(&state),
+            Arc::clone(&shutdown),
+        ))
+    } else {
+        if debug_restore_enabled() {
+            eprintln!(
+                "[climon] CLIMON_DEBUG_RESTORE set but session is not an attached console; \
+                 no restore diagnostics will be written"
+            );
+        }
+        None
+    };
 
     // --- PTY-reader thread ---
     let reader_handle = spawn_reader_thread(reader, Arc::clone(&state), headless);
@@ -791,6 +1018,17 @@ pub fn run_session_host(
     // --- Wait for exit ---
     let exit_code = pty.wait().unwrap_or(1);
 
+    // Release the PTY master now that the child has exited. On Windows this is
+    // load-bearing: ConPTY keeps the output pipe open (conhost stays alive)
+    // until the pseudoconsole is closed, which only happens when the last
+    // strong `Arc` to the master is dropped. The reader thread's cloned reader
+    // would otherwise never EOF and `reader_handle.join()` below would hang
+    // forever (e.g. after the user types `exit`). The `PtyResizer` held in
+    // `HostState` is only a `Weak`, so this `drop` is the final strong ref. On
+    // Unix the reader already EOFs from the slave drop at spawn, so this is a
+    // harmless no-op there.
+    drop(pty);
+
     // --- Lifecycle teardown ---
     {
         let mut s = state.lock().unwrap();
@@ -835,6 +1073,9 @@ pub fn run_session_host(
     if let Some(h) = idle_handle {
         let _ = h.join();
     }
+    if let Some(h) = restore_handle {
+        let _ = h.join();
+    }
     if let Some(h) = title_handle {
         let _ = h.join();
     }
@@ -845,6 +1086,37 @@ pub fn run_session_host(
 
     cleanup_session_socket(&resolved_ref);
     Ok(exit_code)
+}
+
+/// Renders the in-process host's overgrown-terminal notice. The standalone
+/// client uses `renderTerminalWarning` (which references the detach chord); the
+/// in-process local relay has no detach chord, so it points the user at the
+/// dashboard lock icon / browser instead.
+fn render_host_overgrown(payload: &TerminalWarningPayload) -> String {
+    match payload {
+        TerminalWarningPayload::Overgrown {
+            cols,
+            rows,
+            host_cols,
+            host_rows,
+        } => format!(
+            "\r\n\x1b[33m[climon] A browser viewer enlarged this session ({cols}x{rows}), \
+which is bigger than this local terminal ({host_cols}x{host_rows}). Local output is paused \
+to avoid corrupt rendering. Click the lock icon on the active session in the web dashboard, \
+or stop viewing the terminal in the browser, to restore it here.\x1b[0m\r\n"
+        ),
+        TerminalWarningPayload::Restored => String::new(),
+    }
+}
+
+/// Writes directly to the local terminal's stdout (locked, flushed). Used for
+/// the in-process host's overgrown/restored notices, which originate off the
+/// PTY-reader thread.
+fn write_local_stdout(bytes: &[u8]) {
+    let stdout = std::io::stdout();
+    let mut lock = stdout.lock();
+    let _ = lock.write_all(bytes);
+    let _ = lock.flush();
 }
 
 fn spawn_reader_thread(
@@ -861,7 +1133,7 @@ fn spawn_reader_thread(
             };
             let data = &buf[..n];
             let frame = encode_frame(FrameType::Output, data);
-            {
+            let suppress_local = {
                 let mut s = state.lock().unwrap();
                 let remainder = std::mem::take(&mut s.mouse_mode_remainder);
                 s.mouse_mode_remainder = track_mouse_private_modes_from_output(
@@ -873,8 +1145,34 @@ fn spawn_reader_thread(
                 s.scrollback.append(data);
                 s.grid.write(data);
                 s.broadcast(&frame);
-            }
-            if !headless {
+                let suppressed = s.local_output_suppressed;
+                // Diagnostics: while suppression is pending or just after a
+                // restore, log every chunk so one Windows run reveals whether
+                // ConPTY's live output (not our repaint) corrupts the screen.
+                if debug_restore_enabled() {
+                    let pending = s.local_restore_at.is_some();
+                    let in_window = s
+                        .local_debug_capture_until
+                        .map(|t| Instant::now() < t)
+                        .unwrap_or(false);
+                    if pending || in_window {
+                        debug_restore_log(
+                            &s.env,
+                            &format!(
+                                "reader-chunk suppressed={suppressed} pending={pending} window={in_window} n={}: {}",
+                                data.len(),
+                                debug_escape(data, 2048),
+                            ),
+                        );
+                    }
+                }
+                suppressed
+            };
+            // Skip the local write while a browser viewer has grown the shared
+            // PTY beyond this terminal (Fill mode): the oversized output would
+            // corrupt/blank the local screen. Scrollback, grid, and dashboard
+            // viewers above still receive every byte.
+            if !headless && !suppress_local {
                 let stdout = std::io::stdout();
                 let mut lock = stdout.lock();
                 let _ = lock.write_all(data);
@@ -1055,6 +1353,119 @@ fn spawn_connection_reader(
     })
 }
 
+/// Watches for a deferred local-terminal restore (browser viewer shrank back to
+/// the local size in Fill mode) and, once `local_restore_at` elapses, repaints
+/// the local screen from the parsed grid's current state, then resumes live
+/// output. Deferring the repaint lets the PTY's resize-repaint burst drain first
+/// (see `LOCAL_RESTORE_DELAY`), so the clean grid repaint lands last instead of
+/// being clobbered.
+/// What the restore watcher should do on a given tick. Extracted as a pure
+/// decision (see [`local_restore_decision`]) so the fix — never resuming the
+/// local terminal while the PTY is still overgrown — is unit-testable without a
+/// live PTY/`HostState`.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalRestoreDecision {
+    /// No restore is pending, or the deferral has not elapsed yet.
+    NotDue,
+    /// The deferral elapsed but the PTY is still larger than the local console
+    /// (a viewer re-grew during the delay): stay suppressed and clear the
+    /// pending restore so the next genuine shrink reschedules it.
+    SkipOvergrown,
+    /// The deferral elapsed and the PTY now fits the local console: repaint the
+    /// local screen from the grid and resume live output.
+    Repaint,
+}
+
+/// Pure decision for the restore watcher. Resuming the local terminal while the
+/// PTY is still overgrown is the Windows corruption root cause: ConPTY positions
+/// its live output absolutely for the taller grid (e.g. `\e[34;1H` for a 57-row
+/// PTY), which stacks lines / overwrites the prompt on the shorter real console.
+fn local_restore_decision(
+    restore_at: Option<Instant>,
+    now: Instant,
+    overgrown: bool,
+) -> LocalRestoreDecision {
+    match restore_at {
+        Some(at) if now >= at => {
+            if overgrown {
+                LocalRestoreDecision::SkipOvergrown
+            } else {
+                LocalRestoreDecision::Repaint
+            }
+        }
+        _ => LocalRestoreDecision::NotDue,
+    }
+}
+
+fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(25));
+        if shutdown.load(Ordering::SeqCst) {
+            break;
+        }
+        let mut s = state.lock().unwrap();
+        if s.exited {
+            break;
+        }
+        let overgrown = s.local_terminal_exceeded();
+        match local_restore_decision(s.local_restore_at, Instant::now(), overgrown) {
+            LocalRestoreDecision::NotDue => {}
+            LocalRestoreDecision::SkipOvergrown => {
+                // A viewer re-grew the shared PTY during the delay (Fill mode).
+                // Stay suppressed; the next genuine restore transition reschedules
+                // via `update_overgrown_warning`.
+                if debug_restore_enabled() {
+                    debug_restore_log(
+                        &s.env,
+                        &format!(
+                            "restore-skip-overgrown host={}x{} applied={}x{} real_console={:?}",
+                            s.host_cols,
+                            s.host_rows,
+                            s.applied_cols,
+                            s.applied_rows,
+                            debug_console_size(),
+                        ),
+                    );
+                }
+                s.local_restore_at = None;
+            }
+            LocalRestoreDecision::Repaint => {
+                // Repaint the local terminal from the parsed grid's *current*
+                // screen, not the raw scrollback: on Windows ConPTY the raw
+                // byte stream is a sequence of absolute-positioned screen diffs
+                // that stack on top of each other (corrupt/blank) when replayed
+                // in bulk to a cleared console. `render_screen()` emits a clean,
+                // self-contained repaint (clear + positioned rows + cursor).
+                // Write it while still holding the lock and only then unsuppress,
+                // so the reader thread cannot interleave a live chunk between
+                // resuming output and the repaint landing.
+                let out = s.grid.render_screen();
+                if debug_restore_enabled() {
+                    debug_restore_log(
+                        &s.env,
+                        &format!(
+                            "restore-fire host={}x{} applied={}x{} real_console={:?} render(len={}): {}",
+                            s.host_cols,
+                            s.host_rows,
+                            s.applied_cols,
+                            s.applied_rows,
+                            debug_console_size(),
+                            out.len(),
+                            debug_escape(&out, 4096),
+                        ),
+                    );
+                    // Capture the PTY's live output for a window after we
+                    // unsuppress, to catch ConPTY's late resize-repaint.
+                    s.local_debug_capture_until = Some(Instant::now() + Duration::from_secs(2));
+                }
+                write_local_stdout(&out);
+                s.local_output_suppressed = false;
+                s.local_restore_at = None;
+            }
+        }
+    })
+}
+
 fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
         let log = climon_logging::logger::child("idle");
@@ -1197,6 +1608,14 @@ mod local_relay {
         }
         let raw = RawMode::enable(libc::STDIN_FILENO).ok();
 
+        // The in-process local terminal is the session host. Mark it attached
+        // only when stdout is also a real terminal, so overgrown-output gating
+        // (which pauses local writes) never drops bytes from a redirected
+        // stdout. See `HostState::local_attached`.
+        if unsafe { libc::isatty(libc::STDOUT_FILENO) } == 1 {
+            state.lock().unwrap().local_attached = true;
+        }
+
         // stdin -> pty
         let stdin_shutdown = Arc::clone(&shutdown);
         thread::spawn(move || {
@@ -1249,6 +1668,180 @@ mod local_relay {
     }
 }
 
+#[cfg(windows)]
+mod local_relay {
+    use super::*;
+    use climon_pty::terminal_size;
+
+    use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Console::{
+        GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
+        ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+        STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    /// RAII guard that restores the console's input/output modes on drop, so the
+    /// user's cmd.exe/PowerShell is never left in raw mode after the session.
+    ///
+    /// Windows counterpart of the unix [`LocalRelay`]: it puts the console input
+    /// buffer into raw mode (no line buffering/echo, Ctrl-C forwarded, keys
+    /// translated to VT sequences) so local keystrokes reach the PTY, mirroring
+    /// the legacy TS client's `stdin.setRawMode(true)`. It also enables VT output
+    /// processing so the PTY's escape sequences render. Without it the launching
+    /// console stays in cooked mode and only the dashboard can drive the session.
+    pub struct LocalRelay {
+        in_handle: HANDLE,
+        out_handle: HANDLE,
+        saved_in: u32,
+        saved_out: u32,
+        in_active: bool,
+        out_active: bool,
+    }
+
+    impl Drop for LocalRelay {
+        fn drop(&mut self) {
+            unsafe {
+                if self.in_active {
+                    SetConsoleMode(self.in_handle, self.saved_in);
+                }
+                if self.out_active {
+                    SetConsoleMode(self.out_handle, self.saved_out);
+                }
+            }
+        }
+    }
+
+    fn inactive() -> LocalRelay {
+        LocalRelay {
+            in_handle: std::ptr::null_mut(),
+            out_handle: std::ptr::null_mut(),
+            saved_in: 0,
+            saved_out: 0,
+            in_active: false,
+            out_active: false,
+        }
+    }
+
+    pub fn setup(
+        headless: bool,
+        state: Shared,
+        pty_writer: Arc<Mutex<Box<dyn Write + Send>>>,
+        shutdown: Arc<AtomicBool>,
+    ) -> LocalRelay {
+        if headless {
+            return inactive();
+        }
+
+        let (in_handle, out_handle, saved_in, saved_out, out_active) = unsafe {
+            let in_handle = GetStdHandle(STD_INPUT_HANDLE);
+            if in_handle.is_null() || in_handle == INVALID_HANDLE_VALUE {
+                return inactive();
+            }
+            let mut saved_in: u32 = 0;
+            // Fails when stdin is not a console (redirected from a pipe/file):
+            // there is no local terminal to relay, so leave the handles alone.
+            if GetConsoleMode(in_handle, &mut saved_in) == 0 {
+                return inactive();
+            }
+            let raw_in = (saved_in
+                & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+                | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            if SetConsoleMode(in_handle, raw_in) == 0 {
+                return inactive();
+            }
+
+            // Best-effort: enable VT output processing so PTY escape sequences
+            // render. A failure here must not disable input forwarding.
+            let out_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            let mut saved_out: u32 = 0;
+            let out_active = !out_handle.is_null()
+                && out_handle != INVALID_HANDLE_VALUE
+                && GetConsoleMode(out_handle, &mut saved_out) != 0
+                && SetConsoleMode(out_handle, saved_out | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+            (in_handle, out_handle, saved_in, saved_out, out_active)
+        };
+
+        // The in-process local terminal is the session host. Mark it attached
+        // only when stdout is a real console (VT output enabled), so
+        // overgrown-output gating never drops bytes from a redirected stdout.
+        // See `HostState::local_attached`. Also prime the host/PTY size from the
+        // real console: the launcher's `terminal_size()` is unix-only and
+        // reports 80x24 on Windows, and the resize poller only fires on a
+        // *change*, so without this `host_cols/host_rows` (and the overgrown
+        // comparison) would be stuck at the bogus launch metadata.
+        if out_active {
+            let (cols, rows) = terminal_size(std::ptr::null_mut());
+            let mut s = state.lock().unwrap();
+            s.local_attached = true;
+            s.apply_resize(ResizePayload {
+                cols,
+                rows,
+                source: Some(ResizeSource::Host),
+                mode: None,
+            });
+        }
+
+        // stdin -> pty
+        let stdin_shutdown = Arc::clone(&shutdown);
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            let stdin = std::io::stdin();
+            loop {
+                if stdin_shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                let mut lock = stdin.lock();
+                let n = match lock.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                drop(lock);
+                let mut w = pty_writer.lock().unwrap();
+                if w.write_all(&buf[..n]).is_err() {
+                    break;
+                }
+                let _ = w.flush();
+            }
+        });
+
+        // Console-resize poller: Windows has no SIGWINCH, so poll the visible
+        // console size and forward a Host resize whenever it changes (parity with
+        // the unix SIGWINCH handler). A null handle makes `terminal_size` fall
+        // back to STD_OUTPUT_HANDLE, avoiding a non-Send handle in the closure.
+        let resize_shutdown = Arc::clone(&shutdown);
+        let resize_state = Arc::clone(&state);
+        thread::spawn(move || {
+            let mut last = terminal_size(std::ptr::null_mut());
+            loop {
+                if resize_shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(200));
+                let next = terminal_size(std::ptr::null_mut());
+                if next != last {
+                    last = next;
+                    let mut s = resize_state.lock().unwrap();
+                    s.apply_resize(ResizePayload {
+                        cols: next.0,
+                        rows: next.1,
+                        source: Some(ResizeSource::Host),
+                        mode: None,
+                    });
+                }
+            }
+        });
+
+        LocalRelay {
+            in_handle,
+            out_handle,
+            saved_in,
+            saved_out,
+            in_active: true,
+            out_active,
+        }
+    }
+}
+
 #[cfg(all(test, unix))]
 mod writer_thread_tests {
     use super::spawn_writer_thread;
@@ -1288,5 +1881,57 @@ mod writer_thread_tests {
         }
         drop(tx);
         handle.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod restore_decision_tests {
+    use super::{local_restore_decision, LocalRestoreDecision};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn not_due_when_no_restore_pending() {
+        let now = Instant::now();
+        assert_eq!(
+            local_restore_decision(None, now, false),
+            LocalRestoreDecision::NotDue
+        );
+        assert_eq!(
+            local_restore_decision(None, now, true),
+            LocalRestoreDecision::NotDue
+        );
+    }
+
+    #[test]
+    fn not_due_before_deferral_elapses() {
+        let now = Instant::now();
+        let future = now + Duration::from_millis(250);
+        assert_eq!(
+            local_restore_decision(Some(future), now, false),
+            LocalRestoreDecision::NotDue
+        );
+    }
+
+    #[test]
+    fn repaints_when_due_and_not_overgrown() {
+        let now = Instant::now();
+        let past = now - Duration::from_millis(1);
+        assert_eq!(
+            local_restore_decision(Some(past), now, false),
+            LocalRestoreDecision::Repaint
+        );
+    }
+
+    #[test]
+    fn skips_when_due_but_still_overgrown() {
+        // Regression guard for the Windows corruption: a viewer re-grew the PTY
+        // during the deferral, so resuming the local terminal would expose
+        // ConPTY's tall-grid absolute-positioned output to the shorter console.
+        let now = Instant::now();
+        let past = now - Duration::from_millis(1);
+        assert_eq!(
+            local_restore_decision(Some(past), now, true),
+            LocalRestoreDecision::SkipOvergrown
+        );
     }
 }

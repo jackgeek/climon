@@ -244,6 +244,92 @@ impl Drop for RawModeGuard {
     }
 }
 
+/// Windows console raw-mode guard for the attach client's standard handles.
+///
+/// Mirrors the Unix [`RawModeGuard`] and the legacy TS client's
+/// `stdin.setRawMode(true)`: it puts the console *input* buffer into raw mode so
+/// keystrokes are delivered to the session immediately (not line-buffered,
+/// echoed, or intercepted as Ctrl-C) and translated to VT sequences, and enables
+/// VT *output* processing so the PTY's escape sequences render. The previous
+/// modes are restored on drop so cmd.exe/PowerShell are never left in raw mode.
+///
+/// Without this, the local terminal stays in cooked mode and the user cannot
+/// type interactively into the session from the launching console — only the
+/// dashboard's input frames reach the PTY.
+#[cfg(windows)]
+struct RawModeGuard {
+    in_handle: windows_sys::Win32::Foundation::HANDLE,
+    out_handle: windows_sys::Win32::Foundation::HANDLE,
+    saved_in: u32,
+    saved_out: u32,
+    in_active: bool,
+    out_active: bool,
+}
+
+#[cfg(windows)]
+impl RawModeGuard {
+    fn enable() -> Option<RawModeGuard> {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::System::Console::{
+            GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
+            ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        };
+
+        unsafe {
+            let in_handle = GetStdHandle(STD_INPUT_HANDLE);
+            if in_handle.is_null() || in_handle == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let mut saved_in: u32 = 0;
+            // Fails when stdin is not a console (redirected from a pipe/file):
+            // there is no console mode to flip, so leave it untouched.
+            if GetConsoleMode(in_handle, &mut saved_in) == 0 {
+                return None;
+            }
+            let raw_in = (saved_in
+                & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+                | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            if SetConsoleMode(in_handle, raw_in) == 0 {
+                return None;
+            }
+
+            // Best-effort: enable VT output processing so PTY escape sequences
+            // render. A failure here must not disable input forwarding.
+            let out_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            let mut saved_out: u32 = 0;
+            let out_active = !out_handle.is_null()
+                && out_handle != INVALID_HANDLE_VALUE
+                && GetConsoleMode(out_handle, &mut saved_out) != 0
+                && SetConsoleMode(out_handle, saved_out | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+
+            Some(RawModeGuard {
+                in_handle,
+                out_handle,
+                saved_in,
+                saved_out,
+                in_active: true,
+                out_active,
+            })
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Console::SetConsoleMode;
+        unsafe {
+            if self.in_active {
+                SetConsoleMode(self.in_handle, self.saved_in);
+            }
+            if self.out_active {
+                SetConsoleMode(self.out_handle, self.saved_out);
+            }
+        }
+    }
+}
+
 /// Set by the SIGWINCH handler; drained by the attach input loop to forward a
 /// terminal resize to the daemon (mirrors the TS `stdout.on("resize")`).
 #[cfg(unix)]
@@ -294,6 +380,8 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
     }
 
     #[cfg(unix)]
+    let _raw_guard = RawModeGuard::enable();
+    #[cfg(windows)]
     let _raw_guard = RawModeGuard::enable();
 
     let exit_code = Arc::new(AtomicI32::new(0));

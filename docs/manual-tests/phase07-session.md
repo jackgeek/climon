@@ -29,7 +29,7 @@ cases form a configuration matrix:
 |---|---|---|---|---|
 | SESS-unix-linux | Linux (x64) | `openpty` | Unix domain socket | termios raw mode + `SIGWINCH` |
 | SESS-unix-macos | macOS (arm64) | `openpty` | Unix domain socket | termios raw mode + `SIGWINCH` |
-| SESS-win | Windows (x64) | ConPTY | loopback TCP | n/a (no controlling-tty relay) |
+| SESS-win | Windows (x64) | ConPTY | loopback TCP | console raw mode (VT input/output) + size poll |
 
 Run the cases on each listed platform. Steps that differ per cell call it out.
 On macOS, Unix-domain-socket paths under deep temp dirs can exceed `SUN_LEN`
@@ -107,7 +107,153 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
-## MT-P7-03 — Headless (background) session: no local relay, IPC still serves
+## MT-P7-09 — Attach: Windows console local relay (cmd.exe / PowerShell input)
+
+- **ID:** MT-P7-09
+- **Feature / phase:** Phase 7 — attached local relay (Windows)
+- **Preconditions:** A Windows build of the `climon` client; launch from a real
+  console host (`cmd.exe`, PowerShell, or Windows Terminal) — not a redirected
+  pipe.
+- **Config-matrix cell:** SESS-win
+- **Platforms:** Windows (x64)
+
+**Steps:**
+1. From `cmd.exe`, start an attached session running an interactive shell
+   (e.g. `climon powershell` or `climon cmd`).
+2. Type commands in the **launching console**; confirm keystrokes reach the
+   shell with no local line-buffering or double echo, and that arrow keys,
+   Backspace, Tab-completion, and Ctrl-C all work.
+3. Open the dashboard for the same session and type there too; confirm **both**
+   the local console and the dashboard can drive the session simultaneously.
+4. Resize the console window; confirm a running TUI reflows to the new size
+   (console-size poller → `source: host` resize).
+5. Exit the session; confirm the console returns to normal cooked mode (typed
+   characters are echoed/line-buffered again — input mode restored on drop).
+
+**Expected result:**
+- Local console keystrokes are forwarded byte-for-byte to the PTY (regression
+  guard for the bug where only the dashboard could type). The console input
+  buffer is put in raw mode (`ENABLE_LINE_INPUT`/`ENABLE_ECHO_INPUT`/
+  `ENABLE_PROCESSED_INPUT` cleared, `ENABLE_VIRTUAL_TERMINAL_INPUT` set) and VT
+  output processing is enabled so escape sequences render.
+- A window resize forwards a `source: host` resize via the size poller.
+- The saved console input/output modes are restored when the session ends.
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---
+
+## MT-P7-10 — Attach: typing `exit` yields back to the host shell (no hang)
+
+- **ID:** MT-P7-10
+- **Feature / phase:** Phase 7 — PTY teardown / reader EOF on master drop
+- **Preconditions:** A `climon` client build; launch from a real interactive
+  console. Most valuable on **Windows (ConPTY)**, where the bug reproduced; also
+  re-confirm on macOS/Linux for no regression.
+- **Config-matrix cell:** SESS-win (primary), SESS-mac, SESS-linux
+- **Platforms:** Windows (x64), macOS, Linux
+
+**Steps:**
+1. From your shell (`cmd.exe`/PowerShell on Windows, or any terminal), start an
+   attached session running an interactive shell (e.g. `climon cmd`,
+   `climon powershell`, or `climon bash`).
+2. Type `exit` (or press Ctrl-D where applicable) in the **local console** to end
+   the child shell.
+3. Confirm the `climon` process returns control to the **launching shell**
+   promptly — a fresh host prompt appears and you can type again. It must **not**
+   hang requiring you to kill the process.
+4. Repeat with the dashboard open (a browser viewer connected) and confirm
+   `exit` still yields cleanly.
+
+**Expected result:**
+- The session host drops the PTY master after the child exits, closing the
+  ConPTY pseudoconsole so the output-reader thread EOFs and `run_session_host`
+  returns. Control returns to the host shell with no hang. Regression guard for
+  the Windows `exit`-hangs bug (cloned ConPTY reader never EOFing because a
+  `PtyResizer` kept a strong master reference).
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---
+
+## MT-P7-11 — Attach: overgrown browser viewer pauses local output (no blank screen)
+
+- **ID:** MT-P7-11
+- **Feature / phase:** Phase 7 — Fill-mode overgrown gating for the in-process host
+- **Preconditions:** A `climon` client build and a running `climon server`
+  dashboard. Default config (`terminal.clampBrowserToHost = false`, i.e. Fill
+  mode). Launch from a real interactive console.
+- **Config-matrix cell:** SESS-win (primary), SESS-mac, SESS-linux
+- **Platforms:** Windows (x64), macOS, Linux
+
+**Steps:**
+1. Start an attached session from a **small** local console window (so it is
+   easy for a browser to be larger), e.g. `climon bash`.
+2. Open the same session in the dashboard in a **large** browser window /
+   maximized terminal pane, so the browser viewer grows the shared PTY beyond
+   the local console (Fill mode). On the local console you should now see the
+   `[climon] A browser viewer enlarged this session …` notice.
+3. Type/scroll in the dashboard. Confirm the **local console screen is NOT
+   blanked or corrupted** — local PTY rendering is paused and frozen at the
+   notice, while the dashboard renders normally.
+4. Restore: either click the **lock icon** on the active session in the
+   dashboard (clamp mode), shrink the browser to the local size, or close the
+   browser viewer. Confirm that after a brief moment (~250 ms) the local console
+   **repaints the current session content** (matching the dashboard) instead of
+   staying blank — including on Windows `cmd.exe`/ConPTY, where the resize
+   triggers an asynchronous clear-and-repaint.
+
+**Expected result:**
+- In Fill mode, when a browser viewer enlarges the shared PTY beyond the local
+  terminal, the in-process host **pauses** local stdout writes and prints the
+  overgrown notice instead of writing oversized output that would blank/corrupt
+  the local screen. Dashboard viewers, scrollback, and the headless grid still
+  receive every byte. The pause is **level-triggered on the real corruption
+  condition — the PTY currently exceeds the local console in either dimension
+  (`HostState::local_terminal_exceeded`) — independent of resize mode**, NOT
+  edge-triggered on the Fill-gated dashboard warning. (Edge-triggering drifted:
+  the local terminal could end up resumed while the PTY was still larger than the
+  console, so no notice showed and ConPTY corrupted it.) The notice therefore
+  reliably appears whenever the dashboard is bigger than the local terminal and
+  stays until the PTY fits again. On restore (clamp / shrink / close viewer) the
+  local terminal **stays paused for a short delay (`LOCAL_RESTORE_DELAY`, ~250 ms)**
+  so the PTY's resize-repaint burst drains first, then the local console is
+  **repainted from the parsed grid's current screen** (`HeadlessGrid::render_screen`,
+  a sequential `vt100` repaint using only `\r\n` between rows — no absolute cursor
+  positioning, trailing blank rows trimmed) — NOT a raw scrollback replay, which on
+  Windows ConPTY stacks lines on top of each other (absolute-cursor / missing
+  carriage-return corruption). The deferral is load-bearing on Windows ConPTY: an
+  immediate repaint would be clobbered by the asynchronous resize-repaint, leaving
+  the terminal blank. **When the watcher fires it re-checks `local_terminal_exceeded`
+  and only repaints + resumes if the PTY now fits the local console** — if a viewer
+  re-grew during the delay the local terminal stays suppressed, because resuming
+  while still larger than the console would expose ConPTY's tall-grid absolute-
+  positioned live output (e.g. `\e[34;1H` for a 57-row PTY) to the shorter real
+  console and stack the prompt over earlier lines. Regression guard for the ALT+TAB
+  "screen clears to a blank cursor" bug, the "clamp leaves the local terminal blank"
+  bug, the "restored output has missing carriage returns / stacked lines" corruption,
+  and the "no overgrown message shown while the browser is bigger" bug.
+- **Diagnostics:** if the Windows corruption recurs, set `CLIMON_DEBUG_RESTORE=1`
+  before launching the attached client and reproduce the grow-then-restore. The
+  host appends timestamped, escaped traces to `$CLIMON_HOME/logs/restore-debug.log`
+  recording host/applied/**real console** sizes and the exact bytes at
+  overgrow-suppress, restore-schedule, and restore-fire, plus every PTY chunk for
+  ~2 s after unsuppress (to isolate whether the corrupter is our grid repaint or
+  ConPTY's late live resize-repaint).
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
 
 - **ID:** MT-P7-03
 - **Feature / phase:** Phase 7 — headless flag

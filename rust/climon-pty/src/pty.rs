@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
@@ -144,10 +144,16 @@ impl Pty {
     /// same PTY from another thread (e.g. a `SIGWINCH` listener owned by the
     /// session host) without sharing the whole [`Pty`].
     ///
+    /// The handle holds only a [`Weak`] reference to the PTY master, so it never
+    /// keeps the master (and, on Windows, the underlying ConPTY pseudoconsole)
+    /// alive. Once the owning [`Pty`] is dropped at session teardown, the
+    /// pseudoconsole closes, the cloned reader EOFs, and any late
+    /// [`resize`](PtyResizer::resize) call simply returns `false`.
+    ///
     /// [`resize`]: PtyResizer::resize
     pub fn resizer(&self) -> PtyResizer {
         PtyResizer {
-            master: Arc::clone(&self.master),
+            master: Arc::downgrade(&self.master),
             applied_size: Arc::clone(&self.applied_size),
             pid: self.pid,
         }
@@ -173,17 +179,25 @@ impl Pty {
 }
 
 /// A cloneable resize handle for a [`Pty`], usable from any thread.
+///
+/// Holds a [`Weak`] reference to the master so it does not extend the PTY's
+/// lifetime; [`resize`](PtyResizer::resize) returns `false` once the owning
+/// [`Pty`] has been dropped.
 #[derive(Clone)]
 pub struct PtyResizer {
-    master: SharedMaster,
+    master: Weak<Mutex<Box<dyn MasterPty + Send>>>,
     applied_size: AppliedSize,
     pid: Option<u32>,
 }
 
 impl PtyResizer {
-    /// See [`Pty::resize`].
+    /// See [`Pty::resize`]. Returns `false` if the size was unchanged or if the
+    /// owning [`Pty`] has already been dropped.
     pub fn resize(&self, cols: u16, rows: u16) -> bool {
-        apply_resize(&self.master, &self.applied_size, self.pid, cols, rows)
+        let Some(master) = self.master.upgrade() else {
+            return false;
+        };
+        apply_resize(&master, &self.applied_size, self.pid, cols, rows)
     }
 
     /// The currently applied (cols, rows).

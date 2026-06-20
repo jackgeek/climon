@@ -156,6 +156,7 @@ dependencies = [
  "libc",
  "serde_json",
  "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -246,6 +247,7 @@ dependencies = [
  "serde_json",
  "signal-hook",
  "vt100",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

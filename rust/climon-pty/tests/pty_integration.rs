@@ -107,6 +107,37 @@ fn resize_dedupes_and_does_not_panic() {
 }
 
 #[test]
+fn dropping_pty_releases_master_and_makes_resizer_inert() {
+    // A long-lived child keeps the PTY open until we explicitly tear it down.
+    #[cfg(unix)]
+    let opts = sh("sleep 5");
+    #[cfg(windows)]
+    let opts = sh("ping -n 6 127.0.0.1 >NUL");
+
+    let mut pty = Pty::spawn(&opts).expect("spawn");
+    let reader = pty.try_clone_reader().expect("reader");
+    let handle = std::thread::spawn(move || read_to_end(reader));
+
+    // A cloned resize handle works while the owning Pty is alive.
+    let resizer = pty.resizer();
+    assert!(resizer.resize(100, 40));
+
+    // Dropping the Pty releases the last *strong* master reference. On Windows
+    // this is the `exit`-hang regression: ConPTY's pseudoconsole (and conhost,
+    // which holds the output pipe) only closes when the master is dropped, so
+    // without this the cloned reader never EOFs. The resizer holds only a Weak
+    // ref, so it must not keep the master alive and becomes inert after drop.
+    pty.kill().ok();
+    drop(pty);
+
+    // The reader thread must observe EOF and finish (would hang on regression).
+    let _ = handle.join().expect("reader joins after pty drop");
+    // A late resize through the cloned handle is a no-op rather than a panic
+    // or a resurrected master.
+    assert!(!resizer.resize(120, 50));
+}
+
+#[test]
 fn empty_command_errors() {
     let opts = PtyOptions {
         command: String::new(),
