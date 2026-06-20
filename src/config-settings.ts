@@ -249,6 +249,14 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "session.terminalProgram",
+    type: "string",
+    purpose:
+      "Command template used to open a terminal window for a non-headless (visible) session spawned from the dashboard. Use the {cmd} placeholder for the climon command to run. When unset, climon auto-detects a terminal per OS (Terminal.app, Windows Terminal, or x-terminal-emulator/gnome-terminal/konsole/xterm).",
+    scope: ["client"],
+    acceptInput: true
+  },
+  {
     path: "tunnelLink.keepAlive",
     type: "number",
     defaultValue: 60,

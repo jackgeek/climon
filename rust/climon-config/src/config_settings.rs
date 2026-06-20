@@ -402,6 +402,13 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .accept_input()
         .with_validate(v_session_priority),
         ConfigSetting::new(
+            "session.terminalProgram",
+            String,
+            "Command template used to open a terminal window for a non-headless (visible) session spawned from the dashboard. Use the {cmd} placeholder for the climon command to run. When unset, climon auto-detects a terminal per OS (Terminal.app, Windows Terminal, or x-terminal-emulator/gnome-terminal/konsole/xterm).",
+            vec![Client],
+        )
+        .accept_input(),
+        ConfigSetting::new(
             "tunnelLink.keepAlive",
             Number,
             "Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel relay to prevent idle disconnection. Set to 0 to disable keep-alive pings.",
@@ -760,6 +767,7 @@ mod tests {
                 "remote.autoLink",
                 "session.color",
                 "session.priority",
+                "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
                 "logging.appInsights.connectionString",
@@ -779,7 +787,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 36);
+        assert_eq!(all_config_keys().len(), 37);
     }
 
     #[test]
@@ -845,6 +853,7 @@ mod tests {
                 "remote.autoLink",
                 "session.color",
                 "session.priority",
+                "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
                 "logging.appInsights.connectionString",

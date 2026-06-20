@@ -38,6 +38,7 @@ describe("config settings registry", () => {
       "remote.autoLink",
       "session.color",
       "session.priority",
+      "session.terminalProgram",
       "tunnelLink.keepAlive",
       "logging.level",
       "logging.appInsights.connectionString",
@@ -62,6 +63,16 @@ describe("config settings registry", () => {
 
   test("session.color scope is an array with correct process scopes", () => {
     expect(findConfigSetting("session.color")?.scope).toEqual(["client", "daemon", "server"]);
+  });
+
+  test("session.terminalProgram is a client-scoped string with no default", () => {
+    const setting = findConfigSetting("session.terminalProgram");
+    expect(setting).toBeDefined();
+    expect(setting?.type).toBe("string");
+    expect(setting?.scope).toEqual(["client"]);
+    expect(setting?.defaultValue).toBeUndefined();
+    expect(setting?.acceptInput).toBe(true);
+    expect(setting?.internal).not.toBe(true);
   });
 
   test("builds the default config from registry defaults", () => {
@@ -125,6 +136,7 @@ describe("config settings registry", () => {
       "remote.autoLink",
       "session.color",
       "session.priority",
+      "session.terminalProgram",
       "tunnelLink.keepAlive",
       "logging.level",
       "logging.appInsights.connectionString",
@@ -137,7 +149,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(36);
+    expect(allConfigKeys().length).toBe(37);
   });
 
   test("coerces values through registry validators", () => {
