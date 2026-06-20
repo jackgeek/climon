@@ -637,6 +637,25 @@ pub fn run_session_host(
     let conn_threads: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
     let client_seq = Arc::new(AtomicU64::new(0));
 
+    // --- Local terminal relay (attached, unix, tty) ---
+    //
+    // Raw mode MUST be established before the PTY-reader thread can forward any
+    // child output to the local terminal. The child (e.g. a shell's
+    // instant-prompt) may emit terminal queries (OSC 10/11/4 color requests,
+    // cursor-position reports, etc.) as its very first output; if that query
+    // reaches the real terminal while stdin is still in cooked mode, the
+    // terminal's reply is echoed back onto the screen as stray text like
+    // `11;rgb:0d0d/1111/1717`. The TS host relies on Node's synchronous setup
+    // ordering for this guarantee; here we must enable raw mode explicitly
+    // first, since `spawn_reader_thread` runs concurrently.
+    #[cfg(unix)]
+    let _local = local_relay::setup(
+        headless,
+        Arc::clone(&state),
+        Arc::clone(&pty_writer),
+        Arc::clone(&shutdown),
+    );
+
     // --- PTY-reader thread ---
     let reader_handle = spawn_reader_thread(reader, Arc::clone(&state), headless);
 
@@ -694,15 +713,6 @@ pub fn run_session_host(
     } else {
         None
     };
-
-    // --- Local terminal relay (attached, unix, tty) ---
-    #[cfg(unix)]
-    let _local = local_relay::setup(
-        headless,
-        Arc::clone(&state),
-        Arc::clone(&pty_writer),
-        Arc::clone(&shutdown),
-    );
 
     // --- Signal handling: SIGTERM/SIGINT kill the child ---
     #[cfg(unix)]
