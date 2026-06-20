@@ -18,6 +18,9 @@ climon-logging = { path = "../climon-logging", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 getrandom = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "net",
