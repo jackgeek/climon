@@ -449,7 +449,10 @@ mod tests {
             warning: None,
             error: None,
         });
-        assert_eq!(&frame[5..], br#"{"kind":"spawn-result","requestId":"r1","id":"x"}"#);
+        assert_eq!(
+            &frame[5..],
+            br#"{"kind":"spawn-result","requestId":"r1","id":"x"}"#
+        );
         let frame = encode_control(&ControlMessage::Signed {
             payload: "{}".into(),
             nonce: "n".into(),

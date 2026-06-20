@@ -66,7 +66,12 @@ pub fn new_nonce() -> String {
 
 /// Wraps `message` in a [`ControlMessage::Signed`] envelope using the given
 /// `nonce`/`ts` (injected for tests). Production callers use [`sign_now`].
-pub fn sign_control(secret: &str, message: &ControlMessage, nonce: &str, ts: i64) -> ControlMessage {
+pub fn sign_control(
+    secret: &str,
+    message: &ControlMessage,
+    nonce: &str,
+    ts: i64,
+) -> ControlMessage {
     let payload = serde_json::to_string(message).expect("control message serializes to JSON");
     let sig = hmac_hex(secret, &signing_input(&payload, nonce, ts));
     ControlMessage::Signed {
