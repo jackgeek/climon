@@ -151,6 +151,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     const parsedAttention = isObjectRecord(parsed.attention) ? parsed.attention : {};
     const parsedSession = isObjectRecord(parsed.session) ? parsed.session : {};
     const parsedFeature = isObjectRecord(parsed.feature) ? (parsed.feature as Record<string, string>) : {};
+    const parsedHotKeys = isObjectRecord(parsed.hotKeys) ? parsed.hotKeys : {};
     const parsedPriority = typeof parsedSession.priority === "number" ? { priority: parsedSession.priority } : {};
     const parsedColor = typeof parsedSession.color === "string" ? { color: parsedSession.color } : {};
     const parsedConfig = {
@@ -160,7 +161,8 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
       attention: { ...defaults.attention, ...parsedAttention },
       remote: isObjectRecord(parsed.remote) ? parsed.remote : undefined,
       session: { ...defaults.session, ...parsedPriority, ...parsedColor },
-      feature: { ...(defaults.feature ?? {}), ...parsedFeature }
+      feature: { ...(defaults.feature ?? {}), ...parsedFeature },
+      hotKeys: { ...(defaults.hotKeys ?? {}), ...parsedHotKeys }
     };
     const parsedConfigObject = parsedConfig as ClimonConfig;
     // Backfill sections added after a config file was first written.
@@ -185,6 +187,15 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
       } catch {
         parsedConfigObject.session.color = "auto";
       }
+    }
+    if (
+      !parsedConfigObject.hotKeys ||
+      typeof parsedConfigObject.hotKeys.focusTopSession !== "string"
+    ) {
+      parsedConfigObject.hotKeys = {
+        ...(parsedConfigObject.hotKeys ?? {}),
+        focusTopSession: "Alt+J"
+      };
     }
     return parsedConfigObject;
   } catch (error) {

@@ -56,6 +56,15 @@ export interface TerminalConfig {
   setTitle: boolean;
 }
 
+export interface HotKeysConfig {
+  /**
+   * Web-dashboard shortcut that selects the top session in the list and focuses
+   * its terminal. Format is `Mod+...+Key` (e.g. "Alt+T", "Ctrl+Shift+J").
+   * Set to an empty string to disable the shortcut.
+   */
+  focusTopSession: string;
+}
+
 export interface RemoteConfig {
   enabled?: boolean;
   /** Direct remote uplink host for same-machine or LAN setups. */
@@ -151,6 +160,7 @@ export interface ClimonConfig {
   version: 1;
   server: ServerConfig;
   terminal: TerminalConfig;
+  hotKeys: HotKeysConfig;
   attention: AttentionConfig;
   remote?: RemoteConfig;
   session?: SessionDefaultsConfig;

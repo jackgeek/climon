@@ -370,7 +370,8 @@ describe("applyDashboardTunnelPersistence", () => {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
       terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
-      attention: { idleSeconds: 30 }
+      attention: { idleSeconds: 30 },
+      hotKeys: { focusTopSession: "Alt+J" }
     };
 
     applyDashboardTunnelPersistence?.(config, { type: "persist", tunnelId: "tunnel-1", cluster: "eun1" });
@@ -398,6 +399,7 @@ describe("applyDashboardTunnelPersistence", () => {
       server: { host: "127.0.0.1", port: 3131 },
       terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
       attention: { idleSeconds: 30 },
+      hotKeys: { focusTopSession: "Alt+J" },
       remote: { enabled: true, tunnelId: "uplink", ingestHost: "localhost" }
     };
 
@@ -428,7 +430,8 @@ describe("applyDashboardTunnelPersistence", () => {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
       terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
-      attention: { idleSeconds: 30 }
+      attention: { idleSeconds: 30 },
+      hotKeys: { focusTopSession: "Alt+J" }
     };
 
     applyDashboardTunnelPersistence?.(config, { type: "clear" });
@@ -453,6 +456,7 @@ describe("applyDashboardTunnelPersistence", () => {
       server: { host: "127.0.0.1", port: 3131 },
       terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
       attention: { idleSeconds: 30 },
+      hotKeys: { focusTopSession: "Alt+J" },
       remote: {
         enabled: true,
         tunnelId: "uplink",

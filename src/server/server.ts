@@ -1128,6 +1128,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           version: VERSION,
           remotesEnabled: options.enableRemotes === true,
           features: resolveFeatureFlags(config),
+          shortcuts: { focusTopSession: config.hotKeys?.focusTopSession ?? "Alt+J" },
           ports: await collectServerPorts()
         });
       }
