@@ -1,4 +1,4 @@
-climon v2.0.8 — web-based monitor for interactive CLI sessions
+climon v2.0.9 — web-based monitor for interactive CLI sessions
 
 Usage:
   climon [--priority N] [--color C] [--name S]
