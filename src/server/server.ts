@@ -1463,12 +1463,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
         const detect = await detectDevtunnel();
         const state = await readRemoteHostState();
+        const remoteSpawn = isFeatureEnabled(config, "remoteSpawn");
+        const spawnSecret = remoteSpawn ? await ensureSpawnSecret(process.env) : undefined;
         return Response.json({
           devtunnelAvailable: detect.available,
           version: detect.version,
           ingestPort: await resolveIngestPort(),
           tunnel: state ? { id: state.tunnelId } : undefined,
-          canHost: state?.canHost ?? detect.available
+          canHost: state?.canHost ?? detect.available,
+          remoteSpawn,
+          spawnSecret
         });
       }
 

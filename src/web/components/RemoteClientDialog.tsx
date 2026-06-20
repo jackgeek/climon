@@ -113,7 +113,9 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     ingestPort: status?.ingestPort ?? 3132,
     color,
     priority: priorityValid ? parsedPriority : undefined,
-    clientId: clientIdValid ? clientIdTrimmed : undefined
+    clientId: clientIdValid ? clientIdTrimmed : undefined,
+    remoteSpawn: status?.remoteSpawn,
+    spawnSecret: status?.spawnSecret
   });
 
   async function autoCreate(): Promise<void> {

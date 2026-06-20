@@ -293,6 +293,8 @@ export interface RemoteStatus {
   ingestPort: number;
   tunnel?: RemoteTunnelInfo;
   canHost: boolean;
+  remoteSpawn?: boolean;
+  spawnSecret?: string;
 }
 
 export async function fetchRemoteStatus(): Promise<RemoteStatus> {
@@ -348,6 +350,8 @@ export interface SetupScriptParams {
   color?: SessionColorMode;
   priority?: number;
   clientId?: string;
+  remoteSpawn?: boolean;
+  spawnSecret?: string;
 }
 
 /** A single-quoted shell literal (handles embedded single quotes safely). */
@@ -386,6 +390,10 @@ export function buildSetupScript(params: SetupScriptParams): string {
   }
   if (typeof params.priority === "number") {
     lines.push(`climon config session.priority ${params.priority}`);
+  }
+  if (params.remoteSpawn && params.spawnSecret) {
+    lines.push("climon config feature.remoteSpawn enabled");
+    lines.push(`climon config remote.spawnSecret ${arg(params.spawnSecret)}`);
   }
   return lines.join("\n");
 }
