@@ -113,6 +113,46 @@ fn v_detach_prefix(_p: &str, v: &Value) -> Result<(), String> {
     }
 }
 
+fn v_focus_top_session(_p: &str, v: &Value) -> Result<(), String> {
+    let s = v
+        .as_str()
+        .ok_or("hotKeys.focusTopSession must be a string")?;
+    if s.is_empty() || parse_shortcut_ok(s) {
+        Ok(())
+    } else {
+        Err(
+            "hotKeys.focusTopSession must be empty or a shortcut like \"Alt+T\" or \"Ctrl+Shift+J\""
+                .into(),
+        )
+    }
+}
+
+/// Mirrors the TS `parseShortcut`: true when `input` is a valid `Mod+...+Key`
+/// shortcut (exactly one non-modifier key token).
+fn parse_shortcut_ok(input: &str) -> bool {
+    let tokens: Vec<&str> = input
+        .split('+')
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return false;
+    }
+    let mut have_key = false;
+    for token in tokens {
+        match token.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" | "alt" | "option" | "shift" | "meta" | "cmd" | "command" => {}
+            _ => {
+                if have_key {
+                    return false;
+                }
+                have_key = true;
+            }
+        }
+    }
+    have_key
+}
+
 fn v_remote_port(_p: &str, v: &Value) -> Result<(), String> {
     match v.as_f64() {
         Some(n) if is_int(n) && n > 0.0 && n <= 65535.0 => Ok(()),
@@ -272,6 +312,15 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Client],
         )
         .default(Value::from(true)),
+        ConfigSetting::new(
+            "hotKeys.focusTopSession",
+            String,
+            "Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is \"Mod+...+Key\" (e.g. \"Alt+T\", \"Ctrl+Shift+J\"). Set to an empty string to disable.",
+            vec![Server, Browser],
+        )
+        .default(Value::from("Alt+T"))
+        .accept_input()
+        .with_validate(v_focus_top_session),
         ConfigSetting::new(
             "attention.idleSeconds",
             Number,
@@ -743,6 +792,7 @@ mod tests {
                 "terminal.clampBrowserToHost",
                 "terminal.detachPrefix",
                 "terminal.setTitle",
+                "hotKeys.focusTopSession",
                 "attention.idleSeconds",
                 "remote.enabled",
                 "remote.host",
@@ -779,7 +829,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 36);
+        assert_eq!(all_config_keys().len(), 37);
     }
 
     #[test]
@@ -803,6 +853,7 @@ mod tests {
                 "version": 1,
                 "server": { "host": "127.0.0.1", "port": 3131 },
                 "terminal": { "clampBrowserToHost": false, "detachPrefix": 28, "setTitle": true },
+                "hotKeys": { "focusTopSession": "Alt+T" },
                 "attention": { "idleSeconds": 10 },
                 "remote": { "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },
@@ -833,6 +884,7 @@ mod tests {
         assert_eq!(
             accepted_config_keys(),
             vec![
+                "hotKeys.focusTopSession",
                 "remote.enabled",
                 "remote.host",
                 "remote.ingestHost",
@@ -873,6 +925,19 @@ mod tests {
         assert_eq!(
             coerce_config_value_from_settings("session.color", "green").unwrap(),
             json!("green")
+        );
+        assert_eq!(
+            coerce_config_value_from_settings("hotKeys.focusTopSession", "Ctrl+Shift+J").unwrap(),
+            json!("Ctrl+Shift+J")
+        );
+        assert_eq!(
+            coerce_config_value_from_settings("hotKeys.focusTopSession", "").unwrap(),
+            json!("")
+        );
+        assert!(
+            coerce_config_value_from_settings("hotKeys.focusTopSession", "Ctrl+J+K")
+                .unwrap_err()
+                .contains("must be empty or a shortcut")
         );
         assert!(
             coerce_config_value_from_settings("session.priority", "1001")
