@@ -47,8 +47,14 @@ describe("parseShortcut", () => {
     expect(parseShortcut("Alt+Ctrl")).toBeNull();
   });
 
-  test("returns null for an unknown token", () => {
-    expect(parseShortcut("Hyper+T")).toBeNull();
+  test("accepts a named (non-letter) key token", () => {
+    expect(parseShortcut("Up")).toEqual({
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+      key: "up"
+    });
   });
 
   test("returns null when more than one non-modifier key is given", () => {
@@ -80,6 +86,24 @@ describe("matchesShortcut", () => {
   test("does not match a different key", () => {
     expect(
       matchesShortcut({ ctrlKey: false, altKey: true, shiftKey: false, metaKey: false, key: "j" }, altT)
+    ).toBe(false);
+  });
+
+  test("matches via physical code when Alt composes a different character (macOS Option+T)", () => {
+    expect(
+      matchesShortcut(
+        { ctrlKey: false, altKey: true, shiftKey: false, metaKey: false, key: "†", code: "KeyT" },
+        altT
+      )
+    ).toBe(true);
+  });
+
+  test("does not match a different physical code", () => {
+    expect(
+      matchesShortcut(
+        { ctrlKey: false, altKey: true, shiftKey: false, metaKey: false, key: "†", code: "KeyJ" },
+        altT
+      )
     ).toBe(false);
   });
 });

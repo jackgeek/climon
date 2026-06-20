@@ -14,11 +14,15 @@ export interface KeyboardLike {
   shiftKey: boolean;
   metaKey: boolean;
   key: string;
+  /** Optional physical key code (e.g. "KeyT"), used as a fallback when modifiers compose a different `key`. */
+  code?: string;
 }
 
 /**
  * Parses a `Mod+...+Key` shortcut string (e.g. "Alt+T", "Ctrl+Shift+J").
- * Returns null for empty, malformed, or unknown input. Modifier names are
+ * Returns null for empty input, no key, or more than one non-modifier key.
+ * Any single non-modifier token (e.g. "T", "Up", "Enter", "F5") is accepted as
+ * the key. Modifier names are
  * case-insensitive; aliases: Control=Ctrl, Cmd/Command=Meta.
  */
 export function parseShortcut(input: string): ParsedShortcut | null {
@@ -70,13 +74,30 @@ export function parseShortcut(input: string): ParsedShortcut | null {
   return result;
 }
 
-/** True when the event's modifiers and key exactly match the parsed shortcut. */
+/**
+ * True when the event's modifiers and key match the parsed shortcut. Falls back
+ * to the physical `event.code` for single letters/digits so that modifier-composed
+ * characters (e.g. macOS Option+T producing "†") still match "Alt+T".
+ */
 export function matchesShortcut(event: KeyboardLike, parsed: ParsedShortcut): boolean {
-  return (
-    event.ctrlKey === parsed.ctrl &&
-    event.altKey === parsed.alt &&
-    event.shiftKey === parsed.shift &&
-    event.metaKey === parsed.meta &&
-    event.key.toLowerCase() === parsed.key
-  );
+  if (
+    event.ctrlKey !== parsed.ctrl ||
+    event.altKey !== parsed.alt ||
+    event.shiftKey !== parsed.shift ||
+    event.metaKey !== parsed.meta
+  ) {
+    return false;
+  }
+  if (event.key.toLowerCase() === parsed.key) {
+    return true;
+  }
+  if (event.code && parsed.key.length === 1) {
+    if (parsed.key >= "a" && parsed.key <= "z") {
+      return event.code === "Key" + parsed.key.toUpperCase();
+    }
+    if (parsed.key >= "0" && parsed.key <= "9") {
+      return event.code === "Digit" + parsed.key;
+    }
+  }
+  return false;
 }
