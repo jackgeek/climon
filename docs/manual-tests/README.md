@@ -9,6 +9,10 @@ This directory grows lockstep with the [Rust client
 rewrite](../superpowers/plans/2026-06-17-rust-client-rewrite-master-plan.md): each
 phase authors its manual cases here as part of its definition of done.
 
+**Every new feature MUST add manual checks here as part of its definition of
+done** — not only rewrite phases. Add or update a feature file (see
+[Test-case shape](#test-case-shape)) and link it from [Cases by phase](#cases-by-phase).
+
 ## Layout
 
 - `README.md` — this index.
