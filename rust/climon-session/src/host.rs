@@ -27,8 +27,8 @@ use climon_pty::{resolve_command, Pty, PtyOptions};
 use climon_store::paths::now_iso;
 use climon_store::Env as StoreEnv;
 
-use crate::attention::should_apply_user_attention_acknowledgement;
 use crate::attention::fingerprint_body;
+use crate::attention::should_apply_user_attention_acknowledgement;
 use crate::error::{SessionError, SessionResult};
 use crate::fingerprint::HeadlessGrid;
 use crate::idle::ScreenIdleDetector;
@@ -319,7 +319,6 @@ impl HostState {
                     "source": format!("{:?}", size.source),
                     "now": now_ms,
                     "settleUntil": self.idle_detector.settle_until(),
-                    "body": truncate_body(fingerprint_body(&fp)),
                 }),
                 "resize absorbed",
             );
@@ -376,7 +375,6 @@ impl HostState {
                 "settleUntil": self.idle_detector.settle_until(),
                 "flagged": self.idle_detector.is_flagged(),
                 "acknowledged": self.idle_detector.is_acknowledged(),
-                "body": truncate_body(fingerprint_body(&fp)),
             }),
             "revert absorbed",
         );
@@ -409,19 +407,6 @@ impl HostState {
         if self.exited {
             return;
         }
-        climon_logging::logger::child("idle").log_with(
-            climon_logging::level::LogLevel::Debug,
-            serde_json::json!({
-                "sessionId": self.id,
-                "event": "apply_attention",
-                "source": format!("{source:?}"),
-                "needsAttention": payload.needs_attention,
-                "reason": payload.reason,
-                "lastAttentionState": self.last_attention_state,
-                "body": truncate_body(fingerprint_body(current_fp)),
-            }),
-            "attention",
-        );
         if !payload.needs_attention {
             if source == AttentionSource::User
                 && !should_apply_user_attention_acknowledgement(
@@ -439,6 +424,16 @@ impl HostState {
             self.current_attention_fingerprint = None;
             let now = now_iso();
             let is_user = source == AttentionSource::User;
+            climon_logging::logger::child("idle").log_with(
+                climon_logging::level::LogLevel::Debug,
+                serde_json::json!({
+                    "sessionId": self.id,
+                    "event": "apply_attention",
+                    "source": format!("{source:?}"),
+                    "status": if is_user { "acknowledged" } else { "running" },
+                }),
+                "attention cleared",
+            );
             if is_user {
                 // A user acknowledgement clears the detector's flagged state so a
                 // later screen change cannot emit a stale revert, and marks the
@@ -494,6 +489,17 @@ impl HostState {
             self.last_attention_state = Some(true);
             self.current_attention_matched_at = Some(now);
             self.current_attention_fingerprint = Some(current_fp.to_string());
+            climon_logging::logger::child("idle").log_with(
+                climon_logging::level::LogLevel::Debug,
+                serde_json::json!({
+                    "sessionId": self.id,
+                    "event": "apply_attention",
+                    "source": format!("{source:?}"),
+                    "status": "needs-attention",
+                    "reason": reason,
+                }),
+                "attention flagged",
+            );
         }
     }
 
@@ -1049,17 +1055,6 @@ fn spawn_connection_reader(
     })
 }
 
-fn truncate_body(body: &str) -> String {
-    const MAX: usize = 120;
-    let cleaned: String = body.replace('\n', "\\n");
-    if cleaned.chars().count() > MAX {
-        let head: String = cleaned.chars().take(MAX).collect();
-        format!("{head}… ({} chars)", cleaned.chars().count())
-    } else {
-        cleaned
-    }
-}
-
 fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
         let log = climon_logging::logger::child("idle");
@@ -1092,8 +1087,6 @@ fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()>
                         "wasFlagged": was_flagged,
                         "wasAcknowledged": was_ack,
                         "bodyChanged": body_changed,
-                        "prevBody": prev_body.as_deref().map(truncate_body),
-                        "newBody": truncate_body(body),
                         "transition": transition.as_ref().map(|t| if t.needs_attention { "needs-attention" } else { "running" }),
                     }),
                     "idle sample",
