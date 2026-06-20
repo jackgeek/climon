@@ -39,7 +39,9 @@ jobs:
         with:
           workspaces: rust
       - name: Install cargo-deny and cargo-about
-        run: cargo install --locked cargo-deny cargo-about
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-about
       - run: cargo deny check
       - name: Verify THIRD-PARTY-LICENSES.md is up to date
         run: |
