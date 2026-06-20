@@ -9,11 +9,11 @@ to nested TUIs, Windows ConPTY). They cover PTY spawn + output capture, the
 clamp/de-dupe with `SIGWINCH` delivery to descendants, raw-mode termios
 handling, terminal-size queries, exit-code propagation, and the license gate.
 
-Background: Phase 6 ports `src/pty.ts` and absorbs the proof-of-concept modules
-`rust/climon-rs/src/{term,scrollback}.rs` plus the PTY-spawn mechanics of
-`rust/climon-rs/src/host.rs` into a reusable, pull-based `Pty` abstraction built
+Background: Phase 6 ports `src/pty.ts` and absorbed the modules from the
+original proof-of-concept (`term`/`scrollback` plus the PTY-spawn mechanics of
+its `host`) into a reusable, pull-based `Pty` abstraction built
 on `portable-pty` (Unix `openpty` / Windows ConPTY). The socket/viewer/relay
-protocol stays in the PoC and is Phase 7's job. See the
+protocol was Phase 7's job. See the
 [master plan](../superpowers/specs/2026-06-17-rust-client-rewrite-master-plan.md)
 and the [Phase 6 plan](../superpowers/plans/2026-06-18-phase06-climon-pty.md).
 
@@ -74,10 +74,9 @@ Run the cases on each listed platform. Steps that differ per cell call it out.
 2. Observe `spawns_and_reads_output` (a child writes `hi`, the reader receives
    it, `wait()` returns `0`) and `propagates_nonzero_exit_code`
    (`sh -c 'exit 7'` → `wait()` returns `7`).
-3. (Manual cross-check, Unix) From a shell:
-   `cargo run -q -p climon-rs -- run -- /bin/sh -lc 'echo phase6 && exit 3'` is
-   *not* required for this crate, but you may sanity-check spawn behavior with a
-   small scratch binary that calls `Pty::spawn`.
+3. (Manual cross-check, Unix) Exercising `Pty::spawn` directly is *not* required
+   for this crate, but you may sanity-check spawn behavior with a small scratch
+   binary that calls `Pty::spawn` (e.g. `/bin/sh -lc 'echo phase6 && exit 3'`).
 
 **Expected result:**
 - Output bytes from the child are read through the cloned reader.

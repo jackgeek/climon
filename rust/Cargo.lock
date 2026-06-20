@@ -224,16 +224,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "climon-rs"
-version = "0.1.0"
-dependencies = [
- "climon-proto",
- "libc",
- "portable-pty",
- "signal-hook",
-]
-
-[[package]]
 name = "climon-session"
 version = "0.1.0"
 dependencies = [

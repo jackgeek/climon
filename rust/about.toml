@@ -8,4 +8,5 @@ accepted = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
+    "CDLA-Permissive-2.0",
 ]
