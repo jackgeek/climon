@@ -212,6 +212,43 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
+## MT-P7-09 — Acknowledged stays acknowledged across session switch / resize
+
+- **ID:** MT-P7-09
+- **Feature / phase:** Phase 7 — `ScreenIdleDetector` dimension-aware change
+  detection + `acknowledge`
+- **Preconditions:** `attention.idleSeconds` set to a small value (e.g. `2`) in
+  `$CLIMON_HOME/config.jsonc`. The dashboard open with at least two sessions.
+- **Config-matrix cell:** all
+- **Platforms:** macOS, Linux, Windows
+
+**Steps:**
+1. Start a session that leaves the screen static (e.g. `sleep 120`) and wait
+   `idleSeconds` so it flips to `status: needs-attention`.
+2. In the dashboard, view that session and acknowledge it (any input / focus that
+   sends the matching-token acknowledgement). Confirm `status: acknowledged`.
+3. Switch the dashboard to another session and back, and/or resize the browser
+   window (changing the viewer dimensions). The acknowledged session's screen
+   content does not change — only its dimensions do.
+4. Leave it idle for more than another `idleSeconds`.
+
+**Expected result:**
+- The acknowledged session **stays `acknowledged`**. Switching sessions or
+  resizing (a dimension-only fingerprint difference, or a reflow absorbed on
+  resize) never flips it to `running`.
+- While its screen stays unchanged, the acknowledged session does **not** re-flag
+  `needs-attention`.
+- Only a genuine screen-content change (real program output) resumes normal
+  detection (`running`, then re-flag after a fresh idle window).
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---
+
 ## MT-P7-06 — Dashboard rename → Title broadcast (+ OSC title when attached)
 
 - **ID:** MT-P7-06

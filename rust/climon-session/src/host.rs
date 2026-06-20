@@ -106,6 +106,7 @@ struct HostState {
     scrollback: climon_pty::Scrollback,
     grid: HeadlessGrid,
     idle_detector: ScreenIdleDetector,
+    started_at: Instant,
     mouse_mode_state: HashMap<String, bool>,
     mouse_mode_remainder: String,
 }
@@ -393,6 +394,13 @@ impl HostState {
             self.current_attention_fingerprint = None;
             let now = now_iso();
             let is_user = source == AttentionSource::User;
+            if is_user {
+                // A user acknowledgement clears the detector's flagged state so a
+                // later screen change cannot emit a stale revert, and marks the
+                // screen acknowledged so it does not re-flag while unchanged.
+                let now_ms = self.started_at.elapsed().as_millis() as i64;
+                self.idle_detector.acknowledge(current_fp, now_ms);
+            }
             let _ = climon_store::patch::patch_session_meta_from_current(
                 &self.env,
                 &self.id,
@@ -629,6 +637,7 @@ pub fn run_session_host(
         scrollback: climon_pty::Scrollback::new(SCROLLBACK_CAP),
         grid: HeadlessGrid::new(meta.cols, meta.rows),
         idle_detector: ScreenIdleDetector::new(idle_seconds),
+        started_at: Instant::now(),
         mouse_mode_state: HashMap::new(),
         mouse_mode_remainder: String::new(),
     }));
@@ -986,30 +995,27 @@ fn spawn_connection_reader(
 }
 
 fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let start = Instant::now();
-        loop {
-            thread::sleep(Duration::from_millis(1000));
-            if shutdown.load(Ordering::SeqCst) {
-                break;
-            }
-            let now_ms = start.elapsed().as_millis() as i64;
-            let mut s = state.lock().unwrap();
-            if s.exited {
-                break;
-            }
-            let fp = s.fingerprint();
-            if let Some(transition) = s.idle_detector.update(&fp, now_ms) {
-                s.apply_attention(
-                    AttentionPayload {
-                        needs_attention: transition.needs_attention,
-                        reason: transition.reason,
-                        attention_matched_at: None,
-                    },
-                    AttentionSource::Detector,
-                    &fp,
-                );
-            }
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(1000));
+        if shutdown.load(Ordering::SeqCst) {
+            break;
+        }
+        let mut s = state.lock().unwrap();
+        if s.exited {
+            break;
+        }
+        let now_ms = s.started_at.elapsed().as_millis() as i64;
+        let fp = s.fingerprint();
+        if let Some(transition) = s.idle_detector.update(&fp, now_ms) {
+            s.apply_attention(
+                AttentionPayload {
+                    needs_attention: transition.needs_attention,
+                    reason: transition.reason,
+                    attention_matched_at: None,
+                },
+                AttentionSource::Detector,
+                &fp,
+            );
         }
     })
 }

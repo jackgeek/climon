@@ -377,3 +377,98 @@ fn input_clears_attention_via_three_state_patch() {
     let _ = host.join();
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
+    let _guard = serial().lock().unwrap_or_else(|e| e.into_inner());
+    let home = scratch_home("ack-sticky");
+    std::env::set_var("CLIMON_HOME", &home);
+    // Flag attention quickly so the test stays short.
+    std::fs::write(
+        home.join("config.jsonc"),
+        "{ \"attention\": { \"idleSeconds\": 1 } }\n",
+    )
+    .unwrap();
+
+    let id = "mike-november-oscar";
+    let meta = base_meta(id, &home, vec!["sh".into(), "-c".into(), "sleep 10".into()]);
+    let socket_ref = meta.socket_path.clone();
+
+    let host_home = home.clone();
+    let host = thread::spawn(move || {
+        std::env::set_var("CLIMON_HOME", &host_home);
+        run_session_host(id, meta, SessionHostOptions { headless: true }).unwrap()
+    });
+
+    wait_for_session_socket(&socket_ref, Duration::from_secs(3)).expect("socket up");
+    let mut stream = connect_session_socket(&socket_ref).expect("connect");
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+
+    let env = Env::with_home(&home);
+
+    // Wait for the detector to flag needs-attention.
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut token: Option<String> = None;
+    while Instant::now() < deadline {
+        let m = read_session_meta(&env, id).unwrap().unwrap();
+        if m.status == SessionStatus::NeedsAttention {
+            token = m.attention_matched_at.clone();
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let token = token.expect("detector flagged needs-attention");
+
+    // Acknowledge it (screen is unchanged, so it transitions to Acknowledged).
+    let ack = encode_json_frame(
+        FrameType::Attention,
+        &climon_proto::frame::AttentionPayload {
+            needs_attention: false,
+            reason: None,
+            attention_matched_at: Some(token),
+        },
+    );
+    stream.write_all(&ack).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut acknowledged = false;
+    while Instant::now() < deadline {
+        if read_session_meta(&env, id).unwrap().unwrap().status == SessionStatus::Acknowledged {
+            acknowledged = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(acknowledged, "session reached Acknowledged");
+
+    // A host resize changes the screen dimensions but not the (empty) body.
+    let resize = encode_json_frame(
+        FrameType::Resize,
+        &ResizePayload {
+            cols: 100,
+            rows: 30,
+            source: Some(ResizeSource::Host),
+            mode: None,
+        },
+    );
+    stream.write_all(&resize).unwrap();
+
+    // Across several idle windows the session must neither revert to Running nor
+    // re-flag needs-attention while its screen stays idle.
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        let status = read_session_meta(&env, id).unwrap().unwrap().status;
+        assert_eq!(
+            status,
+            SessionStatus::Acknowledged,
+            "acknowledged session must stay acknowledged while idle"
+        );
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    drop(stream);
+    let _ = host.join();
+    let _ = std::fs::remove_dir_all(&home);
+}

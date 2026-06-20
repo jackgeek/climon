@@ -15,6 +15,17 @@ pub fn fingerprint_dimensions(fp: &str) -> Option<&str> {
     }
 }
 
+/// Returns the body of a fingerprint — everything after the `{cols}x{rows}`
+/// dimension header. When the fingerprint has no dimension header (legacy
+/// format) the whole string is the body. Used to compare screen content while
+/// ignoring dimension-only differences (a resize is not program activity).
+pub fn fingerprint_body(fp: &str) -> &str {
+    match fp.find('\n') {
+        Some(nl) if fp[..nl].contains('x') => &fp[nl + 1..],
+        _ => fp,
+    }
+}
+
 /// Decides whether a user (browser) attention acknowledgement should clear the
 /// current outstanding attention. The acknowledgement is accepted only when it
 /// references the current outstanding attention token *and* the screen has not
