@@ -54,6 +54,8 @@ export interface CreateSessionBody {
   name?: string;
   priority?: number;
   color?: SessionColorMode | null;
+  /** When true, spawn the session headless (no GUI window). Default false (visible). */
+  headless?: boolean;
 }
 
 export async function fetchSessions(): Promise<SessionMeta[]> {
@@ -82,7 +84,7 @@ export async function createSession(body: CreateSessionBody): Promise<CreateSess
       const text = await res.text();
       return { ok: false, error: text || `Failed (${res.status})` };
     }
-    const data = (await res.json()) as { id?: string };
+    const data = (await res.json().catch(() => ({}))) as { id?: string };
     return { ok: true, id: data.id };
   } catch {
     return { ok: false, error: "Network error." };
