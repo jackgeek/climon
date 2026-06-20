@@ -15,7 +15,8 @@ describe("fetchHealth", () => {
           JSON.stringify({
             version: "1.2.3",
             remotesEnabled: true,
-            features: { sessionSpawning: { enabled: true, locked: false, status: "experimental" } }
+            features: { sessionSpawning: { enabled: true, locked: false, status: "experimental" } },
+            shortcuts: { focusTopSession: "Ctrl+Shift+J" }
           }),
           { headers: { "content-type": "application/json" } }
         ),
@@ -25,7 +26,8 @@ describe("fetchHealth", () => {
     await expect(fetchHealth()).resolves.toEqual({
       version: "1.2.3",
       remotesEnabled: true,
-      features: { sessionSpawning: { enabled: true, locked: false, status: "experimental" } }
+      features: { sessionSpawning: { enabled: true, locked: false, status: "experimental" } },
+      focusTopSessionShortcut: "Ctrl+Shift+J"
     });
   });
 
@@ -41,7 +43,8 @@ describe("fetchHealth", () => {
     await expect(fetchHealth()).resolves.toEqual({
       version: "1.2.3",
       remotesEnabled: false,
-      features: {}
+      features: {},
+      focusTopSessionShortcut: "Alt+T"
     });
   });
 });
