@@ -128,6 +128,43 @@ describe("config migration", () => {
     await rm(home, { recursive: true, force: true });
   });
 
+  test("loadConfig backfills missing hotKeys.focusTopSession to Alt+T", async () => {
+    const home = await makeTestHome("climon-hotkeys-default-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, setTitle: true },
+        attention: { idleSeconds: 10 }
+      })
+    );
+    const config = await loadConfig(env);
+    expect(config.hotKeys.focusTopSession).toBe("Alt+T");
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("loadConfig preserves a custom hotKeys.focusTopSession value", async () => {
+    const home = await makeTestHome("climon-hotkeys-custom-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: true, setTitle: true },
+        attention: { idleSeconds: 10 },
+        hotKeys: { focusTopSession: "Ctrl+Shift+J" }
+      })
+    );
+    const config = await loadConfig(env);
+    expect(config.hotKeys.focusTopSession).toBe("Ctrl+Shift+J");
+    await rm(home, { recursive: true, force: true });
+  });
+
   test("loadConfig backfills invalid session.color to auto", async () => {
     const home = await makeTestHome("climon-color-invalid-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
