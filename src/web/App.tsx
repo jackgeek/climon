@@ -869,11 +869,29 @@ export function App() {
         if (serverConnectionStateRef.current === "reconnecting") {
           armReconnectOverlay();
         }
+        // A backgrounded tab can leave the xterm renderer with a stale GPU/canvas
+        // frame, so the terminal looks corrupted until something forces a repaint
+        // (scrolling or clicking already fixes it). Always repaint on return.
+        // On desktop also focus the terminal so the user can type immediately;
+        // skip focusing on mobile so we don't summon the soft keyboard on a mere
+        // tab-switch. Deferred a frame so the browser can restore the rendering
+        // context first, matching the focus pattern used elsewhere in this component.
+        requestAnimationFrame(() => {
+          const term = terminalRef.current;
+          if (!term) {
+            return;
+          }
+          if (isMobile) {
+            term.refresh();
+          } else {
+            term.focus();
+          }
+        });
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [armReconnectOverlay]);
+  }, [armReconnectOverlay, isMobile]);
 
   // The terminal panel is a flex child that shrinks the terminal pane when
   // shown. xterm does not reflow to the smaller pane on its own, so refit it

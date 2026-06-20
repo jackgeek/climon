@@ -203,3 +203,34 @@ describe("scheduleTerminalRefit", () => {
     expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "running" }))).toBe(false);
   });
 });
+
+describe("tab refocus terminal refresh", () => {
+  test("repaints on refocus and focuses only on desktop", () => {
+    const source = readFileSync("src/web/App.tsx", "utf8");
+
+    const onVisibilityStart = source.indexOf("const onVisibility = ");
+    expect(onVisibilityStart).toBeGreaterThan(-1);
+    const onVisibilityEnd = source.indexOf("document.addEventListener(\"visibilitychange\"", onVisibilityStart);
+    expect(onVisibilityEnd).toBeGreaterThan(onVisibilityStart);
+    const onVisibilityBody = source.slice(onVisibilityStart, onVisibilityEnd);
+
+    // Marks the visible branch.
+    expect(onVisibilityBody).toContain("becameVisibleAtRef.current = Date.now();");
+
+    // Repaint without focus on mobile (no soft keyboard); focus on desktop.
+    // Assert branch ORDER so a `!isMobile` inversion (focus on mobile) is caught:
+    // the mobile `if (isMobile)` branch with term.refresh() must come before the
+    // desktop `else` branch with term.focus().
+    const ifMobileIdx = onVisibilityBody.indexOf("if (isMobile) {");
+    const refreshIdx = onVisibilityBody.indexOf("term.refresh();");
+    const elseIdx = onVisibilityBody.indexOf("} else {", ifMobileIdx);
+    const focusIdx = onVisibilityBody.indexOf("term.focus();");
+    expect(ifMobileIdx).toBeGreaterThan(-1);
+    expect(refreshIdx).toBeGreaterThan(ifMobileIdx);
+    expect(elseIdx).toBeGreaterThan(refreshIdx);
+    expect(focusIdx).toBeGreaterThan(elseIdx);
+
+    // The handler reads isMobile, so it must be a dependency of the effect.
+    expect(source).toContain("}, [armReconnectOverlay, isMobile]);");
+  });
+});

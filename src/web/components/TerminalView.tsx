@@ -225,6 +225,7 @@ export function loadTerminalAddons(
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
   refit: () => void;
+  refresh: () => void;
   sendInput: (data: string) => void;
   setViewMode: (mode: TerminalResizeMode) => void;
   acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
@@ -800,6 +801,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       return term ? { cols: term.cols, rows: term.rows } : null;
     },
     refit,
+    refresh: () => refreshTerminalRender(termRef.current),
     sendInput: (data: string) => {
       const liveSession = selectedSessionRef.current;
       if (liveSession && isLiveStatus(liveSession.status)) {
