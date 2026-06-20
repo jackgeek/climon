@@ -28,7 +28,8 @@
     "level": "trace"
   },
   "feature": {
-    "sessionSpawning": "disabled"
+    "sessionSpawning": "disabled",
+    "remoteSpawn": "disabled"
   },
   "eula": {
     "accepted": false

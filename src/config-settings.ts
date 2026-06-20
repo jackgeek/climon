@@ -184,6 +184,15 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "remote.spawnSecret",
+    type: "string",
+    purpose:
+      "Shared HMAC secret authenticating dashboard→devbox spawn commands. Generated automatically on the dashboard host when feature.remoteSpawn is enabled, and planted on the devbox by the remotes-screen setup script. Keep it secret.",
+    scope: ["client", "server"],
+    acceptInput: true,
+    sensitive: true
+  },
+  {
     path: "remote.keepAlive",
     type: "number",
     defaultValue: 60,

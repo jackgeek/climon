@@ -86,6 +86,12 @@
     the machine hostname when unset; set it to a value that is unique per host to avoid
     session ID collisions across machines.
 
+  remote.spawnSecret
+    Type: string; Default: unset; Scope: client, server; sensitive
+    Shared HMAC secret authenticating dashboard→devbox spawn commands. Generated
+    automatically on the dashboard host when feature.remoteSpawn is enabled, and planted
+    on the devbox by the remotes-screen setup script. Keep it secret.
+
   remote.keepAlive
     Type: number; Default: 60; Scope: client
     Interval in seconds between mux keepalive pings sent over the remote uplink/ingest
@@ -150,6 +156,12 @@
     Type: string; Default: disabled; Scope: client, daemon, server, browser
     Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled".
     [status: experimental]
+
+  feature.remoteSpawn
+    Type: string; Default: disabled; Scope: client, daemon, server, browser
+    Allow the dashboard to spawn sessions on remote devboxes over a signed,
+    replay-protected mux command channel. Set to "enabled" or "disabled". [status:
+    experimental]
 
   eula.accepted
     Type: boolean; Default: false; Scope: client; internal
