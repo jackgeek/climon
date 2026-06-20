@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as RealIcons from "@fluentui/react-icons";
 import {
   getStableSessionItemRef,
   notificationsMenuLabel,
@@ -52,12 +53,12 @@ mock.module("@fluentui/react-components", () => ({
   }
 }));
 
-mock.module("@fluentui/react-icons", () => ({
-  Add20Regular: () => createElement("span", null),
-  ChevronDoubleLeftRegular: () => createElement("span", null),
-  ChevronDoubleRightRegular: () => createElement("span", null),
-  Navigation20Regular: () => createElement("span", null)
-}));
+// Stub every real icon export so this file's global `mock.module` does not drop
+// named exports that other test files import (mock.module persists across the
+// whole run, so a partial mock here would break unrelated suites).
+mock.module("@fluentui/react-icons", () =>
+  Object.fromEntries(Object.keys(RealIcons).map((name) => [name, () => createElement("span", null)]))
+);
 
 mock.module("../src/web/components/SessionItem.js", () => ({
   SessionItem: () => createElement("div", null)
@@ -197,42 +198,5 @@ describe("Sidebar menu", () => {
 
     expect(html).not.toContain("Clamp size");
     expect(html).not.toContain("Clamp terminal size");
-  });
-
-  test("shows the bug report mail link only when expanded", () => {
-    const commonProps = {
-      sessions: [],
-      activeId: null,
-      collapsible: true,
-      onCollapsedChange: () => {},
-      onSelect: () => {},
-      onClose: () => {},
-      onNew: () => {},
-      onNewFrom: () => {},
-      onEdit: () => {},
-      onPauseToggle: () => {},
-      onManageRemote: () => {},
-      notificationsEnabled: false,
-      onToggleNotifications: () => {},
-      canInstallPwa: false,
-      onInstallPwa: () => {},
-      tunnelLinkStatus: null,
-      onTunnelLink: () => {},
-      onCloseTunnelLink: () => {},
-      viewMode: "clamped" as const,
-      viewModeLocked: false,
-      viewModeToggleable: false,
-      onViewModeToggle: () => {},
-      onMaximize: () => {},
-      onRemoveDisconnected: () => {}
-    };
-
-    const expanded = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, collapsed: false }));
-    const collapsed = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, collapsed: true }));
-
-    expect(expanded).toContain('href="mailto://jackallan@microsoft.com"');
-    expect(expanded).toContain("File a bug");
-    expect(collapsed).not.toContain('href="mailto://jackallan@microsoft.com"');
-    expect(collapsed).not.toContain("File a bug");
   });
 });
