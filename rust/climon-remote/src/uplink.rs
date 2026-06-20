@@ -868,6 +868,9 @@ mod tests {
             ControlMessage::SessionRemoved { .. } => "session-removed",
             ControlMessage::Attach { .. } => "attach",
             ControlMessage::Detach { .. } => "detach",
+            ControlMessage::Spawn { .. } => "spawn",
+            ControlMessage::SpawnResult { .. } => "spawn-result",
+            ControlMessage::Signed { .. } => "signed",
             ControlMessage::Ping => "ping",
             ControlMessage::Pong => "pong",
         }

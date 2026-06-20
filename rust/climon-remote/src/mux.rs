@@ -53,6 +53,37 @@ pub enum ControlMessage {
     Detach {
         id: String,
     },
+    #[serde(rename_all = "camelCase")]
+    Spawn {
+        request_id: String,
+        command: Vec<String>,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        priority: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        color: Option<String>,
+        headless: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    SpawnResult {
+        request_id: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        warning: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        error: Option<String>,
+    },
+    Signed {
+        payload: String,
+        nonce: String,
+        ts: i64,
+        sig: String,
+    },
     Ping,
     Pong,
 }
@@ -367,6 +398,67 @@ mod tests {
                 MuxMessage::Control(ControlMessage::Attach { id: "s1".into() }),
                 MuxMessage::Control(ControlMessage::Detach { id: "s1".into() }),
             ]
+        );
+    }
+
+    #[test]
+    fn encodes_and_decodes_spawn_and_result_and_signed() {
+        let mut decoder = MuxDecoder::new();
+        let spawn = ControlMessage::Spawn {
+            request_id: "r1".into(),
+            command: vec!["bash".into(), "-lc".into(), "top".into()],
+            cwd: "/home/me".into(),
+            cols: 80,
+            rows: 24,
+            name: Some("build".into()),
+            priority: Some(5),
+            color: Some("red".into()),
+            headless: false,
+        };
+        let result = ControlMessage::SpawnResult {
+            request_id: "r1".into(),
+            id: Some("dev~abc".into()),
+            warning: None,
+            error: None,
+        };
+        let signed = ControlMessage::Signed {
+            payload: "{\"kind\":\"ping\"}".into(),
+            nonce: "deadbeef".into(),
+            ts: 1718900000000,
+            sig: "abc123".into(),
+        };
+        let mut buf = encode_control(&spawn);
+        buf.extend_from_slice(&encode_control(&result));
+        buf.extend_from_slice(&encode_control(&signed));
+        let out = decoder.push(&buf).unwrap();
+        assert_eq!(
+            out,
+            vec![
+                MuxMessage::Control(spawn),
+                MuxMessage::Control(result),
+                MuxMessage::Control(signed),
+            ]
+        );
+    }
+
+    #[test]
+    fn spawn_json_uses_kebab_kind_and_camel_fields() {
+        let frame = encode_control(&ControlMessage::SpawnResult {
+            request_id: "r1".into(),
+            id: Some("x".into()),
+            warning: None,
+            error: None,
+        });
+        assert_eq!(&frame[5..], br#"{"kind":"spawn-result","requestId":"r1","id":"x"}"#);
+        let frame = encode_control(&ControlMessage::Signed {
+            payload: "{}".into(),
+            nonce: "n".into(),
+            ts: 7,
+            sig: "s".into(),
+        });
+        assert_eq!(
+            &frame[5..],
+            br#"{"kind":"signed","payload":"{}","nonce":"n","ts":7,"sig":"s"}"#
         );
     }
 
