@@ -10,3 +10,16 @@ accepted = [
     "Zlib",
     "CDLA-Permissive-2.0",
 ]
+
+# miniz_oxide ships several MIT license files (`LICENSE` and `LICENSE-MIT.md`)
+# whose blank-line layout differs. cargo-about's automatic file pick depends on
+# the filesystem's directory iteration order, so it selects `LICENSE-MIT.md` on
+# macOS (APFS) but `LICENSE` on Linux (ext4), and the generated NOTICES drift
+# between local regeneration and the Linux CI check. Pin the exact file so the
+# output is deterministic across platforms.
+[miniz_oxide.clarify]
+license = "MIT"
+
+[[miniz_oxide.clarify.files]]
+path = "LICENSE-MIT.md"
+checksum = "799e9ca9d179295ef372f25d3769cdda7d25bb2668add6a6a1e22d1e4c678b8d"
