@@ -173,7 +173,7 @@ export async function fetchHealth(): Promise<{
   try {
     const res = await fetch(withQuery("/health"));
     if (!res.ok) {
-      return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+T" };
+      return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+G" };
     }
     const data = (await res.json()) as {
       version?: string;
@@ -182,7 +182,7 @@ export async function fetchHealth(): Promise<{
       shortcuts?: { focusTopSession?: string };
     };
     const focusTopSessionShortcut =
-      typeof data.shortcuts?.focusTopSession === "string" ? data.shortcuts.focusTopSession : "Alt+T";
+      typeof data.shortcuts?.focusTopSession === "string" ? data.shortcuts.focusTopSession : "Alt+G";
     return {
       version: typeof data.version === "string" ? data.version : null,
       remotesEnabled: data.remotesEnabled === true,
@@ -190,7 +190,7 @@ export async function fetchHealth(): Promise<{
       focusTopSessionShortcut
     };
   } catch {
-    return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+T" };
+    return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+G" };
   }
 }
 

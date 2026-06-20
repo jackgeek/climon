@@ -564,7 +564,7 @@ pub fn load_config(env: &Env) -> Result<Value, String> {
                 .map(|v| v.is_string())
                 .unwrap_or(false)
             {
-                hotkeys.insert("focusTopSession".to_string(), Value::from("Alt+T"));
+                hotkeys.insert("focusTopSession".to_string(), Value::from("Alt+G"));
             }
         }
 
@@ -822,7 +822,7 @@ mod tests {
         assert_eq!(cfg["terminal"]["clampBrowserToHost"], json!(false));
         assert_eq!(cfg["terminal"]["setTitle"], json!(true));
         assert_eq!(cfg["terminal"]["detachPrefix"], json!(0x1c));
-        assert_eq!(cfg["hotKeys"]["focusTopSession"], json!("Alt+T"));
+        assert_eq!(cfg["hotKeys"]["focusTopSession"], json!("Alt+G"));
         assert_eq!(cfg["session"]["color"], json!("auto"));
     }
 
@@ -1115,7 +1115,7 @@ mod tests {
             json!({ "version": 1, "server": { "host": "127.0.0.1", "port": 3131 } }),
         );
         let cfg = load_config(&env).unwrap();
-        assert_eq!(cfg["hotKeys"]["focusTopSession"], json!("Alt+T"));
+        assert_eq!(cfg["hotKeys"]["focusTopSession"], json!("Alt+G"));
 
         let t2 = TempDir::new("customhotkeys");
         let ch2 = t2.path().join("ch");

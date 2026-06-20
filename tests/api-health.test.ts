@@ -44,7 +44,7 @@ describe("fetchHealth", () => {
       version: "1.2.3",
       remotesEnabled: false,
       features: {},
-      focusTopSessionShortcut: "Alt+T"
+      focusTopSessionShortcut: "Alt+G"
     });
   });
 });

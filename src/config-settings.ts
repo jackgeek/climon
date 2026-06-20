@@ -95,7 +95,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "hotKeys.focusTopSession",
     type: "string",
-    defaultValue: "Alt+T",
+    defaultValue: "Alt+G",
     purpose:
       'Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is "Mod+...+Key" (e.g. "Alt+T", "Ctrl+Shift+J"). Set to an empty string to disable.',
     scope: ["server", "browser"],
