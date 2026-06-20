@@ -117,40 +117,43 @@ fn v_focus_top_session(_p: &str, v: &Value) -> Result<(), String> {
     let s = v
         .as_str()
         .ok_or("hotKeys.focusTopSession must be a string")?;
-    if s.is_empty() || parse_shortcut_ok(s) {
-        Ok(())
-    } else {
-        Err(
+    if s.is_empty() {
+        return Ok(());
+    }
+    match parse_shortcut_key(s) {
+        Some(key) if !key.chars().any(char::is_whitespace) => Ok(()),
+        _ => Err(
             "hotKeys.focusTopSession must be empty or a shortcut like \"Alt+T\" or \"Ctrl+Shift+J\""
                 .into(),
-        )
+        ),
     }
 }
 
-/// Mirrors the TS `parseShortcut`: true when `input` is a valid `Mod+...+Key`
-/// shortcut (exactly one non-modifier key token).
-fn parse_shortcut_ok(input: &str) -> bool {
+/// Mirrors the TS `parseShortcut`: returns the lowercased non-modifier key when
+/// `input` is a valid `Mod+...+Key` shortcut (exactly one non-modifier token),
+/// else `None`.
+fn parse_shortcut_key(input: &str) -> Option<String> {
     let tokens: Vec<&str> = input
         .split('+')
         .map(|t| t.trim())
         .filter(|t| !t.is_empty())
         .collect();
     if tokens.is_empty() {
-        return false;
+        return None;
     }
-    let mut have_key = false;
+    let mut key: Option<String> = None;
     for token in tokens {
         match token.to_ascii_lowercase().as_str() {
             "ctrl" | "control" | "alt" | "option" | "shift" | "meta" | "cmd" | "command" => {}
             _ => {
-                if have_key {
-                    return false;
+                if key.is_some() {
+                    return None; // more than one non-modifier key
                 }
-                have_key = true;
+                key = Some(token.to_ascii_lowercase());
             }
         }
     }
-    have_key
+    key
 }
 
 fn v_remote_port(_p: &str, v: &Value) -> Result<(), String> {
@@ -947,6 +950,22 @@ mod tests {
         assert!(coerce_config_value_from_settings("remote.port", "0")
             .unwrap_err()
             .contains("positive integer"));
+    }
+
+    #[test]
+    fn focus_top_session_validation() {
+        let setting = find_config_setting("hotKeys.focusTopSession").unwrap();
+        let validate = setting.validate.expect("validator present");
+        assert!(validate("hotKeys.focusTopSession", &Value::from("")).is_ok());
+        assert!(validate("hotKeys.focusTopSession", &Value::from("Alt+T")).is_ok());
+        assert!(validate("hotKeys.focusTopSession", &Value::from("Ctrl+Shift+J")).is_ok());
+        // No non-modifier key.
+        assert!(validate("hotKeys.focusTopSession", &Value::from("Alt+Ctrl")).is_err());
+        // Key token contains internal whitespace (matches Bun's /\s/ rejection).
+        assert!(validate("hotKeys.focusTopSession", &Value::from("Hyper Nonsense")).is_err());
+        assert!(validate("hotKeys.focusTopSession", &Value::from("Alt+Page Down")).is_err());
+        // Non-string.
+        assert!(validate("hotKeys.focusTopSession", &Value::from(42)).is_err());
     }
 
     #[test]
