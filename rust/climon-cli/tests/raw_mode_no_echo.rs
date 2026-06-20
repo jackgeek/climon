@@ -31,10 +31,8 @@ fn temp_home() -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!(
-        "climon-cli-rawmode-{}-{nanos}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("climon-cli-rawmode-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(dir.join("sessions")).unwrap();
     dir
 }
@@ -98,11 +96,9 @@ fn local_terminal_does_not_echo_child_color_query_reply() {
                 libc::close(slave);
             }
             libc::close(master);
-            let mut argv_ptrs: Vec<*const libc::c_char> =
-                argv.iter().map(|c| c.as_ptr()).collect();
+            let mut argv_ptrs: Vec<*const libc::c_char> = argv.iter().map(|c| c.as_ptr()).collect();
             argv_ptrs.push(std::ptr::null());
-            let mut envp_ptrs: Vec<*const libc::c_char> =
-                envp.iter().map(|c| c.as_ptr()).collect();
+            let mut envp_ptrs: Vec<*const libc::c_char> = envp.iter().map(|c| c.as_ptr()).collect();
             envp_ptrs.push(std::ptr::null());
             libc::execve(argv_ptrs[0], argv_ptrs.as_ptr(), envp_ptrs.as_ptr());
             libc::_exit(127);
@@ -188,9 +184,7 @@ fn local_terminal_does_not_echo_child_color_query_reply() {
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn count(haystack: &[u8], needle: &[u8]) -> usize {
