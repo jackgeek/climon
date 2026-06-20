@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DASHBOARD_IDLE_TIMEOUT_SECONDS,
   buildRunArgs,
+  buildSpawnArgs,
   resolveParentSpawnColor,
   resolveParentSpawnCwd
 } from "../src/server/server.js";
@@ -9,6 +10,32 @@ import type { SpawnMetaOptions } from "../src/server/server.js";
 
 const unresolvedSpawnMeta: SpawnMetaOptions = { color: "auto" };
 void unresolvedSpawnMeta;
+
+describe("buildSpawnArgs", () => {
+  test("headless with metadata flags", () => {
+    expect(buildSpawnArgs(["npm", "test"], {
+      headless: true, cwd: "/work", cols: 100, rows: 30,
+      meta: { name: "ci", priority: 800, color: "red" }
+    })).toEqual([
+      "__spawn", "--headless", "--cwd", "/work", "--cols", "100", "--rows", "30",
+      "--priority", "800", "--color", "red", "--name", "ci", "npm", "test"
+    ]);
+  });
+
+  test("visible omits --headless", () => {
+    expect(buildSpawnArgs(["bash"], {
+      headless: false, cwd: "/w", cols: 80, rows: 24, meta: {}
+    })).toEqual(["__spawn", "--cwd", "/w", "--cols", "80", "--rows", "24", "bash"]);
+  });
+
+  test("emits --color none to clear an inherited color", () => {
+    expect(buildSpawnArgs(["bash"], {
+      headless: true, cwd: "/w", cols: 80, rows: 24, meta: { color: null }
+    })).toEqual([
+      "__spawn", "--headless", "--cwd", "/w", "--cols", "80", "--rows", "24", "--color", "none", "bash"
+    ]);
+  });
+});
 
 describe("buildRunArgs", () => {
   test("adds no metadata flags when none provided", () => {

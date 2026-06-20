@@ -11,5 +11,8 @@ portable-pty = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [target.'cfg(unix)'.dev-dependencies]
 libc = { workspace = true }

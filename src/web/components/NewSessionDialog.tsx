@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -44,6 +45,7 @@ interface CreateSessionBodyInput {
   name: string;
   priority: number;
   color: CreateSessionBody["color"];
+  headless?: boolean;
 }
 
 export function buildCreateSessionBody(input: CreateSessionBodyInput): CreateSessionBody {
@@ -55,7 +57,8 @@ export function buildCreateSessionBody(input: CreateSessionBodyInput): CreateSes
     parentId: input.parentId,
     name: input.name.trim() || undefined,
     priority: input.priority,
-    color: input.color
+    color: input.color,
+    headless: input.headless
   };
 }
 
@@ -66,6 +69,7 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [fields, setFields] = useState<MetaFieldsValue>({ name: "", priority: "500", color: "auto" });
+  const [headless, setHeadless] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -78,6 +82,7 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
       });
       setError("");
       setBusy(false);
+      setHeadless(false);
     }
   }, [open, parent]);
 
@@ -107,7 +112,8 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
       parentId: parent?.id,
       name: fields.name,
       priority: priorityNum,
-      color: fields.color
+      color: fields.color,
+      headless
     }));
     if (!result.ok) {
       setError(result.error || "Failed to create session.");
@@ -169,6 +175,12 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
               namePlaceholder="Defaults to the command"
               onEnter={() => void submit()}
               includeAuto
+            />
+            <Checkbox
+              label="Headless (run in the background, no window)"
+              checked={headless}
+              onChange={(_, data) => setHeadless(data.checked === true)}
+              style={{ marginTop: "12px" }}
             />
             <Text className={styles.error} style={{ display: "block", marginTop: "12px" }}>
               {error}

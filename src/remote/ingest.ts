@@ -1,3 +1,14 @@
+/**
+ * ⚠️ LEGACY TypeScript client — frozen. Fix the Rust client instead.
+ *
+ * The shipping `climon` *client* is the Rust workspace under `rust/` (crates
+ * `climon-cli`, `climon-session`, `climon-pty`, `climon-store`, `climon-config`,
+ * `climon-remote`, `climon-install`, `climon-update`, …). This module belongs to
+ * the legacy Bun/TypeScript client, kept only for local development and the Bun
+ * test suite. Do NOT add features or fix client bugs here — make all client
+ * changes in the Rust crates. (The Bun dashboard *server* under `src/server*`
+ * and `src/web/` is NOT legacy and is still maintained.)
+ */
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, rmSync, watch, type FSWatcher } from "node:fs";
@@ -8,6 +19,7 @@ import { getClimonHome, getRemoteHostPath, getSessionsDir, resolveConfigSetting,
 import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
+import { ReplayGuard, verifySignedControl, signNow, DEFAULT_FRESHNESS_WINDOW_MS } from "./spawn-auth.js";
 import { acquireSingletonDetailed } from "./singleton.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { cleanupSessionSocket, formatSessionSocketRef, listenOnSessionSocket } from "../session-socket.js";
@@ -138,11 +150,98 @@ interface RemoteSession {
  * Tracks active connections per clientId to prevent races on reconnect,
  * and dismissed sessions that should not be re-materialized.
  */
+/** Outcome of a remote spawn round-trip, correlated by requestId. */
+export interface RemoteSpawnResult {
+  requestId: string;
+  id?: string;
+  warning?: string;
+  error?: string;
+}
+
+/** A spawn request received on the loopback control socket. */
+export interface SpawnControlRequest {
+  type: "spawn";
+  requestId: string;
+  clientId: string;
+  command: string[];
+  cwd: string;
+  cols: number;
+  rows: number;
+  name?: string;
+  priority?: number;
+  color?: string;
+  headless: boolean;
+}
+
+/** A spawn response written back on the control socket. */
+export interface SpawnControlResponse {
+  type: "spawn-result";
+  requestId: string;
+  id?: string;
+  warning?: string;
+  error?: string;
+}
+
+export interface SpawnControlDeps {
+  registry: IngestConnectionRegistry;
+  spawnSecret: string | undefined;
+  timeoutMs: number;
+}
+
+/** Default time the ingest waits for a devbox SpawnResult. */
+export const DEFAULT_SPAWN_TIMEOUT_MS = 10_000;
+
+/**
+ * Signs and forwards a Spawn to the target devbox, awaiting the correlated
+ * SpawnResult. Pure with respect to I/O: all socket access goes through the
+ * registry's channel + pending-spawn correlation, so it is unit-testable.
+ */
+export async function handleSpawnControlRequest(
+  req: SpawnControlRequest,
+  deps: SpawnControlDeps
+): Promise<SpawnControlResponse> {
+  if (!deps.spawnSecret) {
+    return { type: "spawn-result", requestId: req.requestId, error: "remote spawn not configured" };
+  }
+  const channel = deps.registry.getChannel(req.clientId);
+  if (!channel || channel.destroyed) {
+    return { type: "spawn-result", requestId: req.requestId, error: "client not connected" };
+  }
+  const pending = deps.registry.registerPendingSpawn(req.requestId, deps.timeoutMs);
+  const signed = signNow(
+    deps.spawnSecret,
+    {
+      kind: "spawn",
+      requestId: req.requestId,
+      command: req.command,
+      cwd: req.cwd,
+      cols: req.cols,
+      rows: req.rows,
+      name: req.name,
+      priority: req.priority,
+      color: req.color,
+      headless: req.headless
+    },
+    Date.now()
+  );
+  channel.write(encodeControl(signed));
+  const result = await pending;
+  return {
+    type: "spawn-result",
+    requestId: result.requestId,
+    id: result.id,
+    warning: result.warning,
+    error: result.error
+  };
+}
+
 export class IngestConnectionRegistry {
   /** Active connection per clientId — new hellos evict the previous. */
   private active = new Map<string, { channel: Socket; teardown: Promise<void>; resolve: () => void }>();
   /** Sessions explicitly removed by the user (localId set). Cleared on daemon restart. */
   private dismissed = new Set<string>();
+  /** In-flight remote spawns keyed by requestId. */
+  private pendingSpawns = new Map<string, { resolve: (r: RemoteSpawnResult) => void; timer: ReturnType<typeof setTimeout> }>();
 
   /** Returns true if the session has been dismissed and should not be re-materialized. */
   isDismissed(localId: string): boolean {
@@ -184,6 +283,35 @@ export class IngestConnectionRegistry {
       this.active.delete(clientId);
     }
   }
+
+  /** Returns the live channel for a clientId, or undefined if none is active. */
+  getChannel(clientId: string): Socket | undefined {
+    return this.active.get(clientId)?.channel;
+  }
+
+  /**
+   * Registers an in-flight spawn and resolves when resolvePendingSpawn is called
+   * with the same requestId, or after timeoutMs with `{ error: "timeout" }`.
+   */
+  registerPendingSpawn(requestId: string, timeoutMs: number): Promise<RemoteSpawnResult> {
+    return new Promise<RemoteSpawnResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingSpawns.delete(requestId);
+        resolve({ requestId, error: "timeout" });
+      }, timeoutMs);
+      timer.unref?.();
+      this.pendingSpawns.set(requestId, { resolve, timer });
+    });
+  }
+
+  /** Resolves the in-flight spawn for requestId, if any. No-op otherwise. */
+  resolvePendingSpawn(requestId: string, result: RemoteSpawnResult): void {
+    const pending = this.pendingSpawns.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingSpawns.delete(requestId);
+    pending.resolve(result);
+  }
 }
 
 export interface IngestConnOptions {
@@ -191,6 +319,8 @@ export interface IngestConnOptions {
   maxSessions?: number;
   keepAliveSeconds?: number;
   registry?: IngestConnectionRegistry;
+  /** When set, inbound SpawnResults must be signed with this secret. */
+  spawnSecret?: string;
 }
 
 /**
@@ -205,6 +335,8 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
   const registry = options.registry;
   const sessions = new Map<string, RemoteSession>();
   const decoder = new MuxDecoder();
+  const spawnSecret = options.spawnSecret;
+  const replayGuard = new ReplayGuard(DEFAULT_FRESHNESS_WINDOW_MS);
   let label: string | undefined;
   logMsg(log(), "debug", "ingest.inbound_connection", { host: channel.remoteAddress ?? "unknown", port: channel.remotePort ?? "?" });
   // Control frames are processed strictly in order via this FIFO chain. The
@@ -280,6 +412,27 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
   }
 
   async function handleControl(message: ControlMessage): Promise<void> {
+    if (message.kind === "signed") {
+      if (!spawnSecret) return; // not expecting signed traffic; ignore.
+      const verified = verifySignedControl(spawnSecret, message, replayGuard, Date.now());
+      if (!verified.ok) {
+        logMsg(log(), "warn", "ingest.signed_control_rejected", { reason: verified.reason, clientId: label ?? "unknown" });
+        return;
+      }
+      await handleControl(verified.message);
+      return;
+    }
+    if (message.kind === "spawn-result") {
+      if (registry) {
+        registry.resolvePendingSpawn(message.requestId, {
+          requestId: message.requestId,
+          id: message.id,
+          warning: message.warning,
+          error: message.error
+        });
+      }
+      return;
+    }
     if (message.kind === "hello") {
       if (!label && isValidRemoteId(message.clientId)) {
         label = message.clientId;
@@ -648,6 +801,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     requestWatcher?.stop();
     supervisor.stop();
     loopbackServer?.close();
+    controlServer.close();
     server.close();
     removeBeacons();
     process.exit(0);
@@ -708,6 +862,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
           // all existing connections end, but we resolve immediately because we
           // only need the listen fd released so spawned children won't inherit it.
           loopbackServer?.close();
+          controlServer.close();
           server.close(() => {/* drain complete */});
           // Give the event loop one tick to process the close
           setImmediate(resolve);
@@ -727,7 +882,54 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
   // awaits since listen(), so no inbound connection can hit the no-op
   // placeholder once the bound port is advertised via ingest.json.
   const registry = new IngestConnectionRegistry();
-  onConnection = (socket) => void runIngestConnection(socket, { env, keepAliveSeconds, registry });
+  onConnection = (socket) =>
+    void runIngestConnection(socket, {
+      env,
+      keepAliveSeconds,
+      registry,
+      spawnSecret: (() => {
+        const v = resolveConfigSetting("remote.spawnSecret", env);
+        return typeof v === "string" && v.length > 0 ? v : undefined;
+      })()
+    });
+
+  // Loopback-only control socket the dashboard server uses to request spawns.
+  const controlServer = createNetServer((conn) => {
+    let buf = "";
+    conn.on("data", (chunk: Buffer) => {
+      buf += chunk.toString("utf8");
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        let req: SpawnControlRequest;
+        try {
+          req = JSON.parse(line) as SpawnControlRequest;
+        } catch {
+          conn.write(JSON.stringify({ type: "spawn-result", requestId: "", error: "bad request" }) + "\n");
+          continue;
+        }
+        const spawnSecret = (() => {
+          const v = resolveConfigSetting("remote.spawnSecret", env);
+          return typeof v === "string" && v.length > 0 ? v : undefined;
+        })();
+        void handleSpawnControlRequest(req, { registry, spawnSecret, timeoutMs: DEFAULT_SPAWN_TIMEOUT_MS })
+          .then((res) => {
+            if (!conn.destroyed) conn.write(JSON.stringify(res) + "\n");
+          })
+          .catch(() => {
+            if (!conn.destroyed)
+              conn.write(
+                JSON.stringify({ type: "spawn-result", requestId: req.requestId, error: "internal error" }) + "\n"
+              );
+          });
+      }
+    });
+    conn.on("error", () => {});
+  });
+  controlServer.on("error", () => {});
+  const controlSocket = await listenOnSessionSocket(controlServer, formatSessionSocketRef("127.0.0.1", 0));
 
   // Watch the sessions directory for file deletions. When a remote session file
   // (matching the `<clientId>~<remoteId>.json` pattern) is removed externally
@@ -761,7 +963,7 @@ export async function runIngestDaemon(env: NodeJS.ProcessEnv = process.env): Pro
     dir: getClimonHome(env),
     onValid: () => void demoteAndExit()
   });
-  await writeIngestState({ pid: process.pid, port: ingestPort.port, host }, env);
+  await writeIngestState({ pid: process.pid, port: ingestPort.port, host, controlSocket }, env);
 
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

@@ -1,6 +1,6 @@
 {
   "name": "climon",
-  "version": "2.0.5",
+  "version": "2.0.10",
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
   "type": "module",
   "bin": {
@@ -19,7 +19,7 @@
     "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",
     "release": "bun scripts/release.ts",
-    "dev": "bun src/index.ts",
+    "dev": "bun scripts/dev.ts",
     "server": "bun src/server.ts server",
     "server:loop": "bun scripts/server-loop.ts",
     "start": "bun src/index.ts",

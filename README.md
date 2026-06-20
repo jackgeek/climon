@@ -7,9 +7,10 @@ interact with each one from the browser.
 
 ## Highlights
 
-- **No external dependencies.** Uses Bun's built-in PTY (`Bun.Terminal`) and
-  HTTP/WebSocket server. Runs natively on Linux, macOS, and Windows — on
-  Windows the PTY layer uses ConPTY via Bun's native terminal.
+- **No runtime dependencies.** The Rust client uses a native PTY layer
+  (`portable-pty`: openpty on Linux/macOS, ConPTY on Windows); the Bun dashboard
+  server uses Bun's built-in HTTP/WebSocket server. Runs natively on Linux,
+  macOS, and Windows.
 - **Sessions survive server restarts.** Each command runs under its own detached
   per-session daemon that owns the PTY. Restarting `climon server` never kills a
   session.
@@ -30,18 +31,42 @@ interact with each one from the browser.
   [Remote clients (dev tunnels)](#remote-clients-dev-tunnels), and
   [docs/security.md](docs/security.md).
 
+## Architecture at a glance
+
+climon ships as two binaries:
+
+- **Client (`climon`) — Rust.** The launcher/attach client, session host, PTY,
+  `run`/`ls`/`kill`, `config`, `setup`, `update`, the remote
+  `uplink`/`ingest`/`link` bridge, and the native installer are built from the
+  Rust workspace under [`rust/`](rust/). **All client development happens here.**
+- **Dashboard server (`climon-server`) — Bun.** The React + Fluent UI dashboard
+  and its REST/SSE/WebSocket APIs are built from `src/server.ts` (`src/server/`,
+  `src/web/`). This is still Bun and is actively maintained.
+
+> The rest of the TypeScript under `src/` (the old client: `src/index.ts`,
+> `src/launcher.ts`, `src/cli/`, `src/remote/`, `src/install/`, …) is the
+> **legacy client**, frozen and kept only for the Bun test suite. Don't fix
+> client bugs there — change the Rust crates instead. See
+> [docs/architecture.md](docs/architecture.md).
+
 ## Requirements
 
+- **Rust** toolchain (stable, edition 2021) to build the `climon` client from
+  [`rust/`](rust/) — `cargo build --release`.
 - [Bun](https://bun.sh) >= 1.3.0 on Linux/macOS, or >= 1.3.14 on Windows
-  (native ConPTY support is required).
+  (native ConPTY support is required) to build/run the dashboard **server** and
+  the legacy TypeScript test suite.
 
 ## Quick start
 
 ```bash
-bun run build:all            # bundle the client and the server
-bun link                     # make `climon` and `climon-server` available globally
+cargo build --release --manifest-path rust/Cargo.toml   # build the Rust `climon` client
+bun run build:server         # build the Bun dashboard server (`climon-server`)
 climon server                # terminal 1: start the dashboard
 ```
+
+> `bun run build:all` / `bun link` still build and link the **legacy** TS client
+> for the test suite, but the shipped `climon` client is the Rust binary above.
 
 Then in a new terminal:
 
@@ -79,8 +104,9 @@ climon --priority 100 --color red --name "dev server" npm run dev
   `cyan`, `white` (or `none`); shown as a colored accent on the session.
 - `--name S` — a friendly label shown instead of the command. It is also used as
   the local terminal's title, and updates live if you rename the session from the
-  dashboard. When omitted, climon adopts the terminal's current title (falling
-  back to the command). Disable all title behavior by setting
+  dashboard. When omitted, climon adopts the terminal's current title if the
+  terminal reports one; otherwise the name is left blank (the dashboard and
+  `climon ls` then show the command). Disable all title behavior by setting
   `terminal.setTitle` to `false` in `~/.climon/config.json`.
 
 All three can also be set or changed from the dashboard by clicking the **cog**
@@ -105,12 +131,28 @@ Once the server is running you can also start new sessions directly from the
 dashboard. Session creation is **per-session**: hover any live session
 (`running`, `acknowledged`, `needs-attention`, `paused`, or `disconnected`) and
 click its **[+]** button to launch a new session from it. The server spawns the
-new session directly, inheriting the selected session's working directory, so you
-are prompted only for the command. Because this no longer depends on an attached
-terminal, you can launch a session from any live session — including ones that
-were themselves spawned this way (arbitrary nesting). Hover a session row to
-pause or resume its dashboard status; pausing does not suspend the underlying
-process or terminal input.
+new session on the **machine that session lives on**, inheriting the selected
+session's working directory, so you are prompted only for the command. Because
+this no longer depends on an attached terminal, you can launch a session from any
+live session — including ones that were themselves spawned this way (arbitrary
+nesting). Hover a session row to pause or resume its dashboard status; pausing
+does not suspend the underlying process or terminal input.
+
+The New Session dialog has a **Headless** checkbox (unchecked by default). When
+left unchecked (visible), the spawn opens a GUI terminal window on that machine's
+desktop, attached to the new session (Terminal.app, Windows Terminal, or a Linux
+terminal emulator — override with the `session.terminalProgram` config setting).
+When checked (headless), the session runs in the background with no window.
+
+When the selected session lives on a **remote devbox**, the spawn happens on the
+devbox (a visible terminal opens on the devbox desktop, or a headless session
+appears under that devbox's namespace). This requires enabling the opt-in
+`feature.remoteSpawn` flag on the dashboard host — `climon config
+feature.remoteSpawn enabled` — and then pasting the remotes-screen setup script
+on the devbox, which now also enables the flag there and plants the shared
+`remote.spawnSecret` used to sign the command. While the flag is off, the
+per-session **[+]** on a remote session does nothing privileged. See
+[`docs/security.md`](docs/security.md) for the signed command channel.
 
 When there are **no** sessions at all, a global **[+]** appears in the
 sidebar header instead. It asks the dashboard server to spawn a session for you

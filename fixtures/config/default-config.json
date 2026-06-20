@@ -9,6 +9,9 @@
     "detachPrefix": 28,
     "setTitle": true
   },
+  "hotKeys": {
+    "focusTopSession": "Alt+J"
+  },
   "attention": {
     "idleSeconds": 10
   },
@@ -28,7 +31,8 @@
     "level": "trace"
   },
   "feature": {
-    "sessionSpawning": "disabled"
+    "sessionSpawning": "disabled",
+    "remoteSpawn": "disabled"
   },
   "eula": {
     "accepted": false

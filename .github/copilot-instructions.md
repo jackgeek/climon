@@ -1,5 +1,12 @@
 # Copilot instructions for climon
 
+## Client = Rust, server = Bun (read this first)
+
+- The shipping `climon` **client** is the **Rust** workspace under `rust/` (crates `climon-cli`, `climon-session`, `climon-pty`, `climon-store`, `climon-config`, `climon-logging`, `climon-proto`, `climon-remote`, `climon-install`, `climon-update`). **All client work — new features and bug fixes — goes in `rust/`.**
+- The TypeScript client under `src/` (`src/index.ts`, `src/launcher.ts`, `src/session-host.ts`, `src/pty.ts`, `src/cli/`, `src/client/`, `src/daemon/`, `src/install/`, `src/remote/`, …) is **legacy and frozen**. It is kept only for local development reference and the Bun test suite. Do **not** add features or fix client bugs there; port the behavior to the Rust crates instead. Touch it only to keep the existing test suite green.
+- The dashboard **server** (`climon-server`, built from `src/server.ts` with `src/server/` and `src/web/`) is **NOT legacy**. It is still Bun, still maintained, and is never rewritten. The Rust client interoperates with it byte-for-byte over the shared metadata/socket/config surfaces.
+- See `docs/architecture.md` for the component breakdown shared by both implementations.
+
 ## Workflow
 
 - Always start new work in a fresh git worktree under the `.worktrees/` folder, never directly on the main checkout. Create one per task with `git worktree add .worktrees/<branch-name> -b <branch-name>` (or check out an existing branch) and do all edits, builds, and tests there. The `.worktrees/` folder is gitignored.
@@ -10,16 +17,27 @@
 
 ## Build, test, and lint commands
 
+### Rust client (canonical — do client work here)
+
+- The client crates live in `rust/`. Build with `cargo build` (or `cargo build --release`) from `rust/`.
+- Run the Rust tests with `cargo test`; lint with `cargo clippy --all-targets`; format with `cargo fmt`.
+- License/attribution gates use `cargo deny` and `cargo about` (`rust/deny.toml`, `rust/about.toml`).
+- The shipped `climon` binary is built from `rust/climon-cli` and packaged by `scripts/compile.ts`.
+
+### Bun server + legacy TS client/tests
+
 - Install dependencies with `bun install`. The project uses Bun (`packageManager: bun@1.3.10`) and TypeScript ESM.
-- Build all runtime artifacts with `bun run build:all` (`build` client, `build:web` dashboard bundle, `build:server` server entrypoint).
+- Build all runtime artifacts with `bun run build:all` (`build` legacy client, `build:web` dashboard bundle, `build:server` server entrypoint).
 - Compile release binaries with `bun run compile`; bump the version and create the matching git tag with `bun run release`.
 - Type-check/lint with `bun run lint` or `bun run typecheck` (`tsc -p tsconfig.json --noEmit`).
 - Run the full suite with `bun test tests`.
 - Run a single test file with `bun test tests/config.test.ts`.
 - Run one test by name with `bun test tests/config.test.ts -t "default config binds to localhost"`.
-- Useful local entrypoints: `bun src/index.ts <args>`, `bun src/index.ts server`, or `bun src/server.ts server`.
+- Useful local entrypoints: `bun src/server.ts server` (canonical server) or `bun src/index.ts <args>` (legacy client, for reference/tests only).
 
 ## High-level architecture
+
+> The file paths below (`src/…`) name the **legacy TS** implementation that documents the shared design. The canonical **client** implementation of these roles is the Rust workspace in `rust/`; the **server** role is the Bun code under `src/server/` + `src/web/`. Make client changes in the Rust crates.
 
 climon is a cross-platform PTY session manager with three main roles: the launcher/client, one detached daemon per session, and a dashboard server. The launcher (`src/index.ts`, `src/launcher.ts`) writes session metadata, starts a detached daemon, waits for its socket, prints the dashboard URL, and attaches the local terminal. The daemon (`src/daemon/daemon.ts`) owns the PTY (`src/pty.ts`), scrollback ring buffer, client IPC, status transitions, and final persisted output.
 

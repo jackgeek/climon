@@ -420,3 +420,13 @@ describe("TerminalView", () => {
     expect(history).not.toContain("alt4");
   });
 });
+
+describe("TerminalHandle refresh", () => {
+  test("exposes a repaint-only refresh() backed by refreshTerminalRender", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Interface declares the method.
+    expect(source).toContain("refresh: () => void;");
+    // Imperative handle wires it to the repaint-only function (no refit).
+    expect(source).toContain("refresh: () => refreshTerminalRender(termRef.current)");
+  });
+});

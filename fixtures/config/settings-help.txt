@@ -29,6 +29,12 @@
     When true (default), climon sets the attached local terminal's title to the session
     name and updates it live on rename. Disables the whole title feature when false.
 
+  hotKeys.focusTopSession
+    Type: string; Default: Alt+J; Scope: server, browser
+    Web dashboard shortcut that selects the top session in the list and focuses its
+    terminal. Format is "Mod+...+Key" (e.g. "Alt+T", "Ctrl+Shift+J"). Set to an empty
+    string to disable.
+
   attention.idleSeconds
     Type: number; Default: 10; Scope: daemon
     Number of seconds the rendered terminal grid must remain unchanged before the
@@ -86,6 +92,12 @@
     the machine hostname when unset; set it to a value that is unique per host to avoid
     session ID collisions across machines.
 
+  remote.spawnSecret
+    Type: string; Default: unset; Scope: client, server; sensitive
+    Shared HMAC secret authenticating dashboard→devbox spawn commands. Generated
+    automatically on the dashboard host when feature.remoteSpawn is enabled, and planted
+    on the devbox by the remotes-screen setup script. Keep it secret.
+
   remote.keepAlive
     Type: number; Default: 60; Scope: client
     Interval in seconds between mux keepalive pings sent over the remote uplink/ingest
@@ -121,6 +133,13 @@
     Default sort priority (0-1000) for new sessions. Lower numbers sort first within
     each status group.
 
+  session.terminalProgram
+    Type: string; Default: unset; Scope: client
+    Command template used to open a terminal window for a non-headless (visible) session
+    spawned from the dashboard. Use the {cmd} placeholder for the climon command to run.
+    When unset, climon auto-detects a terminal per OS (Terminal.app, Windows Terminal,
+    or x-terminal-emulator/gnome-terminal/konsole/xterm).
+
   tunnelLink.keepAlive
     Type: number; Default: 60; Scope: server
     Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel
@@ -143,6 +162,12 @@
     Type: string; Default: disabled; Scope: client, daemon, server, browser
     Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled".
     [status: experimental]
+
+  feature.remoteSpawn
+    Type: string; Default: disabled; Scope: client, daemon, server, browser
+    Allow the dashboard to spawn sessions on remote devboxes over a signed,
+    replay-protected mux command channel. Set to "enabled" or "disabled". [status:
+    experimental]
 
   eula.accepted
     Type: boolean; Default: false; Scope: client; internal

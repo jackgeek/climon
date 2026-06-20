@@ -69,6 +69,7 @@ import {
   viewedSessionResponse
 } from "./pwa/pushData.js";
 import { computeViewedSessionId, viewedSessionAttentionAck } from "./viewedSession.js";
+import { parseShortcut, matchesShortcut } from "../hotkeys.js";
 import { webLog } from "./log.js";
 
 const log = webLog("app");
@@ -451,6 +452,7 @@ export function App() {
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remotesEnabled, setRemotesEnabled] = useState(false);
   const [features, setFeatures] = useState<FeatureFlagsMap>({});
+  const [focusTopSessionShortcut, setFocusTopSessionShortcut] = useState<string>("Alt+J");
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
   const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);
@@ -738,10 +740,11 @@ export function App() {
 
   // Load the running server's version for the sidebar heading.
   useEffect(() => {
-    void fetchHealth().then(({ version, remotesEnabled: enabled, features: flags }) => {
+    void fetchHealth().then(({ version, remotesEnabled: enabled, features: flags, focusTopSessionShortcut: shortcut }) => {
       setServerVersion(version);
       setRemotesEnabled(enabled);
       setFeatures(flags);
+      setFocusTopSessionShortcut(shortcut);
     });
   }, []);
 
@@ -866,11 +869,29 @@ export function App() {
         if (serverConnectionStateRef.current === "reconnecting") {
           armReconnectOverlay();
         }
+        // A backgrounded tab can leave the xterm renderer with a stale GPU/canvas
+        // frame, so the terminal looks corrupted until something forces a repaint
+        // (scrolling or clicking already fixes it). Always repaint on return.
+        // On desktop also focus the terminal so the user can type immediately;
+        // skip focusing on mobile so we don't summon the soft keyboard on a mere
+        // tab-switch. Deferred a frame so the browser can restore the rendering
+        // context first, matching the focus pattern used elsewhere in this component.
+        requestAnimationFrame(() => {
+          const term = terminalRef.current;
+          if (!term) {
+            return;
+          }
+          if (isMobile) {
+            term.refresh();
+          } else {
+            term.focus();
+          }
+        });
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [armReconnectOverlay]);
+  }, [armReconnectOverlay, isMobile]);
 
   // The terminal panel is a flex child that shrinks the terminal pane when
   // shown. xterm does not reflow to the smaller pane on its own, so refit it
@@ -999,6 +1020,38 @@ export function App() {
     },
     [isMobile, sessions]
   );
+
+  const sessionsRef = useRef<SessionMeta[]>(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  const handleSelectRef = useRef(handleSelect);
+  useEffect(() => {
+    handleSelectRef.current = handleSelect;
+  }, [handleSelect]);
+
+  useEffect(() => {
+    const parsed = parseShortcut(focusTopSessionShortcut);
+    if (!parsed) {
+      return; // empty or invalid shortcut disables the feature
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!matchesShortcut(event, parsed)) {
+        return;
+      }
+      const current = sessionsRef.current;
+      if (current.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      handleSelectRef.current(current[0].id);
+    };
+    // Capture phase so the shortcut wins even while the xterm has focus.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [focusTopSessionShortcut]);
 
   const handlePauseToggle = useCallback(async (session: SessionMeta): Promise<void> => {
     const nextStatus = session.status === "paused" ? "running" : "paused";

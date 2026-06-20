@@ -1,3 +1,14 @@
+/**
+ * ⚠️ LEGACY TypeScript client — frozen. Fix the Rust client instead.
+ *
+ * The shipping `climon` *client* is the Rust workspace under `rust/` (crates
+ * `climon-cli`, `climon-session`, `climon-pty`, `climon-store`, `climon-config`,
+ * `climon-remote`, `climon-install`, `climon-update`, …). This module belongs to
+ * the legacy Bun/TypeScript client, kept only for local development and the Bun
+ * test suite. Do NOT add features or fix client bugs here — make all client
+ * changes in the Rust crates. (The Bun dashboard *server* under `src/server*`
+ * and `src/web/` is NOT legacy and is still maintained.)
+ */
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { basename } from "node:path";
@@ -148,6 +159,20 @@ export interface SessionDefaultFlags {
   priority?: number;
 }
 
+/**
+ * Resolves the default name for an unnamed session from the terminal's reported
+ * title. Returns the sanitized, trimmed title when the terminal supplies a
+ * usable one, or undefined to leave the session name blank when the terminal
+ * reports no title (an unsupported terminal or an empty/whitespace title). A
+ * blank name is intentional: the UI and `climon ls` fall back to the command
+ * string for display, and the daemon pushes any later-assigned name back to the
+ * terminal title.
+ */
+export function resolveDefaultSessionName(queriedTitle: string | undefined): string | undefined {
+  const inferred = queriedTitle ? sanitizeTitle(queriedTitle).trim() : "";
+  return inferred.length > 0 ? inferred : undefined;
+}
+
 export interface ResolvedSessionDefaults {
   color: AnsiColor | null;
   priority: number;
@@ -249,9 +274,7 @@ export async function startMonitoredCommand(
   }
 
   if (options.name === undefined && config.terminal.setTitle) {
-    const queried = await queryTerminalTitle();
-    const inferred = queried ? sanitizeTitle(queried).trim() : "";
-    options.name = inferred.length > 0 ? inferred : buildDisplayCommand(command);
+    options.name = resolveDefaultSessionName(await queryTerminalTitle());
   }
 
   const id = await generateSessionId();

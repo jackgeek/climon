@@ -459,6 +459,7 @@ pub fn load_config(env: &Env) -> Result<Value, String> {
         let parsed_attention = object_or_empty(&parsed, "attention");
         let parsed_session = object_or_empty(&parsed, "session");
         let parsed_feature = object_or_empty(&parsed, "feature");
+        let parsed_hotkeys = object_or_empty(&parsed, "hotKeys");
 
         let mut session = object_or_empty(&defaults, "session");
         if let Some(p) = parsed_session.get("priority") {
@@ -508,6 +509,13 @@ pub fn load_config(env: &Env) -> Result<Value, String> {
                 &parsed_feature,
             )),
         );
+        out.insert(
+            "hotKeys".to_string(),
+            Value::Object(shallow_merge(
+                &object_or_empty(&defaults, "hotKeys"),
+                &parsed_hotkeys,
+            )),
+        );
 
         // Backfills.
         {
@@ -548,6 +556,16 @@ pub fn load_config(env: &Env) -> Result<Value, String> {
                 None => "auto".to_string(),
             };
             session.insert("color".to_string(), Value::from(color));
+        }
+        {
+            let hotkeys = out.get_mut("hotKeys").unwrap().as_object_mut().unwrap();
+            if !hotkeys
+                .get("focusTopSession")
+                .map(|v| v.is_string())
+                .unwrap_or(false)
+            {
+                hotkeys.insert("focusTopSession".to_string(), Value::from("Alt+J"));
+            }
         }
 
         Ok(Value::Object(out))
@@ -804,6 +822,7 @@ mod tests {
         assert_eq!(cfg["terminal"]["clampBrowserToHost"], json!(false));
         assert_eq!(cfg["terminal"]["setTitle"], json!(true));
         assert_eq!(cfg["terminal"]["detachPrefix"], json!(0x1c));
+        assert_eq!(cfg["hotKeys"]["focusTopSession"], json!("Alt+J"));
         assert_eq!(cfg["session"]["color"], json!("auto"));
     }
 
@@ -1083,6 +1102,31 @@ mod tests {
         assert_eq!(cfg["terminal"]["setTitle"], json!(true));
         assert_eq!(cfg["terminal"]["detachPrefix"], json!(0x1c));
         assert_eq!(cfg["session"]["color"], json!("auto"));
+    }
+
+    #[test]
+    fn load_config_merges_and_backfills_hotkeys() {
+        let t = TempDir::new("hotkeys");
+        let ch = t.path().join("ch");
+        fs::create_dir_all(&ch).unwrap();
+        let env = Env::new(Some(ch.to_str().unwrap()), t.path());
+        write_json(
+            &ch,
+            json!({ "version": 1, "server": { "host": "127.0.0.1", "port": 3131 } }),
+        );
+        let cfg = load_config(&env).unwrap();
+        assert_eq!(cfg["hotKeys"]["focusTopSession"], json!("Alt+J"));
+
+        let t2 = TempDir::new("customhotkeys");
+        let ch2 = t2.path().join("ch");
+        fs::create_dir_all(&ch2).unwrap();
+        let env2 = Env::new(Some(ch2.to_str().unwrap()), t2.path());
+        write_json(
+            &ch2,
+            json!({ "version": 1, "hotKeys": { "focusTopSession": "Ctrl+Shift+J" } }),
+        );
+        let cfg2 = load_config(&env2).unwrap();
+        assert_eq!(cfg2["hotKeys"]["focusTopSession"], json!("Ctrl+Shift+J"));
     }
 
     #[test]

@@ -21,6 +21,7 @@ describe("config settings registry", () => {
       "terminal.clampBrowserToHost",
       "terminal.detachPrefix",
       "terminal.setTitle",
+      "hotKeys.focusTopSession",
       "attention.idleSeconds",
       "remote.enabled",
       "remote.host",
@@ -32,16 +33,19 @@ describe("config settings registry", () => {
       "remote.port",
       "remote.ingestPortRetryAttempts",
       "remote.clientId",
+      "remote.spawnSecret",
       "remote.keepAlive",
       "remote.peerHome",
       "remote.peerHost",
       "remote.autoLink",
       "session.color",
       "session.priority",
+      "session.terminalProgram",
       "tunnelLink.keepAlive",
       "logging.level",
       "logging.appInsights.connectionString",
       "feature.sessionSpawning",
+      "feature.remoteSpawn",
       "eula.accepted",
       "eula.version",
       "eula.acceptedAt",
@@ -64,6 +68,26 @@ describe("config settings registry", () => {
     expect(findConfigSetting("session.color")?.scope).toEqual(["client", "daemon", "server"]);
   });
 
+  test("session.terminalProgram is a client-scoped string with no default", () => {
+    const setting = findConfigSetting("session.terminalProgram");
+    expect(setting).toBeDefined();
+    expect(setting?.type).toBe("string");
+    expect(setting?.scope).toEqual(["client"]);
+    expect(setting?.defaultValue).toBeUndefined();
+    expect(setting?.acceptInput).toBe(true);
+    expect(setting?.internal).not.toBe(true);
+  });
+
+  test("remote.spawnSecret is a sensitive client+server string", () => {
+    const s = CONFIG_SETTINGS.find((c) => c.path === "remote.spawnSecret");
+    expect(s).toBeDefined();
+    expect(s?.type).toBe("string");
+    expect(s?.sensitive).toBe(true);
+    expect(s?.acceptInput).toBe(true);
+    expect(s?.scope).toContain("client");
+    expect(s?.scope).toContain("server");
+  });
+
   test("builds the default config from registry defaults", () => {
     expect(buildDefaultConfigFromSettings()).toEqual({
       version: 1,
@@ -73,12 +97,13 @@ describe("config settings registry", () => {
         detachPrefix: 0x1c,
         setTitle: true
       },
+      hotKeys: { focusTopSession: "Alt+J" },
       attention: { idleSeconds: 10 },
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
       tunnelLink: { keepAlive: 60 },
       logging: { level: "trace" },
-      feature: { sessionSpawning: "disabled" },
+      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled" },
       eula: { accepted: false },
       telemetry: { enabled: false },
       update: { auto: false }
@@ -113,22 +138,26 @@ describe("config settings registry", () => {
 
   test("accepted config keys exclude internal and default-only keys", () => {
     expect(acceptedConfigKeys()).toEqual([
+      "hotKeys.focusTopSession",
       "remote.enabled",
       "remote.host",
       "remote.ingestHost",
       "remote.tunnelId",
       "remote.port",
       "remote.clientId",
+      "remote.spawnSecret",
       "remote.keepAlive",
       "remote.peerHome",
       "remote.peerHost",
       "remote.autoLink",
       "session.color",
       "session.priority",
+      "session.terminalProgram",
       "tunnelLink.keepAlive",
       "logging.level",
       "logging.appInsights.connectionString",
       "feature.sessionSpawning",
+      "feature.remoteSpawn",
       "telemetry.enabled",
       "update.auto",
       "update.password"
@@ -137,7 +166,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(36);
+    expect(allConfigKeys().length).toBe(40);
   });
 
   test("coerces values through registry validators", () => {
@@ -222,5 +251,27 @@ describe("update.password setting", () => {
     expect(coerceConfigValueFromSettings("update.password", "hunter2")).toBe(
       "hunter2"
     );
+  });
+});
+
+describe("hotKeys.focusTopSession setting", () => {
+  test("is registered with the Alt+J default and browser scope", () => {
+    const setting = CONFIG_SETTINGS.find((s) => s.path === "hotKeys.focusTopSession");
+    expect(setting).toBeDefined();
+    expect(setting?.defaultValue).toBe("Alt+J");
+    expect(setting?.scope).toContain("browser");
+    expect(setting?.scope).toContain("server");
+  });
+
+  test("appears in the default config", () => {
+    const config = buildDefaultConfigFromSettings();
+    expect((config as { hotKeys?: { focusTopSession?: string } }).hotKeys?.focusTopSession).toBe("Alt+J");
+  });
+
+  test("validation rejects an unparseable non-empty value but accepts empty", () => {
+    const setting = CONFIG_SETTINGS.find((s) => s.path === "hotKeys.focusTopSession");
+    expect(() => setting?.validate?.("")).not.toThrow();
+    expect(() => setting?.validate?.("Alt+T")).not.toThrow();
+    expect(() => setting?.validate?.("Hyper Nonsense")).toThrow();
   });
 });

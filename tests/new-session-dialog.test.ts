@@ -12,6 +12,7 @@ function Passthrough({ children }: PassthroughProps) {
 
 mock.module("@fluentui/react-components", () => ({
   Button: ({ children }: PassthroughProps) => createElement("button", null, children),
+  Checkbox: (props: { label?: string }) => createElement("label", null, props.label),
   Dialog: Passthrough,
   DialogActions: Passthrough,
   DialogBody: Passthrough,
@@ -75,5 +76,17 @@ describe("NewSessionDialog", () => {
       priority: 500,
       color: "blue"
     });
+  });
+
+  test("includes headless flag", () => {
+    expect(buildCreateSessionBody({
+      command: "bash", cwd: "", name: "", priority: 500, color: "auto", headless: true
+    }).headless).toBe(true);
+  });
+
+  test("defaults headless to false", () => {
+    expect(buildCreateSessionBody({
+      command: "bash", cwd: "", name: "", priority: 500, color: "auto", headless: false
+    }).headless).toBe(false);
   });
 });

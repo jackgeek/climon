@@ -16,7 +16,9 @@ sockets.
 > Rust client interoperates with it byte-for-byte over the shared
 > metadata/socket/config surfaces. The TypeScript modules under `src/` (client
 > `src/index.ts`, `src/cli/`, `src/install/`, `src/remote/`, …) are retained as
-> the legacy/development client and the source of the Bun test suite. The
+> the **legacy, frozen** client — kept only as a development reference and the
+> source of the Bun test suite. **All client work (features and bug fixes)
+> happens in the Rust crates; do not fix client bugs in `src/`.** The
 > component descriptions below describe the architecture both implementations
 > share.
 
@@ -105,12 +107,26 @@ A `Bun.serve` server, stateless with respect to PTYs:
   allowed; LAN requires a token).
 - `GET /api/sessions` — current sessions, priority-sorted.
 - `POST /api/sessions` — create a session (loopback only). With a `parentId`, the
-  server spawns the new session itself, inheriting the parent's recorded working
-  directory (and grid size); the parent only needs to be a live session, not
-  attached to a local terminal. Without a `parentId`, the server spawns a session
-  using the posted working directory. Either way it invokes the `climon` client
-  binary (`src/cli/client-exec.ts`, looked up via `CLIMON_CLIENT_BIN` → sibling
-  binary → dev source entrypoint → `PATH`).
+  server spawns the new session on the machine that session lives on, inheriting
+  the parent's recorded working directory (and grid size); the parent only needs
+  to be a live session, not attached to a local terminal. Without a `parentId`,
+  the server spawns a session using the posted working directory. Either way it
+  invokes the Rust client's `climon __spawn` command (one source of truth for
+  per-OS terminal launching; binary looked up via `CLIMON_CLIENT_BIN` → sibling
+  binary → dev-built Rust binary → `PATH`). The request body's `headless` flag
+  selects the mode: headless spawns return `201` with the new session id, while a
+  visible spawn opens a GUI terminal window on that machine and returns `202` (the
+  session appears via the metadata watch). This replaces the older in-process
+  `spawn-session.ts` path. **Routing is by the parent's `origin`:** a *local*
+  parent runs `climon __spawn` on the server host; a *remote* parent (origin
+  `remote`, living on a devbox) is gated by `feature.remoteSpawn` and routed over
+  a loopback-only control socket to this host's ingest, which signs a `Spawn`
+  (HMAC-SHA256) and forwards it over the mux to the devbox uplink. The uplink runs
+  `climon __spawn` on the devbox and replies with a signed `SpawnResult`; the
+  server returns `201 {id: "<clientId>~<innerId>"}` on success, `202` on timeout
+  or a visible spawn, or `502` on a devbox error. See [`security.md`](security.md)
+  for the signed command channel. The ingest advertises its control socket as the
+  `controlSocket` field in `ingest.json`.
 - `DELETE /api/sessions/:id` — clean up a session, removing its metadata and
   scrollback. Does not signal the daemon, so an attached climon client keeps
   running.

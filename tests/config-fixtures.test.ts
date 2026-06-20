@@ -15,7 +15,9 @@ const readJson = <T>(name: string): T => JSON.parse(read(name)) as T;
 
 describe("config cross-language golden fixtures", () => {
   test("parse cases match the shared corpus", () => {
-    const cases = readJson<Array<{ name: string; input: string; expected: unknown }>>("parse-cases.json");
+    const cases = readJson<Array<{ name: string; input: string; expected: Record<string, unknown> }>>(
+      "parse-cases.json"
+    );
     expect(cases.length).toBeGreaterThan(0);
     for (const c of cases) {
       expect(parseJsoncConfig(c.input, `/fixtures/${c.name}.jsonc`)).toEqual(c.expected);
@@ -46,7 +48,7 @@ describe("config cross-language golden fixtures", () => {
 
   test("default config + rendered output match the fixtures", () => {
     expect(buildDefaultConfigFromSettings()).toEqual(readJson("default-config.json"));
-    expect(renderJsoncConfig(buildDefaultConfigFromSettings() as Record<string, unknown>)).toBe(
+    expect(renderJsoncConfig(buildDefaultConfigFromSettings() as unknown as Record<string, unknown>)).toBe(
       read("default-rendered.jsonc")
     );
   });
