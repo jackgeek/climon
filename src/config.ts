@@ -194,7 +194,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     ) {
       parsedConfigObject.hotKeys = {
         ...(parsedConfigObject.hotKeys ?? {}),
-        focusTopSession: "Alt+G"
+        focusTopSession: "Alt+J"
       };
     }
     return parsedConfigObject;

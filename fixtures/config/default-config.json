@@ -10,7 +10,7 @@
     "setTitle": true
   },
   "hotKeys": {
-    "focusTopSession": "Alt+G"
+    "focusTopSession": "Alt+J"
   },
   "attention": {
     "idleSeconds": 10

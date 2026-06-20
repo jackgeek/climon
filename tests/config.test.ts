@@ -128,7 +128,7 @@ describe("config migration", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  test("loadConfig backfills missing hotKeys.focusTopSession to Alt+G", async () => {
+  test("loadConfig backfills missing hotKeys.focusTopSession to Alt+J", async () => {
     const home = await makeTestHome("climon-hotkeys-default-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
     await mkdir(home, { recursive: true });
@@ -142,7 +142,7 @@ describe("config migration", () => {
       })
     );
     const config = await loadConfig(env);
-    expect(config.hotKeys.focusTopSession).toBe("Alt+G");
+    expect(config.hotKeys.focusTopSession).toBe("Alt+J");
     await rm(home, { recursive: true, force: true });
   });
 

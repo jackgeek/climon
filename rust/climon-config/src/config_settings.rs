@@ -321,7 +321,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is \"Mod+...+Key\" (e.g. \"Alt+T\", \"Ctrl+Shift+J\"). Set to an empty string to disable.",
             vec![Server, Browser],
         )
-        .default(Value::from("Alt+G"))
+        .default(Value::from("Alt+J"))
         .accept_input()
         .with_validate(v_focus_top_session),
         ConfigSetting::new(
@@ -856,7 +856,7 @@ mod tests {
                 "version": 1,
                 "server": { "host": "127.0.0.1", "port": 3131 },
                 "terminal": { "clampBrowserToHost": false, "detachPrefix": 28, "setTitle": true },
-                "hotKeys": { "focusTopSession": "Alt+G" },
+                "hotKeys": { "focusTopSession": "Alt+J" },
                 "attention": { "idleSeconds": 10 },
                 "remote": { "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },

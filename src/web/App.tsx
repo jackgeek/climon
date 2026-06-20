@@ -452,7 +452,7 @@ export function App() {
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [remotesEnabled, setRemotesEnabled] = useState(false);
   const [features, setFeatures] = useState<FeatureFlagsMap>({});
-  const [focusTopSessionShortcut, setFocusTopSessionShortcut] = useState<string>("Alt+G");
+  const [focusTopSessionShortcut, setFocusTopSessionShortcut] = useState<string>("Alt+J");
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
   const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);

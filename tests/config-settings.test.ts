@@ -74,7 +74,7 @@ describe("config settings registry", () => {
         detachPrefix: 0x1c,
         setTitle: true
       },
-      hotKeys: { focusTopSession: "Alt+G" },
+      hotKeys: { focusTopSession: "Alt+J" },
       attention: { idleSeconds: 10 },
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
@@ -229,17 +229,17 @@ describe("update.password setting", () => {
 });
 
 describe("hotKeys.focusTopSession setting", () => {
-  test("is registered with the Alt+G default and browser scope", () => {
+  test("is registered with the Alt+J default and browser scope", () => {
     const setting = CONFIG_SETTINGS.find((s) => s.path === "hotKeys.focusTopSession");
     expect(setting).toBeDefined();
-    expect(setting?.defaultValue).toBe("Alt+G");
+    expect(setting?.defaultValue).toBe("Alt+J");
     expect(setting?.scope).toContain("browser");
     expect(setting?.scope).toContain("server");
   });
 
   test("appears in the default config", () => {
     const config = buildDefaultConfigFromSettings();
-    expect((config as { hotKeys?: { focusTopSession?: string } }).hotKeys?.focusTopSession).toBe("Alt+G");
+    expect((config as { hotKeys?: { focusTopSession?: string } }).hotKeys?.focusTopSession).toBe("Alt+J");
   });
 
   test("validation rejects an unparseable non-empty value but accepts empty", () => {
