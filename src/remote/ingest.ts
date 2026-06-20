@@ -19,6 +19,7 @@ import { getClimonHome, getRemoteHostPath, getSessionsDir, resolveConfigSetting,
 import { listSessions, patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
+import { ReplayGuard, verifySignedControl, DEFAULT_FRESHNESS_WINDOW_MS } from "./spawn-auth.js";
 import { acquireSingletonDetailed } from "./singleton.js";
 import { devtunnelEnv } from "./tunnel.js";
 import { cleanupSessionSocket, formatSessionSocketRef, listenOnSessionSocket } from "../session-socket.js";
@@ -241,6 +242,8 @@ export interface IngestConnOptions {
   maxSessions?: number;
   keepAliveSeconds?: number;
   registry?: IngestConnectionRegistry;
+  /** When set, inbound SpawnResults must be signed with this secret. */
+  spawnSecret?: string;
 }
 
 /**
@@ -255,6 +258,8 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
   const registry = options.registry;
   const sessions = new Map<string, RemoteSession>();
   const decoder = new MuxDecoder();
+  const spawnSecret = options.spawnSecret;
+  const replayGuard = new ReplayGuard(DEFAULT_FRESHNESS_WINDOW_MS);
   let label: string | undefined;
   logMsg(log(), "debug", "ingest.inbound_connection", { host: channel.remoteAddress ?? "unknown", port: channel.remotePort ?? "?" });
   // Control frames are processed strictly in order via this FIFO chain. The
@@ -330,6 +335,27 @@ export async function runIngestConnection(channel: Socket, options: IngestConnOp
   }
 
   async function handleControl(message: ControlMessage): Promise<void> {
+    if (message.kind === "signed") {
+      if (!spawnSecret) return; // not expecting signed traffic; ignore.
+      const verified = verifySignedControl(spawnSecret, message, replayGuard, Date.now());
+      if (!verified.ok) {
+        logMsg(log(), "warn", "ingest.signed_control_rejected", { reason: verified.reason, clientId: label ?? "unknown" });
+        return;
+      }
+      await handleControl(verified.message);
+      return;
+    }
+    if (message.kind === "spawn-result") {
+      if (registry) {
+        registry.resolvePendingSpawn(message.requestId, {
+          requestId: message.requestId,
+          id: message.id,
+          warning: message.warning,
+          error: message.error
+        });
+      }
+      return;
+    }
     if (message.kind === "hello") {
       if (!label && isValidRemoteId(message.clientId)) {
         label = message.clientId;
