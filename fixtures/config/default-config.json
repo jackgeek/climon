@@ -9,6 +9,9 @@
     "detachPrefix": 28,
     "setTitle": true
   },
+  "hotKeys": {
+    "focusTopSession": "Alt+T"
+  },
   "attention": {
     "idleSeconds": 10
   },
