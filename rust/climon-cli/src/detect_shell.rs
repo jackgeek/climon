@@ -4,6 +4,7 @@
 //! `$ComSpec` fallback are unit-tested; the per-OS process-tree walkers are
 //! integration-only (they read live `/proc`, `ps`, or PowerShell CIM output).
 
+#[cfg(all(unix, not(target_os = "linux")))]
 use crate::pathenv::which;
 
 /// Executables that are never a useful shell to re-launch. If the parent process

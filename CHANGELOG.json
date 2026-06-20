@@ -1,5 +1,24 @@
 [
   {
+    "version": "2.0.13",
+    "changes": [
+      "Spawn new sessions directly from the dashboard, including headless and visible terminal-window sessions",
+      "Route session spawns to remote devboxes over a signed, replay-protected channel",
+      "Add a configurable hotkey (default Alt+J) to focus the top session",
+      "Add a session.terminalProgram setting to choose the terminal for visible spawns",
+      "Fix Alt+Tab terminal corruption in the dashboard",
+      "Keep acknowledged sessions acknowledged when switching between them or on async resize redraws",
+      "Fix a PTY raw-mode echo race that leaked terminal query replies",
+      "Match keyboard shortcuts by physical key code so modifier-composed characters work",
+      "Query the real Windows console size for accurate terminal sizing",
+      "Report the live dashboard tunnel port and prune stale port mappings",
+      "Leave the default session name blank when no terminal title is available",
+      "Embed dashboard assets in the compiled server binary so the dashboard works standalone",
+      "Verify and decrypt signed releases during climon update using an embedded distribution password",
+      "Remove the \"File a bug\" link from the dashboard sidebar"
+    ]
+  },
+  {
     "version": "2.0.0",
     "changes": [
       "Rewrote client entirely in Rust. Client now significantly more memory efficient."

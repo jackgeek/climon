@@ -23,6 +23,10 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
+    # CDLA-Permissive-2.0 covers the Mozilla CA trust-root data bundled by
+    # webpki-roots (transitive via ureq -> climon-update). It is a permissive
+    # data license with no copyleft obligations.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 # The allowlist is a curated set of acceptable permissive licenses; not every
