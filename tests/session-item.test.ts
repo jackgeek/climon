@@ -2,7 +2,16 @@ import { describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createElement, type CSSProperties, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as RealIcons from "@fluentui/react-icons";
 import type { SessionMeta } from "../src/types.js";
+
+// Stub every real icon export so this file's `mock.module` does not drop named
+// exports that other components import. `mock.module` is global for the whole
+// test run, so a partial mock here would break unrelated test files (e.g. the
+// missing `ChevronDown24Regular`/`ChevronDoubleRightRegular` exports).
+const iconStubs = Object.fromEntries(
+  Object.keys(RealIcons).map((name) => [name, () => createElement("span", null)])
+);
 
 type FluentProps = {
   children?: ReactNode;
@@ -55,12 +64,7 @@ mock.module("@fluentui/react-components", () => ({
 }));
 
 mock.module("@fluentui/react-icons", () => ({
-  Add16Regular: () => createElement("span", null),
-  Dismiss16Regular: () => createElement("span", null),
-  FullScreenMaximize16Regular: () => createElement("span", null),
-  Pause16Regular: () => createElement("span", null),
-  Play16Regular: () => createElement("span", null),
-  Settings16Regular: () => createElement("span", null),
+  ...iconStubs,
   LockClosed16Regular: () => createElement("span", { "data-icon": "lock-closed" }),
   LockOpen16Regular: () => createElement("span", { "data-icon": "lock-open" })
 }));

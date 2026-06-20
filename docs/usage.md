@@ -325,7 +325,7 @@ Every flag carries a maturity status — `experimental`, `incomplete`, `untested
 <!-- BEGIN GENERATED CONFIG SETTINGS -->
 ### `climon config`
 
-`climon config` works like `git config`. It reads project-local config first, then ancestor directories up to (but not past) your home directory, then the global config under `$CLIMON_HOME`.
+`climon config` works like `git config`. It reads project-local config first, then ancestor directories, then the global config under `$CLIMON_HOME`.
 
 - `climon config remote.tunnelId <id>` — set a value.
 - `climon config remote.tunnelId` — print a value (exit 1 if unset).

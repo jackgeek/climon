@@ -1,1 +1,1 @@
-climon v2.0.0
+climon v2.0.6
