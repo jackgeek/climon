@@ -514,6 +514,18 @@ bun run release major      # 0.1.0 -> 1.0.0
 The script refuses to run with a dirty working tree (so the release commit only
 contains the bump) and does **not** push — finish with `git push --follow-tags`.
 
+### Branch workflow: PRs target `dev`, releases come from `main`
+
+Because the [`Release`](.github/workflows/release.yml) workflow triggers on every
+push to `main`, all day-to-day work must go through the `dev` branch:
+
+- **Open pull requests against `dev`, never `main`.** Merging a PR into `main`
+  would immediately cut a release, so feature and fix branches base off and merge
+  into `dev`.
+- **Merge `dev` into `main` only when you actually want to release.** That merge
+  is the deliberate "ship it" action; it runs the patch bump, tags, and publishes
+  the artifacts described below.
+
 ### Automatic bump on merge to `main`
 
 The patch bump runs automatically in CI whenever `main` is updated — i.e. when a
