@@ -31,6 +31,7 @@ pub mod remote_host;
 pub mod shutdown_request;
 pub mod shutdown_watch;
 pub mod singleton;
+pub mod spawn_auth;
 pub mod teardown;
 pub mod tunnel;
 pub mod uplink;
