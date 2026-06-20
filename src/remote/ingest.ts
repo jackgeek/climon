@@ -149,11 +149,21 @@ interface RemoteSession {
  * Tracks active connections per clientId to prevent races on reconnect,
  * and dismissed sessions that should not be re-materialized.
  */
+/** Outcome of a remote spawn round-trip, correlated by requestId. */
+export interface RemoteSpawnResult {
+  requestId: string;
+  id?: string;
+  warning?: string;
+  error?: string;
+}
+
 export class IngestConnectionRegistry {
   /** Active connection per clientId — new hellos evict the previous. */
   private active = new Map<string, { channel: Socket; teardown: Promise<void>; resolve: () => void }>();
   /** Sessions explicitly removed by the user (localId set). Cleared on daemon restart. */
   private dismissed = new Set<string>();
+  /** In-flight remote spawns keyed by requestId. */
+  private pendingSpawns = new Map<string, { resolve: (r: RemoteSpawnResult) => void; timer: ReturnType<typeof setTimeout> }>();
 
   /** Returns true if the session has been dismissed and should not be re-materialized. */
   isDismissed(localId: string): boolean {
@@ -194,6 +204,35 @@ export class IngestConnectionRegistry {
       entry.resolve();
       this.active.delete(clientId);
     }
+  }
+
+  /** Returns the live channel for a clientId, or undefined if none is active. */
+  getChannel(clientId: string): Socket | undefined {
+    return this.active.get(clientId)?.channel;
+  }
+
+  /**
+   * Registers an in-flight spawn and resolves when resolvePendingSpawn is called
+   * with the same requestId, or after timeoutMs with `{ error: "timeout" }`.
+   */
+  registerPendingSpawn(requestId: string, timeoutMs: number): Promise<RemoteSpawnResult> {
+    return new Promise<RemoteSpawnResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingSpawns.delete(requestId);
+        resolve({ requestId, error: "timeout" });
+      }, timeoutMs);
+      timer.unref?.();
+      this.pendingSpawns.set(requestId, { resolve, timer });
+    });
+  }
+
+  /** Resolves the in-flight spawn for requestId, if any. No-op otherwise. */
+  resolvePendingSpawn(requestId: string, result: RemoteSpawnResult): void {
+    const pending = this.pendingSpawns.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingSpawns.delete(requestId);
+    pending.resolve(result);
   }
 }
 
