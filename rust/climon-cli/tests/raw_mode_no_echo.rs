@@ -164,6 +164,22 @@ fn local_terminal_does_not_echo_child_color_query_reply() {
     }
     let _ = std::fs::remove_dir_all(&home);
 
+    // Some sandboxed CI environments (notably GitHub-hosted Ubuntu runners)
+    // forbid a child from claiming a controlling terminal, so the `setsid -c`
+    // wrapping climon uses to host the inner shell fails with EPERM and the
+    // shell never runs. That is an environment limitation, not a regression in
+    // the raw-mode ordering this test guards, so treat it as inconclusive
+    // rather than a failure. The macOS CI job and local dev still exercise the
+    // real path.
+    if find(&display, b"failed to set the controlling terminal").is_some() {
+        eprintln!(
+            "skipping: environment cannot set a controlling terminal (setsid -c \
+             EPERM); raw-mode path not exercised here. Output: {:?}",
+            escape(&display)
+        );
+        return;
+    }
+
     // The child sent at least one query and we answered it; confirm the test
     // actually exercised the query/reply path.
     let queries = count(&display, QUERY);
