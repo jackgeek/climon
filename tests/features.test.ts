@@ -120,4 +120,15 @@ describe("loadConfig feature section", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+  test("remoteSpawn flag defaults disabled and reads config", () => {
+    const flag = FEATURE_FLAGS.find((f) => f.name === "remoteSpawn");
+    expect(flag).toBeDefined();
+    expect(flag?.default).toBe("disabled");
+    expect(flag?.status).toBe("experimental");
+    expect(isFeatureEnabled({} as ClimonConfig, "remoteSpawn")).toBe(false);
+    expect(
+      isFeatureEnabled({ feature: { remoteSpawn: "enabled" } } as unknown as ClimonConfig, "remoteSpawn")
+    ).toBe(true);
+  });
 });
