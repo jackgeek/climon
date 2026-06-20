@@ -489,7 +489,15 @@ mod tests {
     fn parse_spawn_headless_with_cwd_and_command() {
         assert_eq!(
             parse(&[
-                "__spawn", "--headless", "--cwd", "/work", "--cols", "100", "--rows", "30", "npm",
+                "__spawn",
+                "--headless",
+                "--cwd",
+                "/work",
+                "--cols",
+                "100",
+                "--rows",
+                "30",
+                "npm",
                 "test"
             ]),
             ParsedCommand::Spawn {
@@ -508,7 +516,16 @@ mod tests {
     #[test]
     fn parse_spawn_visible_default_with_meta_flags() {
         assert_eq!(
-            parse(&["__spawn", "--cwd", "/w", "--name", "build", "--priority", "800", "bash"]),
+            parse(&[
+                "__spawn",
+                "--cwd",
+                "/w",
+                "--name",
+                "build",
+                "--priority",
+                "800",
+                "bash"
+            ]),
             ParsedCommand::Spawn {
                 argv: vec!["bash".into()],
                 headless: false,
