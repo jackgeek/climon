@@ -1,16 +1,30 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeSessionMeta } from "../src/store.js";
 import type { SessionMeta } from "../src/types.js";
 
+// The dashboard server spawns sessions by invoking the canonical Rust climon
+// client (`climon __spawn`). Point CLIMON_CLIENT_BIN at the built debug binary so
+// these tests exercise the real spawn path without depending on a sibling binary.
+const rustClient = join(process.cwd(), "rust", "target", "debug", "climon");
+
 // Use a real Linux-filesystem temp dir for CLIMON_HOME: unix domain sockets do
 // not work on DrvFs-mounted Windows drives (e.g. /mnt/c), which is where the
 // repo lives in WSL.
 const home = join(tmpdir(), `climon-create-parent-${process.pid}`);
-const env = { ...process.env, CLIMON_HOME: home };
+const env = { ...process.env, CLIMON_HOME: home, CLIMON_CLIENT_BIN: rustClient };
+
+beforeAll(() => {
+  if (!existsSync(rustClient)) {
+    throw new Error(
+      `Rust client binary not found at ${rustClient}. Build it first: (cd rust && cargo build -p climon-cli)`
+    );
+  }
+});
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -94,7 +108,7 @@ describe("POST /api/sessions with a parentId", () => {
       const ok = await fetch(`${base}/api/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ command: longRunningCommand, parentId, cwd: childCwd })
+        body: JSON.stringify({ command: longRunningCommand, parentId, cwd: childCwd, headless: true })
       });
       expect(ok.status).toBe(201);
       const body = (await ok.json()) as { id?: string };

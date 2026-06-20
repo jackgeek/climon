@@ -34,6 +34,9 @@ use crate::keepalive::mux_idle_timeout_ms;
 use crate::mux::{encode_control, encode_data, ControlMessage, MuxDecoder, MuxMessage};
 use crate::process::is_process_alive;
 use crate::singleton::acquire_singleton_detailed;
+use crate::spawn_auth::{
+    sign_now, verify_signed_control, RejectReason, ReplayGuard, DEFAULT_FRESHNESS_WINDOW_MS,
+};
 use climon_session::socket::{parse_session_socket_ref, ParsedRef};
 
 /// Default keepalive interval in seconds. Mirrors `DEFAULT_KEEPALIVE_SECONDS`.
@@ -67,6 +70,119 @@ fn as_number(v: Option<Value>) -> Option<u16> {
         }
         _ => None,
     }
+}
+
+/// Why an inbound control frame could not be dispatched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboundError {
+    /// The frame failed signature/replay/parse verification.
+    Rejected(RejectReason),
+}
+
+/// Resolves an inbound control frame to the message to dispatch. When a secret
+/// is configured, the frame MUST be a verified `Signed` envelope; otherwise the
+/// frame is used as-is (legacy behavior; `Spawn` is ignored downstream).
+fn unwrap_inbound(
+    secret: Option<&str>,
+    guard: &mut ReplayGuard,
+    message: ControlMessage,
+    now_ms: i64,
+) -> Result<ControlMessage, InboundError> {
+    match secret {
+        Some(secret) => {
+            verify_signed_control(secret, &message, guard, now_ms).map_err(InboundError::Rejected)
+        }
+        None => Ok(message),
+    }
+}
+
+/// Builds the `climon __spawn …` argv (after the program name) for a Spawn.
+fn build_spawn_argv(spawn: &ControlMessage) -> Vec<String> {
+    let ControlMessage::Spawn {
+        command,
+        cwd,
+        cols,
+        rows,
+        name,
+        priority,
+        color,
+        headless,
+        ..
+    } = spawn
+    else {
+        return Vec::new();
+    };
+    let mut argv = vec!["__spawn".to_string()];
+    if *headless {
+        argv.push("--headless".into());
+    }
+    argv.push("--cwd".into());
+    argv.push(cwd.clone());
+    argv.push("--cols".into());
+    argv.push(cols.to_string());
+    argv.push("--rows".into());
+    argv.push(rows.to_string());
+    if let Some(priority) = priority {
+        argv.push("--priority".into());
+        argv.push(priority.to_string());
+    }
+    if let Some(color) = color {
+        argv.push("--color".into());
+        argv.push(color.clone());
+    }
+    if let Some(name) = name {
+        argv.push("--name".into());
+        argv.push(name.clone());
+    }
+    argv.extend(command.iter().cloned());
+    argv
+}
+
+/// Runs `climon __spawn …` by re-executing the current binary, returning the
+/// parsed (id, warning, error) outcome. Mirrors Plan A's SpawnOutcome JSON line.
+fn run_spawn(spawn: &ControlMessage) -> (Option<String>, Option<String>, Option<String>) {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                None,
+                None,
+                Some(format!("cannot locate climon binary: {e}")),
+            )
+        }
+    };
+    let output = std::process::Command::new(exe)
+        .args(build_spawn_argv(spawn))
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let line = String::from_utf8_lossy(&out.stdout);
+            let trimmed = line.trim().lines().last().unwrap_or("{}");
+            match serde_json::from_str::<serde_json::Value>(trimmed) {
+                Ok(v) => (
+                    v.get("id").and_then(|x| x.as_str()).map(String::from),
+                    v.get("warning").and_then(|x| x.as_str()).map(String::from),
+                    None,
+                ),
+                Err(_) => (None, None, Some("invalid spawn outcome".into())),
+            }
+        }
+        Ok(out) => (
+            None,
+            None,
+            Some(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+        ),
+        Err(e) => (None, None, Some(format!("failed to run spawn: {e}"))),
+    }
+}
+
+/// Current wall-clock time in milliseconds since the Unix epoch.
+fn unix_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Resolves the devbox uplink config from the cascade. Remote is only considered
@@ -372,6 +488,19 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
 
     let mut decoder = MuxDecoder::new();
     let mut buf = vec![0u8; 64 * 1024];
+    // Resolve the spawn secret + feature gate once. When a secret is present,
+    // every inbound control frame MUST be a verified Signed envelope, and a
+    // Spawn is only honored when feature.remoteSpawn is enabled.
+    let config_env = ConfigEnv::real();
+    let spawn_secret: Option<String> = as_string(resolve_config_setting(
+        "remote.spawnSecret",
+        &config_env,
+        Path::new("."),
+    ));
+    let remote_spawn_enabled = climon_config::config::load_config(&config_env)
+        .map(|cfg| climon_config::features::is_feature_enabled(&cfg, "remoteSpawn"))
+        .unwrap_or(false);
+    let mut replay_guard = ReplayGuard::new(DEFAULT_FRESHNESS_WINDOW_MS);
     loop {
         tokio::select! {
             _ = shutdown.notified() => break,
@@ -387,16 +516,46 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
                 };
                 for msg in messages {
                     match msg {
-                        MuxMessage::Control(ControlMessage::Attach { id }) => {
-                            attach(&bridge, &id).await;
+                        MuxMessage::Control(control) => {
+                            let now_ms = unix_millis();
+                            let inner = match unwrap_inbound(
+                                spawn_secret.as_deref(),
+                                &mut replay_guard,
+                                control,
+                                now_ms,
+                            ) {
+                                Ok(inner) => inner,
+                                // Reject unsigned/forged/replayed when a secret is present.
+                                Err(_) => continue,
+                            };
+                            match inner {
+                                ControlMessage::Attach { id } => attach(&bridge, &id).await,
+                                ControlMessage::Detach { id } => detach(&bridge, &id).await,
+                                ControlMessage::Ping => {
+                                    bridge.write(encode_control(&ControlMessage::Pong));
+                                }
+                                ControlMessage::Spawn { ref request_id, .. } => {
+                                    if let (Some(secret), true) =
+                                        (spawn_secret.as_deref(), remote_spawn_enabled)
+                                    {
+                                        let request_id = request_id.clone();
+                                        let (id, warning, error) = run_spawn(&inner);
+                                        let result = ControlMessage::SpawnResult {
+                                            request_id,
+                                            id,
+                                            warning,
+                                            error,
+                                        };
+                                        bridge.write(encode_control(&sign_now(
+                                            secret,
+                                            &result,
+                                            unix_millis(),
+                                        )));
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
-                        MuxMessage::Control(ControlMessage::Detach { id }) => {
-                            detach(&bridge, &id).await;
-                        }
-                        MuxMessage::Control(ControlMessage::Ping) => {
-                            bridge.write(encode_control(&ControlMessage::Pong));
-                        }
-                        MuxMessage::Control(_) => {}
                         MuxMessage::Data { session_id, data } => {
                             let map = bridge.attached.lock().await;
                             if let Some(att) = map.get(&session_id) {
@@ -868,6 +1027,9 @@ mod tests {
             ControlMessage::SessionRemoved { .. } => "session-removed",
             ControlMessage::Attach { .. } => "attach",
             ControlMessage::Detach { .. } => "detach",
+            ControlMessage::Spawn { .. } => "spawn",
+            ControlMessage::SpawnResult { .. } => "spawn-result",
+            ControlMessage::Signed { .. } => "signed",
             ControlMessage::Ping => "ping",
             ControlMessage::Pong => "pong",
         }
@@ -984,5 +1146,63 @@ mod tests {
         assert!(auth_rejected_in("token expired"));
         assert!(!auth_rejected_in("all good"));
         let _ = Map::<String, String>::new();
+    }
+}
+
+#[cfg(test)]
+mod spawn_dispatch_tests {
+    use super::*;
+    use crate::mux::ControlMessage;
+    use crate::spawn_auth::{sign_control, RejectReason};
+
+    fn spawn_msg() -> ControlMessage {
+        ControlMessage::Spawn {
+            request_id: "r1".into(),
+            command: vec!["bash".into()],
+            cwd: "/w".into(),
+            cols: 80,
+            rows: 24,
+            name: Some("build".into()),
+            priority: Some(700),
+            color: Some("red".into()),
+            headless: true,
+        }
+    }
+
+    #[test]
+    fn unsigned_control_rejected_when_secret_present() {
+        let mut guard = ReplayGuard::new(30_000);
+        let got = unwrap_inbound(Some("sekret"), &mut guard, ControlMessage::Ping, 0);
+        assert_eq!(got, Err(InboundError::Rejected(RejectReason::NotSigned)));
+    }
+
+    #[test]
+    fn signed_control_unwrapped_when_secret_present() {
+        let mut guard = ReplayGuard::new(30_000);
+        let env = sign_control("sekret", &ControlMessage::Ping, "n1", 1000);
+        let got = unwrap_inbound(Some("sekret"), &mut guard, env, 1000);
+        assert_eq!(got, Ok(ControlMessage::Ping));
+    }
+
+    #[test]
+    fn plain_control_passes_through_when_no_secret() {
+        let mut guard = ReplayGuard::new(30_000);
+        let got = unwrap_inbound(None, &mut guard, ControlMessage::Ping, 0);
+        assert_eq!(got, Ok(ControlMessage::Ping));
+    }
+
+    #[test]
+    fn spawn_argv_includes_flags_cwd_and_command() {
+        let argv = build_spawn_argv(&spawn_msg());
+        assert!(argv.contains(&"__spawn".to_string()));
+        assert!(argv.contains(&"--headless".to_string()));
+        assert!(argv.windows(2).any(|w| w[0] == "--cwd" && w[1] == "/w"));
+        assert!(argv.windows(2).any(|w| w[0] == "--cols" && w[1] == "80"));
+        assert!(argv.windows(2).any(|w| w[0] == "--name" && w[1] == "build"));
+        assert!(argv
+            .windows(2)
+            .any(|w| w[0] == "--priority" && w[1] == "700"));
+        assert!(argv.windows(2).any(|w| w[0] == "--color" && w[1] == "red"));
+        assert_eq!(argv.last().unwrap(), "bash");
     }
 }

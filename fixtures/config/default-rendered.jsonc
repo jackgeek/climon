@@ -47,7 +47,9 @@
   },
   "feature": {
     // Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled". [status: experimental]
-    "sessionSpawning": "disabled"
+    "sessionSpawning": "disabled",
+    // Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel. Set to "enabled" or "disabled". [status: experimental]
+    "remoteSpawn": "disabled"
   },
   "eula": {
     // Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.

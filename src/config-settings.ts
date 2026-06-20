@@ -205,6 +205,15 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "remote.spawnSecret",
+    type: "string",
+    purpose:
+      "Shared HMAC secret authenticating dashboard→devbox spawn commands. Generated automatically on the dashboard host when feature.remoteSpawn is enabled, and planted on the devbox by the remotes-screen setup script. Keep it secret.",
+    scope: ["client", "server"],
+    acceptInput: true,
+    sensitive: true
+  },
+  {
     path: "remote.keepAlive",
     type: "number",
     defaultValue: 60,
@@ -268,6 +277,14 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
         throw new Error("session.priority must be an integer between 0 and 1000");
       }
     }
+  },
+  {
+    path: "session.terminalProgram",
+    type: "string",
+    purpose:
+      "Command template used to open a terminal window for a non-headless (visible) session spawned from the dashboard. Use the {cmd} placeholder for the climon command to run. When unset, climon auto-detects a terminal per OS (Terminal.app, Windows Terminal, or x-terminal-emulator/gnome-terminal/konsole/xterm).",
+    scope: ["client"],
+    acceptInput: true
   },
   {
     path: "tunnelLink.keepAlive",

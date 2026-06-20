@@ -1,11 +1,24 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionMeta } from "../src/types.js";
 
+// The dashboard server spawns sessions via the canonical Rust climon client
+// (`climon __spawn`). Point CLIMON_CLIENT_BIN at the built debug binary.
+const rustClient = join(process.cwd(), "rust", "target", "debug", "climon");
+
 const home = join(process.cwd(), ".copilot-tmp", `climon-spawn-gate-${process.pid}`);
-const env = { ...process.env, CLIMON_HOME: home };
+const env = { ...process.env, CLIMON_HOME: home, CLIMON_CLIENT_BIN: rustClient };
+
+beforeAll(() => {
+  if (!existsSync(rustClient)) {
+    throw new Error(
+      `Rust client binary not found at ${rustClient}. Build it first: (cd rust && cargo build -p climon-cli)`
+    );
+  }
+});
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -81,7 +94,7 @@ describe("POST /api/sessions feature gate", () => {
       const res = await fetch(`${base}/api/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ command: `${process.execPath} -e setTimeout(()=>{},30000)` })
+        body: JSON.stringify({ command: `${process.execPath} -e setTimeout(()=>{},30000)`, headless: true })
       });
       expect(res.status).toBe(201);
       const body = (await res.json()) as { id?: string };

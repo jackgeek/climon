@@ -22,6 +22,12 @@ export interface IngestState {
    * Optional for backward compatibility with PR #65 beacons that predate it.
    */
   host?: string;
+  /**
+   * Loopback-only socket ref (from formatSessionSocketRef) the dashboard server
+   * connects to, to request a signed remote spawn. Optional for backward
+   * compatibility with beacons that predate remote spawn.
+   */
+  controlSocket?: string;
 }
 
 export const INGEST_STATE_BASENAME = "ingest.json";
@@ -43,12 +49,18 @@ export function parseIngestState(raw: string): IngestState | undefined {
   if (!pidOk || !portOk) return undefined;
   const state: IngestState = { pid: parsed.pid as number, port: parsed.port as number };
   if (typeof parsed.host === "string" && parsed.host.length > 0) state.host = parsed.host;
+  if (typeof parsed.controlSocket === "string" && parsed.controlSocket.length > 0) {
+    state.controlSocket = parsed.controlSocket;
+  }
   return state;
 }
 
 export function serializeIngestState(state: IngestState): string {
   const payload: IngestState = { pid: state.pid, port: state.port };
   if (state.host !== undefined && state.host.length > 0) payload.host = state.host;
+  if (state.controlSocket !== undefined && state.controlSocket.length > 0) {
+    payload.controlSocket = state.controlSocket;
+  }
   return `${JSON.stringify(payload)}\n`;
 }
 

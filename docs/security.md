@@ -101,11 +101,48 @@ durable ingest watches its own home and demotes on the next well-formed request.
   `vEthernet (WSL)` adapter — reachable from the WSL VM and the Windows host, not
   the LAN. When WSL hosts, the ingest binds loopback only.
 
+## Remote spawn command channel
+
+The dashboard "+" can create a session on the **machine a remote session lives
+on** (a devbox), not just on the server host. This is the one place the server
+sends an *imperative command* to a client, so it is gated and authenticated:
+
+- **Opt-in, off by default.** The `feature.remoteSpawn` flag is `disabled`
+  unless explicitly enabled on **both** the dashboard host and the devbox. While
+  it is off, no spawn command is honored and **no HMAC secret is ever created**.
+- **Pre-shared HMAC secret.** When the feature is enabled on the dashboard host,
+  a 32-byte CSPRNG `remote.spawnSecret` is generated lazily and persisted
+  globally (`0600`). The remotes-screen copy script plants the *same* secret on
+  the devbox (`climon config remote.spawnSecret …`) and enables the flag there.
+  The secret is the sole app-layer authenticator on the direct-WSL bridge.
+- **Signed, replay-protected envelope.** Every server→devbox spawn is wrapped in
+  an HMAC-SHA256 `Signed` envelope over `payload\nnonce\nts`. The devbox verifies
+  the signature with a constant-time compare, requires `ts` within a ±30 s
+  freshness window, and rejects any `nonce` already seen in a bounded recent-set.
+- **Enabling the feature hardens the entire inbound channel.** When the devbox
+  has a secret set, the uplink requires **every** inbound control frame
+  (`attach`/`detach`/`ping`/`spawn`) to be a verified `Signed` envelope; unsigned,
+  forged, stale, or replayed frames are dropped. No secret ⇒ `Spawn` is ignored
+  entirely (legacy behavior), so the security invariant is **no secret ⇒ no
+  remote spawn**.
+- **Loopback-only server→ingest hop.** The dashboard server reaches its own
+  ingest over a loopback-only control socket (advertised as `controlSocket` in
+  `ingest.json`); the ingest signs the `Spawn` and forwards it over the existing
+  mux, then relays the devbox's signed `SpawnResult` back.
+- **Threat model.** Over dev tunnels the tunnel's identity ACL already restricts
+  who can connect; the HMAC adds command authenticity on top. On the direct
+  same-machine (WSL↔Windows) bridge there is no tunnel ACL, so the HMAC secret is
+  the authenticator that prevents a co-tenant process from injecting spawns.
+
 ## Secrets at rest
 
 - `~/.climon/remote-host.json` — the home machine's tunnel-host state. Written
   atomically (temp file + `rename`, so the ingest watcher never observes a torn
   or empty file) with `0600` permissions inside a `0700` directory.
+- `remote.spawnSecret` (in `config.jsonc`) — the pre-shared HMAC key for the
+  remote spawn command channel. Generated only when `feature.remoteSpawn` is
+  enabled, stored in the `0700` config directory, and redacted from logs and
+  config listings as a sensitive setting.
 
 ## Logging
 

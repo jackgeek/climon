@@ -43,13 +43,22 @@ pub struct FeatureFlag {
 }
 
 /// The registry of feature flags. Mirrors `FEATURE_FLAGS`.
-pub const FEATURE_FLAGS: &[FeatureFlag] = &[FeatureFlag {
-    name: "sessionSpawning",
-    default: "disabled",
-    status: FeatureStatus::Experimental,
-    description: "Allow spawning new sessions from the dashboard.",
-    override_value: None,
-}];
+pub const FEATURE_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag {
+        name: "sessionSpawning",
+        default: "disabled",
+        status: FeatureStatus::Experimental,
+        description: "Allow spawning new sessions from the dashboard.",
+        override_value: None,
+    },
+    FeatureFlag {
+        name: "remoteSpawn",
+        default: "disabled",
+        status: FeatureStatus::Experimental,
+        description: "Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel.",
+        override_value: None,
+    },
+];
 
 /// Config key prefix for feature flags.
 pub const FEATURE_CONFIG_PREFIX: &str = "feature.";
@@ -120,6 +129,19 @@ mod tests {
         assert_eq!(flag.default, "disabled");
         assert_eq!(flag.status, FeatureStatus::Experimental);
         assert_eq!(flag.override_value, None);
+    }
+
+    #[test]
+    fn registry_contains_remote_spawn_defaults() {
+        let flag = find_flag("remoteSpawn").expect("flag exists");
+        assert_eq!(flag.default, "disabled");
+        assert_eq!(flag.status, FeatureStatus::Experimental);
+        assert_eq!(flag.override_value, None);
+        assert!(!is_feature_enabled(&json!({}), "remoteSpawn"));
+        assert!(is_feature_enabled(
+            &json!({ "feature": { "remoteSpawn": "enabled" } }),
+            "remoteSpawn"
+        ));
     }
 
     #[test]

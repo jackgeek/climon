@@ -39,6 +39,13 @@ export const FEATURE_FLAGS = defineFeatureFlags([
     default: "disabled",
     status: "experimental",
     description: "Allow spawning new sessions from the dashboard."
+  },
+  {
+    name: "remoteSpawn",
+    default: "disabled",
+    status: "experimental",
+    description:
+      "Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel."
   }
 ] as const satisfies readonly FeatureFlag[]);
 

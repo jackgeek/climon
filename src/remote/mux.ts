@@ -16,6 +16,20 @@ export type ControlMessage =
   | { kind: "session-removed"; id: string }
   | { kind: "attach"; id: string }
   | { kind: "detach"; id: string }
+  | {
+      kind: "spawn";
+      requestId: string;
+      command: string[];
+      cwd: string;
+      cols: number;
+      rows: number;
+      name?: string;
+      priority?: number;
+      color?: string;
+      headless: boolean;
+    }
+  | { kind: "spawn-result"; requestId: string; id?: string; warning?: string; error?: string }
+  | { kind: "signed"; payload: string; nonce: string; ts: number; sig: string }
   | { kind: "ping" }
   | { kind: "pong" };
 
