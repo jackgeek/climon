@@ -43,7 +43,7 @@ import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dash
 import { runPromote } from "./promote.js";
 import { buildPromoteDeps } from "./promote-probes.js";
 import { resolveServerInvocation } from "../cli/server-exec.js";
-import { spawnHeadlessSession as spawnHeadlessSessionDirect } from "../client/spawn-session.js";
+import { resolveClientInvocation } from "../cli/client-exec.js";
 import { resolveSessionDefaults } from "../launcher.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
@@ -512,12 +512,6 @@ export interface SpawnMetaOptions {
   color?: SessionColorMode | null;
 }
 
-interface ResolvedSpawnMetaOptions {
-  name?: string;
-  priority?: number;
-  color?: AnsiColor | null;
-}
-
 /**
  * Builds the argv passed to the climon client to spawn a headless session,
  * prepending --priority/--color/--name flags (when set) before the monitored
@@ -536,6 +530,37 @@ export function buildRunArgs(command: string[], meta: SpawnMetaOptions): string[
     flags.push("--name", meta.name);
   }
   return ["run", "--headless", ...flags, ...command];
+}
+
+export interface SpawnArgsInput {
+  headless: boolean;
+  cwd: string;
+  cols: number;
+  rows: number;
+  meta: SpawnMetaOptions;
+}
+
+/**
+ * Builds the `__spawn` argv passed to the canonical climon client binary. The
+ * client creates the session on THIS machine (headless background session, or a
+ * visible GUI terminal window). Flag order mirrors {@link buildRunArgs}.
+ */
+export function buildSpawnArgs(command: string[], input: SpawnArgsInput): string[] {
+  const args: string[] = ["__spawn"];
+  if (input.headless) {
+    args.push("--headless");
+  }
+  args.push("--cwd", input.cwd, "--cols", String(input.cols), "--rows", String(input.rows));
+  if (typeof input.meta.priority === "number") {
+    args.push("--priority", String(input.meta.priority));
+  }
+  if (input.meta.color !== undefined) {
+    args.push("--color", input.meta.color ?? "none");
+  }
+  if (input.meta.name !== undefined && input.meta.name !== "") {
+    args.push("--name", input.meta.name);
+  }
+  return [...args, ...command];
 }
 
 function normalizeDimension(value: unknown, fallback: number): string {
@@ -593,20 +618,81 @@ export function resolveIngestInvocation(
   return { file: inv.file, args: [...inv.args, "__ingest"] };
 }
 
-function spawnHeadlessSession(
-  argv: string[],
-  cwd: string,
-  cols: string,
-  rows: string,
-  meta: ResolvedSpawnMetaOptions = {}
-): Promise<string> {
-  return spawnHeadlessSessionDirect(
-    argv,
+/**
+ * Resolves the built Rust climon binary in a dev checkout (debug or release),
+ * relative to this source file. Returns undefined outside a `file:` dev run or
+ * when no binary has been built. In production the sibling `climon` binary next
+ * to the server executable is used instead (via resolveClientInvocation).
+ */
+function resolveDevClientBinary(): string | undefined {
+  if (!import.meta.url.startsWith("file:")) {
+    return undefined;
+  }
+  const exe = process.platform === "win32" ? ".exe" : "";
+  for (const profile of ["debug", "release"]) {
+    try {
+      const candidate = fileURLToPath(
+        new URL(`../../rust/target/${profile}/climon${exe}`, import.meta.url)
+      );
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {
+      // ignore and try the next profile
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolves how to invoke the climon client to spawn a session: an explicit
+ * CLIMON_CLIENT_BIN override or sibling binary first, then (in a dev checkout)
+ * the built Rust binary, then a bare `climon` on PATH.
+ */
+export function resolveSpawnInvocation(
+  args: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath
+): { file: string; args: string[] } {
+  const inv = resolveClientInvocation(args, env, execPath);
+  if (inv.file !== "climon") {
+    // An override or a sibling binary was found.
+    return inv;
+  }
+  const devBinary = resolveDevClientBinary();
+  if (devBinary) {
+    return { file: devBinary, args };
+  }
+  return inv;
+}
+
+interface SpawnOutcome {
+  id?: string;
+  warning?: string;
+}
+
+/**
+ * Spawns the climon client with `args` in `cwd` and parses its single-line JSON
+ * outcome (`{}` | `{"id":..}` | `{"id":..,"warning":..}`). Failures to launch or
+ * parse yield an empty outcome so the caller maps it to a 202 (the session may
+ * still appear via the normal sessions watch).
+ */
+async function runClimonSpawn(args: string[], cwd: string): Promise<SpawnOutcome> {
+  const inv = resolveSpawnInvocation(args);
+  const proc = Bun.spawn([inv.file, ...inv.args], {
     cwd,
-    { cols: Number.parseInt(cols, 10), rows: Number.parseInt(rows, 10) },
-    meta,
-    process.env
-  );
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env
+  });
+  const stdout = await new Response(proc.stdout).text();
+  await proc.exited;
+  const line = stdout.trim().split("\n").filter(Boolean).pop() ?? "{}";
+  try {
+    return JSON.parse(line) as SpawnOutcome;
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -1183,13 +1269,16 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
         let payload: {
           command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown; parentId?: unknown;
-          name?: unknown; priority?: unknown; color?: unknown;
+          name?: unknown; priority?: unknown; color?: unknown; headless?: unknown;
         };
         try {
           payload = (await request.json()) as typeof payload;
         } catch {
           return new Response("Invalid JSON body", { status: 400 });
         }
+        // The dashboard "+" defaults to a visible terminal window (headless
+        // false); the caller opts into a background session with headless: true.
+        const headless = payload.headless === true;
         const commandStr = typeof payload.command === "string" ? payload.command.trim() : "";
         const argv = splitCommand(commandStr);
         if (argv.length === 0) {
@@ -1230,18 +1319,24 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           }
           try {
             const color = await resolveParentSpawnColor(metaInput.color, parent.color, cwd);
-            const id = await spawnHeadlessSession(
-              argv,
-              cwd,
-              String(parent.cols),
-              String(parent.rows),
-              {
-                name: metaInput.name,
-                priority: metaInput.priority ?? parent.priority,
-                color
-              }
+            const outcome = await runClimonSpawn(
+              buildSpawnArgs(argv, {
+                headless,
+                cwd,
+                cols: parent.cols,
+                rows: parent.rows,
+                meta: {
+                  name: metaInput.name,
+                  priority: metaInput.priority ?? parent.priority,
+                  color
+                }
+              }),
+              cwd
             );
-            return Response.json({ id }, { status: 201 });
+            if (outcome.id) {
+              return Response.json({ id: outcome.id, warning: outcome.warning }, { status: 201 });
+            }
+            return Response.json({ warning: outcome.warning }, { status: 202 });
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             return new Response(`Failed to create session: ${message}`, { status: 500 });
@@ -1266,12 +1361,24 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             process.env,
             cwd
           );
-          const id = await spawnHeadlessSession(argv, cwd, cols, rows, {
-            name: metaInput.name,
-            priority: defaults.priority,
-            color: defaults.color
-          });
-          return Response.json({ id }, { status: 201 });
+          const outcome = await runClimonSpawn(
+            buildSpawnArgs(argv, {
+              headless,
+              cwd,
+              cols: Number.parseInt(cols, 10),
+              rows: Number.parseInt(rows, 10),
+              meta: {
+                name: metaInput.name,
+                priority: defaults.priority,
+                color: defaults.color
+              }
+            }),
+            cwd
+          );
+          if (outcome.id) {
+            return Response.json({ id: outcome.id, warning: outcome.warning }, { status: 201 });
+          }
+          return Response.json({ warning: outcome.warning }, { status: 202 });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return new Response(`Failed to create session: ${message}`, { status: 500 });
