@@ -144,6 +144,16 @@ desktop, attached to the new session (Terminal.app, Windows Terminal, or a Linux
 terminal emulator — override with the `session.terminalProgram` config setting).
 When checked (headless), the session runs in the background with no window.
 
+When the selected session lives on a **remote devbox**, the spawn happens on the
+devbox (a visible terminal opens on the devbox desktop, or a headless session
+appears under that devbox's namespace). This requires enabling the opt-in
+`feature.remoteSpawn` flag on the dashboard host — `climon config
+feature.remoteSpawn enabled` — and then pasting the remotes-screen setup script
+on the devbox, which now also enables the flag there and plants the shared
+`remote.spawnSecret` used to sign the command. While the flag is off, the
+per-session **[+]** on a remote session does nothing privileged. See
+[`docs/security.md`](docs/security.md) for the signed command channel.
+
 When there are **no** sessions at all, a global **[+]** appears in the
 sidebar header instead. It asks the dashboard server to spawn a session for you
 (prompting for a command and optional working directory); the server does this by

@@ -117,7 +117,16 @@ A `Bun.serve` server, stateless with respect to PTYs:
   selects the mode: headless spawns return `201` with the new session id, while a
   visible spawn opens a GUI terminal window on that machine and returns `202` (the
   session appears via the metadata watch). This replaces the older in-process
-  `spawn-session.ts` path.
+  `spawn-session.ts` path. **Routing is by the parent's `origin`:** a *local*
+  parent runs `climon __spawn` on the server host; a *remote* parent (origin
+  `remote`, living on a devbox) is gated by `feature.remoteSpawn` and routed over
+  a loopback-only control socket to this host's ingest, which signs a `Spawn`
+  (HMAC-SHA256) and forwards it over the mux to the devbox uplink. The uplink runs
+  `climon __spawn` on the devbox and replies with a signed `SpawnResult`; the
+  server returns `201 {id: "<clientId>~<innerId>"}` on success, `202` on timeout
+  or a visible spawn, or `502` on a devbox error. See [`security.md`](security.md)
+  for the signed command channel. The ingest advertises its control socket as the
+  `controlSocket` field in `ingest.json`.
 - `DELETE /api/sessions/:id` — clean up a session, removing its metadata and
   scrollback. Does not signal the daemon, so an attached climon client keeps
   running.

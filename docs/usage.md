@@ -168,6 +168,13 @@ session; checked (headless) runs it in the background with no window. Use the
 `session.terminalProgram` config setting to override which terminal emulator a
 visible spawn opens.
 
+When the originating session lives on a **remote devbox**, the spawn runs on the
+devbox itself. Enable this by setting `feature.remoteSpawn enabled` on the
+dashboard host, then re-pasting the remotes-screen setup script on the devbox
+(it now enables the flag and installs the shared `remote.spawnSecret` that signs
+each spawn command). With the flag off, the per-session **[+]** on a remote
+session performs no privileged action.
+
 When there are no sessions at all, the sidebar header shows a single **[+]**
 instead, which asks the server to create a session for you (prompting for a
 command and optional working directory). Creation only works from the machine
