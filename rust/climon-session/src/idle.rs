@@ -52,6 +52,24 @@ impl ScreenIdleDetector {
         }
     }
 
+    /// Whether the detector currently has the screen flagged as needing
+    /// attention. Diagnostic accessor used by the host's status logging.
+    pub fn is_flagged(&self) -> bool {
+        self.flagged
+    }
+
+    /// Whether the current screen has been user-acknowledged. Diagnostic
+    /// accessor used by the host's status logging.
+    pub fn is_acknowledged(&self) -> bool {
+        self.acknowledged
+    }
+
+    /// The timestamp (ms, on the host's monotonic clock) until which body
+    /// changes are absorbed as post-resize reflow. Diagnostic accessor.
+    pub fn settle_until(&self) -> i64 {
+        self.settle_until
+    }
+
     /// Feeds a fingerprint sampled at `now` (ms). Returns the transition, if any.
     ///
     /// Change detection compares only the fingerprint *body*: a difference in

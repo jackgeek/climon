@@ -28,6 +28,7 @@ use climon_store::paths::now_iso;
 use climon_store::Env as StoreEnv;
 
 use crate::attention::should_apply_user_attention_acknowledgement;
+use crate::attention::fingerprint_body;
 use crate::error::{SessionError, SessionResult};
 use crate::fingerprint::HeadlessGrid;
 use crate::idle::ScreenIdleDetector;
@@ -308,6 +309,20 @@ impl HostState {
             let fp = self.fingerprint();
             let now_ms = self.started_at.elapsed().as_millis() as i64;
             self.idle_detector.absorb_resize(&fp, now_ms);
+            climon_logging::logger::child("idle").log_with(
+                climon_logging::level::LogLevel::Debug,
+                serde_json::json!({
+                    "sessionId": self.id,
+                    "event": "apply_resize",
+                    "cols": cols,
+                    "rows": rows,
+                    "source": format!("{:?}", size.source),
+                    "now": now_ms,
+                    "settleUntil": self.idle_detector.settle_until(),
+                    "body": truncate_body(fingerprint_body(&fp)),
+                }),
+                "resize absorbed",
+            );
             let _ = climon_store::patch::patch_session_meta(
                 &self.env,
                 &self.id,
@@ -350,6 +365,21 @@ impl HostState {
         let fp = self.fingerprint();
         let now_ms = self.started_at.elapsed().as_millis() as i64;
         self.idle_detector.absorb_resize(&fp, now_ms);
+        climon_logging::logger::child("idle").log_with(
+            climon_logging::level::LogLevel::Debug,
+            serde_json::json!({
+                "sessionId": self.id,
+                "event": "revert_to_host_size",
+                "cols": target.cols,
+                "rows": target.rows,
+                "now": now_ms,
+                "settleUntil": self.idle_detector.settle_until(),
+                "flagged": self.idle_detector.is_flagged(),
+                "acknowledged": self.idle_detector.is_acknowledged(),
+                "body": truncate_body(fingerprint_body(&fp)),
+            }),
+            "revert absorbed",
+        );
         let _ = climon_store::patch::patch_session_meta(
             &self.env,
             &self.id,
@@ -379,6 +409,19 @@ impl HostState {
         if self.exited {
             return;
         }
+        climon_logging::logger::child("idle").log_with(
+            climon_logging::level::LogLevel::Debug,
+            serde_json::json!({
+                "sessionId": self.id,
+                "event": "apply_attention",
+                "source": format!("{source:?}"),
+                "needsAttention": payload.needs_attention,
+                "reason": payload.reason,
+                "lastAttentionState": self.last_attention_state,
+                "body": truncate_body(fingerprint_body(current_fp)),
+            }),
+            "attention",
+        );
         if !payload.needs_attention {
             if source == AttentionSource::User
                 && !should_apply_user_attention_acknowledgement(
@@ -568,6 +611,16 @@ pub fn run_session_host(
     let env = StoreEnv::from_env();
     let config_env = climon_config::config::Env::real();
     let config = climon_config::config::load_config(&config_env).map_err(SessionError::Config)?;
+
+    // Route this daemon's diagnostics to `$CLIMON_HOME/logs/daemon/<id>.log`
+    // (per-session, matching the TS daemon) instead of the shared client log.
+    climon_logging::logger::init_logger(
+        climon_logging::sinks::LogRole::Daemon,
+        climon_logging::logger::LoggerInitOptions {
+            session_id: Some(id.to_string()),
+            ..Default::default()
+        },
+    );
 
     let clamp_browser_to_host = cfg_bool(&config, "terminal", "clampBrowserToHost", false);
     let set_title = cfg_bool(&config, "terminal", "setTitle", true);
@@ -996,28 +1049,68 @@ fn spawn_connection_reader(
     })
 }
 
+fn truncate_body(body: &str) -> String {
+    const MAX: usize = 120;
+    let cleaned: String = body.replace('\n', "\\n");
+    if cleaned.chars().count() > MAX {
+        let head: String = cleaned.chars().take(MAX).collect();
+        format!("{head}… ({} chars)", cleaned.chars().count())
+    } else {
+        cleaned
+    }
+}
+
 fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(1000));
-        if shutdown.load(Ordering::SeqCst) {
-            break;
-        }
-        let mut s = state.lock().unwrap();
-        if s.exited {
-            break;
-        }
-        let now_ms = s.started_at.elapsed().as_millis() as i64;
-        let fp = s.fingerprint();
-        if let Some(transition) = s.idle_detector.update(&fp, now_ms) {
-            s.apply_attention(
-                AttentionPayload {
-                    needs_attention: transition.needs_attention,
-                    reason: transition.reason,
-                    attention_matched_at: None,
-                },
-                AttentionSource::Detector,
-                &fp,
-            );
+    thread::spawn(move || {
+        let log = climon_logging::logger::child("idle");
+        let mut prev_body: Option<String> = None;
+        loop {
+            thread::sleep(Duration::from_millis(1000));
+            if shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            let mut s = state.lock().unwrap();
+            if s.exited {
+                break;
+            }
+            let now_ms = s.started_at.elapsed().as_millis() as i64;
+            let fp = s.fingerprint();
+            let body = fingerprint_body(&fp);
+            let body_changed = prev_body.as_deref() != Some(body);
+            let settle_until = s.idle_detector.settle_until();
+            let was_flagged = s.idle_detector.is_flagged();
+            let was_ack = s.idle_detector.is_acknowledged();
+            let transition = s.idle_detector.update(&fp, now_ms);
+            if body_changed || transition.is_some() {
+                log.log_with(
+                    climon_logging::level::LogLevel::Debug,
+                    serde_json::json!({
+                        "sessionId": s.id,
+                        "now": now_ms,
+                        "settleUntil": settle_until,
+                        "withinSettle": now_ms < settle_until,
+                        "wasFlagged": was_flagged,
+                        "wasAcknowledged": was_ack,
+                        "bodyChanged": body_changed,
+                        "prevBody": prev_body.as_deref().map(truncate_body),
+                        "newBody": truncate_body(body),
+                        "transition": transition.as_ref().map(|t| if t.needs_attention { "needs-attention" } else { "running" }),
+                    }),
+                    "idle sample",
+                );
+            }
+            prev_body = Some(body.to_string());
+            if let Some(transition) = transition {
+                s.apply_attention(
+                    AttentionPayload {
+                        needs_attention: transition.needs_attention,
+                        reason: transition.reason,
+                        attention_matched_at: None,
+                    },
+                    AttentionSource::Detector,
+                    &fp,
+                );
+            }
         }
     })
 }
