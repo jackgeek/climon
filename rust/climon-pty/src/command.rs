@@ -40,7 +40,20 @@ static CACHED_SETSID: OnceLock<Option<String>> = OnceLock::new();
 /// Returns the path to a `setsid` binary on `PATH`, or `None` when unavailable.
 /// Always `None` on Windows. The result is cached for the process lifetime,
 /// matching `findSetsid` in `src/pty.ts`.
+///
+/// Setting `CLIMON_DISABLE_SETSID=1` (or `true`) forces `None`, running the
+/// child unwrapped. Some sandboxed environments (notably GitHub-hosted Linux
+/// runners) deny the controlling-terminal ioctl `setsid -c` performs, so the
+/// wrapped child fails to start; opting out there makes spawning behave like a
+/// platform with no `setsid` binary (e.g. macOS), which is the path the
+/// integration tests already exercise.
 pub fn find_setsid() -> Option<&'static str> {
+    if matches!(
+        std::env::var("CLIMON_DISABLE_SETSID").ok().as_deref(),
+        Some("1") | Some("true")
+    ) {
+        return None;
+    }
     CACHED_SETSID
         .get_or_init(|| {
             if cfg!(windows) {

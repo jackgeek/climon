@@ -65,24 +65,13 @@ fn no_controlling_terminal(out: &[u8]) -> bool {
     }
 }
 
-/// GitHub-hosted Linux runners sandbox controlling-terminal allocation
-/// (`setsid -c` performs a `TIOCSCTTY` the runner denies) non-deterministically:
-/// sometimes the wrapper fails with a visible EPERM message, sometimes the
-/// wrapped child's exit status is silently lost (observed `code == 0` for an
-/// `exit 7`). That makes the EPERM-marker check above insufficient there, so
-/// tests that need the setsid-wrapped child to actually run skip up front on
-/// GitHub-hosted Linux. The real path stays covered by the macOS CI job and
-/// local Linux/dev, where `TIOCSCTTY` is permitted.
-fn unreliable_setsid_env() -> bool {
-    std::env::var_os("GITHUB_ACTIONS").is_some() && cfg!(target_os = "linux")
-}
-
+/// GitHub-hosted Linux runners and other sandboxes set `CLIMON_DISABLE_SETSID`
+/// so the `setsid -c` wrapper is skipped (the runner denies the controlling-
+/// terminal ioctl). The EPERM marker below is a fallback for sandboxes that
+/// still attempt setsid; with the opt-out the child runs unwrapped, exactly as
+/// on macOS, and these tests exercise the real PTY path.
 #[test]
 fn spawns_and_reads_output() {
-    if unreliable_setsid_env() {
-        eprintln!("skipping on GitHub-hosted Linux: setsid -c controlling terminal is unreliable");
-        return;
-    }
     let mut pty = Pty::spawn(&sh("printf hi")).expect("spawn");
     let reader = pty.try_clone_reader().expect("reader");
     let handle = std::thread::spawn(move || read_to_end(reader));
@@ -101,10 +90,6 @@ fn spawns_and_reads_output() {
 
 #[test]
 fn propagates_nonzero_exit_code() {
-    if unreliable_setsid_env() {
-        eprintln!("skipping on GitHub-hosted Linux: setsid -c controlling terminal is unreliable");
-        return;
-    }
     let mut pty = Pty::spawn(&sh("exit 7")).expect("spawn");
     // Drain output so the child can exit cleanly.
     let reader = pty.try_clone_reader().expect("reader");
@@ -199,10 +184,6 @@ fn empty_command_errors() {
 #[cfg(unix)]
 #[test]
 fn provided_env_is_applied() {
-    if unreliable_setsid_env() {
-        eprintln!("skipping on GitHub-hosted Linux: setsid -c controlling terminal is unreliable");
-        return;
-    }
     let mut env = std::collections::HashMap::new();
     env.insert("CLIMON_PTY_TEST".to_string(), "marker-value".to_string());
     let opts = PtyOptions {
