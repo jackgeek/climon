@@ -200,6 +200,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "portable-pty",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
