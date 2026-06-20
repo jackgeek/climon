@@ -915,9 +915,13 @@ mod tests {
             Some(c) => format!(",\"color\":\"{c}\""),
             None => String::new(),
         };
+        // Forward slashes keep the path valid inside the hand-built JSON string;
+        // a raw Windows path (`C:\...`) would inject invalid JSON escapes and the
+        // metadata would fail to parse. The cwd value is irrelevant to color
+        // selection, so normalizing the separators is safe here.
+        let cwd_json = home.to_string_lossy().replace('\\', "/");
         let meta = format!(
-            "{{\"id\":\"{id}\",\"command\":[\"bash\"],\"displayCommand\":\"bash\",\"cwd\":\"{}\",\"status\":\"running\",\"priorityReason\":\"running\",\"socketPath\":\"tcp://127.0.0.1:0\",\"cols\":80,\"rows\":24,\"createdAt\":\"{now}\",\"updatedAt\":\"{now}\",\"lastActivityAt\":\"{now}\"{color_field}}}",
-            home.to_string_lossy()
+            "{{\"id\":\"{id}\",\"command\":[\"bash\"],\"displayCommand\":\"bash\",\"cwd\":\"{cwd_json}\",\"status\":\"running\",\"priorityReason\":\"running\",\"socketPath\":\"tcp://127.0.0.1:0\",\"cols\":80,\"rows\":24,\"createdAt\":\"{now}\",\"updatedAt\":\"{now}\",\"lastActivityAt\":\"{now}\"{color_field}}}"
         );
         fs::write(sessions.join(format!("{id}.json")), meta).unwrap();
     }
