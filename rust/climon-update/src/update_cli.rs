@@ -6,10 +6,10 @@ use climon_config::config::{read_global_config_setting, Env};
 use serde_json::Value;
 
 use crate::check::DEFAULT_MANIFEST_URL;
+use crate::distribution::embedded_distribution_password;
 use crate::manifest::fetch_manifest;
 use crate::pubkey::UPDATE_PUBLIC_KEY_B64;
 use crate::state::clear_available_version;
-use crate::distribution::embedded_distribution_password;
 use crate::update_cmd::{run_update_command, UpdateCommandOptions, UpdateStatus};
 use crate::version::VERSION;
 

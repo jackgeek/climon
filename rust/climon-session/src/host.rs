@@ -27,6 +27,7 @@ use climon_pty::{resolve_command, Pty, PtyOptions};
 use climon_store::paths::now_iso;
 use climon_store::Env as StoreEnv;
 
+use crate::attention::fingerprint_body;
 use crate::attention::should_apply_user_attention_acknowledgement;
 use crate::error::{SessionError, SessionResult};
 use crate::fingerprint::HeadlessGrid;
@@ -106,6 +107,7 @@ struct HostState {
     scrollback: climon_pty::Scrollback,
     grid: HeadlessGrid,
     idle_detector: ScreenIdleDetector,
+    started_at: Instant,
     mouse_mode_state: HashMap<String, bool>,
     mouse_mode_remainder: String,
 }
@@ -305,7 +307,21 @@ impl HostState {
         if changed {
             self.grid.resize(cols, rows);
             let fp = self.fingerprint();
-            self.idle_detector.absorb_resize(&fp);
+            let now_ms = self.started_at.elapsed().as_millis() as i64;
+            self.idle_detector.absorb_resize(&fp, now_ms);
+            climon_logging::logger::child("idle").log_with(
+                climon_logging::level::LogLevel::Debug,
+                serde_json::json!({
+                    "sessionId": self.id,
+                    "event": "apply_resize",
+                    "cols": cols,
+                    "rows": rows,
+                    "source": format!("{:?}", size.source),
+                    "now": now_ms,
+                    "settleUntil": self.idle_detector.settle_until(),
+                }),
+                "resize absorbed",
+            );
             let _ = climon_store::patch::patch_session_meta(
                 &self.env,
                 &self.id,
@@ -346,7 +362,22 @@ impl HostState {
         self.resizer.resize(target.cols, target.rows);
         self.grid.resize(target.cols, target.rows);
         let fp = self.fingerprint();
-        self.idle_detector.absorb_resize(&fp);
+        let now_ms = self.started_at.elapsed().as_millis() as i64;
+        self.idle_detector.absorb_resize(&fp, now_ms);
+        climon_logging::logger::child("idle").log_with(
+            climon_logging::level::LogLevel::Debug,
+            serde_json::json!({
+                "sessionId": self.id,
+                "event": "revert_to_host_size",
+                "cols": target.cols,
+                "rows": target.rows,
+                "now": now_ms,
+                "settleUntil": self.idle_detector.settle_until(),
+                "flagged": self.idle_detector.is_flagged(),
+                "acknowledged": self.idle_detector.is_acknowledged(),
+            }),
+            "revert absorbed",
+        );
         let _ = climon_store::patch::patch_session_meta(
             &self.env,
             &self.id,
@@ -393,6 +424,23 @@ impl HostState {
             self.current_attention_fingerprint = None;
             let now = now_iso();
             let is_user = source == AttentionSource::User;
+            climon_logging::logger::child("idle").log_with(
+                climon_logging::level::LogLevel::Debug,
+                serde_json::json!({
+                    "sessionId": self.id,
+                    "event": "apply_attention",
+                    "source": format!("{source:?}"),
+                    "status": if is_user { "acknowledged" } else { "running" },
+                }),
+                "attention cleared",
+            );
+            if is_user {
+                // A user acknowledgement clears the detector's flagged state so a
+                // later screen change cannot emit a stale revert, and marks the
+                // screen acknowledged so it does not re-flag while unchanged.
+                let now_ms = self.started_at.elapsed().as_millis() as i64;
+                self.idle_detector.acknowledge(current_fp, now_ms);
+            }
             let _ = climon_store::patch::patch_session_meta_from_current(
                 &self.env,
                 &self.id,
@@ -441,6 +489,17 @@ impl HostState {
             self.last_attention_state = Some(true);
             self.current_attention_matched_at = Some(now);
             self.current_attention_fingerprint = Some(current_fp.to_string());
+            climon_logging::logger::child("idle").log_with(
+                climon_logging::level::LogLevel::Debug,
+                serde_json::json!({
+                    "sessionId": self.id,
+                    "event": "apply_attention",
+                    "source": format!("{source:?}"),
+                    "status": "needs-attention",
+                    "reason": reason,
+                }),
+                "attention flagged",
+            );
         }
     }
 
@@ -559,6 +618,16 @@ pub fn run_session_host(
     let config_env = climon_config::config::Env::real();
     let config = climon_config::config::load_config(&config_env).map_err(SessionError::Config)?;
 
+    // Route this daemon's diagnostics to `$CLIMON_HOME/logs/daemon/<id>.log`
+    // (per-session, matching the TS daemon) instead of the shared client log.
+    climon_logging::logger::init_logger(
+        climon_logging::sinks::LogRole::Daemon,
+        climon_logging::logger::LoggerInitOptions {
+            session_id: Some(id.to_string()),
+            ..Default::default()
+        },
+    );
+
     let clamp_browser_to_host = cfg_bool(&config, "terminal", "clampBrowserToHost", false);
     let set_title = cfg_bool(&config, "terminal", "setTitle", true);
     let idle_seconds = cfg_i64(&config, "attention", "idleSeconds", 10);
@@ -629,6 +698,7 @@ pub fn run_session_host(
         scrollback: climon_pty::Scrollback::new(SCROLLBACK_CAP),
         grid: HeadlessGrid::new(meta.cols, meta.rows),
         idle_detector: ScreenIdleDetector::new(idle_seconds),
+        started_at: Instant::now(),
         mouse_mode_state: HashMap::new(),
         mouse_mode_remainder: String::new(),
     }));
@@ -987,19 +1057,43 @@ fn spawn_connection_reader(
 
 fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
-        let start = Instant::now();
+        let log = climon_logging::logger::child("idle");
+        let mut prev_body: Option<String> = None;
         loop {
             thread::sleep(Duration::from_millis(1000));
             if shutdown.load(Ordering::SeqCst) {
                 break;
             }
-            let now_ms = start.elapsed().as_millis() as i64;
             let mut s = state.lock().unwrap();
             if s.exited {
                 break;
             }
+            let now_ms = s.started_at.elapsed().as_millis() as i64;
             let fp = s.fingerprint();
-            if let Some(transition) = s.idle_detector.update(&fp, now_ms) {
+            let body = fingerprint_body(&fp);
+            let body_changed = prev_body.as_deref() != Some(body);
+            let settle_until = s.idle_detector.settle_until();
+            let was_flagged = s.idle_detector.is_flagged();
+            let was_ack = s.idle_detector.is_acknowledged();
+            let transition = s.idle_detector.update(&fp, now_ms);
+            if body_changed || transition.is_some() {
+                log.log_with(
+                    climon_logging::level::LogLevel::Debug,
+                    serde_json::json!({
+                        "sessionId": s.id,
+                        "now": now_ms,
+                        "settleUntil": settle_until,
+                        "withinSettle": now_ms < settle_until,
+                        "wasFlagged": was_flagged,
+                        "wasAcknowledged": was_ack,
+                        "bodyChanged": body_changed,
+                        "transition": transition.as_ref().map(|t| if t.needs_attention { "needs-attention" } else { "running" }),
+                    }),
+                    "idle sample",
+                );
+            }
+            prev_body = Some(body.to_string());
+            if let Some(transition) = transition {
                 s.apply_attention(
                     AttentionPayload {
                         needs_attention: transition.needs_attention,

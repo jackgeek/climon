@@ -29,7 +29,7 @@ pub fn obfuscate(plaintext: &[u8]) -> String {
 /// hex (odd length / non-hex digit) or non-UTF-8 output. Never panics.
 pub fn deobfuscate(hex: &str) -> Option<String> {
     let bytes = hex.as_bytes();
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(bytes.len() / 2);

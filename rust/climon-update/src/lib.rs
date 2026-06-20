@@ -14,14 +14,14 @@
 
 pub mod check;
 pub mod clock;
-#[allow(dead_code)]
-mod obfuscate;
 pub mod crypto_envelope;
 pub mod distribution;
 pub mod download;
 pub mod install_manifest;
 pub mod launch_hooks;
 pub mod manifest;
+#[allow(dead_code)]
+mod obfuscate;
 pub mod pubkey;
 pub mod state;
 pub mod swap;
