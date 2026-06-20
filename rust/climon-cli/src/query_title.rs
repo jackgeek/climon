@@ -5,6 +5,7 @@
 //! termios + `poll` with a 150 ms deadline); on non-unix or non-TTY it returns
 //! `None` immediately, matching the TS early-out for non-TTY streams.
 
+#[cfg(unix)]
 const MAX_REPLY_BYTES: usize = 2048;
 
 /// Extracts the title from a terminal's window-title report. The reply to
