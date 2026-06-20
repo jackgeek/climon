@@ -16,7 +16,9 @@ sockets.
 > Rust client interoperates with it byte-for-byte over the shared
 > metadata/socket/config surfaces. The TypeScript modules under `src/` (client
 > `src/index.ts`, `src/cli/`, `src/install/`, `src/remote/`, …) are retained as
-> the legacy/development client and the source of the Bun test suite. The
+> the **legacy, frozen** client — kept only as a development reference and the
+> source of the Bun test suite. **All client work (features and bug fixes)
+> happens in the Rust crates; do not fix client bugs in `src/`.** The
 > component descriptions below describe the architecture both implementations
 > share.
 

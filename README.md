@@ -7,9 +7,10 @@ interact with each one from the browser.
 
 ## Highlights
 
-- **No external dependencies.** Uses Bun's built-in PTY (`Bun.Terminal`) and
-  HTTP/WebSocket server. Runs natively on Linux, macOS, and Windows — on
-  Windows the PTY layer uses ConPTY via Bun's native terminal.
+- **No runtime dependencies.** The Rust client uses a native PTY layer
+  (`portable-pty`: openpty on Linux/macOS, ConPTY on Windows); the Bun dashboard
+  server uses Bun's built-in HTTP/WebSocket server. Runs natively on Linux,
+  macOS, and Windows.
 - **Sessions survive server restarts.** Each command runs under its own detached
   per-session daemon that owns the PTY. Restarting `climon server` never kills a
   session.
@@ -30,18 +31,42 @@ interact with each one from the browser.
   [Remote clients (dev tunnels)](#remote-clients-dev-tunnels), and
   [docs/security.md](docs/security.md).
 
+## Architecture at a glance
+
+climon ships as two binaries:
+
+- **Client (`climon`) — Rust.** The launcher/attach client, session host, PTY,
+  `run`/`ls`/`kill`, `config`, `setup`, `update`, the remote
+  `uplink`/`ingest`/`link` bridge, and the native installer are built from the
+  Rust workspace under [`rust/`](rust/). **All client development happens here.**
+- **Dashboard server (`climon-server`) — Bun.** The React + Fluent UI dashboard
+  and its REST/SSE/WebSocket APIs are built from `src/server.ts` (`src/server/`,
+  `src/web/`). This is still Bun and is actively maintained.
+
+> The rest of the TypeScript under `src/` (the old client: `src/index.ts`,
+> `src/launcher.ts`, `src/cli/`, `src/remote/`, `src/install/`, …) is the
+> **legacy client**, frozen and kept only for the Bun test suite. Don't fix
+> client bugs there — change the Rust crates instead. See
+> [docs/architecture.md](docs/architecture.md).
+
 ## Requirements
 
+- **Rust** toolchain (stable, edition 2021) to build the `climon` client from
+  [`rust/`](rust/) — `cargo build --release`.
 - [Bun](https://bun.sh) >= 1.3.0 on Linux/macOS, or >= 1.3.14 on Windows
-  (native ConPTY support is required).
+  (native ConPTY support is required) to build/run the dashboard **server** and
+  the legacy TypeScript test suite.
 
 ## Quick start
 
 ```bash
-bun run build:all            # bundle the client and the server
-bun link                     # make `climon` and `climon-server` available globally
+cargo build --release --manifest-path rust/Cargo.toml   # build the Rust `climon` client
+bun run build:server         # build the Bun dashboard server (`climon-server`)
 climon server                # terminal 1: start the dashboard
 ```
+
+> `bun run build:all` / `bun link` still build and link the **legacy** TS client
+> for the test suite, but the shipped `climon` client is the Rust binary above.
 
 Then in a new terminal:
 

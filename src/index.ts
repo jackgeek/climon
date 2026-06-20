@@ -1,15 +1,16 @@
 #!/usr/bin/env bun
 /**
- * LEGACY / DEVELOPMENT CLIENT.
+ * ⚠️ LEGACY TypeScript client — frozen. Fix the Rust client instead.
  *
  * As of the Phase-12 cutover, the **shipped** `climon` client is the Rust binary
- * built from `rust/climon-cli` and packaged by `scripts/compile.ts`. This Bun
- * entrypoint is retained for local development (`bun run dev` / `bun run start`
- * / `bun src/index.ts …`) and is still imported by the Bun test suite, but it is
- * no longer published as the `climon` binary (see `package.json` `bin`). The Bun
- * dashboard **server** (`src/server.ts` → `climon-server`) remains canonical and
- * is never rewritten. Keep this file working so the test suite stays green, but
- * make user-facing client behaviour changes in the Rust crates first.
+ * built from the `rust/` workspace (`climon-cli` and the supporting crates) and
+ * packaged by `scripts/compile.ts`. This Bun entrypoint is retained only for
+ * local development (`bun run dev` / `bun src/index.ts …`) and the Bun test
+ * suite; it is no longer published as the `climon` binary (see `package.json`
+ * `bin`). Do NOT add features or fix client bugs here — make all client changes
+ * in the Rust crates. The Bun dashboard **server** (`src/server.ts` →
+ * `climon-server`, plus `src/server/` and `src/web/`) is NOT legacy: it remains
+ * canonical and is still maintained.
  */
 import { basename, dirname, join } from "node:path";
 import { existsSync } from "node:fs";
