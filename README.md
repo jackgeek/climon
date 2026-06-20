@@ -131,12 +131,18 @@ Once the server is running you can also start new sessions directly from the
 dashboard. Session creation is **per-session**: hover any live session
 (`running`, `acknowledged`, `needs-attention`, `paused`, or `disconnected`) and
 click its **[+]** button to launch a new session from it. The server spawns the
-new session directly, inheriting the selected session's working directory, so you
-are prompted only for the command. Because this no longer depends on an attached
-terminal, you can launch a session from any live session — including ones that
-were themselves spawned this way (arbitrary nesting). Hover a session row to
-pause or resume its dashboard status; pausing does not suspend the underlying
-process or terminal input.
+new session on the **machine that session lives on**, inheriting the selected
+session's working directory, so you are prompted only for the command. Because
+this no longer depends on an attached terminal, you can launch a session from any
+live session — including ones that were themselves spawned this way (arbitrary
+nesting). Hover a session row to pause or resume its dashboard status; pausing
+does not suspend the underlying process or terminal input.
+
+The New Session dialog has a **Headless** checkbox (unchecked by default). When
+left unchecked (visible), the spawn opens a GUI terminal window on that machine's
+desktop, attached to the new session (Terminal.app, Windows Terminal, or a Linux
+terminal emulator — override with the `session.terminalProgram` config setting).
+When checked (headless), the session runs in the background with no window.
 
 When there are **no** sessions at all, a global **[+]** appears in the
 sidebar header instead. It asks the dashboard server to spawn a session for you

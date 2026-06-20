@@ -156,10 +156,17 @@ newer version is available instead of applying it automatically.
 
 Session creation happens **from a session**. Hover any live session (`running`,
 `acknowledged`, `needs-attention`, `paused`, or `disconnected`) and click its
-**[+]** to launch a new session from it. The server spawns the new session
-directly, inheriting the originating session's working directory, so you are
-prompted only for the command. This works from any live session, including ones
-that were themselves spawned this way (arbitrary nesting).
+**[+]** to launch a new session from it. The server spawns the new session on
+the **machine that session lives on**, inheriting the originating session's
+working directory, so you are prompted only for the command. This works from any
+live session, including ones that were themselves spawned this way (arbitrary
+nesting).
+
+The dialog includes a **Headless** checkbox (unchecked by default). Unchecked
+(visible) opens a GUI terminal window on that machine attached to the new
+session; checked (headless) runs it in the background with no window. Use the
+`session.terminalProgram` config setting to override which terminal emulator a
+visible spawn opens.
 
 When there are no sessions at all, the sidebar header shows a single **[+]**
 instead, which asks the server to create a session for you (prompting for a
