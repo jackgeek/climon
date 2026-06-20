@@ -19,7 +19,7 @@
     "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",
     "release": "bun scripts/release.ts",
-    "dev": "bun src/index.ts",
+    "dev": "bun scripts/dev.ts",
     "server": "bun src/server.ts server",
     "server:loop": "bun scripts/server-loop.ts",
     "start": "bun src/index.ts",
