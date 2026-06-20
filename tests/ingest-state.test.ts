@@ -85,6 +85,24 @@ describe("ingest beacon host (published bind interface)", () => {
   });
 });
 
+describe("ingest beacon controlSocket (remote spawn)", () => {
+  test("round-trips controlSocket when present", () => {
+    const state: IngestState = {
+      pid: 123,
+      port: 9000,
+      host: "127.0.0.1",
+      controlSocket: "tcp://127.0.0.1:54321"
+    };
+    expect(parseIngestState(serializeIngestState(state))).toEqual(state);
+  });
+
+  test("omits controlSocket when absent (backward compatible)", () => {
+    const parsed = parseIngestState(JSON.stringify({ pid: 1, port: 2 }));
+    expect(parsed).toEqual({ pid: 1, port: 2 });
+    expect("controlSocket" in (parsed ?? {})).toBe(false);
+  });
+});
+
 describe("resolveIngestPort", () => {
   test("returns the bound port from a live ingest.json", async () => {
     await writeIngestState({ pid: process.pid, port: 3140 }, env);
