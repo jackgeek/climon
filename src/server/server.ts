@@ -1,6 +1,7 @@
 import { existsSync, rmSync, watch } from "node:fs";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
@@ -30,8 +31,11 @@ import {
 import { sortSessionsByPriority } from "../priority.js";
 import { atomicWrite, listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
 import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionStatus } from "../types.js";
-import { getIngestPidPath, ingestNeedsRecycle, readRemoteHostState, resolveIngestBindAddress } from "../remote/ingest.js";
+import { getIngestPidPath, ingestNeedsRecycle, namespacedId, readRemoteHostState, resolveIngestBindAddress } from "../remote/ingest.js";
+import type { SpawnControlRequest, SpawnControlResponse } from "../remote/ingest.js";
 import { readIngestState, resolveIngestPort } from "../remote/ingest-state.js";
+import { ensureSpawnSecret } from "../remote/spawn-secret.js";
+import { requestRemoteSpawn } from "./remote-spawn-client.js";
 import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
 import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
@@ -561,6 +565,52 @@ export function buildSpawnArgs(command: string[], input: SpawnArgsInput): string
     args.push("--name", input.meta.name);
   }
   return [...args, ...command];
+}
+
+export interface RemoteSpawnInput {
+  argv: string[];
+  cwd: string;
+  headless: boolean;
+  name?: string;
+  priority?: number;
+  color?: string;
+}
+
+export interface RouteResult {
+  status: number;
+  body: Record<string, unknown> | undefined;
+}
+
+/** Maps a remote parent + spawn input to a Response shape via the ingest. */
+export async function routeRemoteSpawn(
+  parent: { id: string; cols: number; rows: number },
+  input: RemoteSpawnInput,
+  send: (req: SpawnControlRequest) => Promise<SpawnControlResponse> = requestRemoteSpawn
+): Promise<RouteResult> {
+  const clientId = parent.id.slice(0, parent.id.indexOf("~"));
+  const requestId = randomUUID();
+  const res = await send({
+    type: "spawn",
+    requestId,
+    clientId,
+    command: input.argv,
+    cwd: input.cwd,
+    cols: parent.cols,
+    rows: parent.rows,
+    name: input.name,
+    priority: input.priority,
+    color: input.color,
+    headless: input.headless
+  });
+  if (res.error === "timeout") return { status: 202, body: undefined };
+  if (res.error) return { status: 502, body: { error: res.error } };
+  if (res.id) {
+    const body: Record<string, unknown> = { id: namespacedId(clientId, res.id) };
+    if (res.warning) body.warning = res.warning;
+    return { status: 201, body };
+  }
+  // No id (e.g. a visible spawn): the session appears via session-added.
+  return { status: 202, body: res.warning ? { warning: res.warning } : undefined };
 }
 
 function normalizeDimension(value: unknown, fallback: number): string {
@@ -1309,6 +1359,28 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             return new Response("Parent session not found", { status: 404 });
           }
           const cwd = resolveParentSpawnCwd(payload.cwd, parent.cwd);
+          // A remote parent lives on a devbox: route the spawn over the signed
+          // ingest control socket instead of spawning on the server machine.
+          if (parent.origin === "remote") {
+            if (!isFeatureEnabled(config, "remoteSpawn")) {
+              return new Response("Remote spawn is disabled", { status: 403 });
+            }
+            await ensureSpawnSecret(process.env);
+            const route = await routeRemoteSpawn(
+              { id: parent.id, cols: parent.cols, rows: parent.rows },
+              {
+                argv,
+                cwd,
+                headless,
+                name: metaInput.name,
+                priority: metaInput.priority ?? parent.priority,
+                color: metaInput.color === null ? "none" : metaInput.color ?? undefined
+              }
+            );
+            return route.body
+              ? Response.json(route.body, { status: route.status })
+              : new Response(null, { status: route.status });
+          }
           try {
             const info = await stat(cwd);
             if (!info.isDirectory()) {
