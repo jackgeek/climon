@@ -1,0 +1,61 @@
+import type { ClimonConfig } from "../types.js";
+import { dashboardWritableSettings, findConfigSetting } from "../config-settings.js";
+
+/** Reads a dotted key (e.g. "dashboard.theme") from a config object, or undefined. */
+function readDotted(config: ClimonConfig, path: string): unknown {
+  const [section, field] = path.split(".");
+  const sub = (config as unknown as Record<string, unknown>)[section];
+  if (!sub || typeof sub !== "object") {
+    return undefined;
+  }
+  return (sub as Record<string, unknown>)[field];
+}
+
+/** Sets a dotted key on a config object, creating the section if needed. */
+function writeDotted(config: ClimonConfig, path: string, value: unknown): void {
+  const [section, field] = path.split(".");
+  const record = config as unknown as Record<string, unknown>;
+  const existing = record[section];
+  const sub =
+    existing && typeof existing === "object" ? (existing as Record<string, unknown>) : {};
+  sub[field] = value;
+  record[section] = sub;
+}
+
+/** Effective values for every dashboard-writable setting (config value or default). */
+export function collectDashboardPreferences(config: ClimonConfig): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const setting of dashboardWritableSettings()) {
+    const value = readDotted(config, setting.path);
+    out[setting.path] = value === undefined ? setting.defaultValue : value;
+  }
+  return out;
+}
+
+export type ApplyResult = { ok: true } | { ok: false; status: number; error: string };
+
+/**
+ * Validates and applies one dashboard preference to the config (in place).
+ * Enforces the allowlist (dashboardWritable), the declared type, and the
+ * setting's own validator. Returns a discriminated result; the caller persists.
+ */
+export function applyDashboardPreference(
+  config: ClimonConfig,
+  key: string,
+  value: unknown
+): ApplyResult {
+  const setting = findConfigSetting(key);
+  if (!setting || setting.dashboardWritable !== true) {
+    return { ok: false, status: 400, error: `Unknown or non-writable preference: ${key}` };
+  }
+  if (typeof value !== setting.type) {
+    return { ok: false, status: 400, error: `${key} must be a ${setting.type}` };
+  }
+  try {
+    setting.validate?.(value);
+  } catch (error) {
+    return { ok: false, status: 400, error: error instanceof Error ? error.message : String(error) };
+  }
+  writeDotted(config, key, value);
+  return { ok: true };
+}
