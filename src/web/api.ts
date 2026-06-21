@@ -44,6 +44,49 @@ export function withQuery(path: string, current: DashboardLocationState = curren
   return query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path;
 }
 
+export type TunnelAuthState = "ok" | "auth-required" | "unreachable";
+
+/**
+ * Classifies a manual-redirect probe of the dashboard `/health` endpoint to tell
+ * an expired dev-tunnel sign-in apart from a server outage. An expired session
+ * makes the relay answer with a cross-origin 302 to a Microsoft login page,
+ * which a `redirect: "manual"` fetch surfaces as an opaque-redirect response;
+ * some relay configs serve the login page inline as `text/html` instead.
+ */
+export function classifyTunnelAuthResponse(res: Response): TunnelAuthState {
+  if (res.type === "opaqueredirect") {
+    return "auth-required";
+  }
+  const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+  if (res.ok) {
+    return contentType.includes("text/html") ? "auth-required" : "ok";
+  }
+  return "unreachable";
+}
+
+/**
+ * Probes the tunnel relay to decide whether the dashboard connection dropped
+ * because the Microsoft dev-tunnel sign-in expired. Only runs on dev-tunnel
+ * hosts; everywhere else it is a no-op that reports `ok`. Network/timeout
+ * failures report `unreachable` so a transient blip never triggers a sign-in
+ * prompt.
+ */
+export async function probeTunnelAuth(
+  opts: { isTunnelHost?: boolean; fetchImpl?: typeof fetch } = {}
+): Promise<TunnelAuthState> {
+  const isTunnelHost = opts.isTunnelHost ?? isDevTunnelHost(currentDashboardLocation().hostname);
+  if (!isTunnelHost) {
+    return "ok";
+  }
+  const doFetch = opts.fetchImpl ?? fetch;
+  try {
+    const res = await doFetch(withQuery("/health"), { redirect: "manual", cache: "no-store" });
+    return classifyTunnelAuthResponse(res);
+  } catch {
+    return "unreachable";
+  }
+}
+
 export interface CreateSessionBody {
   command: string;
   cwd?: string;

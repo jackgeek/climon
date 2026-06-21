@@ -6,8 +6,10 @@ import {
   attentionAckMessage,
   buildSetupScript,
   canSendAttentionAck,
+  classifyTunnelAuthResponse,
   isDevTunnelHost,
   isLiveStatus,
+  probeTunnelAuth,
   TUNNEL_SKIP_ANTI_PHISHING_PARAM,
   withQuery
 } from "../src/web/api.js";
@@ -224,5 +226,69 @@ describe("buildSetupScript", () => {
     const script = buildSetupScript(BASE);
     expect(script).not.toContain("remoteSpawn");
     expect(script).not.toContain("spawnSecret");
+  });
+});
+
+function probeResponse(overrides: {
+  type?: string;
+  ok?: boolean;
+  status?: number;
+  contentType?: string;
+}): Response {
+  return {
+    type: overrides.type ?? "basic",
+    ok: overrides.ok ?? false,
+    status: overrides.status ?? 200,
+    headers: { get: (name: string) => (name.toLowerCase() === "content-type" ? overrides.contentType ?? null : null) }
+  } as unknown as Response;
+}
+
+describe("classifyTunnelAuthResponse", () => {
+  test("opaque redirect (302 to login) means auth is required", () => {
+    expect(classifyTunnelAuthResponse(probeResponse({ type: "opaqueredirect", status: 0 }))).toBe("auth-required");
+  });
+
+  test("200 JSON health response is ok", () => {
+    expect(
+      classifyTunnelAuthResponse(probeResponse({ ok: true, status: 200, contentType: "application/json" }))
+    ).toBe("ok");
+  });
+
+  test("200 HTML (inline login page) means auth is required", () => {
+    expect(
+      classifyTunnelAuthResponse(probeResponse({ ok: true, status: 200, contentType: "text/html; charset=utf-8" }))
+    ).toBe("auth-required");
+  });
+
+  test("5xx is unreachable, not an auth problem", () => {
+    expect(classifyTunnelAuthResponse(probeResponse({ ok: false, status: 503 }))).toBe("unreachable");
+  });
+});
+
+describe("probeTunnelAuth", () => {
+  test("returns ok without fetching when not on a dev tunnel host", async () => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      return probeResponse({ ok: true });
+    }) as unknown as typeof fetch;
+    const state = await probeTunnelAuth({ isTunnelHost: false, fetchImpl });
+    expect(state).toBe("ok");
+    expect(called).toBe(false);
+  });
+
+  test("classifies the health probe response on a dev tunnel host", async () => {
+    const fetchImpl = (async () =>
+      probeResponse({ type: "opaqueredirect", status: 0 })) as unknown as typeof fetch;
+    const state = await probeTunnelAuth({ isTunnelHost: true, fetchImpl });
+    expect(state).toBe("auth-required");
+  });
+
+  test("treats a thrown network error as unreachable", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    const state = await probeTunnelAuth({ isTunnelHost: true, fetchImpl });
+    expect(state).toBe("unreachable");
   });
 });
