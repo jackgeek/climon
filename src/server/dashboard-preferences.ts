@@ -73,3 +73,47 @@ export function applyDashboardPreference(
   writeDotted(config, key, value);
   return { ok: true };
 }
+
+/**
+ * Serializes config read-modify-write bursts within this process. Concurrent
+ * preference writes would otherwise race (load A, load B, save A, save B → A's
+ * change lost), so every persist runs through a single promise chain. Failures
+ * do not break the chain for subsequent writers.
+ */
+let writeChain: Promise<unknown> = Promise.resolve();
+
+function serializeWrite<T>(task: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(task, task);
+  writeChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+export type PersistResult =
+  | { result: { ok: true }; config: ClimonConfig }
+  | { result: { ok: false; status: number; error: string }; config: null };
+
+/**
+ * Loads the latest config, validates+applies one preference, and persists it —
+ * all serialized so concurrent writers cannot clobber each other. On success
+ * returns the saved config so the caller can refresh any in-memory copy; on
+ * rejection returns the discriminated error and a null config (nothing saved).
+ */
+export function persistDashboardPreference(
+  key: string,
+  value: unknown,
+  load: () => Promise<ClimonConfig>,
+  save: (config: ClimonConfig) => Promise<void>
+): Promise<PersistResult> {
+  return serializeWrite(async () => {
+    const latest = await load();
+    const result = applyDashboardPreference(latest, key, value);
+    if (!result.ok) {
+      return { result, config: null };
+    }
+    await save(latest);
+    return { result, config: latest };
+  });
+}

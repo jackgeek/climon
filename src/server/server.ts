@@ -45,7 +45,7 @@ import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
 import { runPromote } from "./promote.js";
-import { collectDashboardPreferences, applyDashboardPreference } from "./dashboard-preferences.js";
+import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
 import { resolveServerInvocation } from "../cli/server-exec.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
@@ -1657,12 +1657,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         if (typeof body.key !== "string") {
           return new Response("Missing key", { status: 400 });
         }
-        const latest = await loadConfig();
-        const result = applyDashboardPreference(latest, body.key, body.value);
+        const { result, config: latest } = await persistDashboardPreference(
+          body.key,
+          body.value,
+          loadConfig,
+          saveConfig
+        );
         if (!result.ok) {
           return new Response(result.error, { status: result.status });
         }
-        await saveConfig(latest);
         // Keep the in-memory config the server serves on /health in sync.
         Object.assign(config, latest);
         return Response.json({ ok: true, key: body.key, value: body.value });
