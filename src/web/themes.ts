@@ -29,7 +29,7 @@ function baseFor(theme: ITheme): "light" | "dark" {
   return luminance(theme.background ?? "#000000") > 0.5 ? "light" : "dark";
 }
 
-const PACKAGE_THEMES = xtermTheme as unknown as Record<string, ITheme>;
+const PACKAGE_THEMES = xtermTheme as Record<string, ITheme>;
 
 const SOURCE: Record<ThemeId, { label: string; xterm: ITheme }> = {
   default: { label: "Default", xterm: DEFAULT_XTERM },
