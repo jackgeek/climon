@@ -812,6 +812,24 @@ describe("parseTunnelExpiry", () => {
     expect(parseTunnelExpiry('{"tunnelExpiration": "30 days"}')).toBeUndefined();
   });
 
+  test("skips an expiration whose value is not a timestamp", () => {
+    expect(parseTunnelExpiry('{"expiration": "unknown"}')).toBeUndefined();
+  });
+
+  test("skips a non-timestamp expiration in favour of the real one", () => {
+    const output = [
+      'LOG: {"expiration": "never"}',
+      'HTTP: {"expiration": "2026-07-21T19:50:20Z"}'
+    ].join("\n");
+    expect(parseTunnelExpiry(output)).toBe("2026-07-21T19:50:20Z");
+  });
+
+  test("accepts a timestamp with fractional seconds and offset", () => {
+    expect(parseTunnelExpiry('{"expiration": "2026-07-21T19:50:20.123+00:00"}')).toBe(
+      "2026-07-21T19:50:20.123+00:00"
+    );
+  });
+
   test("returns undefined when no expiration is present", () => {
     expect(parseTunnelExpiry("MSAL: noise only\nHTTP: 200 OK")).toBeUndefined();
   });

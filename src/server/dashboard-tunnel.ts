@@ -218,10 +218,14 @@ export function parseTunnelCreate(stdout: string): { tunnelId?: string; cluster?
  * service JSON; only the JSON carries an absolute `"expiration"`, whereas the
  * non-verbose summary exposes a relative `"tunnelExpiration"` we deliberately
  * skip. The leading quote in the pattern anchors to the exact `expiration` key
- * so `tunnelExpiration` never matches.
+ * so `tunnelExpiration` never matches, and the value must be an ISO-8601
+ * timestamp so a stray `"expiration"` carrying a non-datetime value (e.g. log
+ * noise) is skipped in favour of the real one.
  */
 export function parseTunnelExpiry(output: string): string | undefined {
-  const match = output.match(/"expiration"\s*:\s*"([^"]+)"/);
+  const match = output.match(
+    /"expiration"\s*:\s*"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))"/
+  );
   return match?.[1];
 }
 
