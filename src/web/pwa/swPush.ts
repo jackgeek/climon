@@ -1,6 +1,7 @@
 import {
   parsePushData,
   buildNotificationOptions,
+  notificationTargetPath,
   VIEWED_SESSION_QUERY,
   parseViewedSessionResponse,
   shouldSuppressPush,
@@ -107,4 +108,40 @@ export function pickNotificationClient<T extends NotificationClickClient>(
     clients[0] ??
     null
   );
+}
+
+/** What the service worker should do when a notification is tapped. */
+export type NotificationClickAction =
+  | { kind: "open"; url: string }
+  | { kind: "focus"; clientId: string }
+  | { kind: "post"; clientId: string; sessionId: string }
+  | { kind: "navigate"; clientId: string; url: string };
+
+/**
+ * Decides how a notification tap should reach the originating session.
+ *
+ * - No open client: open a deep-linked window (`/?session=<id>`).
+ * - No session id: just focus the chosen client (nothing to deep-link to).
+ * - Foreground client (focused or visible): post `OPEN_SESSION_MESSAGE` — instant
+ *   and keeps live terminal state.
+ * - Backgrounded/hidden client: navigate it to the deep-link URL, because a
+ *   message posted to a frozen page can be dropped on resume and strand the user
+ *   on the session list.
+ */
+export function resolveNotificationClick(
+  sessionId: string | undefined,
+  clients: readonly NotificationClickClient[],
+): NotificationClickAction {
+  const target = pickNotificationClient(clients);
+  const url = notificationTargetPath(sessionId);
+  if (!target) {
+    return { kind: "open", url };
+  }
+  if (!sessionId) {
+    return { kind: "focus", clientId: target.id };
+  }
+  if (target.focused || target.visibilityState === "visible") {
+    return { kind: "post", clientId: target.id, sessionId };
+  }
+  return { kind: "navigate", clientId: target.id, url };
 }
