@@ -210,6 +210,19 @@ export function parseTunnelCreate(stdout: string): { tunnelId?: string; cluster?
   }
 }
 
+/**
+ * Extracts the tunnel's absolute expiry (ISO 8601) from `devtunnel show -v -j`
+ * output. The verbose stream interleaves MSAL/HTTP log lines with the raw
+ * service JSON; only the JSON carries an absolute `"expiration"`, whereas the
+ * non-verbose summary exposes a relative `"tunnelExpiration"` we deliberately
+ * skip. The leading quote in the pattern anchors to the exact `expiration` key
+ * so `tunnelExpiration` never matches.
+ */
+export function parseTunnelExpiry(output: string): string | undefined {
+  const match = output.match(/"expiration"\s*:\s*"([^"]+)"/);
+  return match?.[1];
+}
+
 function ensureOk(result: RunResult, label: string): void {
   if (result.status !== 0) {
     throw new Error(`${label} failed: ${result.stderr.trim() || result.status}`);

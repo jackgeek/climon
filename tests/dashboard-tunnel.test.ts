@@ -5,6 +5,7 @@ import {
   dashboardTunnelAuthMessage,
   parseDashboardTunnelUrl,
   parseTunnelCreate,
+  parseTunnelExpiry,
   splitTunnelId,
   type DashboardTunnelRunner
 } from "../src/server/dashboard-tunnel.js";
@@ -782,3 +783,36 @@ describe("createDashboardTunnelManager", () => {
   });
 });
 
+
+describe("parseTunnelExpiry", () => {
+  const verboseOutput = [
+    "MSAL: Access token is not expired. Returning the found cache entry. [Current time (06/21/2026 19:50:17) - Expiration Time (06/22/2026 03:50:04 +00:00)]",
+    "HTTP: GET https://eun1.rel.tunnels.api.visualstudio.com/tunnels/swift-lake-21d3cf3?includePorts=true",
+    "HTTP: 200 OK (291 ms)",
+    "HTTP: {",
+    '  "clusterId": "eun1",',
+    '  "tunnelId": "swift-lake-21d3cf3",',
+    '  "ports": [],',
+    '  "created": "2026-06-20T15:30:07.070058Z",',
+    '  "expiration": "2026-07-21T19:50:20Z"',
+    "}",
+    "{",
+    '  "tunnel": {',
+    '    "tunnelId": "swift-lake-21d3cf3.eun1",',
+    '    "tunnelExpiration": "30 days"',
+    "  }",
+    "}"
+  ].join("\n");
+
+  test("extracts the absolute expiration timestamp from verbose output", () => {
+    expect(parseTunnelExpiry(verboseOutput)).toBe("2026-07-21T19:50:20Z");
+  });
+
+  test("ignores the relative tunnelExpiration field", () => {
+    expect(parseTunnelExpiry('{"tunnelExpiration": "30 days"}')).toBeUndefined();
+  });
+
+  test("returns undefined when no expiration is present", () => {
+    expect(parseTunnelExpiry("MSAL: noise only\nHTTP: 200 OK")).toBeUndefined();
+  });
+});
