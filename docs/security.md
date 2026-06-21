@@ -189,6 +189,12 @@ color, command label) it advertises. It cannot inject into another client's PTY
 (per-connection sockets) or read its keystrokes. Revoke access by deleting
 the tunnel or removing the user's identity from its ACL.
 
+When the browser's dev-tunnel sign-in expires, the dashboard PWA detects the
+relay's auth redirect (a manual-redirect probe of `/health`) and shows an
+in-app "Sign in again" prompt instead of spinning on "Reconnecting". The prompt
+performs a user-initiated top-level navigation to re-run the Microsoft sign-in;
+it never auto-navigates and stores no tunnel credentials in the browser.
+
 ## Dashboard server: loopback only
 
 The dashboard HTTP/WebSocket server binds to `127.0.0.1` exclusively. There is
