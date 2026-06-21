@@ -327,6 +327,24 @@ export function shouldShowServerReconnectOverlay(
   return state === "reconnecting" && armed;
 }
 
+export type ConnectionOverlayKind = "auth" | "reconnect" | "none";
+
+// The tunnel re-auth overlay takes precedence over the generic reconnect
+// spinner: when the sign-in has expired, "Reconnecting…" would spin forever, so
+// the actionable prompt must win.
+export function activeConnectionOverlay(opts: {
+  tunnelAuthRequired: boolean;
+  reconnectOverlayVisible: boolean;
+}): ConnectionOverlayKind {
+  if (opts.tunnelAuthRequired) {
+    return "auth";
+  }
+  if (opts.reconnectOverlayVisible) {
+    return "reconnect";
+  }
+  return "none";
+}
+
 // "immediate" when the user just returned to the app (page became visible within
 // the grace window) so a known-broken connection is surfaced right away; otherwise
 // "delayed" so a drop while passively viewing waits out the 60s timer.
@@ -423,6 +441,43 @@ export function ServerReconnectOverlay() {
         <p id="server-reconnect-description" className={styles.serverReconnectMessage}>
           Re-establishing connection to the climon server...
         </p>
+      </div>
+    </div>
+  );
+}
+
+export function TunnelReauthOverlay({ onReauth }: { onReauth: () => void }) {
+  const styles = useStyles();
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    overlayRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      ref={overlayRef}
+      className={styles.serverReconnectOverlay}
+      role="alert"
+      aria-live="assertive"
+      aria-atomic="true"
+      aria-labelledby="tunnel-reauth-title"
+      aria-describedby="tunnel-reauth-description"
+      tabIndex={-1}
+      onPointerDown={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+    >
+      <div className={styles.serverReconnectCard}>
+        <h2 id="tunnel-reauth-title" className={styles.serverReconnectTitle}>
+          Session expired
+        </h2>
+        <p id="tunnel-reauth-description" className={styles.serverReconnectMessage}>
+          Your secure tunnel sign-in has expired. Sign in again to reconnect to the climon dashboard.
+        </p>
+        <Button appearance="primary" onClick={onReauth}>
+          Sign in again
+        </Button>
       </div>
     </div>
   );
