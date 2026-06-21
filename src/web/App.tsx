@@ -26,6 +26,7 @@ import {
   closeDashboardTunnel,
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
+  probeTunnelAuth,
   type DashboardTunnelStatus
 } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -330,6 +331,24 @@ export function shouldShowServerReconnectOverlay(
   return state === "reconnecting" && armed;
 }
 
+export type ConnectionOverlayKind = "auth" | "reconnect" | "none";
+
+// The tunnel re-auth overlay takes precedence over the generic reconnect
+// spinner: when the sign-in has expired, "Reconnecting…" would spin forever, so
+// the actionable prompt must win.
+export function activeConnectionOverlay(opts: {
+  tunnelAuthRequired: boolean;
+  reconnectOverlayVisible: boolean;
+}): ConnectionOverlayKind {
+  if (opts.tunnelAuthRequired) {
+    return "auth";
+  }
+  if (opts.reconnectOverlayVisible) {
+    return "reconnect";
+  }
+  return "none";
+}
+
 // "immediate" when the user just returned to the app (page became visible within
 // the grace window) so a known-broken connection is surfaced right away; otherwise
 // "delayed" so a drop while passively viewing waits out the 60s timer.
@@ -431,6 +450,43 @@ export function ServerReconnectOverlay() {
   );
 }
 
+export function TunnelReauthOverlay({ onReauth }: { onReauth: () => void }) {
+  const styles = useStyles();
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    overlayRef.current?.focus();
+  }, []);
+
+  return (
+    <div
+      ref={overlayRef}
+      className={styles.serverReconnectOverlay}
+      role="alert"
+      aria-live="assertive"
+      aria-atomic="true"
+      aria-labelledby="tunnel-reauth-title"
+      aria-describedby="tunnel-reauth-description"
+      tabIndex={-1}
+      onPointerDown={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
+      onWheel={(event) => event.stopPropagation()}
+    >
+      <div className={styles.serverReconnectCard}>
+        <h2 id="tunnel-reauth-title" className={styles.serverReconnectTitle}>
+          Session expired
+        </h2>
+        <p id="tunnel-reauth-description" className={styles.serverReconnectMessage}>
+          Your secure tunnel sign-in has expired. Sign in again to reconnect to the climon dashboard.
+        </p>
+        <Button appearance="primary" onClick={onReauth}>
+          Sign in again
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -479,6 +535,8 @@ export function App() {
   const [serverReconnectToken, setServerReconnectToken] = useState(0);
   const [reconnectOverlayArmed, setReconnectOverlayArmed] = useState(false);
   const reconnectOverlayArmedRef = useRef(false);
+  const [tunnelAuthRequired, setTunnelAuthRequired] = useState(false);
+  const tunnelAuthProbeInFlightRef = useRef(false);
   const reconnectOverlayTimerRef = useRef<number | null>(null);
   const becameVisibleAtRef = useRef<number>(Date.now());
   const pageVisibleRef = useRef(pageVisible);
@@ -658,6 +716,7 @@ export function App() {
       serverConnectionStateRef.current = "connected";
       setServerConnectionState("connected");
       disarmReconnectOverlay();
+      setTunnelAuthRequired(false);
       return wasReconnecting;
     };
     async function refreshSessionsAfterReconnect(): Promise<void> {
@@ -691,6 +750,21 @@ export function App() {
         setServerReconnectToken((token) => token + 1);
       }
     };
+    const maybeProbeTunnelAuth = (): void => {
+      if (!readIsTunnelOrigin() || tunnelAuthProbeInFlightRef.current) {
+        return;
+      }
+      tunnelAuthProbeInFlightRef.current = true;
+      void probeTunnelAuth()
+        .then((state) => {
+          if (!closed && state === "auth-required" && serverConnectionStateRef.current === "reconnecting") {
+            setTunnelAuthRequired(true);
+          }
+        })
+        .finally(() => {
+          tunnelAuthProbeInFlightRef.current = false;
+        });
+    };
     const markServerReconnecting = (): void => {
       if (closed || !hadServerConnectionRef.current) {
         return;
@@ -702,6 +776,7 @@ export function App() {
       }
       serverConnectionStateRef.current = "reconnecting";
       setServerConnectionState("reconnecting");
+      maybeProbeTunnelAuth();
       const mode = reconnectOverlayEntryMode({
         pageVisible: pageVisibleRef.current,
         msSinceVisible: Date.now() - becameVisibleAtRef.current
@@ -1174,6 +1249,10 @@ export function App() {
     serverConnectionState,
     reconnectOverlayArmed
   );
+  const connectionOverlay = activeConnectionOverlay({
+    tunnelAuthRequired,
+    reconnectOverlayVisible: serverReconnectOverlayVisible
+  });
 
   return (
     <FeatureFlagsProvider value={features}>
@@ -1351,7 +1430,10 @@ export function App() {
         onCopy={setTunnelLinkCopied}
         onClose={() => setTunnelLinkOpen(false)}
       />
-      {serverReconnectOverlayVisible && <ServerReconnectOverlay />}
+      {connectionOverlay === "auth" && (
+        <TunnelReauthOverlay onReauth={() => window.location.assign(window.location.href)} />
+      )}
+      {connectionOverlay === "reconnect" && <ServerReconnectOverlay />}
     </div>
     </FeatureFlagsProvider>
   );

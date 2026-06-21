@@ -7,6 +7,8 @@ import { applyVisualViewportLayout, clearVisualViewportLayout, scheduleTerminalR
 import {
   MainHeader,
   ServerReconnectOverlay,
+  TunnelReauthOverlay,
+  activeConnectionOverlay,
   shouldShowServerReconnectOverlay,
   reconnectOverlayEntryMode,
   RECONNECT_VISIBILITY_GRACE_MS,
@@ -232,5 +234,33 @@ describe("tab refocus terminal refresh", () => {
 
     // The handler reads isMobile, so it must be a dependency of the effect.
     expect(source).toContain("}, [armReconnectOverlay, isMobile]);");
+  });
+});
+
+describe("activeConnectionOverlay", () => {
+  test("auth overlay wins over the generic reconnect overlay", () => {
+    expect(
+      activeConnectionOverlay({ tunnelAuthRequired: true, reconnectOverlayVisible: true })
+    ).toBe("auth");
+  });
+
+  test("falls back to reconnect when only reconnect is active", () => {
+    expect(
+      activeConnectionOverlay({ tunnelAuthRequired: false, reconnectOverlayVisible: true })
+    ).toBe("reconnect");
+  });
+
+  test("none when neither is active", () => {
+    expect(
+      activeConnectionOverlay({ tunnelAuthRequired: false, reconnectOverlayVisible: false })
+    ).toBe("none");
+  });
+});
+
+describe("TunnelReauthOverlay", () => {
+  test("renders the expired-session prompt and a sign-in action", () => {
+    const html = renderToStaticMarkup(createElement(TunnelReauthOverlay, { onReauth: () => {} }));
+    expect(html).toContain("Session expired");
+    expect(html).toContain("Sign in again");
   });
 });
