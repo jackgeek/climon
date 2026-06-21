@@ -23,6 +23,7 @@ import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
+import { TunnelExpiryBanner } from "./TunnelExpiryBanner.js";
 import { useFeature } from "../hooks/useFeature.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
@@ -278,6 +279,7 @@ export function Sidebar({
           />
         )}
       </div>
+      {isMobile && <TunnelExpiryBanner variant="inline" />}
       <div className={styles.list} dir="rtl">
         {sessions.length === 0 ? (
           <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)} dir="ltr">
