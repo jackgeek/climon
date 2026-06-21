@@ -12,6 +12,10 @@
   "hotKeys": {
     "focusTopSession": "Alt+J"
   },
+  "dashboard": {
+    "theme": "default",
+    "keyBarPinned": false
+  },
   "attention": {
     "idleSeconds": 10
   },
