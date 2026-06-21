@@ -8,15 +8,24 @@ const EXPIRY_REFETCH_MS = 5 * 60 * 1000;
 const TICK_MS = 1000;
 
 const useStyles = makeStyles({
-  banner: {
+  base: {
+    padding: "12px 16px",
+    textAlign: "center",
+    fontWeight: tokens.fontWeightSemibold
+  },
+  // Desktop: overlay pinned to the very top of the viewport.
+  fixed: {
     position: "fixed",
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 1000,
-    padding: "12px 16px",
-    textAlign: "center",
-    fontWeight: tokens.fontWeightSemibold
+    zIndex: 1000
+  },
+  // Mobile: an in-flow block inside the sidebar, below the climon header and
+  // above the session list, so it never covers the header or the terminal.
+  inline: {
+    flex: "0 0 auto",
+    borderBottom: `1px solid ${tokens.colorNeutralStroke1}`
   },
   info: {
     backgroundColor: tokens.colorBrandBackground,
@@ -35,12 +44,16 @@ const useStyles = makeStyles({
 });
 
 /**
- * Fixed-top banner that counts down to the dev tunnel's absolute expiry. Renders
- * only when the dashboard is opened through the tunnel link (a `*.devtunnels.ms`
- * HTTPS origin) and an expiry is known. Re-fetches the expiry every 5 minutes to
- * follow the rolling extension, and re-renders every second for a live countdown.
+ * Banner that counts down to the dev tunnel's absolute expiry. Renders only when
+ * the dashboard is opened through the tunnel link (a `*.devtunnels.ms` HTTPS
+ * origin) and an expiry is known. Re-fetches the expiry every 5 minutes to follow
+ * the rolling extension, and re-renders every second for a live countdown.
+ *
+ * `variant` controls placement: `"fixed"` (default) pins it to the top of the
+ * viewport on desktop; `"inline"` renders it as an in-flow block (used inside the
+ * sidebar on mobile, below the header and above the session list).
  */
-export function TunnelExpiryBanner() {
+export function TunnelExpiryBanner({ variant = "fixed" }: { variant?: "fixed" | "inline" } = {}) {
   const styles = useStyles();
   const isTunnelOrigin = readIsTunnelOrigin();
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
@@ -81,7 +94,7 @@ export function TunnelExpiryBanner() {
     <div
       role="timer"
       aria-live="off"
-      className={mergeClasses(styles.banner, styles[level])}
+      className={mergeClasses(styles.base, variant === "inline" ? styles.inline : styles.fixed, styles[level])}
     >
       {text}
     </div>

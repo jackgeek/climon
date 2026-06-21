@@ -1278,7 +1278,7 @@ export function App() {
         onOpenChange={setPwaInstallOpen}
         onInstall={handleInstallPwa}
       />
-      <TunnelExpiryBanner />
+      {!isMobile && <TunnelExpiryBanner />}
       {tunnelDownBannerVisible && (
         <div role="alert" className={styles.tunnelDownBanner}>
           This climon Tunnel Link is no longer available. Long-press the climon icon and choose Uninstall.
