@@ -85,3 +85,26 @@ export async function handlePush(deps: HandlePushDeps): Promise<void> {
   }
   await deps.showNotification(data.title, buildNotificationOptions(data));
 }
+
+/** Minimal slice of a window `WindowClient` the notification-click glue needs. */
+export interface NotificationClickClient {
+  id: string;
+  focused: boolean;
+  visibilityState: "hidden" | "visible" | "prerender" | "unloaded";
+}
+
+/**
+ * Chooses which open client a notification tap should target. Prefers a
+ * `focused` client, then a `visible` one, then the first client — so a stale or
+ * hidden client never wins over the live PWA. Returns null when there are none.
+ */
+export function pickNotificationClient<T extends NotificationClickClient>(
+  clients: readonly T[],
+): T | null {
+  return (
+    clients.find((c) => c.focused) ??
+    clients.find((c) => c.visibilityState === "visible") ??
+    clients[0] ??
+    null
+  );
+}

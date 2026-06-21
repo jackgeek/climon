@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import {
   handlePush,
   queryViewedSession,
+  pickNotificationClient,
   type PushClient,
   type ViewedSessionChannel,
+  type NotificationClickClient,
 } from "../src/web/pwa/swPush.js";
 import { VIEWED_SESSION_QUERY, viewedSessionResponse } from "../src/web/pwa/pushData.js";
 
@@ -148,5 +150,41 @@ describe("queryViewedSession", () => {
       timeoutMs: 500,
     });
     expect(result).toBeNull();
+  });
+});
+
+function client(
+  id: string,
+  overrides: Partial<NotificationClickClient> = {},
+): NotificationClickClient {
+  return { id, focused: false, visibilityState: "hidden", ...overrides };
+}
+
+describe("pickNotificationClient", () => {
+  test("returns null when there are no clients", () => {
+    expect(pickNotificationClient([])).toBeNull();
+  });
+
+  test("prefers a focused client over a visible or hidden one", () => {
+    const picked = pickNotificationClient([
+      client("hidden"),
+      client("visible", { visibilityState: "visible" }),
+      client("focused", { focused: true, visibilityState: "visible" }),
+    ]);
+    expect(picked?.id).toBe("focused");
+  });
+
+  test("prefers a visible client when none is focused", () => {
+    const picked = pickNotificationClient([
+      client("hidden-1"),
+      client("visible", { visibilityState: "visible" }),
+      client("hidden-2"),
+    ]);
+    expect(picked?.id).toBe("visible");
+  });
+
+  test("falls back to the first client when none is focused or visible", () => {
+    const picked = pickNotificationClient([client("a"), client("b")]);
+    expect(picked?.id).toBe("a");
   });
 });
