@@ -363,6 +363,8 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     tunnelId = undefined;
     cluster = undefined;
     url = undefined;
+    expiresAt = undefined;
+    expiresAtFetchedAt = 0;
     if (persistedTunnelId === id) {
       persistedTunnelId = undefined;
       await options.onClearPersistedTunnel?.();
@@ -380,6 +382,8 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     tunnelId = undefined;
     cluster = undefined;
     url = undefined;
+    expiresAt = undefined;
+    expiresAtFetchedAt = 0;
     if (persistedTunnelId === id) {
       persistedTunnelId = undefined;
       await options.onClearPersistedTunnel?.();

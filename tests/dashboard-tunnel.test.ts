@@ -858,3 +858,41 @@ describe("dashboard tunnel status expiry", () => {
     expect(commands.some((cmd) => cmd.startsWith("show"))).toBe(false);
   });
 });
+
+describe("dashboard tunnel expiry cache reset", () => {
+  test("refreshes expiry for a recreated tunnel instead of serving the old value", async () => {
+    let showCalls = 0;
+    const expirations = ["2026-07-21T19:50:20Z", "2026-08-21T10:00:00Z"];
+    // First host start fails verification once to force a discard + recreate,
+    // so the manager tears down the first tunnel and builds a second.
+    let verifyCalls = 0;
+    const manager = createDashboardTunnelManager({
+      port: 3131,
+      verifyTunnel: async () => {
+        verifyCalls += 1;
+        return verifyCalls > 1; // first tunnel fails verification -> discarded & recreated
+      },
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test.eun1" }), stderr: "" };
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "delete") return { status: 0, stdout: "", stderr: "" };
+        if (args[0] === "show") {
+          const value = expirations[Math.min(showCalls, expirations.length - 1)];
+          showCalls += 1;
+          return { status: 0, stdout: `{ "expiration": "${value}" }`, stderr: "" };
+        }
+        throw new Error(`unexpected runner command: ${args.join(" ")}`);
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await manager.ensure();
+    const status = await manager.status();
+    expect(status.expiresAt).toBe("2026-07-21T19:50:20Z");
+  });
+});
