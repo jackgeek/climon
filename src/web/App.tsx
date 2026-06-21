@@ -57,6 +57,7 @@ import { StatusBadge } from "./components/StatusBadge.js";
 import type { TerminalResizeMode } from "../ipc/frame.js";
 import { toggleViewMode } from "./view-mode.js";
 import { InstallPwaDialog } from "./components/InstallPwaDialog.js";
+import { TunnelExpiryBanner } from "./components/TunnelExpiryBanner.js";
 import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa } from "./pwa/pwaContext.js";
 import {
   registerServiceWorker,
@@ -1198,6 +1199,7 @@ export function App() {
         onOpenChange={setPwaInstallOpen}
         onInstall={handleInstallPwa}
       />
+      <TunnelExpiryBanner />
       {tunnelDownBannerVisible && (
         <div role="alert" className={styles.tunnelDownBanner}>
           This climon Tunnel Link is no longer available. Long-press the climon icon and choose Uninstall.
