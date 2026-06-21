@@ -76,13 +76,16 @@ self.addEventListener("notificationclick", (event: NotificationEvent) => {
           try {
             await client.navigate(action.url);
           } catch {
-            // Some platforms reject navigate() on uncontrolled clients; fall back
-            // to the (best-effort) message so a focused page can still react.
-            if (sessionId) {
-              client.postMessage({ type: OPEN_SESSION_MESSAGE, sessionId });
-            }
+            // Some platforms reject navigate() on an uncontrolled client. Opening
+            // a deep-linked window is more reliable than a postMessage a frozen
+            // page could drop — which is the failure this handler prevents.
+            await self.clients.openWindow(action.url);
           }
           return;
+        }
+        default: {
+          const exhaustive: never = action;
+          return exhaustive;
         }
       }
     })(),
