@@ -816,3 +816,45 @@ describe("parseTunnelExpiry", () => {
     expect(parseTunnelExpiry("MSAL: noise only\nHTTP: 200 OK")).toBeUndefined();
   });
 });
+
+describe("dashboard tunnel status expiry", () => {
+  function expiryRunner(commands: string[]): DashboardTunnelRunner {
+    return async (_cmd, args) => {
+      commands.push(args.join(" "));
+      if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+      if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+      if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test.eun1" }), stderr: "" };
+      if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+      if (args[0] === "show") return { status: 0, stdout: '{ "expiration": "2026-07-21T19:50:20Z" }', stderr: "" };
+      throw new Error(`unexpected runner command: ${args.join(" ")}`);
+    };
+  }
+
+  test("includes expiresAt once the tunnel is running", async () => {
+    const commands: string[] = [];
+    const manager = createManager({
+      port: 3131,
+      runner: expiryRunner(commands),
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await manager.ensure();
+    await expect(manager.status()).resolves.toMatchObject({
+      running: true,
+      expiresAt: "2026-07-21T19:50:20Z"
+    });
+    expect(commands.some((cmd) => cmd.startsWith("show climon-test.eun1 -v -j"))).toBe(true);
+  });
+
+  test("omits expiresAt when the tunnel is not running", async () => {
+    const commands: string[] = [];
+    const manager = createManager({ port: 3131, runner: expiryRunner(commands) });
+    const status = await manager.status();
+    expect(status.running).toBe(false);
+    expect(status.expiresAt).toBeUndefined();
+    expect(commands.some((cmd) => cmd.startsWith("show"))).toBe(false);
+  });
+});

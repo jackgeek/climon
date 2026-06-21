@@ -13,6 +13,7 @@ export interface DashboardTunnelStatus {
   url?: string;
   tunnelId?: string;
   version?: string;
+  expiresAt?: string;
 }
 
 export interface DashboardTunnelInfo extends DashboardTunnelStatus {
@@ -64,6 +65,7 @@ const VERIFY_ATTEMPTS = 3;
 const VERIFY_RETRY_DELAY_MS = 1000;
 const MAX_TUNNEL_RECREATIONS = 1;
 const KEEP_ALIVE_MS = 60000;
+const EXPIRY_TTL_MS = 60000;
 const KEEP_ALIVE_TIMEOUT_MS = 8000;
 
 /**
@@ -264,6 +266,8 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   let cluster: string | undefined = options.persisted?.cluster;
   let persistedTunnelId: string | undefined = options.persisted?.tunnelId;
   let url: string | undefined;
+  let expiresAt: string | undefined;
+  let expiresAtFetchedAt = 0;
   let host: HostProcess | undefined;
   let closing = false;
   let starting: Promise<DashboardTunnelInfo> | undefined;
@@ -462,14 +466,39 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     };
   }
 
+  /**
+   * Refreshes the cached absolute tunnel expiry via `devtunnel show -v -j`,
+   * at most once per `EXPIRY_TTL_MS`. Best-effort: any failure or unparseable
+   * output leaves the previous value untouched and never throws.
+   */
+  async function refreshExpiry(): Promise<void> {
+    if (!tunnelId) return;
+    if (Date.now() - expiresAtFetchedAt < EXPIRY_TTL_MS) return;
+    expiresAtFetchedAt = Date.now();
+    try {
+      const result = await runner("devtunnel", ["show", tunnelId, "-v", "-j"]);
+      if (result.status === 0) {
+        const parsed = parseTunnelExpiry(result.stdout);
+        if (parsed) expiresAt = parsed;
+      }
+    } catch {
+      // ignore — keep the last known expiry
+    }
+  }
+
   return {
     async status() {
       const detected = await detect();
+      const running = isRunning();
+      if (running) {
+        await refreshExpiry();
+      }
       return {
         ...detected,
-        running: isRunning(),
-        url: isRunning() ? url : undefined,
-        tunnelId
+        running,
+        url: running ? url : undefined,
+        tunnelId,
+        expiresAt: running ? expiresAt : undefined
       };
     },
     async ensure() {
