@@ -1,9 +1,23 @@
 import type { ClimonConfig } from "../types.js";
 import { dashboardWritableSettings, findConfigSetting } from "../config-settings.js";
 
+/**
+ * Splits a dotted config path into its `section.field` parts. All
+ * dashboard-writable settings use exactly two segments; anything else is a
+ * programming error (a malformed registry entry) rather than user input, so we
+ * fail loudly instead of silently writing to `undefined`.
+ */
+function splitDottedPath(path: string): [string, string] {
+  const segments = path.split(".");
+  if (segments.length !== 2 || !segments[0] || !segments[1]) {
+    throw new Error(`Dashboard preference path must be "section.field", got: ${path}`);
+  }
+  return [segments[0], segments[1]];
+}
+
 /** Reads a dotted key (e.g. "dashboard.theme") from a config object, or undefined. */
 function readDotted(config: ClimonConfig, path: string): unknown {
-  const [section, field] = path.split(".");
+  const [section, field] = splitDottedPath(path);
   const sub = (config as unknown as Record<string, unknown>)[section];
   if (!sub || typeof sub !== "object") {
     return undefined;
@@ -13,7 +27,7 @@ function readDotted(config: ClimonConfig, path: string): unknown {
 
 /** Sets a dotted key on a config object, creating the section if needed. */
 function writeDotted(config: ClimonConfig, path: string, value: unknown): void {
-  const [section, field] = path.split(".");
+  const [section, field] = splitDottedPath(path);
   const record = config as unknown as Record<string, unknown>;
   const existing = record[section];
   const sub =
