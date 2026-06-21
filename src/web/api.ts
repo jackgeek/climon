@@ -214,17 +214,19 @@ export async function fetchHealth(): Promise<{
   remotesEnabled: boolean;
   features: Record<string, FeatureFlagState>;
   focusTopSessionShortcut: string;
+  preferences: Record<string, unknown>;
 }> {
   try {
     const res = await fetch(withQuery("/health"));
     if (!res.ok) {
-      return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+J" };
+      return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+J", preferences: {} };
     }
     const data = (await res.json()) as {
       version?: string;
       remotesEnabled?: boolean;
       features?: Record<string, FeatureFlagState>;
       shortcuts?: { focusTopSession?: string };
+      preferences?: Record<string, unknown>;
     };
     const focusTopSessionShortcut =
       typeof data.shortcuts?.focusTopSession === "string" ? data.shortcuts.focusTopSession : "Alt+J";
@@ -232,10 +234,11 @@ export async function fetchHealth(): Promise<{
       version: typeof data.version === "string" ? data.version : null,
       remotesEnabled: data.remotesEnabled === true,
       features: data.features && typeof data.features === "object" ? data.features : {},
-      focusTopSessionShortcut
+      focusTopSessionShortcut,
+      preferences: data.preferences && typeof data.preferences === "object" ? data.preferences : {}
     };
   } catch {
-    return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+J" };
+    return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+J", preferences: {} };
   }
 }
 

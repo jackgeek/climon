@@ -45,6 +45,7 @@ import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
 import { runPromote } from "./promote.js";
+import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
 import { resolveServerInvocation } from "../cli/server-exec.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
@@ -1265,6 +1266,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           remotesEnabled: options.enableRemotes === true,
           features: resolveFeatureFlags(config),
           shortcuts: { focusTopSession: config.hotKeys?.focusTopSession ?? "Alt+J" },
+          preferences: collectDashboardPreferences(config),
           ports: await collectServerPorts()
         });
       }
@@ -1634,6 +1636,39 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
         await pushService.unsubscribe(body.endpoint);
         return new Response(null, { status: 204 });
+      }
+
+      if (url.pathname === "/api/dashboard/preferences" && request.method === "POST") {
+        // Same-origin guard: reachable over the tunnel (remote viewers may change
+        // cosmetic prefs) while blocking cross-origin CSRF / DNS-rebinding.
+        if (!isSameOriginRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let body: { key?: unknown; value?: unknown };
+        try {
+          body = (await request.json()) as { key?: unknown; value?: unknown };
+        } catch {
+          return new Response("Invalid JSON", { status: 400 });
+        }
+        if (typeof body.key !== "string") {
+          return new Response("Missing key", { status: 400 });
+        }
+        const { result, config: latest } = await persistDashboardPreference(
+          body.key,
+          body.value,
+          loadConfig,
+          saveConfig
+        );
+        if (!result.ok) {
+          return new Response(result.error, { status: result.status });
+        }
+        // Keep the in-memory config the server serves on /health in sync.
+        Object.assign(config, latest);
+        return Response.json({ ok: true, key: body.key, value: body.value });
       }
 
       if (url.pathname === "/api/sessions") {

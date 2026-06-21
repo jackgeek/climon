@@ -35,6 +35,16 @@
     terminal. Format is "Mod+...+Key" (e.g. "Alt+T", "Ctrl+Shift+J"). Set to an empty
     string to disable.
 
+  dashboard.theme
+    Type: string; Default: default; Scope: server, browser
+    Web dashboard terminal colour theme. One of: default, dracula, atom, gruvbox-dark,
+    solarized-dark, tomorrow-night, monokai, material-dark, solarized-light, github,
+    tomorrow.
+
+  dashboard.keyBarPinned
+    Type: boolean; Default: false; Scope: server, browser
+    Whether the web dashboard key bar is pinned open.
+
   attention.idleSeconds
     Type: number; Default: 10; Scope: daemon
     Number of seconds the rendered terminal grid must remain unchanged before the

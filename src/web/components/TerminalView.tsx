@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { makeStyles } from "@fluentui/react-components";
-import { Terminal, type ITerminalAddon } from "@xterm/xterm";
+import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { SessionMeta } from "../../types.js";
@@ -71,9 +71,11 @@ export const terminalOptions = {
   cursorBlink: true,
   fontFamily: "ui-monospace, monospace",
   fontSize: DEFAULT_FONT_SIZE,
-  scrollback: TERMINAL_SCROLLBACK,
-  theme: { background: "#0d1117" }
+  scrollback: TERMINAL_SCROLLBACK
 } as const;
+
+/** Fallback terminal background used before a theme prop resolves. */
+const DEFAULT_TERMINAL_BACKGROUND = "#0d1117";
 
 export function applyTerminalScrollbackForSession(
   term: ScrollbackConfigurableTerminal,
@@ -237,7 +239,6 @@ const useStyles = makeStyles({
     flex: "1 1 auto",
     minHeight: 0,
     padding: "8px",
-    backgroundColor: "#0d1117",
     "& .xterm-viewport": {
       scrollbarWidth: "none",
       msOverflowStyle: "none"
@@ -256,6 +257,7 @@ interface Props {
   viewMode: TerminalResizeMode;
   onViewModeChange: (mode: TerminalResizeMode) => void;
   fontSize: number;
+  xtermTheme: ITheme;
   onFontSizeChange: (delta: number) => void;
   serverConnected: boolean;
   serverReconnectToken: number;
@@ -271,6 +273,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     viewMode,
     onViewModeChange,
     fontSize,
+    xtermTheme,
     onFontSizeChange,
     serverConnected,
     serverReconnectToken,
@@ -287,6 +290,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const viewModeRef = useRef<TerminalResizeMode>(viewMode);
   const onViewModeChangeRef = useRef(onViewModeChange);
   const fontSizeRef = useRef(fontSize);
+  const xtermThemeRef = useRef(xtermTheme);
   const onFontSizeChangeRef = useRef(onFontSizeChange);
   const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
   const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
@@ -333,6 +337,16 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     applyTerminalFontSize(term, fontSize, refit);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fontSize]);
+
+  // Apply theme changes live: update the running terminal's palette and repaint.
+  useEffect(() => {
+    xtermThemeRef.current = xtermTheme;
+    const term = termRef.current;
+    if (term) {
+      term.options.theme = xtermTheme;
+      refreshTerminalRender(term);
+    }
+  }, [xtermTheme]);
 
   // A queued view-mode request belongs to the session that was attached when it
   // was queued. Drop it when the session changes so it can never flush to a
@@ -644,6 +658,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
     const term = new Terminal({
       ...terminalOptions,
+      theme: xtermThemeRef.current,
       fontSize: fontSizeRef.current
     });
     const fit = new FitAddon();
@@ -824,11 +839,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     <div
       ref={containerRef}
       className={styles.root}
-      style={
-        accentColor
+      style={{
+        backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
+        ...(accentColor
           ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
-          : undefined
-      }
+          : {})
+      }}
       onClick={focusActiveTerminal}
       onFocusCapture={refreshActiveTerminal}
     />

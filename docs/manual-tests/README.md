@@ -49,6 +49,7 @@ result-tracking row.
 | — | Tunnel-link expiry countdown banner | [phase13-tunnel-expiry-banner.md](phase13-tunnel-expiry-banner.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
+| — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |
 
 ## Recording results
 

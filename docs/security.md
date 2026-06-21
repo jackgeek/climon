@@ -230,6 +230,28 @@ part of user config. Subscriptions are pruned automatically when a push send ret
 HTTP 404/410. Push payloads contain only the session label and attention reason
 already visible in the dashboard — no scrollback or command output.
 
+## Dashboard preferences endpoint
+
+The dashboard persists a small set of cosmetic preferences (currently the
+terminal theme and the mobile key-bar pin) in `config.jsonc` so they are shared
+across browsers and devices. Remote Tunnel Link viewers are intentionally allowed
+to change these, so the write path is same-origin guarded rather than
+loopback-only:
+
+- `POST /api/dashboard/preferences` — guarded by `isSameOriginRequest` (JSON
+  content-type plus an `Origin` whose host equals the `Host` header), exactly like
+  the push endpoints. This permits the tunnel origin while blocking
+  cross-origin/CSRF and DNS-rebinding.
+- Writes are restricted to an **allowlist**: only config settings flagged
+  `dashboardWritable` in `src/config-settings.ts` are accepted. Each write must
+  also pass the setting's declared type and its per-setting `validate` check
+  (e.g. the theme must be one of the known `THEME_IDS`). A forged or malicious
+  same-origin request can therefore at most change a validated cosmetic
+  preference — it can never reach non-allowlisted keys such as `server.port` or
+  any client/daemon setting.
+- Effective values are exposed read-only via `/health` (`preferences`), which the
+  server treats as the source of truth and the browser reconciles on load.
+
 ## Untrusted-input handling
 
 - **Session metadata** (`toLocalMeta` / `sanitizeRemotePatch`): server-controlled

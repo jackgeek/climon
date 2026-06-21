@@ -65,6 +65,13 @@ export interface HotKeysConfig {
   focusTopSession: string;
 }
 
+export interface DashboardConfig {
+  /** Selected web-dashboard terminal theme id (see THEME_IDS). */
+  theme?: string;
+  /** Whether the dashboard key bar is pinned. */
+  keyBarPinned?: boolean;
+}
+
 export interface RemoteConfig {
   enabled?: boolean;
   /** Direct remote uplink host for same-machine or LAN setups. */
@@ -161,6 +168,7 @@ export interface ClimonConfig {
   server: ServerConfig;
   terminal: TerminalConfig;
   hotKeys: HotKeysConfig;
+  dashboard?: DashboardConfig;
   attention: AttentionConfig;
   remote?: RemoteConfig;
   session?: SessionDefaultsConfig;

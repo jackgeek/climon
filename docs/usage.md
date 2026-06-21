@@ -147,6 +147,15 @@ newer version is available instead of applying it automatically.
     Tap outside the panel to close it; swipe again to reopen the chooser.
 - The list updates automatically as sessions change state (via Server-Sent
   Events).
+- **Menu preferences (☰).** The hamburger menu has a **Theme** submenu that
+  recolours the terminal (Default plus curated themes such as Dracula, Gruvbox
+  Dark, Monokai, Solarized, and GitHub). Picking a light theme also switches the
+  dashboard chrome to the Fluent light base. The selected theme and the mobile
+  **Pin key bar** toggle are stored in `config.jsonc` (`dashboard.theme` and
+  `dashboard.keyBarPinned`), so they persist across reloads and are shared across
+  every browser and device — including remote Tunnel Link viewers. You can also
+  set them from the CLI with `climon config dashboard.theme <id>` and
+  `climon config dashboard.keyBarPinned <bool>`.
 - When one or more sessions need attention, the browser tab title shows the
   count as `climon (!N)`. For newly attentive sessions after the dashboard loads,
   the page also attempts to play a short alert sound and show a browser
@@ -360,6 +369,8 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `terminal.detachPrefix` | number | `28` | client | Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255]. |
 | `terminal.setTitle` | boolean | `true` | client | When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false. |
 | `hotKeys.focusTopSession` | string | `Alt+J` | server, browser | Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is "Mod+...+Key" (e.g. "Alt+T", "Ctrl+Shift+J"). Set to an empty string to disable. |
+| `dashboard.theme` | string | `default` | server, browser | Web dashboard terminal colour theme. One of: default, dracula, atom, gruvbox-dark, solarized-dark, tomorrow-night, monokai, material-dark, solarized-light, github, tomorrow. |
+| `dashboard.keyBarPinned` | boolean | `false` | server, browser | Whether the web dashboard key bar is pinned open. |
 | `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |
 | `remote.enabled` | boolean | unset | client | Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection. |
 | `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
