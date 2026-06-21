@@ -16,7 +16,8 @@ describe("fetchHealth", () => {
             version: "1.2.3",
             remotesEnabled: true,
             features: { sessionSpawning: { enabled: true, locked: false, status: "experimental" } },
-            shortcuts: { focusTopSession: "Ctrl+Shift+J" }
+            shortcuts: { focusTopSession: "Ctrl+Shift+J" },
+            preferences: { "dashboard.theme": "dracula" }
           }),
           { headers: { "content-type": "application/json" } }
         ),
@@ -27,7 +28,8 @@ describe("fetchHealth", () => {
       version: "1.2.3",
       remotesEnabled: true,
       features: { sessionSpawning: { enabled: true, locked: false, status: "experimental" } },
-      focusTopSessionShortcut: "Ctrl+Shift+J"
+      focusTopSessionShortcut: "Ctrl+Shift+J",
+      preferences: { "dashboard.theme": "dracula" }
     });
   });
 
@@ -44,7 +46,8 @@ describe("fetchHealth", () => {
       version: "1.2.3",
       remotesEnabled: false,
       features: {},
-      focusTopSessionShortcut: "Alt+J"
+      focusTopSessionShortcut: "Alt+J",
+      preferences: {}
     });
   });
 });
