@@ -147,6 +147,15 @@ newer version is available instead of applying it automatically.
     Tap outside the panel to close it; swipe again to reopen the chooser.
 - The list updates automatically as sessions change state (via Server-Sent
   Events).
+- **Menu preferences (☰).** The hamburger menu has a **Theme** submenu that
+  recolours the terminal (Default plus curated themes such as Dracula, Gruvbox
+  Dark, Monokai, Solarized, and GitHub). Picking a light theme also switches the
+  dashboard chrome to the Fluent light base. The selected theme and the mobile
+  **Pin key bar** toggle are stored in `config.jsonc` (`dashboard.theme` and
+  `dashboard.keyBarPinned`), so they persist across reloads and are shared across
+  every browser and device — including remote Tunnel Link viewers. You can also
+  set them from the CLI with `climon config dashboard.theme <id>` and
+  `climon config dashboard.keyBarPinned <bool>`.
 - When one or more sessions need attention, the browser tab title shows the
   count as `climon (!N)`. For newly attentive sessions after the dashboard loads,
   the page also attempts to play a short alert sound and show a browser

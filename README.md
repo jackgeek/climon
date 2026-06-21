@@ -17,6 +17,11 @@ interact with each one from the browser.
 - **Live web terminal.** The dashboard is a React + Fluent UI app that embeds an
   `xterm.js` terminal wired to the session over a WebSocket — fully interactive,
   no iframe.
+- **Themable dashboard.** Pick a terminal colour theme from the ☰ menu (Default
+  plus curated themes); light themes also switch the dashboard chrome to a light
+  base. The theme and the mobile "Pin key bar" toggle are saved in `config.jsonc`
+  (`dashboard.theme` / `dashboard.keyBarPinned`), so they persist and are shared
+  across every browser and device.
 - **Attention queue.** While a session is attached locally, climon mirrors its
   output into a headless terminal and watches the rendered screen. If the visible
   content stops changing for `attention.idleSeconds` (default 10) — a blinking
