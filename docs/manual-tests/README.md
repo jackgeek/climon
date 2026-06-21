@@ -47,6 +47,7 @@ result-tracking row.
 | 12 | Cutover & cleanup — ship the Rust `climon` client as the `install` binary, native Rust self-install (sentinel `climon-alpha` trigger, PATH + `.version` + changelog, locked-binary kill/retry, licence-declined abort), `scripts/compile.ts` host/assemble modes, `release.yml` cross-compile matrix, retire the Bun client bin | [phase12-cutover.md](phase12-cutover.md) |
 | — | Pin key bar (mobile) — mobile-only hamburger toggle + centralised mobile detection | [pin-key-bar.md](pin-key-bar.md) |
 | — | Tunnel-link expiry countdown banner | [phase13-tunnel-expiry-banner.md](phase13-tunnel-expiry-banner.md) |
+| — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 
 ## Recording results
 
