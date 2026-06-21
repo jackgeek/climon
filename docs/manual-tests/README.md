@@ -48,6 +48,7 @@ result-tracking row.
 | — | Pin key bar (mobile) — mobile-only hamburger toggle + centralised mobile detection | [pin-key-bar.md](pin-key-bar.md) |
 | — | Tunnel-link expiry countdown banner | [phase13-tunnel-expiry-banner.md](phase13-tunnel-expiry-banner.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
+| — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
 
 ## Recording results
 
