@@ -1,6 +1,12 @@
 /// <reference lib="webworker" />
-import { notificationTargetPath, OPEN_SESSION_MESSAGE } from "./pwa/pushData.js";
-import { handlePush, queryViewedSession, type ViewedSessionChannel } from "./pwa/swPush.js";
+import { OPEN_SESSION_MESSAGE } from "./pwa/pushData.js";
+import {
+  handlePush,
+  queryViewedSession,
+  resolveNotificationClick,
+  type NotificationClickClient,
+  type ViewedSessionChannel,
+} from "./pwa/swPush.js";
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -31,26 +37,54 @@ self.addEventListener("push", (event: PushEvent) => {
   );
 });
 
+/** Projects a live `WindowClient` onto the descriptor the decision uses. */
+function toClickClient(client: WindowClient): NotificationClickClient {
+  return { id: client.id, focused: client.focused, visibilityState: client.visibilityState };
+}
+
 self.addEventListener("notificationclick", (event: NotificationEvent) => {
   event.notification.close();
   const sessionId =
     (event.notification.data as { sessionId?: string } | null)?.sessionId ?? undefined;
-  const targetPath = notificationTargetPath(sessionId);
   event.waitUntil(
     (async () => {
-      const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      for (const client of allClients) {
-        if ("focus" in client) {
+      const windowClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      const action = resolveNotificationClick(sessionId, windowClients.map(toClickClient));
+      const byId = (id: string): WindowClient | undefined =>
+        windowClients.find((client) => client.id === id);
+      switch (action.kind) {
+        case "open":
+          await self.clients.openWindow(action.url);
+          return;
+        case "focus":
+          await byId(action.clientId)?.focus();
+          return;
+        case "post": {
+          const client = byId(action.clientId);
+          if (!client) return;
           await client.focus();
-          if (sessionId) {
-            client.postMessage({ type: OPEN_SESSION_MESSAGE, sessionId });
+          client.postMessage({ type: OPEN_SESSION_MESSAGE, sessionId: action.sessionId });
+          return;
+        }
+        case "navigate": {
+          const client = byId(action.clientId);
+          if (!client) return;
+          await client.focus();
+          try {
+            await client.navigate(action.url);
+          } catch {
+            // Some platforms reject navigate() on uncontrolled clients; fall back
+            // to the (best-effort) message so a focused page can still react.
+            if (sessionId) {
+              client.postMessage({ type: OPEN_SESSION_MESSAGE, sessionId });
+            }
           }
           return;
         }
       }
-      // No focusable client: open the dashboard deep-linked to the session.
-      // The freshly opened page reads ?session= on load and pops it.
-      await self.clients.openWindow(targetPath);
     })(),
   );
 });
