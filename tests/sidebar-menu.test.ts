@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import * as RealIcons from "@fluentui/react-icons";
 import {
   getStableSessionItemRef,
+  keyBarPinnedMenuLabel,
   notificationsMenuLabel,
   remotesMenuLabel,
   scrollActiveSessionIntoView,
@@ -83,6 +84,48 @@ describe("Sidebar menu", () => {
     expect(notificationsMenuLabel(true)).toBe("Disable notifications");
   });
 
+  test("labels the pin key bar action", () => {
+    expect(keyBarPinnedMenuLabel(false)).toBe("Pin key bar");
+    expect(keyBarPinnedMenuLabel(true)).toBe("Unpin key bar");
+  });
+
+  test("shows the pin key bar item only on mobile", () => {
+    const commonProps = {
+      sessions: [],
+      activeId: null,
+      collapsed: false,
+      collapsible: true,
+      onCollapsedChange: () => {},
+      onSelect: () => {},
+      onClose: () => {},
+      onNew: () => {},
+      onNewFrom: () => {},
+      onEdit: () => {},
+      onPauseToggle: () => {},
+      onManageRemote: () => {},
+      notificationsEnabled: false,
+      onToggleNotifications: () => {},
+      canInstallPwa: false,
+      onInstallPwa: () => {},
+      tunnelLinkStatus: null,
+      onTunnelLink: () => {},
+      onCloseTunnelLink: () => {},
+      viewMode: "clamped" as const,
+      viewModeLocked: false,
+      onViewModeToggle: () => {},
+      onMaximize: () => {},
+      onRemoveDisconnected: () => {},
+      keyBarPinned: false,
+      onToggleKeyBarPinned: () => {}
+    };
+
+    const desktop = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, isMobile: false }));
+    const mobile = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, isMobile: true }));
+
+    expect(desktop).not.toContain("Pin key bar");
+    expect(mobile).toContain("Pin key bar");
+  });
+
   test("keeps the session list as the scrollable sidebar region", () => {
     const source = readFileSync("src/web/components/Sidebar.tsx", "utf8");
 
@@ -155,7 +198,10 @@ describe("Sidebar menu", () => {
       viewModeToggleable: false,
       onViewModeToggle: () => {},
       onMaximize: () => {},
-      onRemoveDisconnected: () => {}
+      onRemoveDisconnected: () => {},
+      isMobile: false,
+      keyBarPinned: false,
+      onToggleKeyBarPinned: () => {}
     };
 
     const disabled = renderToStaticMarkup(createElement(Sidebar, commonProps));
@@ -191,7 +237,10 @@ describe("Sidebar menu", () => {
       viewModeToggleable: false,
       onViewModeToggle: () => {},
       onMaximize: () => {},
-      onRemoveDisconnected: () => {}
+      onRemoveDisconnected: () => {},
+      isMobile: false,
+      keyBarPinned: false,
+      onToggleKeyBarPinned: () => {}
     };
 
     const html = renderToStaticMarkup(createElement(Sidebar, commonProps));

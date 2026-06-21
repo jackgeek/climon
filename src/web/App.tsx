@@ -40,7 +40,10 @@ import { TerminalView, type TerminalHandle } from "./components/TerminalView.js"
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
+import { readKeyBarPinned, writeKeyBarPinned } from "./keyBarPinned.js";
 import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
+import { MOBILE_MEDIA_QUERY_RULE } from "./mobile.js";
+import { useIsMobile } from "./hooks/useIsMobile.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import {
   browserNotificationPermissionMessage,
@@ -91,7 +94,7 @@ const useStyles = makeStyles({
     overflow: "hidden",
     backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground1,
-    "@media (max-width: 768px)": {
+    [MOBILE_MEDIA_QUERY_RULE]: {
       flexDirection: "column",
       height: "var(--climon-visual-viewport-height, 100dvh)"
     }
@@ -101,7 +104,7 @@ const useStyles = makeStyles({
     minWidth: "320px",
     flex: "0 0 auto",
     minHeight: 0,
-    "@media (max-width: 768px)": {
+    [MOBILE_MEDIA_QUERY_RULE]: {
       width: "100%",
       minWidth: 0,
       maxHeight: "none",
@@ -111,7 +114,7 @@ const useStyles = makeStyles({
   sidebarCollapsed: {
     width: "64px",
     minWidth: "64px",
-    "@media (max-width: 768px)": {
+    [MOBILE_MEDIA_QUERY_RULE]: {
       width: "64px",
       minWidth: "64px"
     }
@@ -133,7 +136,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1
   },
   mainHiddenMobile: {
-    "@media (max-width: 768px)": {
+    [MOBILE_MEDIA_QUERY_RULE]: {
       display: "none"
     }
   },
@@ -192,7 +195,7 @@ const useStyles = makeStyles({
     zIndex: 14,
     backgroundColor: "transparent",
     display: "none",
-    "@media (max-width: 768px)": {
+    [MOBILE_MEDIA_QUERY_RULE]: {
       display: "block"
     }
   },
@@ -200,7 +203,7 @@ const useStyles = makeStyles({
     position: "relative",
     zIndex: 15,
     display: "none",
-    "@media (max-width: 768px)": {
+    [MOBILE_MEDIA_QUERY_RULE]: {
       display: "flex"
     }
   },
@@ -498,10 +501,9 @@ export function App() {
   const [maximized, setMaximized] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
+  const [keyBarPinned, setKeyBarPinned] = useState(() => readKeyBarPinned());
   const [fontSize, setFontSize] = useState(() => readFontSize());
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches
-  );
+  const isMobile = useIsMobile();
   const [pageVisible, setPageVisible] = useState(() =>
     typeof document === "undefined" || document.visibilityState !== "hidden"
   );
@@ -860,6 +862,16 @@ export function App() {
     }
   }, [maximized]);
 
+  // When the key bar is pinned on mobile, entering fullscreen (or toggling pin
+  // on while already maximized) reveals the chooser bar automatically so it is
+  // always available without the edge-swipe gesture. Gated on isMobile so the
+  // pin behaviour stays consistent with the mobile-only unpin control.
+  useEffect(() => {
+    if (isMobile && maximized && keyBarPinned) {
+      setPanelView((prev) => (prev === "closed" ? "chooser" : prev));
+    }
+  }, [isMobile, maximized, keyBarPinned]);
+
   // Reveal the special-key bar with a right-to-left edge swipe while maximized.
   // Native window listeners in the capture phase are used (rather than React
   // synthetic handlers on the terminal element) so the gesture is detected
@@ -917,16 +929,6 @@ export function App() {
       window.removeEventListener("touchcancel", onCancel, { capture: true });
     };
   }, [maximized]);
-
-  // Track the mobile breakpoint so the terminal is only "displayed" (and thus
-  // holds the PTY size) when it is actually on screen: always on desktop, but
-  // only when maximized on mobile.
-  useEffect(() => {
-    const mql = window.matchMedia("(max-width: 768px)");
-    const onChange = (e: MediaQueryListEvent): void => setIsMobile(e.matches);
-    mql.addEventListener("change", onChange);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
 
   // Track page visibility so the terminal is only "displayed" while the tab is
   // actually on screen. When the tab is hidden (switched away, minimized, or
@@ -1142,6 +1144,14 @@ export function App() {
     scheduleTerminalRefit(terminalRef.current);
   }, []);
 
+  const handleToggleKeyBarPinned = useCallback((): void => {
+    setKeyBarPinned((prev) => {
+      const next = !prev;
+      writeKeyBarPinned(next);
+      return next;
+    });
+  }, []);
+
   const handleToggleNotifications = useCallback((): void => {
     const mode = resolveNotificationMode({ pushSupported, isTunnelOrigin });
 
@@ -1313,6 +1323,9 @@ export function App() {
           onCloseTunnelLink={() => void handleCloseTunnelLink()}
           showRemotesMenu={remotesEnabled}
           onRemoveDisconnected={handleRemoveDisconnected}
+          isMobile={isMobile}
+          keyBarPinned={keyBarPinned}
+          onToggleKeyBarPinned={handleToggleKeyBarPinned}
           viewMode={authoritativeViewMode ?? "fill"}
           viewModeLocked={false}
           onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "fill"))}
@@ -1355,14 +1368,16 @@ export function App() {
         />
         {panelView !== "closed" && maximized && activeSession && isLiveStatus(activeSession.status) && (
           <>
-            <div
-              className={styles.keyBarBackdrop}
-              onClick={() => setPanelView("closed")}
-              onTouchStart={(e) => {
-                e.stopPropagation();
-                setPanelView("closed");
-              }}
-            />
+            {!(keyBarPinned && panelView === "chooser") && (
+              <div
+                className={styles.keyBarBackdrop}
+                onClick={() => setPanelView(keyBarPinned ? "chooser" : "closed")}
+                onTouchStart={(e) => {
+                  e.stopPropagation();
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
+              />
+            )}
             <div className={styles.keyBarWrap}>
               <TerminalPanel
                 view={panelView}

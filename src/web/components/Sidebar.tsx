@@ -27,6 +27,7 @@ import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
 import {
   getStableSessionItemRef,
   installPwaMenuLabel,
+  keyBarPinnedMenuLabel,
   notificationsMenuLabel,
   removeDisconnectedMenuLabel,
   remotesMenuLabel,
@@ -151,6 +152,9 @@ interface Props {
   viewModeLocked?: boolean;
   onViewModeToggle?: () => void;
   onMaximize: (id: string) => void;
+  isMobile: boolean;
+  keyBarPinned: boolean;
+  onToggleKeyBarPinned: () => void;
 }
 
 export function Sidebar({
@@ -179,7 +183,10 @@ export function Sidebar({
   viewMode,
   viewModeLocked = false,
   onViewModeToggle,
-  onMaximize
+  onMaximize,
+  isMobile,
+  keyBarPinned,
+  onToggleKeyBarPinned,
 }: Props) {
   const styles = useStyles();
   const sessionSpawning = useFeature("sessionSpawning").enabled;
@@ -206,6 +213,9 @@ export function Sidebar({
             <MenuPopover>
               <MenuList>
                 <MenuItem onClick={onToggleNotifications}>{notificationsMenuLabel(notificationsEnabled)}</MenuItem>
+                {isMobile && (
+                  <MenuItem onClick={onToggleKeyBarPinned}>{keyBarPinnedMenuLabel(keyBarPinned)}</MenuItem>
+                )}
                 {canInstallPwa && (
                   <MenuItem onClick={onInstallPwa}>{installPwaMenuLabel}</MenuItem>
                 )}

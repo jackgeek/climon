@@ -5,6 +5,10 @@ export function notificationsMenuLabel(enabled: boolean): string {
   return enabled ? "Disable notifications" : "Enable notifications";
 }
 
+export function keyBarPinnedMenuLabel(pinned: boolean): string {
+  return pinned ? "Unpin key bar" : "Pin key bar";
+}
+
 export type SessionItemRef = (element: HTMLElement | null) => void;
 
 export interface StableSessionItemRefRegistry {
