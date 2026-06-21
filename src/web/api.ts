@@ -225,6 +225,7 @@ export interface DashboardTunnelStatus {
   url?: string;
   tunnelId?: string;
   version?: string;
+  expiresAt?: string;
 }
 
 export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatus> {
