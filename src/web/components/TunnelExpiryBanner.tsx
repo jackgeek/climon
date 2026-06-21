@@ -78,7 +78,11 @@ export function TunnelExpiryBanner() {
 
   const { text, level } = formatExpiryCountdown(msRemaining);
   return (
-    <div role="status" className={mergeClasses(styles.banner, styles[level])}>
+    <div
+      role="timer"
+      aria-live="off"
+      className={mergeClasses(styles.banner, styles[level])}
+    >
       {text}
     </div>
   );
