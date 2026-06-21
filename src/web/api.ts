@@ -67,7 +67,7 @@ export function classifyTunnelAuthResponse(res: Response): TunnelAuthState {
 /**
  * Probes the tunnel relay to decide whether the dashboard connection dropped
  * because the Microsoft dev-tunnel sign-in expired. Only runs on dev-tunnel
- * hosts; everywhere else it is a no-op that reports `ok`. Network/timeout
+ * hosts; everywhere else it is a no-op that reports `ok`. Network
  * failures report `unreachable` so a transient blip never triggers a sign-in
  * prompt.
  */

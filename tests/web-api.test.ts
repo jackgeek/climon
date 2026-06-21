@@ -278,10 +278,18 @@ describe("probeTunnelAuth", () => {
   });
 
   test("classifies the health probe response on a dev tunnel host", async () => {
-    const fetchImpl = (async () =>
-      probeResponse({ type: "opaqueredirect", status: 0 })) as unknown as typeof fetch;
+    let capturedUrl: string | undefined;
+    let capturedInit: RequestInit | undefined;
+    const fetchImpl = (async (input: string, init?: RequestInit) => {
+      capturedUrl = input;
+      capturedInit = init;
+      return probeResponse({ type: "opaqueredirect", status: 0 });
+    }) as unknown as typeof fetch;
     const state = await probeTunnelAuth({ isTunnelHost: true, fetchImpl });
     expect(state).toBe("auth-required");
+    expect(capturedUrl).toContain("/health");
+    expect(capturedInit?.redirect).toBe("manual");
+    expect(capturedInit?.cache).toBe("no-store");
   });
 
   test("treats a thrown network error as unreachable", async () => {
