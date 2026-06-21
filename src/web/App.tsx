@@ -755,7 +755,7 @@ export function App() {
       tunnelAuthProbeInFlightRef.current = true;
       void probeTunnelAuth()
         .then((state) => {
-          if (!closed && state === "auth-required") {
+          if (!closed && state === "auth-required" && serverConnectionStateRef.current === "reconnecting") {
             setTunnelAuthRequired(true);
           }
         })
