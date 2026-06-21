@@ -1,7 +1,9 @@
 import {
   Button,
   Menu,
+  MenuDivider,
   MenuItem,
+  MenuItemRadio,
   MenuList,
   MenuPopover,
   MenuTrigger,
@@ -24,6 +26,8 @@ import { SessionItem } from "./SessionItem.js";
 import { useFeature } from "../hooks/useFeature.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
+import { DASHBOARD_THEMES } from "../themes.js";
+import { DEFAULT_THEME_ID } from "../../dashboard-preference-keys.js";
 import {
   getStableSessionItemRef,
   installPwaMenuLabel,
@@ -155,6 +159,8 @@ interface Props {
   isMobile: boolean;
   keyBarPinned: boolean;
   onToggleKeyBarPinned: () => void;
+  currentTheme?: string;
+  onSelectTheme?: (id: string) => void;
 }
 
 export function Sidebar({
@@ -187,6 +193,8 @@ export function Sidebar({
   isMobile,
   keyBarPinned,
   onToggleKeyBarPinned,
+  currentTheme = DEFAULT_THEME_ID,
+  onSelectTheme,
 }: Props) {
   const styles = useStyles();
   const sessionSpawning = useFeature("sessionSpawning").enabled;
@@ -229,6 +237,29 @@ export function Sidebar({
                 {sessions.some((s) => s.status === "completed" || s.status === "failed" || s.status === "disconnected") && (
                   <MenuItem onClick={onRemoveDisconnected}>{removeDisconnectedMenuLabel}</MenuItem>
                 )}
+                <MenuDivider />
+                <Menu
+                  checkedValues={{ theme: [currentTheme] }}
+                  onCheckedValueChange={(_e, data) => {
+                    const next = data.checkedItems[0];
+                    if (next) {
+                      onSelectTheme?.(next);
+                    }
+                  }}
+                >
+                  <MenuTrigger disableButtonEnhancement>
+                    <MenuItem>Theme</MenuItem>
+                  </MenuTrigger>
+                  <MenuPopover>
+                    <MenuList>
+                      {DASHBOARD_THEMES.map((t) => (
+                        <MenuItemRadio key={t.id} name="theme" value={t.id}>
+                          {t.label}
+                        </MenuItemRadio>
+                      ))}
+                    </MenuList>
+                  </MenuPopover>
+                </Menu>
               </MenuList>
             </MenuPopover>
           </Menu>

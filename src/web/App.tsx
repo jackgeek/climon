@@ -7,11 +7,14 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  FluentProvider,
   Spinner,
   Text,
   makeStyles,
   mergeClasses,
-  tokens
+  tokens,
+  webDarkTheme,
+  webLightTheme
 } from "@fluentui/react-components";
 import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SessionMeta } from "../types.js";
@@ -40,8 +43,14 @@ import { TerminalView, type TerminalHandle } from "./components/TerminalView.js"
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
-import { readKeyBarPinned, writeKeyBarPinned } from "./keyBarPinned.js";
 import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
+import { getTheme } from "./themes.js";
+import { DEFAULT_THEME_ID, PREF_THEME, PREF_KEY_BAR_PINNED } from "../dashboard-preference-keys.js";
+import {
+  readCachedPreference,
+  setDashboardPreference,
+  migrateLegacyKeyBarPinned
+} from "./preferences.js";
 import { MOBILE_MEDIA_QUERY_RULE } from "./mobile.js";
 import { useIsMobile } from "./hooks/useIsMobile.js";
 import { SplashScreen } from "./components/SplashScreen.js";
@@ -502,7 +511,12 @@ export function App() {
   const [maximized, setMaximized] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
-  const [keyBarPinned, setKeyBarPinned] = useState(() => readKeyBarPinned());
+  const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
+    () => readCachedPreference(PREF_KEY_BAR_PINNED) === true
+  );
+  const [themeId, setThemeId] = useState<string>(
+    () => (readCachedPreference(PREF_THEME) as string) ?? DEFAULT_THEME_ID
+  );
   const [fontSize, setFontSize] = useState(() => readFontSize());
   const isMobile = useIsMobile();
   const [pageVisible, setPageVisible] = useState(() =>
@@ -818,12 +832,28 @@ export function App() {
 
   // Load the running server's version for the sidebar heading.
   useEffect(() => {
-    void fetchHealth().then(({ version, remotesEnabled: enabled, features: flags, focusTopSessionShortcut: shortcut }) => {
-      setServerVersion(version);
-      setRemotesEnabled(enabled);
-      setFeatures(flags);
-      setFocusTopSessionShortcut(shortcut);
-    });
+    void fetchHealth().then(
+      ({ version, remotesEnabled: enabled, features: flags, focusTopSessionShortcut: shortcut, preferences }) => {
+        setServerVersion(version);
+        setRemotesEnabled(enabled);
+        setFeatures(flags);
+        setFocusTopSessionShortcut(shortcut);
+        // Server config is the source of truth; reconcile cached UI prefs from it.
+        const serverTheme = preferences[PREF_THEME];
+        if (typeof serverTheme === "string") {
+          setThemeId(serverTheme);
+        }
+        const serverPin = preferences[PREF_KEY_BAR_PINNED];
+        if (typeof serverPin === "boolean") {
+          setKeyBarPinned(serverPin);
+        }
+      }
+    );
+  }, []);
+
+  // One-time migration of the legacy device-local key-bar pin into shared config.
+  useEffect(() => {
+    void migrateLegacyKeyBarPinned();
   }, []);
 
   const refreshTunnelLinkStatus = useCallback(async (): Promise<void> => {
@@ -1148,9 +1178,14 @@ export function App() {
   const handleToggleKeyBarPinned = useCallback((): void => {
     setKeyBarPinned((prev) => {
       const next = !prev;
-      writeKeyBarPinned(next);
+      void setDashboardPreference(PREF_KEY_BAR_PINNED, next);
       return next;
     });
+  }, []);
+
+  const handleSelectTheme = useCallback((id: string): void => {
+    setThemeId(id);
+    void setDashboardPreference(PREF_THEME, id);
   }, []);
 
   const handleToggleNotifications = useCallback((): void => {
@@ -1255,7 +1290,11 @@ export function App() {
     reconnectOverlayVisible: serverReconnectOverlayVisible
   });
 
+  const activeTheme = getTheme(themeId);
+  const fluentTheme = activeTheme.base === "light" ? webLightTheme : webDarkTheme;
+
   return (
+    <FluentProvider theme={fluentTheme} style={{ height: "100%" }}>
     <FeatureFlagsProvider value={features}>
     <div className={styles.root}>
       {showSplash && <SplashScreen onDone={dismissSplash} />}
@@ -1328,6 +1367,8 @@ export function App() {
           isMobile={isMobile}
           keyBarPinned={keyBarPinned}
           onToggleKeyBarPinned={handleToggleKeyBarPinned}
+          currentTheme={themeId}
+          onSelectTheme={handleSelectTheme}
           viewMode={authoritativeViewMode ?? "fill"}
           viewModeLocked={false}
           onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "fill"))}
@@ -1363,6 +1404,7 @@ export function App() {
             }
           }}
           fontSize={fontSize}
+          xtermTheme={activeTheme.xterm}
           onFontSizeChange={adjustFontSize}
           serverConnected={serverConnected}
           serverReconnectToken={serverReconnectToken}
@@ -1438,5 +1480,6 @@ export function App() {
       {connectionOverlay === "reconnect" && <ServerReconnectOverlay />}
     </div>
     </FeatureFlagsProvider>
+    </FluentProvider>
   );
 }
