@@ -26,6 +26,7 @@ import {
   closeDashboardTunnel,
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
+  probeTunnelAuth,
   type DashboardTunnelStatus
 } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -532,6 +533,8 @@ export function App() {
   const [serverReconnectToken, setServerReconnectToken] = useState(0);
   const [reconnectOverlayArmed, setReconnectOverlayArmed] = useState(false);
   const reconnectOverlayArmedRef = useRef(false);
+  const [tunnelAuthRequired, setTunnelAuthRequired] = useState(false);
+  const tunnelAuthProbeInFlightRef = useRef(false);
   const reconnectOverlayTimerRef = useRef<number | null>(null);
   const becameVisibleAtRef = useRef<number>(Date.now());
   const pageVisibleRef = useRef(pageVisible);
@@ -711,6 +714,7 @@ export function App() {
       serverConnectionStateRef.current = "connected";
       setServerConnectionState("connected");
       disarmReconnectOverlay();
+      setTunnelAuthRequired(false);
       return wasReconnecting;
     };
     async function refreshSessionsAfterReconnect(): Promise<void> {
@@ -744,6 +748,21 @@ export function App() {
         setServerReconnectToken((token) => token + 1);
       }
     };
+    const maybeProbeTunnelAuth = (): void => {
+      if (!readIsTunnelOrigin() || tunnelAuthProbeInFlightRef.current) {
+        return;
+      }
+      tunnelAuthProbeInFlightRef.current = true;
+      void probeTunnelAuth()
+        .then((state) => {
+          if (!closed && state === "auth-required") {
+            setTunnelAuthRequired(true);
+          }
+        })
+        .finally(() => {
+          tunnelAuthProbeInFlightRef.current = false;
+        });
+    };
     const markServerReconnecting = (): void => {
       if (closed || !hadServerConnectionRef.current) {
         return;
@@ -755,6 +774,7 @@ export function App() {
       }
       serverConnectionStateRef.current = "reconnecting";
       setServerConnectionState("reconnecting");
+      maybeProbeTunnelAuth();
       const mode = reconnectOverlayEntryMode({
         pageVisible: pageVisibleRef.current,
         msSinceVisible: Date.now() - becameVisibleAtRef.current
@@ -1219,6 +1239,10 @@ export function App() {
     serverConnectionState,
     reconnectOverlayArmed
   );
+  const connectionOverlay = activeConnectionOverlay({
+    tunnelAuthRequired,
+    reconnectOverlayVisible: serverReconnectOverlayVisible
+  });
 
   return (
     <FeatureFlagsProvider value={features}>
@@ -1391,7 +1415,10 @@ export function App() {
         onCopy={setTunnelLinkCopied}
         onClose={() => setTunnelLinkOpen(false)}
       />
-      {serverReconnectOverlayVisible && <ServerReconnectOverlay />}
+      {connectionOverlay === "auth" && (
+        <TunnelReauthOverlay onReauth={() => window.location.assign(window.location.href)} />
+      )}
+      {connectionOverlay === "reconnect" && <ServerReconnectOverlay />}
     </div>
     </FeatureFlagsProvider>
   );
