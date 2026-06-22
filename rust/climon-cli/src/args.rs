@@ -45,6 +45,7 @@ pub enum ParsedCommand {
         priority: Option<i64>,
         color: Option<ColorFlag>,
         name: Option<String>,
+        theme: Option<String>,
     },
     Server {
         port: Option<f64>,
@@ -62,6 +63,7 @@ pub enum ParsedCommand {
         priority: Option<i64>,
         color: Option<ColorFlag>,
         name: Option<String>,
+        theme: Option<String>,
     },
     /// `climon __spawn [--headless] [--cwd D] [--cols N] [--rows N] [meta] <cmd>`
     /// — internal command used by the dashboard server to create a session on
@@ -75,6 +77,7 @@ pub enum ParsedCommand {
         name: Option<String>,
         color: Option<ColorFlag>,
         priority: Option<i64>,
+        theme: Option<String>,
     },
     Config {
         argv: Vec<String>,
@@ -111,12 +114,13 @@ pub fn help_text() -> String {
         "climon v{VERSION} — web-based monitor for interactive CLI sessions
 
 Usage:
-  climon [--priority N] [--color C] [--name S]
+  climon [--priority N] [--color C] [--name S] [--theme T]
                                Start a monitored session for the current shell
-  climon [--priority N] [--color C] [--name S] <command> [args...]
+  climon [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
                                Run a command in a monitored PTY session
                                (priority 0-1000; color: auto|none|black|red|
-                               green|yellow|blue|magenta|cyan|white)
+                               green|yellow|blue|magenta|cyan|white;
+                               theme: a dashboard theme name, e.g. \"Dracula\")
   climon server [--port N] [--enable-remotes] [--no-takeover]
                                Start the dashboard web server (loopback only)
                                (--no-takeover: never terminate an existing
@@ -190,6 +194,7 @@ struct SessionFlags {
     priority: Option<i64>,
     color: Option<ColorFlag>,
     name: Option<String>,
+    theme: Option<String>,
 }
 
 /// Consumes leading `--priority`/`--color`/`--name` flags (both `--flag value`
@@ -236,6 +241,9 @@ fn parse_session_flags(tokens: &[String]) -> Result<(SessionFlags, Vec<String>),
             "--name" => {
                 flags.name = Some(take_value!());
             }
+            "--theme" => {
+                flags.theme = Some(take_value!());
+            }
             _ => break,
         }
         i += 1;
@@ -248,6 +256,7 @@ fn shell_from_flags(flags: SessionFlags) -> ParsedCommand {
         priority: flags.priority,
         color: flags.color,
         name: flags.name,
+        theme: flags.theme,
     }
 }
 
@@ -258,6 +267,7 @@ fn run_from_flags(argv: Vec<String>, headless: bool, flags: SessionFlags) -> Par
         priority: flags.priority,
         color: flags.color,
         name: flags.name,
+        theme: flags.theme,
     }
 }
 
@@ -269,6 +279,7 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
             priority: None,
             color: None,
             name: None,
+            theme: None,
         });
     }
 
@@ -394,6 +405,7 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
                 name: flags.name,
                 color: flags.color,
                 priority: flags.priority,
+                theme: flags.theme,
             })
         }
         "config" => Ok(ParsedCommand::Config { argv: rest }),
@@ -509,6 +521,7 @@ mod tests {
                 name: None,
                 priority: None,
                 color: None,
+                theme: None,
             }
         );
     }
@@ -535,6 +548,7 @@ mod tests {
                 name: Some("build".into()),
                 priority: Some(800),
                 color: None,
+                theme: None,
             }
         );
     }
@@ -560,7 +574,8 @@ mod tests {
             ParsedCommand::Shell {
                 priority: None,
                 color: None,
-                name: None
+                name: None,
+                theme: None,
             }
         );
     }
@@ -722,7 +737,8 @@ mod tests {
                 headless: false,
                 priority: Some(800),
                 color: Some(ColorFlag::Color(AnsiColor::Red)),
-                name: Some("dev".to_string())
+                name: Some("dev".to_string()),
+                theme: None,
             }
         );
     }
@@ -736,7 +752,8 @@ mod tests {
                 headless: false,
                 priority: Some(250),
                 color: Some(ColorFlag::Color(AnsiColor::Blue)),
-                name: None
+                name: None,
+                theme: None,
             }
         );
     }
@@ -750,7 +767,8 @@ mod tests {
                 headless: false,
                 priority: None,
                 color: Some(ColorFlag::Auto),
-                name: None
+                name: None,
+                theme: None,
             }
         );
     }
@@ -776,7 +794,8 @@ mod tests {
                 headless: true,
                 priority: Some(10),
                 color: None,
-                name: None
+                name: None,
+                theme: None,
             }
         );
     }
@@ -800,7 +819,8 @@ mod tests {
             ParsedCommand::Shell {
                 priority: None,
                 color: None,
-                name: Some("my session".to_string())
+                name: Some("my session".to_string()),
+                theme: None,
             }
         );
         assert_eq!(
@@ -808,7 +828,8 @@ mod tests {
             ParsedCommand::Shell {
                 priority: Some(5),
                 color: Some(ColorFlag::Color(AnsiColor::Blue)),
-                name: None
+                name: None,
+                theme: None,
             }
         );
     }
@@ -835,6 +856,24 @@ mod tests {
                 argv: v(&["--telemetry=on"])
             }
         );
+    }
+
+    #[test]
+    fn parses_theme_flag_for_run() {
+        let cmd = parse_args(&[
+            "run".into(),
+            "--theme".into(),
+            "Adventure Time".into(),
+            "bash".into(),
+        ])
+        .unwrap();
+        match cmd {
+            ParsedCommand::Run { theme, argv, .. } => {
+                assert_eq!(theme.as_deref(), Some("Adventure Time"));
+                assert_eq!(argv, vec!["bash".to_string()]);
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
     }
 
     // ---- buildRunArgs ----

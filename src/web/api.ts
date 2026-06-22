@@ -97,6 +97,8 @@ export interface CreateSessionBody {
   name?: string;
   priority?: number;
   color?: SessionColorMode | null;
+  /** Per-session terminal theme display name; omit to inherit the default. */
+  theme?: string;
   /** When true, spawn the session headless (no GUI window). Default false (visible). */
   headless?: boolean;
 }
@@ -138,6 +140,7 @@ export interface UpdateSessionBody {
   name?: string;
   priority?: number;
   color?: AnsiColor | null;
+  theme?: string;
   status?: Extract<SessionMeta["status"], "paused" | "running">;
 }
 

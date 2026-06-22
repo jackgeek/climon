@@ -9,6 +9,7 @@ import {
 import type { AnsiColor, SessionColorMode } from "../../types.js";
 import { ANSI_CSS } from "../colors.js";
 import { sessionColorDropdownOptions } from "../session-color-options.js";
+import { SessionThemePicker } from "./SessionThemePicker.js";
 
 const useStyles = makeStyles({
   swatch: {
@@ -26,6 +27,7 @@ export interface MetaFieldsValue {
   name: string;
   priority: string;
   color: SessionColorMode;
+  theme: string;
 }
 
 interface Props {
@@ -87,6 +89,10 @@ export function SessionMetaFields({
           ))}
         </Dropdown>
       </Field>
+      <SessionThemePicker
+        value={value.theme}
+        onChange={(theme) => onChange({ ...value, theme })}
+      />
     </>
   );
 }

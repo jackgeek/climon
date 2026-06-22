@@ -947,6 +947,7 @@ mod tests {
             name: None,
             priority: None,
             color: None,
+            theme: None,
             user_paused: None,
         }
     }

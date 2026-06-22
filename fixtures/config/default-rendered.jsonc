@@ -20,8 +20,8 @@
     "focusTopSession": "Alt+J"
   },
   "dashboard": {
-    // Web dashboard terminal colour theme id. Choose from the dashboard theme picker; defaults to "default".
-    "theme": "default",
+    // Default web dashboard terminal colour theme (by display name, e.g. "Dracula"). Sessions without their own theme inherit this. Choose from the dashboard "Default theme" picker; defaults to "Default".
+    "theme": "Default",
     // Whether the web dashboard key bar is pinned open.
     "keyBarPinned": false
   },

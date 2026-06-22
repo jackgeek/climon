@@ -50,6 +50,7 @@ result-tracking row.
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
 | — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |
+| — | Per-session theme + default theme (CLI `--theme`, Edit/New dialogs, live inheritance) | [per-session-theme.md](per-session-theme.md) |
 
 ## Recording results
 

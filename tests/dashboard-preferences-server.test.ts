@@ -13,15 +13,15 @@ function freshConfig() {
 describe("collectDashboardPreferences", () => {
   test("returns defaults when nothing is set", () => {
     const prefs = collectDashboardPreferences(freshConfig());
-    expect(prefs["dashboard.theme"]).toBe("default");
+    expect(prefs["dashboard.theme"]).toBe("Default");
     expect(prefs["dashboard.keyBarPinned"]).toBe(false);
   });
 
   test("reflects values set on the config", () => {
     const config = freshConfig();
-    config.dashboard = { theme: "dracula", keyBarPinned: true };
+    config.dashboard = { theme: "Dracula", keyBarPinned: true };
     const prefs = collectDashboardPreferences(config);
-    expect(prefs["dashboard.theme"]).toBe("dracula");
+    expect(prefs["dashboard.theme"]).toBe("Dracula");
     expect(prefs["dashboard.keyBarPinned"]).toBe(true);
   });
 });
@@ -29,9 +29,9 @@ describe("collectDashboardPreferences", () => {
 describe("applyDashboardPreference", () => {
   test("writes a valid theme and reports ok", () => {
     const config = freshConfig();
-    const result = applyDashboardPreference(config, "dashboard.theme", "dracula");
+    const result = applyDashboardPreference(config, "dashboard.theme", "Dracula");
     expect(result.ok).toBe(true);
-    expect(config.dashboard?.theme).toBe("dracula");
+    expect(config.dashboard?.theme).toBe("Dracula");
   });
 
   test("writes a valid boolean preference", () => {
@@ -79,12 +79,12 @@ describe("persistDashboardPreference", () => {
     };
 
     await Promise.all([
-      persistDashboardPreference("dashboard.theme", "dracula", load, save),
+      persistDashboardPreference("dashboard.theme", "Dracula", load, save),
       persistDashboardPreference("dashboard.keyBarPinned", true, load, save)
     ]);
 
     // Both updates survive because the writes were serialized.
-    expect(stored.dashboard?.theme).toBe("dracula");
+    expect(stored.dashboard?.theme).toBe("Dracula");
     expect(stored.dashboard?.keyBarPinned).toBe(true);
   });
 
@@ -95,9 +95,9 @@ describe("persistDashboardPreference", () => {
       stored = config;
     };
 
-    const ok = await persistDashboardPreference("dashboard.theme", "monokai-soda", load, save);
+    const ok = await persistDashboardPreference("dashboard.theme", "Monokai Soda", load, save);
     expect(ok.result.ok).toBe(true);
-    expect(ok.config?.dashboard?.theme).toBe("monokai-soda");
+    expect(ok.config?.dashboard?.theme).toBe("Monokai Soda");
 
     const bad = await persistDashboardPreference("server.port", 9999, load, save);
     expect(bad.result).toMatchObject({ ok: false, status: 400 });

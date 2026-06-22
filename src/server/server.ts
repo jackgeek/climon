@@ -515,6 +515,7 @@ export interface SpawnMetaOptions {
   name?: string;
   priority?: number;
   color?: SessionColorMode | null;
+  theme?: string;
 }
 
 /**
@@ -533,6 +534,9 @@ export function buildRunArgs(command: string[], meta: SpawnMetaOptions): string[
   }
   if (meta.name !== undefined && meta.name !== "") {
     flags.push("--name", meta.name);
+  }
+  if (meta.theme !== undefined && meta.theme !== "") {
+    flags.push("--theme", meta.theme);
   }
   return ["run", "--headless", ...flags, ...command];
 }
@@ -565,6 +569,9 @@ export function buildSpawnArgs(command: string[], input: SpawnArgsInput): string
   if (input.meta.name !== undefined && input.meta.name !== "") {
     args.push("--name", input.meta.name);
   }
+  if (input.meta.theme !== undefined && input.meta.theme !== "") {
+    args.push("--theme", input.meta.theme);
+  }
   return [...args, ...command];
 }
 
@@ -573,6 +580,7 @@ export interface RemoteSpawnInput {
   cwd: string;
   headless: boolean;
   name?: string;
+  theme?: string;
   priority?: number;
   color?: string;
 }
@@ -599,6 +607,7 @@ export async function routeRemoteSpawn(
     cols: parent.cols,
     rows: parent.rows,
     name: input.name,
+    theme: input.theme,
     priority: input.priority,
     color: input.color,
     headless: input.headless
@@ -1322,7 +1331,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
         let payload: {
           command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown; parentId?: unknown;
-          name?: unknown; priority?: unknown; color?: unknown; headless?: unknown;
+          name?: unknown; priority?: unknown; color?: unknown; headless?: unknown; theme?: unknown;
         };
         try {
           payload = (await request.json()) as typeof payload;
@@ -1349,7 +1358,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               ? undefined
               : payload.color === null
                 ? null
-                : parseColorMode(String(payload.color))
+                : parseColorMode(String(payload.color)),
+            theme: typeof payload.theme === "string" && payload.theme.trim() ? payload.theme.trim() : undefined
           };
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
@@ -1376,6 +1386,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
                 cwd,
                 headless,
                 name: metaInput.name,
+                theme: metaInput.theme,
                 priority: metaInput.priority ?? parent.priority,
                 color: metaInput.color === null ? "none" : metaInput.color ?? undefined
               }
@@ -1403,7 +1414,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
                 meta: {
                   name: metaInput.name,
                   priority: metaInput.priority ?? parent.priority,
-                  color
+                  color,
+                  theme: metaInput.theme
                 }
               }),
               cwd
@@ -1445,7 +1457,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               meta: {
                 name: metaInput.name,
                 priority: defaults.priority,
-                color: defaults.color
+                color: defaults.color,
+                theme: metaInput.theme
               }
             }),
             cwd
@@ -1684,7 +1697,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let body: { name?: unknown; priority?: unknown; color?: unknown; status?: unknown };
+        let body: { name?: unknown; priority?: unknown; color?: unknown; status?: unknown; theme?: unknown };
         try {
           body = (await request.json()) as typeof body;
         } catch {
@@ -1694,6 +1707,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           name?: string;
           priority?: number;
           color?: AnsiColor | null;
+          theme?: string;
           status?: Extract<SessionStatus, "paused" | "running">;
           priorityReason?: "running";
           userPaused?: boolean;
@@ -1710,6 +1724,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           }
           if (body.color !== undefined) {
             patch.color = body.color === null ? null : parseColor(String(body.color));
+          }
+          if (body.theme !== undefined) {
+            const t = body.theme === null ? "" : String(body.theme);
+            patch.theme = t.trim() === "" ? undefined : t;
           }
           if (body.status !== undefined) {
             requestedStatus = parseBrowserStatusPatch(body.status);

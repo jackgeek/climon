@@ -414,6 +414,7 @@ pub struct StartOptions {
     pub name: Option<String>,
     pub color: Option<ColorFlag>,
     pub priority: Option<i64>,
+    pub theme: Option<String>,
 }
 
 /// Starts a monitored session for `command`. Mirrors `startMonitoredCommand`.
@@ -460,6 +461,7 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
     )?;
 
     let cwd_str = cwd.to_string_lossy().to_string();
+    let theme = options.theme.clone();
 
     if options.headless {
         let (cols, rows) = resolve_launch_size(&env);
@@ -472,6 +474,7 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
                 name: options.name,
                 priority: Some(defaults.priority),
                 color: defaults.color,
+                theme,
             },
             &store_env,
             &config_env,
@@ -525,6 +528,7 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         name,
         priority: Some(defaults.priority),
         color: defaults.color.map(Some),
+        theme,
         user_paused: None,
     };
     write_session_meta(&store_env, &meta).map_err(|e| e.to_string())?;

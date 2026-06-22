@@ -149,6 +149,7 @@ mod tests {
             priority: None,
             color: None,
             user_paused: None,
+            theme: None,
         }
     }
 

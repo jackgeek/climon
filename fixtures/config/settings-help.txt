@@ -36,9 +36,10 @@
     string to disable.
 
   dashboard.theme
-    Type: string; Default: default; Scope: server, browser
-    Web dashboard terminal colour theme id. Choose from the dashboard theme picker;
-    defaults to "default".
+    Type: string; Default: Default; Scope: server, browser
+    Default web dashboard terminal colour theme (by display name, e.g. "Dracula").
+    Sessions without their own theme inherit this. Choose from the dashboard "Default
+    theme" picker; defaults to "Default".
 
   dashboard.keyBarPinned
     Type: boolean; Default: false; Scope: server, browser

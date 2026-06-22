@@ -45,7 +45,7 @@ import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
 import { getTheme } from "./themes.js";
-import { DEFAULT_THEME_ID, PREF_THEME, PREF_KEY_BAR_PINNED } from "../dashboard-preference-keys.js";
+import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED } from "../dashboard-preference-keys.js";
 import {
   readCachedPreference,
   setDashboardPreference,
@@ -515,7 +515,7 @@ export function App() {
     () => readCachedPreference(PREF_KEY_BAR_PINNED) === true
   );
   const [themeId, setThemeId] = useState<string>(
-    () => (readCachedPreference(PREF_THEME) as string) ?? DEFAULT_THEME_ID
+    () => (readCachedPreference(PREF_THEME) as string) ?? DEFAULT_THEME_NAME
   );
   const [fontSize, setFontSize] = useState(() => readFontSize());
   const isMobile = useIsMobile();
@@ -1290,7 +1290,7 @@ export function App() {
     reconnectOverlayVisible: serverReconnectOverlayVisible
   });
 
-  const activeTheme = getTheme(themeId);
+  const activeTheme = getTheme(activeSession?.theme ?? themeId);
   const fluentTheme = activeTheme.base === "light" ? webLightTheme : webDarkTheme;
 
   return (

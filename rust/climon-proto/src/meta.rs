@@ -131,6 +131,8 @@ pub struct SessionMeta {
     )]
     pub color: Option<Option<AnsiColor>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_paused: Option<bool>,
 }
 
@@ -179,6 +181,12 @@ pub struct SessionMetaPatch {
         skip_serializing_if = "Option::is_none"
     )]
     pub color: Option<Option<AnsiColor>>,
+    #[serde(
+        default,
+        deserialize_with = "double_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub theme: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_paused: Option<bool>,
 }
@@ -290,5 +298,15 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(serde_json::to_string(&patch).unwrap(), r#"{"color":null}"#);
+    }
+
+    #[test]
+    fn session_meta_theme_round_trips() {
+        let mut meta: SessionMeta = serde_json::from_str(minimal_json()).unwrap();
+        meta.theme = Some("Dracula".to_string());
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("\"theme\":\"Dracula\""));
+        let back: SessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.theme.as_deref(), Some("Dracula"));
     }
 }

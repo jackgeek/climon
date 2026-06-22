@@ -201,6 +201,14 @@ pub fn to_local_meta(
             None
         }
     };
+    let theme = {
+        let v = get("theme");
+        if v.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+            Some(bounded_string(&v, ""))
+        } else {
+            None
+        }
+    };
 
     SessionMeta {
         id: local_id.to_string(),
@@ -231,6 +239,7 @@ pub fn to_local_meta(
         name,
         priority: get("priority").as_f64().map(|n| n as u16),
         color,
+        theme,
         user_paused: None,
     }
 }

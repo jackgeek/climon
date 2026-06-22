@@ -66,7 +66,7 @@ export interface HotKeysConfig {
 }
 
 export interface DashboardConfig {
-  /** Selected web-dashboard terminal theme id (see THEME_IDS). */
+  /** Selected web-dashboard default terminal theme display name (see THEME_NAMES). */
   theme?: string;
   /** Whether the dashboard key bar is pinned. */
   keyBarPinned?: boolean;
@@ -222,6 +222,8 @@ export interface SessionMeta {
   priority?: number;
   /** Accent color for the sidebar item, or null/absent for none. */
   color?: AnsiColor | null;
+  /** Per-session terminal theme display name; absent = inherit the dashboard default. */
+  theme?: string;
   /** User-controlled pause marker; live daemon writes must not visually unpause while true. */
   userPaused?: boolean;
 }
@@ -242,6 +244,7 @@ export interface SessionMetaPatch {
   name?: string;
   priority?: number;
   color?: AnsiColor | null;
+  theme?: string;
   userPaused?: boolean;
 }
 

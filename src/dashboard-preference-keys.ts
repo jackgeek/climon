@@ -6,10 +6,9 @@
  */
 
 export {
-  THEME_IDS,
-  DEFAULT_THEME_ID,
-  isThemeId,
-  type ThemeId
+  THEME_NAMES,
+  DEFAULT_THEME_NAME,
+  isThemeName
 } from "./dashboard-themes.js";
 
 /** Config path → dashboard-writable preference. */
