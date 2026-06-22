@@ -26,10 +26,10 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
   **Default**).
 - **Config-matrix cell:** Browser = desktop.
 - **Steps:**
-  1. Open ☰ → **Theme** → **GitHub** (a light theme).
+  1. Open ☰ → **Theme** → **Github** (a light theme).
   2. Observe the dashboard chrome (sidebar, menus, headers).
   3. Open ☰ → **Theme** → **Default**.
-- **Expected result:** Selecting **GitHub** switches the dashboard chrome to the
+- **Expected result:** Selecting **Github** switches the dashboard chrome to the
   Fluent **light** base; selecting **Default** returns it to the Fluent **dark**
   base. Only the Fluent base swaps — no other climon colours change.
 - **Platforms:** Desktop Chrome, Firefox, Safari.
@@ -56,9 +56,9 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
   same server.
 - **Config-matrix cell:** Browser A + Browser B (or device A + device B).
 - **Steps:**
-  1. In browser A, open ☰ → **Theme** → **Monokai**.
+  1. In browser A, open ☰ → **Theme** → **Monokai Soda**.
   2. In browser B, load (or reload) the dashboard.
-- **Expected result:** Browser B loads with **Monokai** active, because the
+- **Expected result:** Browser B loads with **Monokai Soda** active, because the
   server (`/health`) is the source of truth.
 - **Platforms:** Desktop + second browser/device.
 - **Result:** _date / tester / platform / pass-fail / notes_
@@ -110,5 +110,34 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
   `dashboard.keyBarPinned = true`, the legacy `climon.keyBarPinned` key is
   removed, and `climon.pref.migrated.keyBarPinned` is set to `"true"`. The second
   load does not re-run the migration (no duplicate write).
+- **Platforms:** Desktop Chrome, Firefox, Safari.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## DP-8 — Full theme picker: grouped, searchable, with fallback
+
+- **Feature:** Dashboard preferences — full theme picker
+- **Preconditions:** Dashboard open with at least one live session attached.
+- **Config-matrix cell:** Browser = desktop Chrome/Firefox/Safari.
+- **Steps:**
+  1. Open ☰ → **Theme**.
+  2. Confirm **Default** is pinned at the top, followed by a **Dark** group and a
+     **Light** group, each listing many themes (the picker exposes all bundled
+     `xterm-theme` options).
+  3. Type `solar` into the **Search themes…** box.
+  4. Clear the search box, then type `zzzznotathemewxyz`.
+  5. Select a **Light** group theme (e.g. **Solarized Light**), then reload.
+  6. (Optional) Edit `config.jsonc` to set `dashboard.theme = "not-a-real-theme"`
+     and reload the dashboard.
+- **Expected result:**
+  - Step 2: Default on top; Dark and Light groups each populated; the popover
+    scrolls without overflowing the viewport.
+  - Step 3: the list filters case-insensitively to matching themes (e.g.
+    Solarized Dark / Solarized Light); empty groups disappear; **Escape** still
+    closes the menu while the search box is focused.
+  - Step 4: a disabled **No themes found** row is shown and no group remains.
+  - Step 5: the chosen light theme is active after reload (chrome on the Fluent
+    light base); `config.jsonc` holds its kebab id (e.g. `solarized-light`).
+  - Step 6: an unknown id is rejected on write and falls back to **Default** on
+    load — no crash, no blank terminal.
 - **Platforms:** Desktop Chrome, Firefox, Safari.
 - **Result:** _date / tester / platform / pass-fail / notes_
