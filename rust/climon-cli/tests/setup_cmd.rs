@@ -8,11 +8,14 @@ use climon_config::config::{read_global_config_setting, Env};
 use serde_json::Value;
 
 fn temp_home() -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("climon-cli-setup-{}-{nanos}", std::process::id()));
+    // Per-process atomic counter guarantees a distinct directory for every call:
+    // the PID disambiguates concurrent test binaries and the counter disambiguates
+    // the parallel test threads within this binary. A time-based suffix alone can
+    // collide because both threads share this harness PID and the clock is coarse,
+    // which previously let one test's cleanup delete another's home mid-write.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("climon-cli-setup-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
