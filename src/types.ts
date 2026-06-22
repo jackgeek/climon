@@ -222,6 +222,8 @@ export interface SessionMeta {
   priority?: number;
   /** Accent color for the sidebar item, or null/absent for none. */
   color?: AnsiColor | null;
+  /** Per-session terminal theme display name; absent = inherit the dashboard default. */
+  theme?: string;
   /** User-controlled pause marker; live daemon writes must not visually unpause while true. */
   userPaused?: boolean;
 }
@@ -242,6 +244,7 @@ export interface SessionMetaPatch {
   name?: string;
   priority?: number;
   color?: AnsiColor | null;
+  theme?: string;
   userPaused?: boolean;
 }
 

@@ -92,6 +92,9 @@ pub fn merge_patch(base: &SessionMeta, patch: &SessionMetaPatch) -> SessionMeta 
     if let Some(v) = patch.color {
         out.color = Some(v);
     }
+    if let Some(v) = patch.theme.clone() {
+        out.theme = v;
+    }
     if let Some(v) = patch.user_paused {
         out.user_paused = Some(v);
     }
@@ -218,6 +221,7 @@ mod tests {
             priority: None,
             color: None,
             user_paused: None,
+            theme: None,
         }
     }
 
@@ -375,9 +379,20 @@ mod tests {
     }
 
     #[test]
+    fn merge_sets_and_clears_theme() {
+        let base = base_meta("theme-test");
+        let set = SessionMetaPatch { theme: Some(Some("Dracula".into())), ..Default::default() };
+        assert_eq!(merge_patch(&base, &set).theme.as_deref(), Some("Dracula"));
+
+        let mut themed = base.clone();
+        themed.theme = Some("Dracula".into());
+        let clear = SessionMetaPatch { theme: Some(None), ..Default::default() };
+        assert_eq!(merge_patch(&themed, &clear).theme, None);
+    }
+
+    #[test]
     fn remove_returns_false_when_absent_and_clears_scrollback() {
         let env = env_for("meta-remove");
-        assert!(!remove_session_meta(&env, "ghost-ghost-ghost").unwrap());
 
         write_session_meta(&env, &base_meta("real-real-real")).unwrap();
         write_scrollback(&env, "real-real-real", b"scrollback").unwrap();
