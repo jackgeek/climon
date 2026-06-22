@@ -22,6 +22,8 @@ describe("config settings registry", () => {
       "terminal.detachPrefix",
       "terminal.setTitle",
       "hotKeys.focusTopSession",
+      "dashboard.theme",
+      "dashboard.keyBarPinned",
       "attention.idleSeconds",
       "remote.enabled",
       "remote.host",
@@ -98,6 +100,7 @@ describe("config settings registry", () => {
         setTitle: true
       },
       hotKeys: { focusTopSession: "Alt+J" },
+      dashboard: { theme: "Default", keyBarPinned: false },
       attention: { idleSeconds: 10 },
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
@@ -139,6 +142,8 @@ describe("config settings registry", () => {
   test("accepted config keys exclude internal and default-only keys", () => {
     expect(acceptedConfigKeys()).toEqual([
       "hotKeys.focusTopSession",
+      "dashboard.theme",
+      "dashboard.keyBarPinned",
       "remote.enabled",
       "remote.host",
       "remote.ingestHost",
@@ -166,7 +171,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(40);
+    expect(allConfigKeys().length).toBe(42);
   });
 
   test("coerces values through registry validators", () => {
@@ -273,5 +278,35 @@ describe("hotKeys.focusTopSession setting", () => {
     expect(() => setting?.validate?.("")).not.toThrow();
     expect(() => setting?.validate?.("Alt+T")).not.toThrow();
     expect(() => setting?.validate?.("Hyper Nonsense")).toThrow();
+  });
+});
+
+describe("dashboard-writable settings", () => {
+  test("dashboard.theme and dashboard.keyBarPinned are registered and writable", () => {
+    const theme = findConfigSetting("dashboard.theme");
+    const pin = findConfigSetting("dashboard.keyBarPinned");
+    expect(theme?.dashboardWritable).toBe(true);
+    expect(pin?.dashboardWritable).toBe(true);
+  });
+
+  test("every dashboardWritable setting is browser-scoped, validated, and not sensitive/internal", () => {
+    for (const setting of CONFIG_SETTINGS.filter((s) => s.dashboardWritable)) {
+      expect(setting.scope).toContain("browser");
+      expect(typeof setting.validate).toBe("function");
+      expect(setting.internal ?? false).toBe(false);
+      expect(setting.sensitive ?? false).toBe(false);
+    }
+  });
+
+  test("dashboard.theme validate accepts a known name and rejects an unknown one", () => {
+    const theme = findConfigSetting("dashboard.theme");
+    expect(() => theme?.validate?.("Dracula")).not.toThrow();
+    expect(() => theme?.validate?.("nope")).toThrow();
+  });
+
+  test("dashboard.keyBarPinned validate rejects a non-boolean", () => {
+    const pin = findConfigSetting("dashboard.keyBarPinned");
+    expect(() => pin?.validate?.(true)).not.toThrow();
+    expect(() => pin?.validate?.("yes")).toThrow();
   });
 });

@@ -32,6 +32,7 @@ jobs:
       version: ${{ steps.compute.outputs.version }}
       tag: ${{ steps.compute.outputs.tag }}
       existing: ${{ steps.compute.outputs.existing }}
+      prebumped: ${{ steps.compute.outputs.prebumped }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,26 +43,48 @@ jobs:
           curl -fsSL https://bun.sh/install | bash
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
 
+      # Determine the release version. package.json is the source of truth: when
+      # its version has no tag yet, a contributor deliberately bumped it in the PR
+      # (minor/major releases), so we release that version as-is. Otherwise the
+      # current version is already released, so we auto-bump the patch — the
+      # default "merge a fix to main, ship a patch" flow.
       - name: Compute next release version
         id: compute
         run: |
           set -euo pipefail
-          next_tag="$(bun -e '
+          git fetch --tags --force origin
+          pkg_tag="$(bun -e '
             const { readFileSync } = require("node:fs");
             const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-            const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(pkg.version);
-            if (!match) throw new Error(`Invalid package version: ${pkg.version}`);
-            console.log(`v${match[1]}.${match[2]}.${Number(match[3]) + 1}`);
+            if (!/^\d+\.\d+\.\d+$/.test(pkg.version)) {
+              throw new Error(`Invalid package version: ${pkg.version}`);
+            }
+            console.log(`v${pkg.version}`);
           ')"
-          git fetch --tags --force origin
-          if git rev-parse "refs/tags/$next_tag" >/dev/null 2>&1; then
-            existing="$next_tag"
+          if git rev-parse "refs/tags/$pkg_tag" >/dev/null 2>&1; then
+            # Current version already released -> auto patch-bump.
+            next_tag="$(bun -e '
+              const { readFileSync } = require("node:fs");
+              const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+              const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(pkg.version);
+              console.log(`v${m[1]}.${m[2]}.${Number(m[3]) + 1}`);
+            ')"
+            prebumped="false"
+            if git rev-parse "refs/tags/$next_tag" >/dev/null 2>&1; then
+              existing="$next_tag"
+            else
+              existing=""
+            fi
           else
+            # Pre-bumped in the PR (minor/major) -> release package.json as-is.
+            next_tag="$pkg_tag"
+            prebumped="true"
             existing=""
           fi
           echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
           echo "version=${next_tag#v}" >> "$GITHUB_OUTPUT"
           echo "existing=$existing" >> "$GITHUB_OUTPUT"
+          echo "prebumped=$prebumped" >> "$GITHUB_OUTPUT"
 
   # Cross-compile the Rust client for every target on a native runner. Each leg
   # uploads its `install`/`install.exe` binary as an artifact for the assemble
@@ -205,8 +228,16 @@ jobs:
           git checkout "${{ needs.version.outputs.existing }}"
 
       - name: Patch release (bump + commit + tag)
-        if: ${{ needs.version.outputs.existing == '' }}
+        if: ${{ needs.version.outputs.existing == '' && needs.version.outputs.prebumped != 'true' }}
         run: bun run release
+
+      # Pre-bumped (minor/major) release: package.json + CLI fixtures were already
+      # bumped in the PR, so just tag the merged HEAD — no version bump commit.
+      - name: Tag pre-bumped release
+        if: ${{ needs.version.outputs.prebumped == 'true' }}
+        env:
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: git tag -a "$RELEASE_TAG" -m "$RELEASE_TAG"
 
       - name: Capture release tag
         id: release-tag
@@ -296,7 +327,15 @@ jobs:
 
       - name: Push bump commit and tag
         if: ${{ needs.version.outputs.existing == '' }}
-        run: git push --follow-tags origin HEAD:main
+        env:
+          RELEASE_TAG: ${{ steps.release-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Auto-patch adds a bump commit to push; pre-bumped only adds the tag
+          # (HEAD is already main). Push the branch fast-forward and the tag
+          # explicitly so both paths land the new tag on origin.
+          git push origin HEAD:main
+          git push origin "refs/tags/$RELEASE_TAG"
 
       - name: Publish GitHub Release
         env:

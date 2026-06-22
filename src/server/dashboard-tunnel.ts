@@ -13,6 +13,7 @@ export interface DashboardTunnelStatus {
   url?: string;
   tunnelId?: string;
   version?: string;
+  expiresAt?: string;
 }
 
 export interface DashboardTunnelInfo extends DashboardTunnelStatus {
@@ -64,6 +65,7 @@ const VERIFY_ATTEMPTS = 3;
 const VERIFY_RETRY_DELAY_MS = 1000;
 const MAX_TUNNEL_RECREATIONS = 1;
 const KEEP_ALIVE_MS = 60000;
+const EXPIRY_TTL_MS = 60000;
 const KEEP_ALIVE_TIMEOUT_MS = 8000;
 
 /**
@@ -210,6 +212,23 @@ export function parseTunnelCreate(stdout: string): { tunnelId?: string; cluster?
   }
 }
 
+/**
+ * Extracts the tunnel's absolute expiry (ISO 8601) from `devtunnel show -v -j`
+ * output. The verbose stream interleaves MSAL/HTTP log lines with the raw
+ * service JSON; only the JSON carries an absolute `"expiration"`, whereas the
+ * non-verbose summary exposes a relative `"tunnelExpiration"` we deliberately
+ * skip. The leading quote in the pattern anchors to the exact `expiration` key
+ * so `tunnelExpiration` never matches, and the value must be an ISO-8601
+ * timestamp so a stray `"expiration"` carrying a non-datetime value (e.g. log
+ * noise) is skipped in favour of the real one.
+ */
+export function parseTunnelExpiry(output: string): string | undefined {
+  const match = output.match(
+    /"expiration"\s*:\s*"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))"/
+  );
+  return match?.[1];
+}
+
 function ensureOk(result: RunResult, label: string): void {
   if (result.status !== 0) {
     throw new Error(`${label} failed: ${result.stderr.trim() || result.status}`);
@@ -251,6 +270,8 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   let cluster: string | undefined = options.persisted?.cluster;
   let persistedTunnelId: string | undefined = options.persisted?.tunnelId;
   let url: string | undefined;
+  let expiresAt: string | undefined;
+  let expiresAtFetchedAt = 0;
   let host: HostProcess | undefined;
   let closing = false;
   let starting: Promise<DashboardTunnelInfo> | undefined;
@@ -346,6 +367,8 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     tunnelId = undefined;
     cluster = undefined;
     url = undefined;
+    expiresAt = undefined;
+    expiresAtFetchedAt = 0;
     if (persistedTunnelId === id) {
       persistedTunnelId = undefined;
       await options.onClearPersistedTunnel?.();
@@ -363,6 +386,8 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     tunnelId = undefined;
     cluster = undefined;
     url = undefined;
+    expiresAt = undefined;
+    expiresAtFetchedAt = 0;
     if (persistedTunnelId === id) {
       persistedTunnelId = undefined;
       await options.onClearPersistedTunnel?.();
@@ -449,14 +474,39 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     };
   }
 
+  /**
+   * Refreshes the cached absolute tunnel expiry via `devtunnel show -v -j`,
+   * at most once per `EXPIRY_TTL_MS`. Best-effort: any failure or unparseable
+   * output leaves the previous value untouched and never throws.
+   */
+  async function refreshExpiry(): Promise<void> {
+    if (!tunnelId) return;
+    if (Date.now() - expiresAtFetchedAt < EXPIRY_TTL_MS) return;
+    expiresAtFetchedAt = Date.now();
+    try {
+      const result = await runner("devtunnel", ["show", tunnelId, "-v", "-j"]);
+      if (result.status === 0) {
+        const parsed = parseTunnelExpiry(result.stdout);
+        if (parsed) expiresAt = parsed;
+      }
+    } catch {
+      // ignore — keep the last known expiry
+    }
+  }
+
   return {
     async status() {
       const detected = await detect();
+      const running = isRunning();
+      if (running) {
+        await refreshExpiry();
+      }
       return {
         ...detected,
-        running: isRunning(),
-        url: isRunning() ? url : undefined,
-        tunnelId
+        running,
+        url: running ? url : undefined,
+        tunnelId,
+        expiresAt: running ? expiresAt : undefined
       };
     },
     async ensure() {

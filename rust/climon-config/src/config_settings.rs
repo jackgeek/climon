@@ -325,6 +325,22 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .accept_input()
         .with_validate(v_focus_top_session),
         ConfigSetting::new(
+            "dashboard.theme",
+            String,
+            "Default web dashboard terminal colour theme (by display name, e.g. \"Dracula\"). Sessions without their own theme inherit this. Choose from the dashboard \"Default theme\" picker; defaults to \"Default\".",
+            vec![Server, Browser],
+        )
+        .default(Value::from("Default"))
+        .accept_input(),
+        ConfigSetting::new(
+            "dashboard.keyBarPinned",
+            Boolean,
+            "Whether the web dashboard key bar is pinned open.",
+            vec![Server, Browser],
+        )
+        .default(Value::from(false))
+        .accept_input(),
+        ConfigSetting::new(
             "attention.idleSeconds",
             Number,
             "Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.",
@@ -811,6 +827,8 @@ mod tests {
                 "terminal.detachPrefix",
                 "terminal.setTitle",
                 "hotKeys.focusTopSession",
+                "dashboard.theme",
+                "dashboard.keyBarPinned",
                 "attention.idleSeconds",
                 "remote.enabled",
                 "remote.host",
@@ -850,7 +868,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 40);
+        assert_eq!(all_config_keys().len(), 42);
     }
 
     #[test]
@@ -875,6 +893,7 @@ mod tests {
                 "server": { "host": "127.0.0.1", "port": 3131 },
                 "terminal": { "clampBrowserToHost": false, "detachPrefix": 28, "setTitle": true },
                 "hotKeys": { "focusTopSession": "Alt+J" },
+                "dashboard": { "theme": "Default", "keyBarPinned": false },
                 "attention": { "idleSeconds": 10 },
                 "remote": { "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },
@@ -916,6 +935,8 @@ mod tests {
             accepted_config_keys(),
             vec![
                 "hotKeys.focusTopSession",
+                "dashboard.theme",
+                "dashboard.keyBarPinned",
                 "remote.enabled",
                 "remote.host",
                 "remote.ingestHost",

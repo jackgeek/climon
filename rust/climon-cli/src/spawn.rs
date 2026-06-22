@@ -102,6 +102,7 @@ pub struct SessionMetaOptions {
     pub name: Option<String>,
     pub priority: Option<u16>,
     pub color: Option<AnsiColor>,
+    pub theme: Option<String>,
 }
 
 /// Creates a new monitored session that runs without a local terminal attached:
@@ -149,6 +150,7 @@ pub fn spawn_headless_session(
         name: options.name,
         priority: options.priority,
         color: options.color.map(Some),
+        theme: options.theme,
         user_paused: None,
     };
     write_session_meta(store_env, &meta).map_err(|e| e.to_string())?;

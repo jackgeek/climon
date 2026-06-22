@@ -189,6 +189,12 @@ color, command label) it advertises. It cannot inject into another client's PTY
 (per-connection sockets) or read its keystrokes. Revoke access by deleting
 the tunnel or removing the user's identity from its ACL.
 
+When the browser's dev-tunnel sign-in expires, the dashboard PWA detects the
+relay's auth redirect (a manual-redirect probe of `/health`) and shows an
+in-app "Sign in again" prompt instead of spinning on "Reconnecting". The prompt
+performs a user-initiated top-level navigation to re-run the Microsoft sign-in;
+it never auto-navigates and stores no tunnel credentials in the browser.
+
 ## Dashboard server: loopback only
 
 The dashboard HTTP/WebSocket server binds to `127.0.0.1` exclusively. There is
@@ -223,6 +229,28 @@ The VAPID private key (`$CLIMON_HOME/push/vapid.json`) and subscriptions
 part of user config. Subscriptions are pruned automatically when a push send returns
 HTTP 404/410. Push payloads contain only the session label and attention reason
 already visible in the dashboard — no scrollback or command output.
+
+## Dashboard preferences endpoint
+
+The dashboard persists a small set of cosmetic preferences (currently the
+terminal theme and the mobile key-bar pin) in `config.jsonc` so they are shared
+across browsers and devices. Remote Tunnel Link viewers are intentionally allowed
+to change these, so the write path is same-origin guarded rather than
+loopback-only:
+
+- `POST /api/dashboard/preferences` — guarded by `isSameOriginRequest` (JSON
+  content-type plus an `Origin` whose host equals the `Host` header), exactly like
+  the push endpoints. This permits the tunnel origin while blocking
+  cross-origin/CSRF and DNS-rebinding.
+- Writes are restricted to an **allowlist**: only config settings flagged
+  `dashboardWritable` in `src/config-settings.ts` are accepted. Each write must
+  also pass the setting's declared type and its per-setting `validate` check
+  (e.g. the theme must be one of the known `THEME_IDS`). A forged or malicious
+  same-origin request can therefore at most change a validated cosmetic
+  preference — it can never reach non-allowlisted keys such as `server.port` or
+  any client/daemon setting.
+- Effective values are exposed read-only via `/health` (`preferences`), which the
+  server treats as the source of truth and the browser reconciles on load.
 
 ## Untrusted-input handling
 

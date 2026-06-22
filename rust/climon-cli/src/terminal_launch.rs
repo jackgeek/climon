@@ -18,11 +18,16 @@ fn sh_quote(value: &str) -> String {
 }
 
 /// macOS: drive Terminal.app via AppleScript, cd'ing into `cwd` first.
-pub fn build_macos(cwd: &Path, climon_cmd: &str) -> LaunchSpec {
+pub fn build_macos(cwd: &Path, argv: &[String]) -> LaunchSpec {
+    let cmd = argv
+        .iter()
+        .map(|a| sh_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ");
     let script = format!(
         "tell application \"Terminal\" to do script \"cd {} && {}\"",
         sh_quote(&cwd.to_string_lossy()).replace('"', "\\\""),
-        climon_cmd.replace('"', "\\\"")
+        cmd.replace('"', "\\\"")
     );
     LaunchSpec {
         program: "osascript".into(),
@@ -31,9 +36,9 @@ pub fn build_macos(cwd: &Path, climon_cmd: &str) -> LaunchSpec {
 }
 
 /// Windows: Windows Terminal with an explicit working directory.
-pub fn build_windows(cwd: &Path, climon_cmd: &str) -> LaunchSpec {
+pub fn build_windows(cwd: &Path, argv: &[String]) -> LaunchSpec {
     let mut args = vec!["-d".to_string(), cwd.to_string_lossy().to_string()];
-    args.extend(climon_cmd.split_whitespace().map(str::to_string));
+    args.extend(argv.iter().cloned());
     LaunchSpec {
         program: "wt.exe".into(),
         args,
@@ -42,14 +47,15 @@ pub fn build_windows(cwd: &Path, climon_cmd: &str) -> LaunchSpec {
 
 /// Build from a user `session.terminalProgram` template containing `{cmd}`.
 /// The template is whitespace-split into program + args; the single `{cmd}`
-/// token is replaced by the climon command split into its own tokens.
-pub fn build_from_template(template: &str, _cwd: &Path, climon_cmd: &str) -> Option<LaunchSpec> {
+/// token is replaced by the climon command's argument vector (each kept intact,
+/// so values with spaces are not re-split).
+pub fn build_from_template(template: &str, _cwd: &Path, argv: &[String]) -> Option<LaunchSpec> {
     let mut tokens = template.split_whitespace();
     let program = tokens.next()?.to_string();
     let mut args = Vec::new();
     for tok in tokens {
         if tok == "{cmd}" {
-            args.extend(climon_cmd.split_whitespace().map(str::to_string));
+            args.extend(argv.iter().cloned());
         } else {
             args.push(tok.to_string());
         }
@@ -60,7 +66,7 @@ pub fn build_from_template(template: &str, _cwd: &Path, climon_cmd: &str) -> Opt
 /// Linux autodetect with an injectable PATH predicate (for testing).
 pub fn build_linux_with<F: Fn(&str) -> bool>(
     cwd: &Path,
-    climon_cmd: &str,
+    argv: &[String],
     on_path: F,
 ) -> Option<LaunchSpec> {
     const CANDIDATES: &[&str] = &["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"];
@@ -72,7 +78,7 @@ pub fn build_linux_with<F: Fn(&str) -> bool>(
                 "konsole" => vec!["--workdir".into(), cwd_s.clone(), "-e".into()],
                 _ => vec!["-e".into()],
             };
-            args.extend(climon_cmd.split_whitespace().map(str::to_string));
+            args.extend(argv.iter().cloned());
             return Some(LaunchSpec {
                 program: (*term).to_string(),
                 args,
@@ -92,23 +98,23 @@ fn program_on_path(program: &str) -> bool {
 /// no terminal could be resolved (e.g. headless Linux box with no emulator).
 pub fn resolve_spec(
     cwd: &Path,
-    climon_cmd: &str,
+    argv: &[String],
     terminal_program: Option<&str>,
 ) -> Option<LaunchSpec> {
     if let Some(tpl) = terminal_program.filter(|t| !t.trim().is_empty()) {
-        return build_from_template(tpl, cwd, climon_cmd);
+        return build_from_template(tpl, cwd, argv);
     }
     #[cfg(target_os = "macos")]
     {
-        return Some(build_macos(cwd, climon_cmd));
+        return Some(build_macos(cwd, argv));
     }
     #[cfg(target_os = "windows")]
     {
-        return Some(build_windows(cwd, climon_cmd));
+        return Some(build_windows(cwd, argv));
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        return build_linux_with(cwd, climon_cmd, program_on_path);
+        return build_linux_with(cwd, argv, program_on_path);
     }
     #[allow(unreachable_code)]
     {
@@ -119,8 +125,8 @@ pub fn resolve_spec(
 
 /// Actually open the terminal window. Returns Err when no terminal could be
 /// resolved or the spawn failed, so the caller can fall back to headless.
-pub fn launch(cwd: &Path, climon_cmd: &str, terminal_program: Option<&str>) -> Result<(), String> {
-    let spec = resolve_spec(cwd, climon_cmd, terminal_program)
+pub fn launch(cwd: &Path, argv: &[String], terminal_program: Option<&str>) -> Result<(), String> {
+    let spec = resolve_spec(cwd, argv, terminal_program)
         .ok_or_else(|| "no terminal emulator found on this machine".to_string())?;
     std::process::Command::new(&spec.program)
         .args(&spec.args)
@@ -133,47 +139,88 @@ pub fn launch(cwd: &Path, climon_cmd: &str, terminal_program: Option<&str>) -> R
 mod tests {
     use super::*;
 
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
     fn macos_uses_applescript_with_cd_and_command() {
-        let spec = build_macos(Path::new("/work/dir"), "climon copilot");
+        let spec = build_macos(Path::new("/work/dir"), &argv(&["climon", "copilot"]));
         assert_eq!(spec.program, "osascript");
         // The AppleScript cd's into the dir then runs the command in Terminal.
         let joined = spec.args.join(" ");
         assert!(joined.contains("Terminal"));
         assert!(joined.contains("cd '/work/dir'"));
-        assert!(joined.contains("climon copilot"));
+        assert!(joined.contains("'climon' 'copilot'"));
+    }
+
+    #[test]
+    fn macos_keeps_spaced_theme_name_quoted() {
+        let spec = build_macos(
+            Path::new("/w"),
+            &argv(&["climon", "--theme", "Adventure Time", "bash"]),
+        );
+        assert!(spec.args.join(" ").contains("'--theme' 'Adventure Time'"));
     }
 
     #[test]
     fn windows_uses_wt_with_working_directory() {
-        let spec = build_windows(Path::new("C:/work"), "climon copilot");
+        let spec = build_windows(Path::new("C:/work"), &argv(&["climon", "copilot"]));
         assert_eq!(spec.program, "wt.exe");
         assert_eq!(spec.args[0], "-d");
         assert_eq!(spec.args[1], "C:/work");
-        // Remaining args run the command.
-        assert!(spec.args.join(" ").contains("climon copilot"));
+        // Remaining args run the command, each kept as a distinct token.
+        assert_eq!(spec.args[2], "climon");
+        assert_eq!(spec.args[3], "copilot");
+    }
+
+    #[test]
+    fn windows_keeps_spaced_theme_name_as_one_arg() {
+        let spec = build_windows(
+            Path::new("C:/w"),
+            &argv(&["climon", "--theme", "Adventure Time", "bash"]),
+        );
+        assert!(spec.args.iter().any(|a| a == "Adventure Time"));
     }
 
     #[test]
     fn linux_override_template_substitutes_cmd_placeholder() {
-        let spec = build_from_template("alacritty -e {cmd}", Path::new("/w"), "climon copilot")
-            .expect("template parses");
+        let spec = build_from_template(
+            "alacritty -e {cmd}",
+            Path::new("/w"),
+            &argv(&["climon", "copilot"]),
+        )
+        .expect("template parses");
         assert_eq!(spec.program, "alacritty");
         assert_eq!(spec.args, vec!["-e", "climon", "copilot"]);
     }
 
     #[test]
+    fn linux_template_keeps_spaced_theme_name_as_one_arg() {
+        let spec = build_from_template(
+            "alacritty -e {cmd}",
+            Path::new("/w"),
+            &argv(&["climon", "--theme", "Adventure Time", "bash"]),
+        )
+        .expect("template parses");
+        assert!(spec.args.iter().any(|a| a == "Adventure Time"));
+    }
+
+    #[test]
     fn linux_autodetect_prefers_first_available() {
         // detect() takes an injectable "is this program on PATH?" predicate.
-        let spec = build_linux_with(Path::new("/w"), "climon copilot", |p| p == "gnome-terminal");
+        let spec = build_linux_with(Path::new("/w"), &argv(&["climon", "copilot"]), |p| {
+            p == "gnome-terminal"
+        });
         let spec = spec.expect("a terminal was found");
         assert_eq!(spec.program, "gnome-terminal");
-        assert!(spec.args.join(" ").contains("climon copilot"));
+        assert!(spec.args.contains(&"climon".to_string()));
+        assert!(spec.args.contains(&"copilot".to_string()));
     }
 
     #[test]
     fn linux_autodetect_none_available_returns_none() {
-        let spec = build_linux_with(Path::new("/w"), "climon copilot", |_| false);
+        let spec = build_linux_with(Path::new("/w"), &argv(&["climon", "copilot"]), |_| false);
         assert!(spec.is_none());
     }
 }

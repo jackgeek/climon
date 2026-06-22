@@ -17,6 +17,11 @@ interact with each one from the browser.
 - **Live web terminal.** The dashboard is a React + Fluent UI app that embeds an
   `xterm.js` terminal wired to the session over a WebSocket — fully interactive,
   no iframe.
+- **Themable dashboard.** Pick a terminal colour theme from the ☰ menu (Default
+  plus curated themes); light themes also switch the dashboard chrome to a light
+  base. The theme and the mobile "Pin key bar" toggle are saved in `config.jsonc`
+  (`dashboard.theme` / `dashboard.keyBarPinned`), so they persist and are shared
+  across every browser and device.
 - **Attention queue.** While a session is attached locally, climon mirrors its
   output into a headless terminal and watches the rendered screen. If the visible
   content stops changing for `attention.idleSeconds` (default 10) — a blinking
@@ -513,6 +518,18 @@ bun run release major      # 0.1.0 -> 1.0.0
 
 The script refuses to run with a dirty working tree (so the release commit only
 contains the bump) and does **not** push — finish with `git push --follow-tags`.
+
+### Branch workflow: PRs target `dev`, releases come from `main`
+
+Because the [`Release`](.github/workflows/release.yml) workflow triggers on every
+push to `main`, all day-to-day work must go through the `dev` branch:
+
+- **Open pull requests against `dev`, never `main`.** Merging a PR into `main`
+  would immediately cut a release, so feature and fix branches base off and merge
+  into `dev`.
+- **Merge `dev` into `main` only when you actually want to release.** That merge
+  is the deliberate "ship it" action; it runs the patch bump, tags, and publishes
+  the artifacts described below.
 
 ### Automatic bump on merge to `main`
 

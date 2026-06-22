@@ -99,6 +99,7 @@ fn run() -> Result<i32, String> {
             priority,
             color,
             name,
+            theme,
         } => {
             let shell = detect_parent_shell();
             let shell_argv = build_shell_argv(&shell);
@@ -110,6 +111,7 @@ fn run() -> Result<i32, String> {
                     name: Some(shell_name),
                     priority,
                     color,
+                    theme,
                 },
             )
         }
@@ -122,6 +124,7 @@ fn run() -> Result<i32, String> {
             priority,
             color,
             name,
+            theme,
         } => start_monitored_command(
             &argv,
             StartOptions {
@@ -129,6 +132,7 @@ fn run() -> Result<i32, String> {
                 name,
                 priority,
                 color,
+                theme,
             },
         ),
         ParsedCommand::Config { argv } => Ok(run_config(&argv)),
@@ -141,6 +145,7 @@ fn run() -> Result<i32, String> {
             name,
             color,
             priority,
+            theme,
         } => {
             let req = climon_cli::spawn_command::SpawnRequest {
                 argv,
@@ -155,6 +160,7 @@ fn run() -> Result<i32, String> {
                 name,
                 color,
                 priority,
+                theme,
                 terminal_program: climon_cli::spawn_command::resolve_terminal_program(),
             };
             climon_cli::spawn_command::run_spawn_command(req)

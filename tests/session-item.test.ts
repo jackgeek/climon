@@ -376,7 +376,7 @@ describe("SessionItem clamp lock", () => {
     expect(source).toContain('":hover .climon-lock": { display: "inline-flex" }');
     expect(source).toContain('mergeClasses("climon-lock", styles.lockBtn)');
     expect(source).toMatch(
-      /lockBtn:\s*\{[\s\S]*?display:\s*"none"[\s\S]*?@media \(max-width: 768px\)[\s\S]*?display:\s*"inline-flex"/
+      /lockBtn:\s*\{[\s\S]*?display:\s*"none"[\s\S]*?\[MOBILE_MEDIA_QUERY_RULE\][\s\S]*?display:\s*"inline-flex"/
     );
   });
 });

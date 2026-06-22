@@ -5,6 +5,7 @@ import {
   dashboardTunnelAuthMessage,
   parseDashboardTunnelUrl,
   parseTunnelCreate,
+  parseTunnelExpiry,
   splitTunnelId,
   type DashboardTunnelRunner
 } from "../src/server/dashboard-tunnel.js";
@@ -782,3 +783,144 @@ describe("createDashboardTunnelManager", () => {
   });
 });
 
+
+describe("parseTunnelExpiry", () => {
+  const verboseOutput = [
+    "MSAL: Access token is not expired. Returning the found cache entry. [Current time (06/21/2026 19:50:17) - Expiration Time (06/22/2026 03:50:04 +00:00)]",
+    "HTTP: GET https://eun1.rel.tunnels.api.visualstudio.com/tunnels/swift-lake-21d3cf3?includePorts=true",
+    "HTTP: 200 OK (291 ms)",
+    "HTTP: {",
+    '  "clusterId": "eun1",',
+    '  "tunnelId": "swift-lake-21d3cf3",',
+    '  "ports": [],',
+    '  "created": "2026-06-20T15:30:07.070058Z",',
+    '  "expiration": "2026-07-21T19:50:20Z"',
+    "}",
+    "{",
+    '  "tunnel": {',
+    '    "tunnelId": "swift-lake-21d3cf3.eun1",',
+    '    "tunnelExpiration": "30 days"',
+    "  }",
+    "}"
+  ].join("\n");
+
+  test("extracts the absolute expiration timestamp from verbose output", () => {
+    expect(parseTunnelExpiry(verboseOutput)).toBe("2026-07-21T19:50:20Z");
+  });
+
+  test("ignores the relative tunnelExpiration field", () => {
+    expect(parseTunnelExpiry('{"tunnelExpiration": "30 days"}')).toBeUndefined();
+  });
+
+  test("skips an expiration whose value is not a timestamp", () => {
+    expect(parseTunnelExpiry('{"expiration": "unknown"}')).toBeUndefined();
+  });
+
+  test("skips a non-timestamp expiration in favour of the real one", () => {
+    const output = [
+      'LOG: {"expiration": "never"}',
+      'HTTP: {"expiration": "2026-07-21T19:50:20Z"}'
+    ].join("\n");
+    expect(parseTunnelExpiry(output)).toBe("2026-07-21T19:50:20Z");
+  });
+
+  test("accepts a timestamp with fractional seconds and offset", () => {
+    expect(parseTunnelExpiry('{"expiration": "2026-07-21T19:50:20.123+00:00"}')).toBe(
+      "2026-07-21T19:50:20.123+00:00"
+    );
+  });
+
+  test("returns undefined when no expiration is present", () => {
+    expect(parseTunnelExpiry("MSAL: noise only\nHTTP: 200 OK")).toBeUndefined();
+  });
+});
+
+describe("dashboard tunnel status expiry", () => {
+  function expiryRunner(commands: string[]): DashboardTunnelRunner {
+    return async (_cmd, args) => {
+      commands.push(args.join(" "));
+      if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+      if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+      if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test.eun1" }), stderr: "" };
+      if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+      if (args[0] === "show") return { status: 0, stdout: '{ "expiration": "2026-07-21T19:50:20Z" }', stderr: "" };
+      throw new Error(`unexpected runner command: ${args.join(" ")}`);
+    };
+  }
+
+  test("includes expiresAt once the tunnel is running", async () => {
+    const commands: string[] = [];
+    const manager = createManager({
+      port: 3131,
+      runner: expiryRunner(commands),
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await manager.ensure();
+    await expect(manager.status()).resolves.toMatchObject({
+      running: true,
+      expiresAt: "2026-07-21T19:50:20Z"
+    });
+    expect(commands.some((cmd) => cmd.startsWith("show climon-test.eun1 -v -j"))).toBe(true);
+  });
+
+  test("omits expiresAt when the tunnel is not running", async () => {
+    const commands: string[] = [];
+    const manager = createManager({ port: 3131, runner: expiryRunner(commands) });
+    const status = await manager.status();
+    expect(status.running).toBe(false);
+    expect(status.expiresAt).toBeUndefined();
+    expect(commands.some((cmd) => cmd.startsWith("show"))).toBe(false);
+  });
+});
+
+describe("dashboard tunnel expiry cache reset", () => {
+  test("refetches expiry after the tunnel identity is reset (missing-port recreation)", async () => {
+    let portCreateCalls = 0;
+    let showCalls = 0;
+    const expirations = ["2026-07-21T19:50:20Z", "2026-08-21T10:00:00Z"];
+    const runner: DashboardTunnelRunner = async (_cmd, args) => {
+      if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+      if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+      if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "saved-tunnel.eun1" }), stderr: "" };
+      if (args[0] === "port" && args[1] === "create") {
+        portCreateCalls += 1;
+        // The second port-create reports the tunnel is gone, forcing forgetTunnel + recreate.
+        if (portCreateCalls === 2) return { status: 1, stdout: "", stderr: "tunnel not found" };
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+      if (args[0] === "delete") return { status: 0, stdout: "", stderr: "" };
+      if (args[0] === "show") {
+        const value = expirations[Math.min(showCalls, expirations.length - 1)];
+        showCalls += 1;
+        return { status: 0, stdout: `{ "expiration": "${value}" }`, stderr: "" };
+      }
+      throw new Error(`unexpected runner command: ${args.join(" ")}`);
+    };
+    const manager = createManager({
+      port: 3131,
+      persisted: { tunnelId: "saved-tunnel.eun1", cluster: "eun1" },
+      runner,
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://saved-tunnel-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await manager.ensure();
+    // Cache the first tunnel's expiry.
+    await expect(manager.status()).resolves.toMatchObject({ expiresAt: expirations[0] });
+
+    // Drop the live host (the persisted tunnel id is retained), then re-ensure. The next
+    // port-create reports the tunnel is gone, so the manager forgets the old id and creates
+    // a replacement — which must invalidate the cached expiry so status() refetches it.
+    await manager.close();
+    await manager.ensure();
+
+    await expect(manager.status()).resolves.toMatchObject({ expiresAt: expirations[1] });
+  });
+});

@@ -65,6 +65,13 @@ export interface HotKeysConfig {
   focusTopSession: string;
 }
 
+export interface DashboardConfig {
+  /** Selected web-dashboard default terminal theme display name (see THEME_NAMES). */
+  theme?: string;
+  /** Whether the dashboard key bar is pinned. */
+  keyBarPinned?: boolean;
+}
+
 export interface RemoteConfig {
   enabled?: boolean;
   /** Direct remote uplink host for same-machine or LAN setups. */
@@ -161,6 +168,7 @@ export interface ClimonConfig {
   server: ServerConfig;
   terminal: TerminalConfig;
   hotKeys: HotKeysConfig;
+  dashboard?: DashboardConfig;
   attention: AttentionConfig;
   remote?: RemoteConfig;
   session?: SessionDefaultsConfig;
@@ -214,6 +222,8 @@ export interface SessionMeta {
   priority?: number;
   /** Accent color for the sidebar item, or null/absent for none. */
   color?: AnsiColor | null;
+  /** Per-session terminal theme display name; absent = inherit the dashboard default. */
+  theme?: string;
   /** User-controlled pause marker; live daemon writes must not visually unpause while true. */
   userPaused?: boolean;
 }
@@ -234,6 +244,7 @@ export interface SessionMetaPatch {
   name?: string;
   priority?: number;
   color?: AnsiColor | null;
+  theme?: string;
   userPaused?: boolean;
 }
 

@@ -45,6 +45,7 @@ import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
 import { runPromote } from "./promote.js";
+import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
 import { resolveServerInvocation } from "../cli/server-exec.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
@@ -514,6 +515,7 @@ export interface SpawnMetaOptions {
   name?: string;
   priority?: number;
   color?: SessionColorMode | null;
+  theme?: string;
 }
 
 /**
@@ -532,6 +534,9 @@ export function buildRunArgs(command: string[], meta: SpawnMetaOptions): string[
   }
   if (meta.name !== undefined && meta.name !== "") {
     flags.push("--name", meta.name);
+  }
+  if (meta.theme !== undefined && meta.theme !== "") {
+    flags.push("--theme", meta.theme);
   }
   return ["run", "--headless", ...flags, ...command];
 }
@@ -564,6 +569,9 @@ export function buildSpawnArgs(command: string[], input: SpawnArgsInput): string
   if (input.meta.name !== undefined && input.meta.name !== "") {
     args.push("--name", input.meta.name);
   }
+  if (input.meta.theme !== undefined && input.meta.theme !== "") {
+    args.push("--theme", input.meta.theme);
+  }
   return [...args, ...command];
 }
 
@@ -572,6 +580,7 @@ export interface RemoteSpawnInput {
   cwd: string;
   headless: boolean;
   name?: string;
+  theme?: string;
   priority?: number;
   color?: string;
 }
@@ -598,6 +607,7 @@ export async function routeRemoteSpawn(
     cols: parent.cols,
     rows: parent.rows,
     name: input.name,
+    theme: input.theme,
     priority: input.priority,
     color: input.color,
     headless: input.headless
@@ -1265,6 +1275,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           remotesEnabled: options.enableRemotes === true,
           features: resolveFeatureFlags(config),
           shortcuts: { focusTopSession: config.hotKeys?.focusTopSession ?? "Alt+J" },
+          preferences: collectDashboardPreferences(config),
           ports: await collectServerPorts()
         });
       }
@@ -1320,7 +1331,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
         let payload: {
           command?: unknown; cwd?: unknown; cols?: unknown; rows?: unknown; parentId?: unknown;
-          name?: unknown; priority?: unknown; color?: unknown; headless?: unknown;
+          name?: unknown; priority?: unknown; color?: unknown; headless?: unknown; theme?: unknown;
         };
         try {
           payload = (await request.json()) as typeof payload;
@@ -1347,7 +1358,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               ? undefined
               : payload.color === null
                 ? null
-                : parseColorMode(String(payload.color))
+                : parseColorMode(String(payload.color)),
+            theme: typeof payload.theme === "string" && payload.theme.trim() ? payload.theme.trim() : undefined
           };
         } catch (error) {
           return new Response(error instanceof Error ? error.message : "Invalid metadata", { status: 400 });
@@ -1374,6 +1386,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
                 cwd,
                 headless,
                 name: metaInput.name,
+                theme: metaInput.theme,
                 priority: metaInput.priority ?? parent.priority,
                 color: metaInput.color === null ? "none" : metaInput.color ?? undefined
               }
@@ -1401,7 +1414,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
                 meta: {
                   name: metaInput.name,
                   priority: metaInput.priority ?? parent.priority,
-                  color
+                  color,
+                  theme: metaInput.theme
                 }
               }),
               cwd
@@ -1443,7 +1457,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               meta: {
                 name: metaInput.name,
                 priority: defaults.priority,
-                color: defaults.color
+                color: defaults.color,
+                theme: metaInput.theme
               }
             }),
             cwd
@@ -1636,6 +1651,39 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         return new Response(null, { status: 204 });
       }
 
+      if (url.pathname === "/api/dashboard/preferences" && request.method === "POST") {
+        // Same-origin guard: reachable over the tunnel (remote viewers may change
+        // cosmetic prefs) while blocking cross-origin CSRF / DNS-rebinding.
+        if (!isSameOriginRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let body: { key?: unknown; value?: unknown };
+        try {
+          body = (await request.json()) as { key?: unknown; value?: unknown };
+        } catch {
+          return new Response("Invalid JSON", { status: 400 });
+        }
+        if (typeof body.key !== "string") {
+          return new Response("Missing key", { status: 400 });
+        }
+        const { result, config: latest } = await persistDashboardPreference(
+          body.key,
+          body.value,
+          loadConfig,
+          saveConfig
+        );
+        if (!result.ok) {
+          return new Response(result.error, { status: result.status });
+        }
+        // Keep the in-memory config the server serves on /health in sync.
+        Object.assign(config, latest);
+        return Response.json({ ok: true, key: body.key, value: body.value });
+      }
+
       if (url.pathname === "/api/sessions") {
         return new Response(await sessionsPayload(), { headers: { "content-type": "application/json" } });
       }
@@ -1649,7 +1697,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         )) {
           return new Response("Forbidden", { status: 403 });
         }
-        let body: { name?: unknown; priority?: unknown; color?: unknown; status?: unknown };
+        let body: { name?: unknown; priority?: unknown; color?: unknown; status?: unknown; theme?: unknown };
         try {
           body = (await request.json()) as typeof body;
         } catch {
@@ -1659,6 +1707,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           name?: string;
           priority?: number;
           color?: AnsiColor | null;
+          theme?: string;
           status?: Extract<SessionStatus, "paused" | "running">;
           priorityReason?: "running";
           userPaused?: boolean;
@@ -1675,6 +1724,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           }
           if (body.color !== undefined) {
             patch.color = body.color === null ? null : parseColor(String(body.color));
+          }
+          if (body.theme !== undefined) {
+            const t = body.theme === null ? "" : String(body.theme);
+            patch.theme = t.trim() === "" ? undefined : t;
           }
           if (body.status !== undefined) {
             requestedStatus = parseBrowserStatusPatch(body.status);

@@ -40,6 +40,7 @@ describe("TerminalView", () => {
         visible: false,
         viewMode: "clamped",
         fontSize: 13,
+        xtermTheme: { background: "#0d1117" },
         onFontSizeChange: () => {},
         serverConnected: true,
         serverReconnectToken: 0

@@ -44,6 +44,49 @@ export function withQuery(path: string, current: DashboardLocationState = curren
   return query ? `${path}${path.includes("?") ? "&" : "?"}${query}` : path;
 }
 
+export type TunnelAuthState = "ok" | "auth-required" | "unreachable";
+
+/**
+ * Classifies a manual-redirect probe of the dashboard `/health` endpoint to tell
+ * an expired dev-tunnel sign-in apart from a server outage. An expired session
+ * makes the relay answer with a cross-origin 302 to a Microsoft login page,
+ * which a `redirect: "manual"` fetch surfaces as an opaque-redirect response;
+ * some relay configs serve the login page inline as `text/html` instead.
+ */
+export function classifyTunnelAuthResponse(res: Response): TunnelAuthState {
+  if (res.type === "opaqueredirect") {
+    return "auth-required";
+  }
+  const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+  if (res.ok) {
+    return contentType.includes("text/html") ? "auth-required" : "ok";
+  }
+  return "unreachable";
+}
+
+/**
+ * Probes the tunnel relay to decide whether the dashboard connection dropped
+ * because the Microsoft dev-tunnel sign-in expired. Only runs on dev-tunnel
+ * hosts; everywhere else it is a no-op that reports `ok`. Network
+ * failures report `unreachable` so a transient blip never triggers a sign-in
+ * prompt.
+ */
+export async function probeTunnelAuth(
+  opts: { isTunnelHost?: boolean; fetchImpl?: typeof fetch } = {}
+): Promise<TunnelAuthState> {
+  const isTunnelHost = opts.isTunnelHost ?? isDevTunnelHost(currentDashboardLocation().hostname);
+  if (!isTunnelHost) {
+    return "ok";
+  }
+  const doFetch = opts.fetchImpl ?? fetch;
+  try {
+    const res = await doFetch(withQuery("/health"), { redirect: "manual", cache: "no-store" });
+    return classifyTunnelAuthResponse(res);
+  } catch {
+    return "unreachable";
+  }
+}
+
 export interface CreateSessionBody {
   command: string;
   cwd?: string;
@@ -54,6 +97,8 @@ export interface CreateSessionBody {
   name?: string;
   priority?: number;
   color?: SessionColorMode | null;
+  /** Per-session terminal theme display name; omit to inherit the default. */
+  theme?: string;
   /** When true, spawn the session headless (no GUI window). Default false (visible). */
   headless?: boolean;
 }
@@ -95,6 +140,7 @@ export interface UpdateSessionBody {
   name?: string;
   priority?: number;
   color?: AnsiColor | null;
+  theme?: string;
   status?: Extract<SessionMeta["status"], "paused" | "running">;
 }
 
@@ -171,17 +217,19 @@ export async function fetchHealth(): Promise<{
   remotesEnabled: boolean;
   features: Record<string, FeatureFlagState>;
   focusTopSessionShortcut: string;
+  preferences: Record<string, unknown>;
 }> {
   try {
     const res = await fetch(withQuery("/health"));
     if (!res.ok) {
-      return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+J" };
+      return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+J", preferences: {} };
     }
     const data = (await res.json()) as {
       version?: string;
       remotesEnabled?: boolean;
       features?: Record<string, FeatureFlagState>;
       shortcuts?: { focusTopSession?: string };
+      preferences?: Record<string, unknown>;
     };
     const focusTopSessionShortcut =
       typeof data.shortcuts?.focusTopSession === "string" ? data.shortcuts.focusTopSession : "Alt+J";
@@ -189,10 +237,11 @@ export async function fetchHealth(): Promise<{
       version: typeof data.version === "string" ? data.version : null,
       remotesEnabled: data.remotesEnabled === true,
       features: data.features && typeof data.features === "object" ? data.features : {},
-      focusTopSessionShortcut
+      focusTopSessionShortcut,
+      preferences: data.preferences && typeof data.preferences === "object" ? data.preferences : {}
     };
   } catch {
-    return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+J" };
+    return { version: null, remotesEnabled: false, features: {}, focusTopSessionShortcut: "Alt+J", preferences: {} };
   }
 }
 
@@ -225,6 +274,7 @@ export interface DashboardTunnelStatus {
   url?: string;
   tunnelId?: string;
   version?: string;
+  expiresAt?: string;
 }
 
 export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatus> {

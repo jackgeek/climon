@@ -30,7 +30,7 @@ interface Props {
 
 export function EditSessionDialog({ session, onClose }: Props) {
   const styles = useStyles();
-  const [fields, setFields] = useState<MetaFieldsValue>({ name: "", priority: "500", color: "none" });
+  const [fields, setFields] = useState<MetaFieldsValue>({ name: "", priority: "500", color: "none", theme: "" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -39,7 +39,8 @@ export function EditSessionDialog({ session, onClose }: Props) {
       setFields({
         name: session.name ?? "",
         priority: String(session.priority ?? 500),
-        color: session.color ?? "none"
+        color: session.color ?? "none",
+        theme: session.theme ?? ""
       });
       setError("");
       setBusy(false);
@@ -61,7 +62,8 @@ export function EditSessionDialog({ session, onClose }: Props) {
     const result = await updateSession(session.id, {
       name: fields.name.trim(),
       priority: priorityNum,
-      color
+      color,
+      theme: fields.theme
     });
     if (!result.ok) {
       setError(result.error || "Failed to update session.");

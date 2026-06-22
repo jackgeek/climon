@@ -11,10 +11,14 @@ pub fn is_process_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: avoid flashing a console window for the liveness probe.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         match std::process::Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
         {
             Ok(out) => String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()),
@@ -39,6 +43,9 @@ pub fn kill_process(pid: u32, force: bool) -> bool {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: avoid flashing a console window for the kill.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let mut args: Vec<String> = vec!["/PID".to_string(), pid.to_string(), "/T".to_string()];
         if force {
             args.push("/F".to_string());
@@ -48,6 +55,7 @@ pub fn kill_process(pid: u32, force: bool) -> bool {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
             .status()
             .map(|s| s.success())
             .unwrap_or(false)

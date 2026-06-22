@@ -1,7 +1,12 @@
 import {
   Button,
+  Input,
   Menu,
+  MenuDivider,
+  MenuGroup,
+  MenuGroupHeader,
   MenuItem,
+  MenuItemRadio,
   MenuList,
   MenuPopover,
   MenuTrigger,
@@ -16,17 +21,21 @@ import {
   ChevronDoubleRightRegular,
   Navigation20Regular
 } from "@fluentui/react-icons";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
+import { TunnelExpiryBanner } from "./TunnelExpiryBanner.js";
 import { useFeature } from "../hooks/useFeature.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
+import { DASHBOARD_THEMES } from "../themes.js";
+import { DEFAULT_THEME_NAME } from "../../dashboard-preference-keys.js";
 import {
   getStableSessionItemRef,
   installPwaMenuLabel,
+  keyBarPinnedMenuLabel,
   notificationsMenuLabel,
   removeDisconnectedMenuLabel,
   remotesMenuLabel,
@@ -78,6 +87,14 @@ const useStyles = makeStyles({
     flex: "1 1 auto",
     minHeight: 0,
     direction: "rtl"
+  },
+  themeSearch: {
+    margin: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    width: `calc(100% - (2 * ${tokens.spacingHorizontalS}))`
+  },
+  themeList: {
+    maxHeight: "60vh",
+    overflowY: "auto"
   },
   listItem: {
     direction: "ltr"
@@ -151,6 +168,11 @@ interface Props {
   viewModeLocked?: boolean;
   onViewModeToggle?: () => void;
   onMaximize: (id: string) => void;
+  isMobile: boolean;
+  keyBarPinned: boolean;
+  onToggleKeyBarPinned: () => void;
+  currentTheme?: string;
+  onSelectTheme?: (id: string) => void;
 }
 
 export function Sidebar({
@@ -179,7 +201,12 @@ export function Sidebar({
   viewMode,
   viewModeLocked = false,
   onViewModeToggle,
-  onMaximize
+  onMaximize,
+  isMobile,
+  keyBarPinned,
+  onToggleKeyBarPinned,
+  currentTheme = DEFAULT_THEME_NAME,
+  onSelectTheme,
 }: Props) {
   const styles = useStyles();
   const sessionSpawning = useFeature("sessionSpawning").enabled;
@@ -189,6 +216,15 @@ export function Sidebar({
   useEffect(() => {
     scrollActiveSessionIntoView(activeId, (id) => itemRefRegistry.current.elements[id]);
   }, [activeId, sessions]);
+
+  const [themeFilter, setThemeFilter] = useState("");
+  const filteredThemes = useMemo(() => {
+    const q = themeFilter.trim().toLowerCase();
+    return q ? DASHBOARD_THEMES.filter((t) => t.name.toLowerCase().includes(q)) : DASHBOARD_THEMES;
+  }, [themeFilter]);
+  const defaultTheme = filteredThemes.find((t) => t.name === DEFAULT_THEME_NAME);
+  const darkThemes = filteredThemes.filter((t) => t.name !== DEFAULT_THEME_NAME && t.base === "dark");
+  const lightThemes = filteredThemes.filter((t) => t.name !== DEFAULT_THEME_NAME && t.base === "light");
 
   return (
     <div className={mergeClasses(styles.root, collapsed && styles.collapsedRoot)}>
@@ -206,6 +242,9 @@ export function Sidebar({
             <MenuPopover>
               <MenuList>
                 <MenuItem onClick={onToggleNotifications}>{notificationsMenuLabel(notificationsEnabled)}</MenuItem>
+                {isMobile && (
+                  <MenuItem onClick={onToggleKeyBarPinned}>{keyBarPinnedMenuLabel(keyBarPinned)}</MenuItem>
+                )}
                 {canInstallPwa && (
                   <MenuItem onClick={onInstallPwa}>{installPwaMenuLabel}</MenuItem>
                 )}
@@ -219,6 +258,66 @@ export function Sidebar({
                 {sessions.some((s) => s.status === "completed" || s.status === "failed" || s.status === "disconnected") && (
                   <MenuItem onClick={onRemoveDisconnected}>{removeDisconnectedMenuLabel}</MenuItem>
                 )}
+                <MenuDivider />
+                <Menu
+                  checkedValues={{ theme: [currentTheme] }}
+                  onCheckedValueChange={(_e, data) => {
+                    const next = data.checkedItems[0];
+                    if (next) {
+                      onSelectTheme?.(next);
+                    }
+                  }}
+                >
+                  <MenuTrigger disableButtonEnhancement>
+                    <MenuItem>Default theme</MenuItem>
+                  </MenuTrigger>
+                  <MenuPopover>
+                    <Input
+                      className={styles.themeSearch}
+                      size="small"
+                      placeholder="Search themes…"
+                      value={themeFilter}
+                      onChange={(_e, data) => setThemeFilter(data.value)}
+                      onKeyDown={(e) => {
+                        // Keep list arrow-navigation from stealing focus out of the
+                        // search box, but let Escape/Tab still dismiss the menu.
+                        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                          e.stopPropagation();
+                        }
+                      }}
+                    />
+                    <MenuList className={styles.themeList}>
+                      {defaultTheme && (
+                        <MenuItemRadio name="theme" value={defaultTheme.name}>
+                          {defaultTheme.name}
+                        </MenuItemRadio>
+                      )}
+                      {darkThemes.length > 0 && (
+                        <MenuGroup>
+                          <MenuGroupHeader>Dark</MenuGroupHeader>
+                          {darkThemes.map((t) => (
+                            <MenuItemRadio key={t.name} name="theme" value={t.name}>
+                              {t.name}
+                            </MenuItemRadio>
+                          ))}
+                        </MenuGroup>
+                      )}
+                      {lightThemes.length > 0 && (
+                        <MenuGroup>
+                          <MenuGroupHeader>Light</MenuGroupHeader>
+                          {lightThemes.map((t) => (
+                            <MenuItemRadio key={t.name} name="theme" value={t.name}>
+                              {t.name}
+                            </MenuItemRadio>
+                          ))}
+                        </MenuGroup>
+                      )}
+                      {!defaultTheme && darkThemes.length === 0 && lightThemes.length === 0 && (
+                        <MenuItem disabled>No themes found</MenuItem>
+                      )}
+                    </MenuList>
+                  </MenuPopover>
+                </Menu>
               </MenuList>
             </MenuPopover>
           </Menu>
@@ -237,6 +336,7 @@ export function Sidebar({
           />
         )}
       </div>
+      {isMobile && <TunnelExpiryBanner variant="inline" />}
       <div className={styles.list} dir="rtl">
         {sessions.length === 0 ? (
           <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)} dir="ltr">

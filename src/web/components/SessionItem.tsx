@@ -18,6 +18,7 @@ import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { bottomRowRightOffsets } from "./session-item-layout.js";
 import { useFeature } from "../hooks/useFeature.js";
+import { MOBILE_MEDIA_QUERY_RULE } from "../mobile.js";
 
 const useStyles = makeStyles({
   root: {
@@ -124,7 +125,7 @@ const useStyles = makeStyles({
     display: "none",
     marginTop: "8px",
     width: "100%",
-    "@media (max-width: 768px)": {
+    [MOBILE_MEDIA_QUERY_RULE]: {
       display: "inline-flex"
     }
   }

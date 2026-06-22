@@ -1,4 +1,5 @@
 import type { ClimonConfig } from "./types.js";
+import { isThemeName } from "./dashboard-preference-keys.js";
 import { DEFAULT_PRIORITY } from "./session-meta.js";
 import { FEATURE_FLAGS } from "./features.js";
 import { parseShortcut } from "./hotkeys.js";
@@ -16,6 +17,12 @@ export interface ConfigSetting {
   scope: ConfigProcessScope[];
   sensitive?: boolean;
   internal?: boolean;
+  /**
+   * When true, the web dashboard may read AND write this setting through the
+   * generic preferences API. Must include "browser" in `scope`. This flag is the
+   * security allowlist for browser-originated config writes.
+   */
+  dashboardWritable?: boolean;
   acceptInput?: boolean;
   validate?: (value: unknown) => void;
 }
@@ -109,6 +116,34 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
         throw new Error(
           'hotKeys.focusTopSession must be empty or a shortcut like "Alt+T" or "Ctrl+Shift+J"'
         );
+      }
+    }
+  },
+  {
+    path: "dashboard.theme",
+    type: "string",
+    defaultValue: "Default",
+    purpose: "Default web dashboard terminal colour theme (by display name, e.g. \"Dracula\"). Sessions without their own theme inherit this. Choose from the dashboard \"Default theme\" picker; defaults to \"Default\".",
+    scope: ["server", "browser"],
+    acceptInput: true,
+    dashboardWritable: true,
+    validate: (value: unknown) => {
+      if (!isThemeName(value)) {
+        throw new Error(`dashboard.theme is not a recognised theme name: ${String(value)}`);
+      }
+    }
+  },
+  {
+    path: "dashboard.keyBarPinned",
+    type: "boolean",
+    defaultValue: false,
+    purpose: "Whether the web dashboard key bar is pinned open.",
+    scope: ["server", "browser"],
+    acceptInput: true,
+    dashboardWritable: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "boolean") {
+        throw new Error("dashboard.keyBarPinned must be a boolean");
       }
     }
   },
@@ -489,6 +524,11 @@ export function coerceConfigValueFromSettings(path: string, value: string): unkn
  */
 export function findConfigSetting(path: string): ConfigSetting | undefined {
   return CONFIG_SETTINGS.find((s) => s.path === path);
+}
+
+/** All settings the web dashboard is allowed to read and write. */
+export function dashboardWritableSettings(): ConfigSetting[] {
+  return CONFIG_SETTINGS.filter((setting) => setting.dashboardWritable === true);
 }
 
 /**
