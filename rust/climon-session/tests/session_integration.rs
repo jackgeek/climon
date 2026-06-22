@@ -84,6 +84,7 @@ fn base_meta(id: &str, home: &PathBuf, command: Vec<String>) -> SessionMeta {
         name: None,
         priority: None,
         color: None,
+        theme: None,
         user_paused: None,
     };
     // The launcher writes the initial meta file before the host starts.
