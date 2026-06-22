@@ -281,6 +281,15 @@ loopback-only:
 - **Mux frames**: every frame is length-prefixed and capped
   (`MAX_MUX_PAYLOAD = 8 MiB`); an oversize or malformed frame tears the
   connection down rather than allocating unbounded memory.
+- **Hello identity** (`hello.hostname` / `hello.os`): attacker-controlled
+  fields surfaced by `climon remotes` and the dashboard. The ingest sanitizes
+  them at the boundary — `hostname` capped to 64 chars with C0/C1 control bytes
+  and ESC stripped, `os` allowlisted to `darwin`/`win32`/`linux` (else
+  `unknown`) — so a malicious devbox cannot inject terminal escape sequences
+  into a TTY or oversize the `ingest-status.json` beacon. The
+  `ingest-status.json` / `uplink-status.json` beacons are local files under
+  `$CLIMON_HOME` (mode `0600`) carrying hostnames/addresses only — no secrets,
+  not network-exposed; `GET /api/remotes` is loopback-only (403 otherwise).
 
 ## Integrity of managed files
 
