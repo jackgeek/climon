@@ -1290,7 +1290,7 @@ export function App() {
     reconnectOverlayVisible: serverReconnectOverlayVisible
   });
 
-  const activeTheme = getTheme(themeId);
+  const activeTheme = getTheme(activeSession?.theme ?? themeId);
   const fluentTheme = activeTheme.base === "light" ? webLightTheme : webDarkTheme;
 
   return (

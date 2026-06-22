@@ -45,6 +45,7 @@ interface CreateSessionBodyInput {
   name: string;
   priority: number;
   color: CreateSessionBody["color"];
+  theme?: string;
   headless?: boolean;
 }
 
@@ -58,6 +59,7 @@ export function buildCreateSessionBody(input: CreateSessionBodyInput): CreateSes
     name: input.name.trim() || undefined,
     priority: input.priority,
     color: input.color,
+    theme: input.theme || undefined,
     headless: input.headless
   };
 }
@@ -68,7 +70,7 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
   const [cwd, setCwd] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [fields, setFields] = useState<MetaFieldsValue>({ name: "", priority: "500", color: "auto" });
+  const [fields, setFields] = useState<MetaFieldsValue>({ name: "", priority: "500", color: "auto", theme: "" });
   const [headless, setHeadless] = useState(false);
 
   useEffect(() => {
@@ -78,7 +80,8 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
       setFields({
         name: "",
         priority: String(parent?.priority ?? 500),
-        color: parent ? parent.color ?? "none" : "auto"
+        color: parent ? parent.color ?? "none" : "auto",
+        theme: ""
       });
       setError("");
       setBusy(false);
@@ -113,6 +116,7 @@ export function NewSessionDialog({ open, onOpenChange, getDimensions, onCreated,
       name: fields.name,
       priority: priorityNum,
       color: fields.color,
+      theme: fields.theme,
       headless
     }));
     if (!result.ok) {
