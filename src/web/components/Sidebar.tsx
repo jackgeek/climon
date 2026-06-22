@@ -31,7 +31,7 @@ import { useFeature } from "../hooks/useFeature.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
 import { DASHBOARD_THEMES } from "../themes.js";
-import { DEFAULT_THEME_ID } from "../../dashboard-preference-keys.js";
+import { DEFAULT_THEME_NAME } from "../../dashboard-preference-keys.js";
 import {
   getStableSessionItemRef,
   installPwaMenuLabel,
@@ -205,7 +205,7 @@ export function Sidebar({
   isMobile,
   keyBarPinned,
   onToggleKeyBarPinned,
-  currentTheme = DEFAULT_THEME_ID,
+  currentTheme = DEFAULT_THEME_NAME,
   onSelectTheme,
 }: Props) {
   const styles = useStyles();
@@ -220,11 +220,11 @@ export function Sidebar({
   const [themeFilter, setThemeFilter] = useState("");
   const filteredThemes = useMemo(() => {
     const q = themeFilter.trim().toLowerCase();
-    return q ? DASHBOARD_THEMES.filter((t) => t.label.toLowerCase().includes(q)) : DASHBOARD_THEMES;
+    return q ? DASHBOARD_THEMES.filter((t) => t.name.toLowerCase().includes(q)) : DASHBOARD_THEMES;
   }, [themeFilter]);
-  const defaultTheme = filteredThemes.find((t) => t.id === DEFAULT_THEME_ID);
-  const darkThemes = filteredThemes.filter((t) => t.id !== DEFAULT_THEME_ID && t.base === "dark");
-  const lightThemes = filteredThemes.filter((t) => t.id !== DEFAULT_THEME_ID && t.base === "light");
+  const defaultTheme = filteredThemes.find((t) => t.name === DEFAULT_THEME_NAME);
+  const darkThemes = filteredThemes.filter((t) => t.name !== DEFAULT_THEME_NAME && t.base === "dark");
+  const lightThemes = filteredThemes.filter((t) => t.name !== DEFAULT_THEME_NAME && t.base === "light");
 
   return (
     <div className={mergeClasses(styles.root, collapsed && styles.collapsedRoot)}>
@@ -269,7 +269,7 @@ export function Sidebar({
                   }}
                 >
                   <MenuTrigger disableButtonEnhancement>
-                    <MenuItem>Theme</MenuItem>
+                    <MenuItem>Default theme</MenuItem>
                   </MenuTrigger>
                   <MenuPopover>
                     <Input
@@ -288,16 +288,16 @@ export function Sidebar({
                     />
                     <MenuList className={styles.themeList}>
                       {defaultTheme && (
-                        <MenuItemRadio name="theme" value={defaultTheme.id}>
-                          {defaultTheme.label}
+                        <MenuItemRadio name="theme" value={defaultTheme.name}>
+                          {defaultTheme.name}
                         </MenuItemRadio>
                       )}
                       {darkThemes.length > 0 && (
                         <MenuGroup>
                           <MenuGroupHeader>Dark</MenuGroupHeader>
                           {darkThemes.map((t) => (
-                            <MenuItemRadio key={t.id} name="theme" value={t.id}>
-                              {t.label}
+                            <MenuItemRadio key={t.name} name="theme" value={t.name}>
+                              {t.name}
                             </MenuItemRadio>
                           ))}
                         </MenuGroup>
@@ -306,8 +306,8 @@ export function Sidebar({
                         <MenuGroup>
                           <MenuGroupHeader>Light</MenuGroupHeader>
                           {lightThemes.map((t) => (
-                            <MenuItemRadio key={t.id} name="theme" value={t.id}>
-                              {t.label}
+                            <MenuItemRadio key={t.name} name="theme" value={t.name}>
+                              {t.name}
                             </MenuItemRadio>
                           ))}
                         </MenuGroup>
