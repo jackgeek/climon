@@ -1,5 +1,19 @@
 [
   {
+    "version": "2.1.0",
+    "changes": [
+      "Choose a per-session terminal theme with the new --theme flag and the dashboard Edit/New session dialogs",
+      "Pick from the full set of bundled terminal themes in a searchable, light/dark-grouped theme picker",
+      "Set a default dashboard theme that sessions inherit live until overridden",
+      "Sync dashboard preferences (theme and key-bar pin) across your connected clients",
+      "Pin the dashboard key bar on mobile via the hamburger menu",
+      "Show an in-app sign-in prompt when a dev tunnel session expires, instead of a dead connection",
+      "Show a countdown banner before a dashboard tunnel link expires",
+      "Open the originating session terminal when you tap a push notification",
+      "Stop console windows from flashing on Windows when the remote uplink retries"
+    ]
+  },
+  {
     "version": "2.0.13",
     "changes": [
       "Spawn new sessions directly from the dashboard, including headless and visible terminal-window sessions",

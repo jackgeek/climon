@@ -1,4 +1,4 @@
-climon v2.0.13 — web-based monitor for interactive CLI sessions
+climon v2.1.0 — web-based monitor for interactive CLI sessions
 
 Usage:
   climon [--priority N] [--color C] [--name S] [--theme T]
