@@ -303,14 +303,6 @@ export function SessionItem({
           {displayTitle}
         </Text>
       )}
-      <div className={mergeClasses(styles.meta, compact && styles.compactMeta)}>
-        <StatusBadge status={session.status} compact={compact} showTitle={!compact} />
-        {!compact && session.clientLabel && (
-          <span className={styles.origin} title={session.clientLabel}>
-            {session.clientLabel}
-          </span>
-        )}
-      </div>
       {active && !compact && (
         <Button
           className={styles.maximize}
@@ -325,6 +317,14 @@ export function SessionItem({
           Open terminal
         </Button>
       )}
+      <div className={mergeClasses(styles.meta, compact && styles.compactMeta)}>
+        <StatusBadge status={session.status} compact={compact} showTitle={!compact} />
+        {!compact && session.clientLabel && (
+          <span className={styles.origin} title={session.clientLabel}>
+            {session.clientLabel}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

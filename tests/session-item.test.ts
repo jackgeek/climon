@@ -288,6 +288,30 @@ describe("SessionItem terminated controls", () => {
   });
 });
 
+describe("SessionItem open terminal ordering", () => {
+  test("renders the Open terminal button above the status/client meta for active sessions", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        active: true,
+        compact: false,
+        session: makeSession({ clientLabel: "ssh laptop" }),
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onPauseToggle: () => {},
+        onSelect: () => {}
+      })
+    );
+
+    const buttonIndex = markup.indexOf("Open terminal");
+    const metaIndex = markup.indexOf('class="meta"');
+    expect(buttonIndex).toBeGreaterThanOrEqual(0);
+    expect(metaIndex).toBeGreaterThanOrEqual(0);
+    expect(buttonIndex).toBeLessThan(metaIndex);
+  });
+});
+
 describe("SessionItem clamp lock", () => {
   const lockProps = {
     compact: false,
