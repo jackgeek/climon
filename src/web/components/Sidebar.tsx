@@ -1,7 +1,10 @@
 import {
   Button,
+  Input,
   Menu,
   MenuDivider,
+  MenuGroup,
+  MenuGroupHeader,
   MenuItem,
   MenuItemRadio,
   MenuList,
@@ -18,7 +21,7 @@ import {
   ChevronDoubleRightRegular,
   Navigation20Regular
 } from "@fluentui/react-icons";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import type { DashboardTunnelStatus } from "../api.js";
@@ -84,6 +87,14 @@ const useStyles = makeStyles({
     flex: "1 1 auto",
     minHeight: 0,
     direction: "rtl"
+  },
+  themeSearch: {
+    margin: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    width: `calc(100% - (2 * ${tokens.spacingHorizontalS}))`
+  },
+  themeList: {
+    maxHeight: "60vh",
+    overflowY: "auto"
   },
   listItem: {
     direction: "ltr"
@@ -206,6 +217,15 @@ export function Sidebar({
     scrollActiveSessionIntoView(activeId, (id) => itemRefRegistry.current.elements[id]);
   }, [activeId, sessions]);
 
+  const [themeFilter, setThemeFilter] = useState("");
+  const filteredThemes = useMemo(() => {
+    const q = themeFilter.trim().toLowerCase();
+    return q ? DASHBOARD_THEMES.filter((t) => t.label.toLowerCase().includes(q)) : DASHBOARD_THEMES;
+  }, [themeFilter]);
+  const defaultTheme = filteredThemes.find((t) => t.id === DEFAULT_THEME_ID);
+  const darkThemes = filteredThemes.filter((t) => t.id !== DEFAULT_THEME_ID && t.base === "dark");
+  const lightThemes = filteredThemes.filter((t) => t.id !== DEFAULT_THEME_ID && t.base === "light");
+
   return (
     <div className={mergeClasses(styles.root, collapsed && styles.collapsedRoot)}>
       <div className={mergeClasses(styles.header, collapsed && styles.collapsedHeader)}>
@@ -252,12 +272,49 @@ export function Sidebar({
                     <MenuItem>Theme</MenuItem>
                   </MenuTrigger>
                   <MenuPopover>
-                    <MenuList>
-                      {DASHBOARD_THEMES.map((t) => (
-                        <MenuItemRadio key={t.id} name="theme" value={t.id}>
-                          {t.label}
+                    <Input
+                      className={styles.themeSearch}
+                      size="small"
+                      placeholder="Search themes…"
+                      value={themeFilter}
+                      onChange={(_e, data) => setThemeFilter(data.value)}
+                      onKeyDown={(e) => {
+                        // Keep list arrow-navigation from stealing focus out of the
+                        // search box, but let Escape/Tab still dismiss the menu.
+                        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                          e.stopPropagation();
+                        }
+                      }}
+                    />
+                    <MenuList className={styles.themeList}>
+                      {defaultTheme && (
+                        <MenuItemRadio name="theme" value={defaultTheme.id}>
+                          {defaultTheme.label}
                         </MenuItemRadio>
-                      ))}
+                      )}
+                      {darkThemes.length > 0 && (
+                        <MenuGroup>
+                          <MenuGroupHeader>Dark</MenuGroupHeader>
+                          {darkThemes.map((t) => (
+                            <MenuItemRadio key={t.id} name="theme" value={t.id}>
+                              {t.label}
+                            </MenuItemRadio>
+                          ))}
+                        </MenuGroup>
+                      )}
+                      {lightThemes.length > 0 && (
+                        <MenuGroup>
+                          <MenuGroupHeader>Light</MenuGroupHeader>
+                          {lightThemes.map((t) => (
+                            <MenuItemRadio key={t.id} name="theme" value={t.id}>
+                              {t.label}
+                            </MenuItemRadio>
+                          ))}
+                        </MenuGroup>
+                      )}
+                      {!defaultTheme && darkThemes.length === 0 && lightThemes.length === 0 && (
+                        <MenuItem disabled>No themes found</MenuItem>
+                      )}
                     </MenuList>
                   </MenuPopover>
                 </Menu>

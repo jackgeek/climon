@@ -95,9 +95,9 @@ describe("persistDashboardPreference", () => {
       stored = config;
     };
 
-    const ok = await persistDashboardPreference("dashboard.theme", "monokai", load, save);
+    const ok = await persistDashboardPreference("dashboard.theme", "monokai-soda", load, save);
     expect(ok.result.ok).toBe(true);
-    expect(ok.config?.dashboard?.theme).toBe("monokai");
+    expect(ok.config?.dashboard?.theme).toBe("monokai-soda");
 
     const bad = await persistDashboardPreference("server.port", 9999, load, save);
     expect(bad.result).toMatchObject({ ok: false, status: 400 });
