@@ -256,9 +256,23 @@ fn run_cleanup() -> i32 {
 /// `climon link [--peer-home <path>]`: wire WSL<->Windows dashboard discovery.
 fn run_link(argv: &[String]) -> i32 {
     use climon_cli::link_cmd::run_link_command;
+    use std::io::IsTerminal;
     let env = ConfigEnv::real();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    run_link_command(argv, &env, &cwd, &mut |t: &str| write_stdout(t, true))
+    let is_tty = std::io::stdin().is_terminal();
+    let mut confirm = |question: &str| -> bool {
+        write_stdout(question, true);
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line).is_err() {
+            return true;
+        }
+        let answer = line.trim().to_ascii_lowercase();
+        answer.is_empty() || answer == "y" || answer == "yes"
+    };
+    run_link_command(argv, &env, &cwd, is_tty, &mut confirm, &mut |t: &str| {
+        write_stdout(t, true)
+    })
 }
 
 /// `climon __uplink`: run the devbox uplink supervisor on a tokio runtime.
