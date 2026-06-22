@@ -6,10 +6,18 @@ import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
 import { readServerStateFromDir, getServerStatePath, serializeServerState } from "../src/server-state.js";
+import { computeRemotesActive } from "../src/server/server.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
 const { shouldMarkDisconnected, shouldStopIngestForShutdown } = serverModule;
+
+test("remotes are active when wslBridge or remotes flag is enabled", () => {
+  expect(computeRemotesActive({} as never)).toBe(false);
+  expect(computeRemotesActive({ feature: { wslBridge: "enabled" } } as never)).toBe(true);
+  expect(computeRemotesActive({ feature: { remotes: "enabled" } } as never)).toBe(true);
+  expect(computeRemotesActive({ feature: { remoteSpawn: "enabled" } } as never)).toBe(false);
+});
 
 function meta(over: Partial<SessionMeta>): SessionMeta {
   const now = new Date().toISOString();
@@ -144,12 +152,15 @@ describe("server shutdown ingest lifecycle", () => {
           ingestHost: "127.0.0.1",
           port: ingestPort,
           ingestPortRetryAttempts: 5
+        },
+        feature: {
+          remotes: "enabled"
         }
       })
     );
 
     const server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(dashboardPort), "--enable-remotes"],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(dashboardPort)],
       { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
     );
     let serverExited = false;

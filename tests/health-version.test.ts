@@ -1,15 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:net";
-import { readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { VERSION } from "../src/version.js";
 
-const home = join(tmpdir(), `climon-health-${process.pid}`);
+const home = join(process.cwd(), ".test-home", `climon-health-${process.pid}`);
 const env = { ...process.env, CLIMON_HOME: home };
 
-// A server started with --enable-remotes spawns a detached ingest daemon that
+// A server started with remotes enabled spawns a detached ingest daemon that
 // outlives the killed server process. Tests must stop it explicitly, otherwise
 // the orphaned ingest accumulates across runs (and can busy-loop on a core),
 // progressively slowing the whole suite under load.
@@ -95,7 +94,7 @@ describe("GET /health", () => {
     }
   }, 60000);
 
-  test("reports remotes disabled unless the server is started with --enable-remotes", async () => {
+  test("reports remotes enabled from feature config", async () => {
     const port = await freePort();
     const server = Bun.spawn(
       [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
@@ -113,9 +112,12 @@ describe("GET /health", () => {
       await server.exited;
     }
 
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.jsonc"), JSON.stringify({ feature: { remotes: "enabled" } }));
+
     const enabledPort = await freePort();
     const enabledServer = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--no-takeover", "--enable-remotes", "--port", String(enabledPort)],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(enabledPort)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const enabledBase = `http://127.0.0.1:${enabledPort}`;

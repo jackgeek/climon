@@ -72,7 +72,6 @@ import { isFeatureEnabled, resolveFeatureFlags } from "../features.js";
 
 interface StartServerOptions {
   port?: number;
-  enableRemotes?: boolean;
   /**
    * When true, never terminate or prompt to terminate an existing dashboard
    * server. Skips the existing-server check entirely and binds the next
@@ -94,6 +93,11 @@ interface ServerShutdownOptions {
 
 export const DASHBOARD_IDLE_TIMEOUT_SECONDS = 255;
 const INGEST_DEMOTION_SHUTDOWN_SOURCE = "ingest-demotion";
+
+/** Whether the shared ingest daemon should run: either remote scenario enabled. */
+export function computeRemotesActive(config: ClimonConfig): boolean {
+  return isFeatureEnabled(config, "wslBridge") || isFeatureEnabled(config, "remotes");
+}
 
 // Bound the health probe so a process that holds the port but never answers
 // HTTP (a stuck previous server or an unrelated listener) cannot hang start-up.
@@ -1043,6 +1047,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   await ensureClimonHome();
   startupLog("loading config");
   const config = await loadConfig();
+  const remotesActive = computeRemotesActive(config);
+  const wslBridgeEnabled = isFeatureEnabled(config, "wslBridge");
   startupLog(`config loaded (requested port ${config.server.port})`);
   if (options.port !== undefined) {
     config.server.port = options.port;
@@ -1075,9 +1081,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   // Cross-OS promote: when a peer OS is configured, displace any peer host
   // before binding. Entirely skipped (zero cost) when remote.peerHome is unset.
-  if (peerHome) {
+  if (peerHome && wslBridgeEnabled) {
     const peerLabel = peerOsLabel(process.env);
-    startupLog("peer configured; running cross-OS promote");
+    startupLog("peer configured and WSL bridge enabled; running cross-OS promote");
     const outcome = await runPromote(
       buildPromoteDeps(peerHome, process.env, peerLabel, (message) => startupLog(`promote: ${message}`))
     );
@@ -1144,7 +1150,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   // Clean up stale sessions whose daemons are no longer responsive.
   startupLog("cleaning up stale sessions");
   await cleanupStaleSessions();
-  if (options.enableRemotes) {
+  if (remotesActive) {
     startupLog("ensuring ingest daemon is running");
     await ensureIngestDaemon();
     startupLog("ingest daemon ready");
@@ -1272,7 +1278,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         return Response.json({
           ok: true,
           version: VERSION,
-          remotesEnabled: options.enableRemotes === true,
+          remotesEnabled: remotesActive,
           features: resolveFeatureFlags(config),
           shortcuts: { focusTopSession: config.hotKeys?.focusTopSession ?? "Alt+J" },
           preferences: collectDashboardPreferences(config),
@@ -2043,7 +2049,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // When a peer is configured but no ingest daemon is running, the server
     // itself must watch for shutdown-request.json. Without this, a peer that
     // wins the dual-promote tie-break writes a request that nobody consumes.
-    if (peerHome && !options.enableRemotes) {
+    if (peerHome && wslBridgeEnabled && !remotesActive) {
       const shutdownWatcher = createShutdownRequestWatcher({
         dir: getClimonHome(),
         onValid: (req) => {
@@ -2062,7 +2068,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // SIGTERMs this server, so plainShutdown must already be installed to remove
     // server.json cleanly. Running it concurrently (not awaited before serving)
     // also keeps the settle window off every peer startup's critical path.
-    if (peerHome) void settleDualPromote(peerHome, localStartedAt);
+    if (peerHome && wslBridgeEnabled) void settleDualPromote(peerHome, localStartedAt);
   });
 }
 
