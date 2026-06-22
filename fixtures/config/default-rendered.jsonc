@@ -20,7 +20,7 @@
     "focusTopSession": "Alt+J"
   },
   "dashboard": {
-    // Web dashboard terminal colour theme. One of: default, dracula, atom, gruvbox-dark, solarized-dark, tomorrow-night, monokai, material-dark, solarized-light, github, tomorrow.
+    // Web dashboard terminal colour theme id. Choose from the dashboard theme picker; defaults to "default".
     "theme": "default",
     // Whether the web dashboard key bar is pinned open.
     "keyBarPinned": false

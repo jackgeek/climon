@@ -37,9 +37,8 @@
 
   dashboard.theme
     Type: string; Default: default; Scope: server, browser
-    Web dashboard terminal colour theme. One of: default, dracula, atom, gruvbox-dark,
-    solarized-dark, tomorrow-night, monokai, material-dark, solarized-light, github,
-    tomorrow.
+    Web dashboard terminal colour theme id. Choose from the dashboard theme picker;
+    defaults to "default".
 
   dashboard.keyBarPinned
     Type: boolean; Default: false; Scope: server, browser

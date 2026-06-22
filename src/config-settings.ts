@@ -1,5 +1,5 @@
 import type { ClimonConfig } from "./types.js";
-import { THEME_IDS, isThemeId } from "./dashboard-preference-keys.js";
+import { isThemeId } from "./dashboard-preference-keys.js";
 import { DEFAULT_PRIORITY } from "./session-meta.js";
 import { FEATURE_FLAGS } from "./features.js";
 import { parseShortcut } from "./hotkeys.js";
@@ -123,13 +123,13 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "dashboard.theme",
     type: "string",
     defaultValue: "default",
-    purpose: `Web dashboard terminal colour theme. One of: ${THEME_IDS.join(", ")}.`,
+    purpose: "Web dashboard terminal colour theme id. Choose from the dashboard theme picker; defaults to \"default\".",
     scope: ["server", "browser"],
     acceptInput: true,
     dashboardWritable: true,
     validate: (value: unknown) => {
       if (!isThemeId(value)) {
-        throw new Error(`dashboard.theme must be one of: ${THEME_IDS.join(", ")}`);
+        throw new Error(`dashboard.theme is not a recognised theme id: ${String(value)}`);
       }
     }
   },
