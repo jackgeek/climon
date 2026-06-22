@@ -617,6 +617,14 @@ fn devtunnel_command(args: &[&str]) -> tokio::process::Command {
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        // devtunnel.exe is a console app; without CREATE_NO_WINDOW every
+        // invocation (and the supervisor's reconnect loop spawns these
+        // repeatedly) flashes a console window on Windows.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd
 }
 
