@@ -247,25 +247,31 @@ for where state is stored and how to change choices later.
 
 ## Windows/WSL same-machine bridge (no dev tunnel)
 
-The easiest setup is automatic: install climon on **Windows**, run `climon
-server`, then run climon normally in **WSL**. The first WSL run detects the
-Windows climon and auto-links discovery in both directions (it prints how to
-disable this first), so WSL sessions show up on the Windows dashboard with no
-config. Link manually any time with:
+The safest setup is explicit: install climon on **Windows**, run `climon
+server`, then run `climon link` in **WSL** and opt in to the WSL bridge when
+prompted. The first WSL run still detects the Windows climon and auto-links
+discovery in both directions (it prints how to disable this first), but it does
+**not** enable the bridge. Sessions only stream across OS boundaries after
+`feature.wslBridge` is enabled on both sides.
 
 ```bash
-climon link                                          # auto-detect Windows CLIMON_HOME
-climon link --peer-home /mnt/c/Users/<you>/.climon   # or specify it
+climon link                                           # auto-detect and prompt
+climon link --wsl-bridge                              # non-interactive opt-in
+climon link --peer-home /mnt/c/Users/<you>/.climon    # or specify the peer
 ```
+
+`climon link` writes `remote.peerHome` on both sides and, when you answer yes
+(or pass `--wsl-bridge`), writes `feature.wslBridge enabled` on both sides. The
+setting takes effect for the next `climon server`/session start.
 
 Discovery reads beacons (local `server.json` first, then the peer at
 `remote.peerHome`), validates the peer by TCP-probing its published `ingest.json`
 host (not the dashboard `/health`, which is unreachable from WSL under default
 NAT), and reads the live dashboard/ingest ports from the beacons — so a port bump
 on collision just works. Switching which OS hosts is automatic: run `climon server`
-on the other OS and it displaces the current host over the filesystem, migrating the
-previous host's sessions via an uplink. Disable auto-linking with `climon config
-remote.autoLink false`, and
+on the other OS and, when `feature.wslBridge` is enabled, it displaces the
+current host over the filesystem, migrating the previous host's sessions via an
+uplink. Disable auto-linking with `climon config remote.autoLink false`, and
 override the peer host (if auto-detection picks the wrong one) with `climon
 config remote.peerHost <host>`. See
 [docs/usage.md](docs/usage.md#connecting-windows-and-wsl-on-the-same-machine).
@@ -301,6 +307,7 @@ and WSL sessions should appear in that Windows dashboard.
    dashboard:
 
    ```powershell
+   climon config feature.wslBridge enabled
    climon config remote.ingestHost <windows-wsl-adapter-ip>
    climon config remote.port 3132
    climon server
@@ -309,6 +316,7 @@ and WSL sessions should appear in that Windows dashboard.
 3. In WSL, point the uplink at the same Windows adapter address:
 
    ```bash
+   climon config feature.wslBridge enabled
    climon config remote.enabled true
    climon config remote.host <windows-wsl-adapter-ip>
    climon config remote.port 3132
@@ -327,6 +335,7 @@ in that WSL dashboard.
 1. In WSL, bind the ingest daemon to loopback and start the dashboard:
 
    ```bash
+   climon config feature.wslBridge enabled
    climon config remote.ingestHost 127.0.0.1
    climon config remote.port 3132
    climon server
@@ -335,6 +344,7 @@ in that WSL dashboard.
 2. On Windows, point the uplink at WSL through Windows localhost forwarding:
 
    ```powershell
+   climon config feature.wslBridge enabled
    climon config remote.enabled true
    climon config remote.host 127.0.0.1
    climon config remote.port 3132
@@ -362,12 +372,13 @@ For direct Windows/WSL bridging, the client side must show
 ### Switching which OS hosts the dashboard
 
 You can run the dashboard from **either** WSL or Windows — one at a time — and
-switch at will. With `remote.peerHome` configured on both sides (usually by
-`climon link`), starting the dashboard on the other OS automatically takes over:
+switch at will. With `remote.peerHome` and `feature.wslBridge enabled`
+configured on both sides (usually by `climon link --wsl-bridge`), starting the
+dashboard on the other OS automatically takes over:
 
 ```bash
 # On the OS that should now host the dashboard:
-bun run server
+climon server
 ```
 
 It cleanly shuts down the dashboard still running on the other OS (its server,
@@ -393,7 +404,8 @@ no network-exposed dashboard.
 
 Setup:
 
-1. Start a climon server locally and note its port (e.g. `climon server --port 8080`).
+1. Enable the ingest/uplink bridge and start a climon server locally:
+   `climon config feature.remotes enabled`, then `climon server --port 8080`.
 2. Open **Remotes…** from the dashboard's hamburger menu.
    - If the `devtunnel` CLI is installed on the home machine, climon can
      **auto-create** the tunnel for you (it also opens a keep-alive TCP port so

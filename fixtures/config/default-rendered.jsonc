@@ -34,7 +34,7 @@
     "ingestPortRetryAttempts": 100,
     // Interval in seconds between mux keepalive pings sent over the remote uplink/ingest connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0 to disable.
     "keepAlive": 60,
-    // When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking.
+    // When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Auto-link configures discovery only; it never enables feature.wslBridge. Set false to disable auto-linking.
     "autoLink": true
   },
   "session": {

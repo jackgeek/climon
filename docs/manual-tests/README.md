@@ -47,6 +47,7 @@ result-tracking row.
 | 12 | Cutover & cleanup — ship the Rust `climon` client as the `install` binary, native Rust self-install (sentinel `climon-alpha` trigger, PATH + `.version` + changelog, locked-binary kill/retry, licence-declined abort), `scripts/compile.ts` host/assemble modes, `release.yml` cross-compile matrix, retire the Bun client bin | [phase12-cutover.md](phase12-cutover.md) |
 | — | Pin key bar (mobile) — mobile-only hamburger toggle + centralised mobile detection | [pin-key-bar.md](pin-key-bar.md) |
 | — | Tunnel-link expiry countdown banner | [phase13-tunnel-expiry-banner.md](phase13-tunnel-expiry-banner.md) |
+| — | WSL bridge feature flag — config-driven remotes ingest + explicit bridge opt-in | [phase14-wsl-bridge-feature-flag.md](phase14-wsl-bridge-feature-flag.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
 | — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |

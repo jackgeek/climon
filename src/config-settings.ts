@@ -264,7 +264,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "remote.peerHome",
     type: "string",
-    purpose: "Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\\\wsl.localhost\\<distro>\\home\\<you>\\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`.",
+    purpose: "Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\\\wsl.localhost\\<distro>\\home\\<you>\\.climon from Windows). When feature.wslBridge is enabled, climon reads the peer's beacons and wires sessions to it. Usually set automatically by `climon link`.",
     scope: ["client", "server"],
     acceptInput: true
   },
@@ -279,7 +279,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "remote.autoLink",
     type: "boolean",
     defaultValue: true,
-    purpose: "When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking.",
+    purpose: "When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Auto-link configures discovery only; it never enables feature.wslBridge. Set false to disable auto-linking.",
     scope: ["client"],
     acceptInput: true
   },

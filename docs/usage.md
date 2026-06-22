@@ -249,17 +249,19 @@ You can monitor sessions that run on another machine (a "devbox") from your loca
 dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port — see
 [security.md](./security.md) for the full threat model.
 
-1. On the machine running `climon server`, open the dashboard, click the
-   hamburger menu, and choose **Remotes…**.
-2. If the `devtunnel` CLI is installed on the server machine, let climon create
+1. On the home machine, enable the ingest/uplink bridge, then start or restart
+   the dashboard: `climon config feature.remotes enabled` followed by
+   `climon server`.
+2. Open the dashboard, click the hamburger menu, and choose **Remotes…**.
+3. If the `devtunnel` CLI is installed on the server machine, let climon create
    and host the tunnel for you. Otherwise create a dev tunnel manually and paste
    its id or URL into the dialog.
-3. Optionally choose the default color and priority for that devbox's sessions,
+4. Optionally choose the default color and priority for that devbox's sessions,
    then copy the generated config script.
-4. Run the script on the devbox. It records `remote.tunnelId`,
+5. Run the script on the devbox. It records `remote.tunnelId`,
    `remote.port`, and any chosen session defaults with
    `climon config`.
-5. Run any command on the devbox with `climon <cmd>`. The session appears on your
+6. Run any command on the devbox with `climon <cmd>`. The session appears on your
    dashboard under the devbox's stable client id.
 
 Revoke a devbox by deleting the dev tunnel or removing its identity from the
@@ -274,29 +276,39 @@ reading its `server.json` beacon — no dev tunnel required.
 ### Quick setup (recommended)
 
 1. On **Windows**, install climon and start the dashboard: `climon server`.
-2. In **WSL**, just run climon normally — e.g. `climon copilot`. On the first run
-   it detects the Windows climon, announces that it is auto-linking (and how to
-   disable it), and configures discovery in **both** directions. Your WSL
-   sessions then appear on the Windows dashboard automatically.
+2. In **WSL**, run `climon link` and answer **yes** to enable the WSL bridge (or
+   use `climon link --wsl-bridge` in automation). This records
+   `remote.peerHome` and `feature.wslBridge enabled` in **both** configs.
+3. Restart the dashboard or start your next session. WSL sessions now appear on
+   the Windows dashboard.
+
+If you skip the explicit link step, the first WSL run still detects the Windows
+climon and auto-links discovery in both directions, but it leaves
+`feature.wslBridge` disabled. That lets each OS discover the other without
+streaming sessions until you opt in.
 
 The auto-link prints how to opt out before it writes anything:
 
 ```text
-climon: detected a Windows climon at /mnt/c/Users/<you>/.climon; attempting to auto-link…
+climon: detected a Windows climon at /mnt/c/Users/<you>/.climon; attempting to auto-link so sessions appear on the Windows dashboard.
 climon: to prevent this, run: climon config remote.autoLink false
-climon: auto-link successful — WSL<->Windows discovery configured on both sides.
+climon: auto-link successful — WSL<->Windows discovery configured on both sides. The WSL bridge is NOT enabled; turn it on with: climon config feature.wslBridge enabled (or run: climon link --wsl-bridge).
 ```
 
 To link manually (or to re-link), run `climon link`:
 
 ```bash
-climon link                                   # auto-detect the Windows CLIMON_HOME
+climon link                                   # auto-detect, then prompt
+climon link --wsl-bridge                      # enable without prompting
+climon link --no-wsl-bridge                   # discovery only
 climon link --peer-home /mnt/c/Users/<you>/.climon   # or specify it explicitly
 ```
 
 `climon link` writes `remote.peerHome` on the WSL side and the reverse pointer
 (`\\wsl.localhost\<distro>\home\<you>\.climon`) into the Windows config, so both
-`WSL -> Windows` and `Windows -> WSL` discovery work from one command.
+`WSL -> Windows` and `Windows -> WSL` discovery work from one command. It only
+writes `feature.wslBridge enabled` when you accept the TTY prompt or pass
+`--wsl-bridge`; with non-TTY stdin and no explicit flag, the bridge stays off.
 
 How discovery resolves a dashboard, for any `climon` invocation:
 
@@ -319,10 +331,12 @@ ingest daemon to a specific non-loopback address), configure it directly:
 
 ```bash
 # Dashboard side: choose an address reachable from the other side.
+climon config feature.wslBridge enabled
 climon config remote.ingestHost <dashboard-reachable-host>
 climon config remote.port 3132
 
 # Session side: point the uplink at the dashboard side.
+climon config feature.wslBridge enabled
 climon config remote.enabled true
 climon config remote.host <dashboard-reachable-host>
 climon config remote.port 3132
@@ -362,6 +376,12 @@ Major features can be gated behind feature flags stored under the `feature.` pre
 climon config feature.sessionSpawning enabled
 climon config feature.sessionSpawning disabled
 ```
+
+Remote ingest startup is config-driven: set `feature.remotes enabled` before
+using dev-tunnel remotes, or `feature.wslBridge enabled` before using the
+Windows/WSL bridge. Enabling `feature.remotes` starts the ingest daemon for
+devboxes but does not activate same-machine Windows/WSL uplinks or dashboard
+handoff; those are gated independently by `feature.wslBridge`.
 
 Every flag carries a maturity status — `experimental`, `incomplete`, `untested`, `known-issues`, or `ready`. Only `ready` features are considered safe; enabling a feature with any other status prints a warning. Some flags may be locked to a value by the application build, in which case your configured value has no effect until that build-level override is removed.
 
@@ -404,9 +424,9 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `remote.clientId` | string | unset | client | Stable, non-secret client namespace identifying this machine's sessions. Defaults to the machine hostname when unset; set it to a value that is unique per host to avoid session ID collisions across machines. |
 | `remote.spawnSecret` | string | unset | client, server | Shared HMAC secret authenticating dashboard→devbox spawn commands. Generated automatically on the dashboard host when feature.remoteSpawn is enabled, and planted on the devbox by the remotes-screen setup script. Keep it secret. (**sensitive**) |
 | `remote.keepAlive` | number | `60` | client | Interval in seconds between mux keepalive pings sent over the remote uplink/ingest connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0 to disable. |
-| `remote.peerHome` | string | unset | client, server | Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\wsl.localhost\<distro>\home\<you>\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`. |
+| `remote.peerHome` | string | unset | client, server | Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\wsl.localhost\<distro>\home\<you>\.climon from Windows). When feature.wslBridge is enabled, climon reads the peer's beacons and wires sessions to it. Usually set automatically by `climon link`. |
 | `remote.peerHost` | string | unset | client, server | Optional host override used to reach the peer dashboard/ingest. Leave unset to auto-detect (localhost, or the WSL gateway IP under NAT networking). |
-| `remote.autoLink` | boolean | `true` | client | When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking. |
+| `remote.autoLink` | boolean | `true` | client | When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Auto-link configures discovery only; it never enables feature.wslBridge. Set false to disable auto-linking. |
 | `session.color` | string | `auto` | client, daemon, server | Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment. |
 | `session.priority` | number | `500` | client, daemon, server | Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group. |
 | `session.terminalProgram` | string | unset | client | Command template used to open a terminal window for a non-headless (visible) session spawned from the dashboard. Use the {cmd} placeholder for the climon command to run. When unset, climon auto-detects a terminal per OS (Terminal.app, Windows Terminal, or x-terminal-emulator/gnome-terminal/konsole/xterm). |
