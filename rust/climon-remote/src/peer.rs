@@ -16,7 +16,17 @@ pub type Env = HashMap<String, String>;
 /// Runs a command and returns trimmed stdout, or `None` on any failure (mirrors
 /// the TS `RunCommand` which throws). Default implementation shells out.
 pub fn default_run(file: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(file).args(args).output().ok()?;
+    let mut cmd = Command::new(file);
+    cmd.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: peer discovery shells out to console tools
+        // (wsl.exe, wslpath, ...) on every cycle; without this they flash a window.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
