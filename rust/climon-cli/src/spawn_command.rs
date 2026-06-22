@@ -24,6 +24,7 @@ pub struct SpawnRequest {
     pub name: Option<String>,
     pub color: Option<ColorFlag>,
     pub priority: Option<i64>,
+    pub theme: Option<String>,
     pub terminal_program: Option<String>,
 }
 
@@ -78,6 +79,10 @@ pub fn build_climon_command(req: &SpawnRequest) -> String {
     if let Some(n) = &req.name {
         parts.push("--name".into());
         parts.push(n.clone());
+    }
+    if let Some(t) = &req.theme {
+        parts.push("--theme".into());
+        parts.push(t.clone());
     }
     parts.extend(req.argv.iter().cloned());
     parts.join(" ")
@@ -164,6 +169,7 @@ pub fn run_spawn_command(req: SpawnRequest) -> Result<i32, String> {
                     name: r.name.clone(),
                     priority: Some(defaults.priority),
                     color: defaults.color,
+                    theme: r.theme.clone(),
                 },
                 &store_env,
                 &config_env,
@@ -195,6 +201,7 @@ mod tests {
             name: Some("n".into()),
             color: None,
             priority: Some(500),
+            theme: None,
             terminal_program: None,
         }
     }

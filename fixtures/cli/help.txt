@@ -1,12 +1,13 @@
 climon v2.0.13 — web-based monitor for interactive CLI sessions
 
 Usage:
-  climon [--priority N] [--color C] [--name S]
+  climon [--priority N] [--color C] [--name S] [--theme T]
                                Start a monitored session for the current shell
-  climon [--priority N] [--color C] [--name S] <command> [args...]
+  climon [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
                                Run a command in a monitored PTY session
                                (priority 0-1000; color: auto|none|black|red|
-                               green|yellow|blue|magenta|cyan|white)
+                               green|yellow|blue|magenta|cyan|white;
+                               theme: a dashboard theme name, e.g. "Dracula")
   climon server [--port N] [--enable-remotes] [--no-takeover]
                                Start the dashboard web server (loopback only)
                                (--no-takeover: never terminate an existing
