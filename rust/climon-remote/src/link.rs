@@ -15,6 +15,9 @@ use crate::peer::{
 pub struct LinkOptions {
     /// Explicit peer `CLIMON_HOME`; auto-detected from WSL when omitted.
     pub peer_home: Option<String>,
+    /// Write `feature.wslBridge = enabled` into the local config (and the peer
+    /// config when the reverse pointer is written).
+    pub enable_wsl_bridge: bool,
 }
 
 /// Result of [`link_peer`]. Mirrors `LinkResult`.
@@ -24,6 +27,10 @@ pub struct LinkResult {
     pub peer_home: String,
     /// True when the reverse pointer was also written into the peer's config.
     pub reverse_linked: bool,
+    /// True when `feature.wslBridge` was enabled in the local config.
+    pub wsl_bridge_local: bool,
+    /// True when `feature.wslBridge` was enabled in the peer config.
+    pub wsl_bridge_peer: bool,
 }
 
 /// Injectable dependencies. Mirrors `LinkDeps` (config writers are not injected;
@@ -84,7 +91,14 @@ pub fn link_peer(
     let local_home = get_climon_home(env).to_string_lossy().into_owned();
     write_config_setting("remote.peerHome", &peer_home, WriteScope::Global, env, cwd)?;
 
+    let mut wsl_bridge_local = false;
+    if options.enable_wsl_bridge {
+        write_config_setting("feature.wslBridge", "enabled", WriteScope::Global, env, cwd)?;
+        wsl_bridge_local = true;
+    }
+
     let mut reverse_linked = false;
+    let mut wsl_bridge_peer = false;
     if on_wsl {
         if let Some(reverse_pointer) = (deps.wsl_home_unc_path)() {
             // Write into the peer (Windows) config by pointing CLIMON_HOME at it.
@@ -97,6 +111,16 @@ pub fn link_peer(
                 cwd,
             )?;
             reverse_linked = true;
+            if options.enable_wsl_bridge {
+                write_config_setting(
+                    "feature.wslBridge",
+                    "enabled",
+                    WriteScope::Global,
+                    &peer_env,
+                    cwd,
+                )?;
+                wsl_bridge_peer = true;
+            }
         }
     }
 
@@ -104,6 +128,8 @@ pub fn link_peer(
         local_home,
         peer_home,
         reverse_linked,
+        wsl_bridge_local,
+        wsl_bridge_peer,
     })
 }
 
@@ -139,6 +165,7 @@ pub fn maybe_auto_link(
     match link_peer(
         LinkOptions {
             peer_home: Some(win_home),
+            enable_wsl_bridge: false,
         },
         env,
         cwd,
@@ -151,7 +178,7 @@ pub fn maybe_auto_link(
                 " (WSL side only)"
             };
             out(&format!(
-                "climon: auto-link successful — WSL<->Windows discovery configured{suffix}.\n"
+                "climon: auto-link successful — WSL<->Windows discovery configured{suffix}. The WSL bridge is NOT enabled; turn it on with: climon config feature.wslBridge enabled (or run: climon link --wsl-bridge).\n"
             ));
         }
         Err(error) => {
@@ -198,6 +225,7 @@ mod tests {
         let result = link_peer(
             LinkOptions {
                 peer_home: Some(peer.to_string_lossy().into_owned()),
+                enable_wsl_bridge: false,
             },
             &env_for(&home),
             &root,
@@ -228,6 +256,7 @@ mod tests {
         let result = link_peer(
             LinkOptions {
                 peer_home: Some(peer.to_string_lossy().into_owned()),
+                enable_wsl_bridge: false,
             },
             &env_for(&home),
             &root,
@@ -239,6 +268,39 @@ mod tests {
         assert!(home_config.contains("\"peerHome\""));
         let peer_config = std::fs::read_to_string(peer.join("config.jsonc")).unwrap();
         assert!(peer_config.contains("wsl.localhost"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn enables_wsl_bridge_on_both_sides_when_requested_from_wsl() {
+        let root = tmp("wslbridge");
+        let home = root.join("wsl");
+        let peer = root.join("win");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&peer).unwrap();
+        let deps = LinkDeps {
+            is_wsl: Box::new(|| true),
+            detect_windows_climon_home: Box::new(|| None),
+            wsl_home_unc_path: Box::new(|| {
+                Some("\\\\wsl.localhost\\Ubuntu\\home\\jack\\.climon".to_string())
+            }),
+        };
+        let result = link_peer(
+            LinkOptions {
+                peer_home: Some(peer.to_string_lossy().into_owned()),
+                enable_wsl_bridge: true,
+            },
+            &env_for(&home),
+            &root,
+            &deps,
+        )
+        .unwrap();
+        assert!(result.wsl_bridge_local);
+        assert!(result.wsl_bridge_peer);
+        let home_config = std::fs::read_to_string(home.join("config.jsonc")).unwrap();
+        assert!(home_config.contains("\"wslBridge\": \"enabled\""));
+        let peer_config = std::fs::read_to_string(peer.join("config.jsonc")).unwrap();
+        assert!(peer_config.contains("\"wslBridge\": \"enabled\""));
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -275,14 +337,18 @@ mod tests {
                 }),
             };
             let mut out = |t: &str| lines.push(t.to_string());
-            maybe_auto_link(&env_for(&home), &root, &mut out, &deps);
+            maybe_auto_link(&env_for(&home), &home, &mut out, &deps);
         }
         let text = lines.join("");
         assert!(text.contains("attempting to auto-link"));
         assert!(text.contains("remote.autoLink false"));
         assert!(text.contains("auto-link successful"));
+        assert!(text.contains("discovery configured"));
+        assert!(text.contains("WSL bridge is NOT enabled"));
+        assert!(text.contains("climon config feature.wslBridge enabled"));
         let config = std::fs::read_to_string(home.join("config.jsonc")).unwrap();
         assert!(config.contains("\"peerHome\""));
+        assert!(!config.contains("\"wslBridge\""));
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -299,7 +365,7 @@ mod tests {
                 wsl_home_unc_path: Box::new(|| None),
             };
             let mut out = |t: &str| lines.push(t.to_string());
-            maybe_auto_link(&env_for(&home), &root, &mut out, &deps);
+            maybe_auto_link(&env_for(&home), &home, &mut out, &deps);
         }
         assert!(lines.is_empty());
         std::fs::remove_dir_all(&root).ok();
@@ -323,7 +389,7 @@ mod tests {
                 wsl_home_unc_path: Box::new(|| None),
             };
             let mut out = |t: &str| lines.push(t.to_string());
-            maybe_auto_link(&env_for(&home), &root, &mut out, &deps);
+            maybe_auto_link(&env_for(&home), &home, &mut out, &deps);
         }
         assert!(lines.is_empty());
         std::fs::remove_dir_all(&root).ok();
