@@ -12,7 +12,7 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
 - **Preconditions:** Dashboard open with at least one live session attached.
 - **Config-matrix cell:** Browser = desktop Chrome/Firefox/Safari.
 - **Steps:**
-  1. Open the hamburger (☰) menu and open the **Theme** submenu.
+  1. Open the hamburger (☰) menu and open the **Default theme** submenu.
   2. Choose **Dracula**.
 - **Expected result:** The terminal recolours to Dracula immediately, with no
   page reload. The check mark moves to **Dracula**.
@@ -26,9 +26,9 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
   **Default**).
 - **Config-matrix cell:** Browser = desktop.
 - **Steps:**
-  1. Open ☰ → **Theme** → **Github** (a light theme).
+  1. Open ☰ → **Default theme** → **Github** (a light theme).
   2. Observe the dashboard chrome (sidebar, menus, headers).
-  3. Open ☰ → **Theme** → **Default**.
+  3. Open ☰ → **Default theme** → **Default**.
 - **Expected result:** Selecting **Github** switches the dashboard chrome to the
   Fluent **light** base; selecting **Default** returns it to the Fluent **dark**
   base. Only the Fluent base swaps — no other climon colours change.
@@ -41,11 +41,11 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
 - **Preconditions:** Dashboard open.
 - **Config-matrix cell:** Browser = desktop.
 - **Steps:**
-  1. Open ☰ → **Theme** → **Gruvbox Dark**.
+  1. Open ☰ → **Default theme** → **Gruvbox Dark**.
   2. Reload the page (full reload).
 - **Expected result:** The dashboard loads with **Gruvbox Dark** already active
   (the check mark is on Gruvbox Dark). `config.jsonc` contains
-  `dashboard.theme = "gruvbox-dark"`.
+  `dashboard.theme = "Gruvbox Dark"`.
 - **Platforms:** Desktop Chrome, Firefox, Safari.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
@@ -56,7 +56,7 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
   same server.
 - **Config-matrix cell:** Browser A + Browser B (or device A + device B).
 - **Steps:**
-  1. In browser A, open ☰ → **Theme** → **Monokai Soda**.
+  1. In browser A, open ☰ → **Default theme** → **Monokai Soda**.
   2. In browser B, load (or reload) the dashboard.
 - **Expected result:** Browser B loads with **Monokai Soda** active, because the
   server (`/health`) is the source of truth.
@@ -86,7 +86,7 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
   dashboard via the tunnel URL.
 - **Config-matrix cell:** Remote = dev tunnel; Browser = any.
 - **Steps:**
-  1. Over the tunnel URL, open ☰ → **Theme** → **Solarized Dark**.
+  1. Over the tunnel URL, open ☰ → **Default theme** → **Solarized Dark**.
   2. (Optional) Watch the network panel for `POST /api/dashboard/preferences`.
 - **Expected result:** The write succeeds (HTTP 200), the terminal repaints, and
   the value persists in `config.jsonc`. A cross-origin request (different Origin
@@ -119,7 +119,7 @@ guarded, allowlist-validated) and read back from `/health`, so they persist in
 - **Preconditions:** Dashboard open with at least one live session attached.
 - **Config-matrix cell:** Browser = desktop Chrome/Firefox/Safari.
 - **Steps:**
-  1. Open ☰ → **Theme**.
+  1. Open ☰ → **Default theme**.
   2. Confirm **Default** is pinned at the top, followed by a **Dark** group and a
      **Light** group, each listing many themes (the picker exposes all bundled
      `xterm-theme` options).

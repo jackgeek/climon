@@ -36,6 +36,18 @@ This starts the command inside a managed PTY and attaches your terminal to it �
 it behaves exactly like running the command directly. Meanwhile it appears on the
 dashboard.
 
+You can give the session its own dashboard terminal theme with `--theme`, naming
+any dashboard theme by its display name:
+
+```bash
+climon --theme "Dracula" npm test
+climon run --theme "Adventure Time" bash
+```
+
+The name is matched leniently — an unrecognised name simply falls back to the
+dashboard default in the browser (no error). Omit `--theme` to inherit the
+default set from the dashboard **Default theme** menu (`dashboard.theme`).
+
 ### Nested invocations
 
 If you run `climon <cmd>` from a shell that is itself running inside a climon
@@ -147,15 +159,23 @@ newer version is available instead of applying it automatically.
     Tap outside the panel to close it; swipe again to reopen the chooser.
 - The list updates automatically as sessions change state (via Server-Sent
   Events).
-- **Menu preferences (☰).** The hamburger menu has a **Theme** submenu that
-  recolours the terminal (Default plus curated themes such as Dracula, Gruvbox
-  Dark, Monokai, Solarized, and GitHub). Picking a light theme also switches the
-  dashboard chrome to the Fluent light base. The selected theme and the mobile
-  **Pin key bar** toggle are stored in `config.jsonc` (`dashboard.theme` and
+- **Menu preferences (☰).** The hamburger menu has a **Default theme** submenu
+  that sets the dashboard-wide default terminal theme (Default plus curated
+  themes such as Dracula, Gruvbox Dark, Monokai, Solarized, and GitHub, grouped
+  into Dark and Light and searchable). Every session that has no theme of its own
+  inherits this default live. Picking a light theme also switches the dashboard
+  chrome to the Fluent light base. The selected default and the mobile **Pin key
+  bar** toggle are stored in `config.jsonc` (`dashboard.theme` and
   `dashboard.keyBarPinned`), so they persist across reloads and are shared across
   every browser and device — including remote Tunnel Link viewers. You can also
-  set them from the CLI with `climon config dashboard.theme <id>` and
-  `climon config dashboard.keyBarPinned <bool>`.
+  set them from the CLI with `climon config dashboard.theme "<name>"` (a theme
+  display name, e.g. `"Dracula"`) and `climon config dashboard.keyBarPinned <bool>`.
+- **Per-session theme.** A session can override the default with its own theme,
+  set from the **Edit Session** dialog (and chosen at creation in the **New
+  Session** dialog) or from the CLI with `--theme` (see *Monitor a command*).
+  Choose **Inherit default** in the dialog to clear the override and follow the
+  default again. The dashboard chrome and terminal always follow the *active*
+  session's effective theme.
 - When one or more sessions need attention, the browser tab title shows the
   count as `climon (!N)`. For newly attentive sessions after the dashboard loads,
   the page also attempts to play a short alert sound and show a browser
