@@ -278,7 +278,13 @@ export function Sidebar({
                       placeholder="Search themes…"
                       value={themeFilter}
                       onChange={(_e, data) => setThemeFilter(data.value)}
-                      onKeyDown={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => {
+                        // Keep list arrow-navigation from stealing focus out of the
+                        // search box, but let Escape/Tab still dismiss the menu.
+                        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                          e.stopPropagation();
+                        }
+                      }}
                     />
                     <MenuList className={styles.themeList}>
                       {defaultTheme && (
@@ -305,6 +311,9 @@ export function Sidebar({
                             </MenuItemRadio>
                           ))}
                         </MenuGroup>
+                      )}
+                      {!defaultTheme && darkThemes.length === 0 && lightThemes.length === 0 && (
+                        <MenuItem disabled>No themes found</MenuItem>
                       )}
                     </MenuList>
                   </MenuPopover>
