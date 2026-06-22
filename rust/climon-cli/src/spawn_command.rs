@@ -65,8 +65,12 @@ fn json_str(s: &str) -> String {
     out
 }
 
-/// Build the inner `climon <flags> <cmd>` string the visible terminal runs.
-pub fn build_climon_command(req: &SpawnRequest) -> String {
+/// Build the inner `climon <flags> <cmd>` argument vector the visible terminal
+/// runs. Returning the tokens (rather than a space-joined string) keeps values
+/// that contain spaces — e.g. a theme name like "Adventure Time" or a session
+/// name — intact instead of being re-split on whitespace by the terminal
+/// launcher.
+pub fn build_climon_command(req: &SpawnRequest) -> Vec<String> {
     let mut parts: Vec<String> = vec!["climon".to_string()];
     if let Some(p) = req.priority {
         parts.push("--priority".into());
@@ -85,7 +89,7 @@ pub fn build_climon_command(req: &SpawnRequest) -> String {
         parts.push(t.clone());
     }
     parts.extend(req.argv.iter().cloned());
-    parts.join(" ")
+    parts
 }
 
 /// Pure decision logic with injected effects (testable without real spawns).
@@ -96,7 +100,7 @@ pub fn decide_and_run<C, L>(
 ) -> SpawnOutcome
 where
     C: FnOnce(&SpawnRequest) -> Result<String, String>,
-    L: FnOnce(&str) -> Result<(), String>,
+    L: FnOnce(&[String]) -> Result<(), String>,
 {
     if req.headless {
         return match create_headless(req) {
@@ -229,7 +233,7 @@ mod tests {
             &req(false),
             |_r| panic!("must not create headless when the terminal launches"),
             |cmd| {
-                *launched.borrow_mut() = Some(cmd.to_string());
+                *launched.borrow_mut() = Some(cmd.to_vec());
                 Ok(())
             },
         );
@@ -241,8 +245,17 @@ mod tests {
             }
         );
         let cmd = launched.borrow().clone().unwrap();
-        assert!(cmd.contains("bash"));
-        assert!(cmd.contains("--name"));
+        assert!(cmd.contains(&"bash".to_string()));
+        assert!(cmd.contains(&"--name".to_string()));
+    }
+
+    #[test]
+    fn build_keeps_spaced_theme_name_as_a_single_token() {
+        let mut r = req(false);
+        r.theme = Some("Adventure Time".into());
+        let parts = build_climon_command(&r);
+        let idx = parts.iter().position(|p| p == "--theme").unwrap();
+        assert_eq!(parts[idx + 1], "Adventure Time");
     }
 
     #[test]

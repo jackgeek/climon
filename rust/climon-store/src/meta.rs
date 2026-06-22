@@ -400,6 +400,8 @@ mod tests {
     fn remove_returns_false_when_absent_and_clears_scrollback() {
         let env = env_for("meta-remove");
 
+        assert!(!remove_session_meta(&env, "ghost-ghost-ghost").unwrap());
+
         write_session_meta(&env, &base_meta("real-real-real")).unwrap();
         write_scrollback(&env, "real-real-real", b"scrollback").unwrap();
         assert!(remove_session_meta(&env, "real-real-real").unwrap());
