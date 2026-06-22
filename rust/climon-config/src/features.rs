@@ -58,6 +58,20 @@ pub const FEATURE_FLAGS: &[FeatureFlag] = &[
         description: "Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel.",
         override_value: None,
     },
+    FeatureFlag {
+        name: "wslBridge",
+        default: "disabled",
+        status: FeatureStatus::Experimental,
+        description: "Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard.",
+        override_value: None,
+    },
+    FeatureFlag {
+        name: "remotes",
+        default: "disabled",
+        status: FeatureStatus::Experimental,
+        description: "Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge.",
+        override_value: None,
+    },
 ];
 
 /// Config key prefix for feature flags.
@@ -184,5 +198,29 @@ mod tests {
         );
         assert!(feature_status("nope").is_err());
         assert!(!is_feature_locked("sessionSpawning"));
+    }
+
+    #[test]
+    fn registry_contains_wsl_bridge_and_remotes_defaults() {
+        let wsl = find_flag("wslBridge").expect("wslBridge flag exists");
+        assert_eq!(wsl.default, "disabled");
+        assert_eq!(wsl.status, FeatureStatus::Experimental);
+        assert_eq!(wsl.override_value, None);
+
+        let remotes = find_flag("remotes").expect("remotes flag exists");
+        assert_eq!(remotes.default, "disabled");
+        assert_eq!(remotes.status, FeatureStatus::Experimental);
+        assert_eq!(remotes.override_value, None);
+
+        assert!(!is_feature_enabled(&json!({}), "wslBridge"));
+        assert!(!is_feature_enabled(&json!({}), "remotes"));
+        assert!(is_feature_enabled(
+            &json!({ "feature": { "wslBridge": "enabled" } }),
+            "wslBridge"
+        ));
+        assert!(is_feature_enabled(
+            &json!({ "feature": { "remotes": "enabled" } }),
+            "remotes"
+        ));
     }
 }

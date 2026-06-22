@@ -853,6 +853,8 @@ mod tests {
                 "logging.appInsights.connectionString",
                 "feature.sessionSpawning",
                 "feature.remoteSpawn",
+                "feature.wslBridge",
+                "feature.remotes",
                 "eula.accepted",
                 "eula.version",
                 "eula.acceptedAt",
@@ -868,7 +870,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 42);
+        assert_eq!(all_config_keys().len(), 44);
     }
 
     #[test]
@@ -899,7 +901,12 @@ mod tests {
                 "session": { "color": "auto", "priority": 500 },
                 "tunnelLink": { "keepAlive": 60 },
                 "logging": { "level": "trace" },
-                "feature": { "sessionSpawning": "disabled", "remoteSpawn": "disabled" },
+                "feature": {
+                    "sessionSpawning": "disabled",
+                    "remoteSpawn": "disabled",
+                    "wslBridge": "disabled",
+                    "remotes": "disabled"
+                },
                 "eula": { "accepted": false },
                 "telemetry": { "enabled": false },
                 "update": { "auto": false }
@@ -956,6 +963,8 @@ mod tests {
                 "logging.appInsights.connectionString",
                 "feature.sessionSpawning",
                 "feature.remoteSpawn",
+                "feature.wslBridge",
+                "feature.remotes",
                 "telemetry.enabled",
                 "update.auto",
                 "update.password",

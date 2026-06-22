@@ -132,3 +132,19 @@ describe("loadConfig feature section", () => {
     ).toBe(true);
   });
 });
+
+describe("wsl bridge + remotes feature flags", () => {
+  test("both flags are registered with disabled defaults", () => {
+    const names = FEATURE_FLAGS.map((f) => f.name);
+    expect(names).toContain("wslBridge");
+    expect(names).toContain("remotes");
+    expect(isFeatureEnabled({} as ClimonConfig, "wslBridge")).toBe(false);
+    expect(isFeatureEnabled({} as ClimonConfig, "remotes")).toBe(false);
+  });
+
+  test("enabling via config resolves to enabled", () => {
+    const cfg = { feature: { wslBridge: "enabled", remotes: "enabled" } } as unknown as ClimonConfig;
+    expect(isFeatureEnabled(cfg, "wslBridge")).toBe(true);
+    expect(isFeatureEnabled(cfg, "remotes")).toBe(true);
+  });
+});
