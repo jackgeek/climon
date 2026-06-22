@@ -51,7 +51,8 @@ describe("dashboard theme registry", () => {
         name !== "default" &&
         name !== "__esModule" &&
         typeof (xtermTheme as Record<string, unknown>)[name] === "object" &&
-        (xtermTheme as Record<string, unknown>)[name] !== null
+        (xtermTheme as Record<string, unknown>)[name] !== null &&
+        !Array.isArray((xtermTheme as Record<string, unknown>)[name])
     ).length;
     // +1 for the built-in climon default
     expect(DASHBOARD_THEMES.length).toBe(expected + 1);
