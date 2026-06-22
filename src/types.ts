@@ -66,7 +66,7 @@ export interface HotKeysConfig {
 }
 
 export interface DashboardConfig {
-  /** Selected web-dashboard terminal theme id (see THEME_IDS). */
+  /** Selected web-dashboard default terminal theme display name (see THEME_NAMES). */
   theme?: string;
   /** Whether the dashboard key bar is pinned. */
   keyBarPinned?: boolean;
