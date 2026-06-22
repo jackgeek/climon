@@ -141,7 +141,16 @@ sends an *imperative command* to a client, so it is gated and authenticated:
 - **Loopback-only server→ingest hop.** The dashboard server reaches its own
   ingest over a loopback-only control socket (advertised as `controlSocket` in
   `ingest.json`); the ingest signs the `Spawn` and forwards it over the existing
-  mux, then relays the devbox's signed `SpawnResult` back.
+  mux, then relays the devbox's signed `SpawnResult` back. The control socket is TCP
+  loopback, so it is reachable by any local process; the ingest therefore generates a
+  per-run `controlToken` (published in the `0600` `ingest.json`) and requires it on
+  every request via a constant-time compare before dispatch. Its secrecy rests on the
+  beacon file permissions — **same-uid only** — the same filesystem-permission basis used
+  for the shutdown channel above. The `spawnSecret` signs the outbound devbox frame; the
+  `controlToken` authenticates the caller of the loopback socket. Gate #3 (the ingest
+  refusing a same-machine `peer` connection when `feature.wslBridge` is off) is a
+  **feature/misconfiguration guard, not a security boundary**: `peer` is self-asserted on
+  the wire, so a hostile uplink that omits it is not stopped by gate #3 alone.
 - **Threat model.** Over dev tunnels the tunnel's identity ACL already restricts
   who can connect; the HMAC adds command authenticity on top. On the direct
   same-machine (WSL↔Windows) bridge there is no tunnel ACL, so the HMAC secret is
@@ -371,6 +380,7 @@ restarted server pick up the new version.
 | Inject arbitrary local paths or server-controlled fields | **No** (`isValidRemoteId` + `toLocalMeta` sanitization) |
 | Read another client's keystrokes or inject into its PTY | **No** (per-connection sockets) |
 | Spoof another client's *dashboard metadata* | Yes, if it has tunnel access (see limitation above) |
+| Delete another client's materialized sessions by spoofing its `clientId` + an empty `session-list` | Only when the ingest has no `remote.spawnSecret`; with a secret set, `session-list` must be a verified `Signed` envelope (deletion stays scoped to the spoofed namespace, never local sessions) |
 | Reach the dashboard HTTP server | **No** (loopback only) |
 | Keep connecting after access is revoked | **No** (auth rejection is terminal) |
 
