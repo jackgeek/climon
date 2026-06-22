@@ -381,12 +381,18 @@ mod tests {
     #[test]
     fn merge_sets_and_clears_theme() {
         let base = base_meta("theme-test");
-        let set = SessionMetaPatch { theme: Some(Some("Dracula".into())), ..Default::default() };
+        let set = SessionMetaPatch {
+            theme: Some(Some("Dracula".into())),
+            ..Default::default()
+        };
         assert_eq!(merge_patch(&base, &set).theme.as_deref(), Some("Dracula"));
 
         let mut themed = base.clone();
         themed.theme = Some("Dracula".into());
-        let clear = SessionMetaPatch { theme: Some(None), ..Default::default() };
+        let clear = SessionMetaPatch {
+            theme: Some(None),
+            ..Default::default()
+        };
         assert_eq!(merge_patch(&themed, &clear).theme, None);
     }
 

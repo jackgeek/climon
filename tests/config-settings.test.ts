@@ -100,7 +100,7 @@ describe("config settings registry", () => {
         setTitle: true
       },
       hotKeys: { focusTopSession: "Alt+J" },
-      dashboard: { theme: "default", keyBarPinned: false },
+      dashboard: { theme: "Default", keyBarPinned: false },
       attention: { idleSeconds: 10 },
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
@@ -298,9 +298,9 @@ describe("dashboard-writable settings", () => {
     }
   });
 
-  test("dashboard.theme validate accepts a known id and rejects an unknown one", () => {
+  test("dashboard.theme validate accepts a known name and rejects an unknown one", () => {
     const theme = findConfigSetting("dashboard.theme");
-    expect(() => theme?.validate?.("dracula")).not.toThrow();
+    expect(() => theme?.validate?.("Dracula")).not.toThrow();
     expect(() => theme?.validate?.("nope")).toThrow();
   });
 
