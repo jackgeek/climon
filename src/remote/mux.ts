@@ -26,6 +26,7 @@ export type ControlMessage =
       name?: string;
       priority?: number;
       color?: string;
+      theme?: string;
       headless: boolean;
     }
   | { kind: "spawn-result"; requestId: string; id?: string; warning?: string; error?: string }

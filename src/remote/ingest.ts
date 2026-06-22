@@ -95,6 +95,7 @@ function sanitizeRemotePatch(patch: SessionMetaPatch): SessionMetaPatch {
   if (typeof input.name === "string") clean.name = boundedString(input.name);
   if (typeof input.priority === "number") clean.priority = input.priority;
   if (input.color === null || ANSI_COLORS.has(input.color as AnsiColor)) clean.color = input.color as AnsiColor | null;
+  if (typeof input.theme === "string") clean.theme = boundedString(input.theme);
   return clean;
 }
 
@@ -133,6 +134,7 @@ export function toLocalMeta(
     name: remote.name ? boundedString(remote.name) : undefined,
     priority: typeof remote.priority === "number" ? remote.priority : undefined,
     color: input.color === null ? null : ANSI_COLORS.has(input.color as AnsiColor) ? (input.color as AnsiColor) : undefined,
+    theme: typeof input.theme === "string" && input.theme ? boundedString(input.theme as string) : undefined,
     origin: "remote",
     clientLabel: label
   };
@@ -170,6 +172,7 @@ export interface SpawnControlRequest {
   name?: string;
   priority?: number;
   color?: string;
+  theme?: string;
   headless: boolean;
 }
 
@@ -220,6 +223,7 @@ export async function handleSpawnControlRequest(
       name: req.name,
       priority: req.priority,
       color: req.color,
+      theme: req.theme,
       headless: req.headless
     },
     Date.now()

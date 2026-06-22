@@ -35,6 +35,23 @@ describe("buildSpawnArgs", () => {
       "__spawn", "--headless", "--cwd", "/w", "--cols", "80", "--rows", "24", "--color", "none", "bash"
     ]);
   });
+
+  test("emits --theme when set", () => {
+    const args = buildSpawnArgs(["bash"], {
+      headless: true, cwd: "/w", cols: 80, rows: 24, meta: { theme: "Monokai Soda" }
+    });
+    expect(args).toContain("--theme");
+    expect(args).toContain("Monokai Soda");
+  });
+
+  test("omits --theme when empty or unset", () => {
+    expect(buildSpawnArgs(["bash"], {
+      headless: true, cwd: "/w", cols: 80, rows: 24, meta: { theme: "" }
+    })).not.toContain("--theme");
+    expect(buildSpawnArgs(["bash"], {
+      headless: true, cwd: "/w", cols: 80, rows: 24, meta: {}
+    })).not.toContain("--theme");
+  });
 });
 
 describe("buildRunArgs", () => {
@@ -54,6 +71,17 @@ describe("buildRunArgs", () => {
     expect(buildRunArgs(["bash"], { priority: 800, color: "red", name: "shell" })).toEqual([
       "run", "--headless", "--priority", "800", "--color", "red", "--name", "shell", "bash"
     ]);
+  });
+
+  test("emits --theme when set", () => {
+    const args = buildRunArgs(["bash"], { theme: "Dracula" });
+    expect(args).toContain("--theme");
+    expect(args).toContain("Dracula");
+  });
+
+  test("omits --theme when empty or unset", () => {
+    expect(buildRunArgs(["bash"], { theme: "" })).not.toContain("--theme");
+    expect(buildRunArgs(["bash"], {})).not.toContain("--theme");
   });
 
   test("emits --color none to clear an inherited color", () => {
