@@ -300,6 +300,15 @@ so they inherit the tunnel's identity ACL as their access boundary:
   origin (unlike `isAllowedSpawnRequest`, which is loopback-only and stays in force
   for privileged spawn/patch/tunnel endpoints).
 
+Subscribed Web Push endpoints are additionally validated as `https:` URLs whose
+host is not a loopback, private, or link-local IP literal and is not a known
+internal hostname such as `localhost`, `*.localhost`, `*.local`,
+`local`, `metadata.google.internal`, `*.internal`, `ip6-localhost`, or
+`ip6-loopback`. DNS hostnames are not resolved at subscribe time, so normal
+public browser push service hosts such as FCM, Mozilla Push Service, or Apple
+Push remain accepted while direct internal-host SSRF targets are rejected before
+they can be stored.
+
 The VAPID private key (`$CLIMON_HOME/push/vapid.json`) and subscriptions
 (`$CLIMON_HOME/push/subscriptions.json`) are stored under `$CLIMON_HOME` and are not
 part of user config. Subscriptions are pruned automatically when a push send returns

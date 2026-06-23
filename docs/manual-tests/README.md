@@ -53,6 +53,7 @@ result-tracking row.
 | — | Remotes visibility — `ingest-status.json`/`uplink-status.json` beacons, `climon remotes` (`--watch`/`--json`), loopback `GET /api/remotes` + SSE, dashboard "Remote hosts" panel, hello identity sanitization | [phase16-remotes-visibility.md](phase16-remotes-visibility.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
+| — | Security — Web Push endpoint SSRF guard | [security-push-ssrf.md](security-push-ssrf.md) |
 | — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |
 | — | Per-session theme + default theme (CLI `--theme`, Edit/New dialogs, live inheritance) | [per-session-theme.md](per-session-theme.md) |
 | — | Windows — no console-window popups from remote child processes (`devtunnel`/`tasklist`/`taskkill`/peer discovery) | [windows-no-console-popups.md](windows-no-console-popups.md) |
