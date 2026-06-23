@@ -61,6 +61,7 @@ pub struct ConfigSetting {
     pub purpose: String,
     pub scope: Vec<ConfigProcessScope>,
     pub sensitive: bool,
+    pub global_only: bool,
     pub internal: bool,
     pub accept_input: bool,
     pub validate: Option<ValidateFn>,
@@ -75,6 +76,7 @@ impl ConfigSetting {
             purpose: purpose.to_string(),
             scope,
             sensitive: false,
+            global_only: false,
             internal: false,
             accept_input: false,
             validate: None,
@@ -86,6 +88,10 @@ impl ConfigSetting {
     }
     fn sensitive(mut self) -> Self {
         self.sensitive = true;
+        self
+    }
+    fn global_only(mut self) -> Self {
+        self.global_only = true;
         self
     }
     fn internal(mut self) -> Self {
@@ -353,49 +359,56 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection.",
             vec![Client],
         )
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "remote.host",
             String,
             "Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set.",
             vec![Client],
         )
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "remote.ingestHost",
             String,
             "Host address where the dashboard-side ingest daemon should listen for incoming remote session connections.",
             vec![Client],
         )
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "remote.tunnelId",
             String,
             "Dev tunnel id (e.g. \"happy-tree-abc123\") used by `devtunnel connect` to forward local climon traffic to a remote dashboard.",
             vec![Client],
         )
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "remote.dashboardTunnelId",
             String,
             "Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions.",
             vec![Server],
         )
-        .internal(),
+        .internal()
+        .global_only(),
         ConfigSetting::new(
             "remote.dashboardTunnelCluster",
             String,
             "Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions.",
             vec![Server],
         )
-        .internal(),
+        .internal()
+        .global_only(),
         ConfigSetting::new(
             "remote.dashboardTunnelEnabled",
             Boolean,
             "Server-owned flag recording whether the Tunnel Link is enabled, so the server re-establishes the dashboard tunnel automatically on startup.",
             vec![Server],
         )
-        .internal(),
+        .internal()
+        .global_only(),
         ConfigSetting::new(
             "remote.port",
             Number,
@@ -403,6 +416,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Client],
         )
         .accept_input()
+        .global_only()
         .with_validate(v_remote_port),
         ConfigSetting::new(
             "remote.ingestPortRetryAttempts",
@@ -411,6 +425,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Server],
         )
         .default(Value::from(100))
+        .global_only()
         .with_validate(v_ingest_retries),
         ConfigSetting::new(
             "remote.clientId",
@@ -419,6 +434,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Client],
         )
         .accept_input()
+        .global_only()
         .with_validate(v_client_id),
         ConfigSetting::new(
             "remote.spawnSecret",
@@ -427,7 +443,8 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Client, Server],
         )
         .accept_input()
-        .sensitive(),
+        .sensitive()
+        .global_only(),
         ConfigSetting::new(
             "remote.keepAlive",
             Number,
@@ -436,6 +453,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         )
         .default(Value::from(60))
         .accept_input()
+        .global_only()
         .with_validate(v_remote_keepalive),
         ConfigSetting::new(
             "remote.peerHome",
@@ -443,14 +461,16 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\\\wsl.localhost\\<distro>\\home\\<you>\\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`.",
             vec![Client, Server],
         )
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "remote.peerHost",
             String,
             "Optional host override used to reach the peer dashboard/ingest. Leave unset to auto-detect (localhost, or the WSL gateway IP under NAT networking).",
             vec![Client, Server],
         )
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "remote.autoLink",
             Boolean,
@@ -458,7 +478,8 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Client],
         )
         .default(Value::from(true))
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "session.color",
             String,
@@ -483,7 +504,8 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "Command template used to open a terminal window for a non-headless (visible) session spawned from the dashboard. Use the {cmd} placeholder for the climon command to run. When unset, climon auto-detects a terminal per OS (Terminal.app, Windows Terminal, or x-terminal-emulator/gnome-terminal/konsole/xterm).",
             vec![Client],
         )
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "tunnelLink.keepAlive",
             Number,
@@ -550,7 +572,8 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Client],
         )
         .default(Value::from(false))
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "update.password",
             String,
@@ -558,21 +581,24 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Client],
         )
         .sensitive()
-        .accept_input(),
+        .accept_input()
+        .global_only(),
         ConfigSetting::new(
             "update.lastCheck",
             String,
             "ISO-8601 timestamp of the last background update check. Used to throttle checks.",
             vec![Client],
         )
-        .internal(),
+        .internal()
+        .global_only(),
         ConfigSetting::new(
             "update.availableVersion",
             String,
             "Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update.",
             vec![Client],
         )
-        .internal(),
+        .internal()
+        .global_only(),
         ConfigSetting::new(
             "install.id",
             String,

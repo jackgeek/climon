@@ -254,6 +254,12 @@ fn read_dotted_key<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a Val
 
 /// Resolves a dotted config key across the cascade; first dir defining it wins.
 pub fn resolve_config_setting(key: &str, env: &Env, cwd: &Path) -> Option<Value> {
+    if find_config_setting(key)
+        .map(|setting| setting.global_only)
+        .unwrap_or(false)
+    {
+        return read_global_config_setting(key, env);
+    }
     for dir in candidate_config_dirs(env, cwd) {
         let sparse = read_sparse_config(&dir);
         if let Some(v) = read_dotted_key(&sparse, key) {
@@ -754,10 +760,13 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-            let dir = std::env::temp_dir().join(format!(
-                "climon-cfg-{label}-{}-{nanos}-{n}",
-                std::process::id()
-            ));
+            let dir = std::env::current_dir()
+                .unwrap()
+                .join(".copilot-tmp")
+                .join(format!(
+                    "climon-cfg-{label}-{}-{nanos}-{n}",
+                    std::process::id()
+                ));
             fs::create_dir_all(&dir).unwrap();
             TempDir(dir)
         }
@@ -780,9 +789,9 @@ mod tests {
         .unwrap();
     }
 
-    // Env whose home is `root/home` and CLIMON_HOME is `root/home/.climon`.
+    // Env whose home is `root` and CLIMON_HOME is `root/.climon`.
     fn cascade_env(root: &Path) -> (Env, PathBuf) {
-        let home = root.join("home");
+        let home = root.to_path_buf();
         fs::create_dir_all(&home).unwrap();
         let climon_home = home.join(".climon");
         let env = Env::new(Some(climon_home.to_str().unwrap()), home.clone());
@@ -872,6 +881,56 @@ mod tests {
     }
 
     #[test]
+    fn global_only_settings_ignore_project_local_config() {
+        let t = TempDir::new("globalonly");
+        let (env, home) = cascade_env(t.path());
+        let repo = t.path().join("repo");
+        fs::create_dir_all(home.join(".climon")).unwrap();
+        fs::create_dir_all(repo.join(".climon")).unwrap();
+        fs::write(
+            home.join(".climon").join("config.jsonc"),
+            r#"{"session":{"terminalProgram":"safe-term {cmd}"},"remote":{"port":3131},"update":{"password":"safe-password"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            repo.join(".climon").join("config.jsonc"),
+            r#"{"session":{"terminalProgram":"./evil.sh {cmd}"},"remote":{"port":4444},"update":{"password":"evil-password"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_config_setting("session.terminalProgram", &env, &repo),
+            Some(json!("safe-term {cmd}"))
+        );
+        assert_eq!(
+            resolve_config_setting("remote.port", &env, &repo),
+            Some(json!(3131))
+        );
+        assert_eq!(
+            resolve_config_setting("update.password", &env, &repo),
+            Some(json!("safe-password"))
+        );
+    }
+
+    #[test]
+    fn non_global_only_settings_still_honor_project_local_config() {
+        let t = TempDir::new("localok");
+        let (env, _) = cascade_env(t.path());
+        let repo = t.path().join("repo");
+        fs::create_dir_all(repo.join(".climon")).unwrap();
+        fs::write(
+            repo.join(".climon").join("config.jsonc"),
+            r#"{"session":{"color":"blue"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_config_setting("session.color", &env, &repo),
+            Some(json!("blue"))
+        );
+    }
+
+    #[test]
     fn cascade_walks_ancestors_and_returns_none() {
         let t = TempDir::new("walk");
         let (env, _) = cascade_env(t.path());
@@ -879,13 +938,13 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
         write_json(
             &t.path().join("a").join(".climon"),
-            json!({ "remote": { "port": 6666 } }),
+            json!({ "session": { "priority": 123 } }),
         );
         assert_eq!(
-            resolve_config_setting("remote.port", &env, &deep),
-            Some(json!(6666))
+            resolve_config_setting("session.priority", &env, &deep),
+            Some(json!(123))
         );
-        assert_eq!(resolve_config_setting("remote.tunnelId", &env, &deep), None);
+        assert_eq!(resolve_config_setting("session.color", &env, &deep), None);
     }
 
     #[test]
