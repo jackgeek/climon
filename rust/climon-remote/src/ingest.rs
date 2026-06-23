@@ -939,6 +939,7 @@ pub async fn run_ingest_daemon(
             pid: std::process::id(),
             port,
             host: Some(host.clone()),
+            control_socket: None,
         },
         &config_env,
     )?;
@@ -1048,6 +1049,7 @@ mod tests {
             pid: 1,
             port: 3132,
             host: host.map(String::from),
+            control_socket: None,
         }
     }
 
