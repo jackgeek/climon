@@ -51,10 +51,10 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
   }
 }
 
-export async function atomicWrite(path: string, data: Buffer | string): Promise<void> {
+export async function atomicWrite(path: string, data: Buffer | string, options: { mode?: number } = {}): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tempPath = `${path}.${process.pid}.${Date.now()}.${tempCounter++}.tmp`;
-  await writeFile(tempPath, data);
+  await writeFile(tempPath, data, options.mode === undefined ? undefined : { mode: options.mode });
   try {
     await renameWithRetry(tempPath, path);
   } catch (error) {

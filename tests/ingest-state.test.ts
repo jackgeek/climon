@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   getIngestStatePath,
@@ -52,6 +52,18 @@ describe("ingest beacon round-trip", () => {
     const state: IngestState = { pid: 4321, port: 3140 };
     await writeIngestState(state, env);
     expect(await readIngestStateFromDir(home)).toEqual(state);
+  });
+
+  test.skipIf(process.platform === "win32")("write creates a 0600 ingest beacon", async () => {
+    const state: IngestState = {
+      pid: 4321,
+      port: 3140,
+      controlSocket: "tcp://127.0.0.1:54321",
+      controlToken: "secret-token"
+    };
+    await writeIngestState(state, env);
+
+    expect(statSync(getIngestStatePath(env)).mode & 0o777).toBe(0o600);
   });
 
   test("a tokenless beacon is valid (the token was removed)", () => {
