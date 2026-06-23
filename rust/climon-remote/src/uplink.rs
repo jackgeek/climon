@@ -626,6 +626,37 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
                                         )));
                                     }
                                 }
+                                ControlMessage::ReadFile {
+                                    request_id,
+                                    session_id,
+                                    path,
+                                    max_bytes,
+                                } => {
+                                    // Resolve the session cwd from the same local
+                                    // metadata store used by `attach`; an unknown
+                                    // id yields not-found. The read is confined to
+                                    // that cwd subtree (see `file_read`).
+                                    let result = match read_session_meta(
+                                        &bridge.store_env,
+                                        &session_id,
+                                    ) {
+                                        Ok(Some(meta)) => crate::file_read::read_confined_file(
+                                            &meta.cwd, &path, max_bytes,
+                                        ),
+                                        _ => serde_json::json!({
+                                            "status": "not-found",
+                                            "path": path,
+                                        }),
+                                    };
+                                    let reply = ControlMessage::ReadFileResult { request_id, result };
+                                    let frame = match spawn_secret.as_deref() {
+                                        Some(secret) => {
+                                            encode_control(&sign_now(secret, &reply, unix_millis()))
+                                        }
+                                        None => encode_control(&reply),
+                                    };
+                                    bridge.write(frame);
+                                }
                                 _ => {}
                             }
                         }

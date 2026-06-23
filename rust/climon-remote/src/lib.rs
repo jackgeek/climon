@@ -18,6 +18,7 @@
 pub mod client_id;
 pub mod demotion;
 pub mod discovery;
+pub mod file_read;
 pub mod ingest;
 pub mod ingest_bind_host;
 pub mod ingest_port;
