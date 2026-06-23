@@ -232,7 +232,6 @@ mod tests {
         fs::create_dir_all(&source_dir).unwrap();
         fs::write(source_dir.join("install.exe"), "client").unwrap();
         fs::write(source_dir.join("climon-server.exe"), "server").unwrap();
-        fs::write(source_dir.join("climon-beta"), "server").unwrap();
 
         install_binaries(&source_dir, &install_dir, InstallBinariesOptions::default()).unwrap();
 
@@ -242,10 +241,6 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(install_dir.join("climon-server.exe")).unwrap(),
-            "server"
-        );
-        assert_eq!(
-            fs::read_to_string(install_dir.join("climon-beta")).unwrap(),
             "server"
         );
         fs::remove_dir_all(&root).ok();
@@ -293,7 +288,6 @@ mod tests {
         fs::create_dir_all(&source_dir).unwrap();
         fs::write(source_dir.join("install.exe"), "client").unwrap();
         fs::write(source_dir.join("climon-server.exe"), "server").unwrap();
-        fs::write(source_dir.join("climon-beta"), "server").unwrap();
 
         let climon_attempts = Cell::new(0);
         let prompted = Cell::new(0);
@@ -336,10 +330,6 @@ mod tests {
             fs::read_to_string(install_dir.join("climon-server.exe")).unwrap(),
             "server"
         );
-        assert_eq!(
-            fs::read_to_string(install_dir.join("climon-beta")).unwrap(),
-            "server"
-        );
         fs::remove_dir_all(&root).ok();
     }
 
@@ -350,7 +340,6 @@ mod tests {
         let install_dir = root.join("Programs").join("climon");
         fs::create_dir_all(&source_dir).unwrap();
         fs::write(source_dir.join("install.exe"), "client").unwrap();
-        fs::write(source_dir.join("climon-beta"), "server").unwrap();
 
         let killed = Cell::new(0);
         let mut copy = |_s: &Path, _d: &Path| -> Result<(), InstallError> {

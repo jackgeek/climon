@@ -11,7 +11,7 @@ use crate::crypto_envelope::decrypt_envelope;
 use crate::download::{download_text, download_to_file, MAX_ARTIFACT_BYTES, MAX_TEXT_BYTES};
 use crate::install_manifest::install_files_for_platform;
 use crate::manifest::{artifact_key, is_newer, Manifest};
-use crate::swap::{cleanup_old_files, replace_file_atomic};
+use crate::swap::{cleanup_old_files, remove_orphan_files, replace_file_atomic};
 use crate::verify::verify_signature;
 
 /// Outcome status of an update attempt.
@@ -51,6 +51,10 @@ const MSG_VERIFY_FAILED: &str =
     "Update aborted: signature verification failed. No changes were made.";
 const MSG_DEFERRED: &str =
     "Update could not be applied right now (files in use). Will retry later.";
+
+/// Files that earlier versions installed but newer releases no longer ship.
+/// Deleted from the install dir on a successful update.
+const REMOVED_FILES: &[&str] = &["climon-beta"];
 
 /// Downloads, verifies, and applies an update without ever killing a process.
 /// Returns a structured status; only unexpected I/O errors propagate as `Err`.
@@ -128,6 +132,7 @@ pub fn run_update_command(
             version: Some(opts.manifest.version.clone()),
         });
     }
+    remove_orphan_files(opts.install_dir, REMOVED_FILES);
     print(&format!(
         "Update applied. Start new sessions (or restart the server) to use {}.\n",
         opts.manifest.version
@@ -181,11 +186,7 @@ mod tests {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             let opts =
                 SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            for (name, data) in [
-                ("install", "new-binary"),
-                ("climon-server", "new-server"),
-                ("climon-beta", "new-beta"),
-            ] {
+            for (name, data) in [("install", "new-binary"), ("climon-server", "new-server")] {
                 w.start_file(name, opts).unwrap();
                 w.write_all(data.as_bytes()).unwrap();
             }
@@ -287,9 +288,9 @@ mod tests {
             std::fs::read(dir.path().join("climon-server")).unwrap(),
             b"new-server"
         );
-        assert_eq!(
-            std::fs::read(dir.path().join("climon-beta")).unwrap(),
-            b"new-beta"
+        assert!(
+            !dir.path().join("climon-beta").exists(),
+            "orphaned climon-beta should be removed on update"
         );
     }
 

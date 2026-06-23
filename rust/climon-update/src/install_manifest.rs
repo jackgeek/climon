@@ -22,10 +22,6 @@ pub fn install_files_for_platform(platform: &str) -> Vec<InstallFile> {
             source: format!("climon-server{exe}"),
             dest: format!("climon-server{exe}"),
         },
-        InstallFile {
-            source: "climon-beta".to_string(),
-            dest: "climon-beta".to_string(),
-        },
     ]
 }
 
@@ -36,19 +32,19 @@ mod tests {
     #[test]
     fn unix_files_have_no_exe_suffix() {
         let files = install_files_for_platform("linux");
+        assert_eq!(files.len(), 2);
         assert_eq!(files[0].source, "install");
         assert_eq!(files[0].dest, "climon");
         assert_eq!(files[1].dest, "climon-server");
-        assert_eq!(files[2].dest, "climon-beta");
     }
 
     #[test]
     fn windows_files_have_exe_suffix() {
         let files = install_files_for_platform("win32");
+        assert_eq!(files.len(), 2);
         assert_eq!(files[0].source, "install.exe");
         assert_eq!(files[0].dest, "climon.exe");
         assert_eq!(files[1].source, "climon-server.exe");
         assert_eq!(files[1].dest, "climon-server.exe");
-        assert_eq!(files[2].dest, "climon-beta");
     }
 }

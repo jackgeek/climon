@@ -147,23 +147,16 @@ A `Bun.serve` server, stateless with respect to PTYs:
 The client entrypoint (`src/index.ts`) never imports server code, so the React/
 Fluent/`@xterm/*` dependencies and the embedded dashboard bundle
 (`src/server/embedded-assets.ts`) stay out of the client binary and server-side
-growth never inflates the client. The server is shipped two ways, and a release zip
-contains both:
+growth never inflates the client. The server ships as a single compiled binary, and a
+release zip contains it:
 
 - **Compiled `climon-server` binary** — `src/server.ts` compiled with
   `bun build --compile` (per target in `scripts/compile.ts`) and installed alongside
-  `climon`. This is the **canonical** server path, and the **only** path usable by the
-  future Rust client, which cannot load a JS bundle in-process. The client's `server`
-  subcommand resolves and spawns it via `src/cli/server-exec.ts`
+  `climon`. This is the **canonical and only** server path: the shipped Rust client
+  always spawns this binary (it cannot load a JS bundle in-process). The client's
+  `server` subcommand resolves and spawns it via `src/cli/server-exec.ts`
   (`resolveServerInvocation`: `CLIMON_SERVER_BIN` → sibling `climon-server[.exe]` → dev
   source entrypoint → `PATH`).
-- **In-process `climon-beta` JS bundle** — a minified server bundle loaded inside the
-  Bun client process by `delegateToServer` (`runServerInProcess`) to avoid spawning a
-  second process. This is a Bun-client-only optimization; `delegateToServer` prefers it
-  when present and falls back to spawning the `climon-server` binary otherwise. The
-  shipped Rust client always spawns the `climon-server` binary (it cannot load a JS
-  bundle in-process), but `climon-beta` is still packaged so the legacy Bun client and
-  the updater's install-manifest layout stay unchanged.
 
 ### Dashboard UI (`src/web/`)
 

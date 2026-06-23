@@ -138,12 +138,43 @@ pub fn cleanup_old_files(dir: &Path, names: &[String]) {
     }
 }
 
+/// Best-effort removal of files that are no longer part of the install set
+/// (e.g. a retired `climon-beta` server bundle). These are data files that are
+/// never executed, so they cannot be locked by a running process (even on
+/// Windows); removal never kills anything and ignores all errors, retrying on
+/// the next update. Also clears any leftover `.old` swap sibling.
+pub fn remove_orphan_files(dir: &Path, names: &[&str]) {
+    for name in names {
+        let _ = std::fs::remove_file(dir.join(name));
+        let _ = std::fs::remove_file(dir.join(format!("{name}.old")));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn tmp_dir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn remove_orphan_files_deletes_named_files_and_old_siblings() {
+        let d = tmp_dir();
+        std::fs::write(d.path().join("climon-beta"), "stale").unwrap();
+        std::fs::write(d.path().join("climon-beta.old"), "stale-old").unwrap();
+        std::fs::write(d.path().join("climon"), "keep").unwrap();
+        remove_orphan_files(d.path(), &["climon-beta"]);
+        assert!(!d.path().join("climon-beta").exists());
+        assert!(!d.path().join("climon-beta.old").exists());
+        assert!(d.path().join("climon").exists());
+    }
+
+    #[test]
+    fn remove_orphan_files_ignores_absent_files() {
+        let d = tmp_dir();
+        remove_orphan_files(d.path(), &["climon-beta"]);
+        assert!(!d.path().join("climon-beta").exists());
     }
 
     #[test]
@@ -158,10 +189,10 @@ mod tests {
     #[test]
     fn creates_the_file_when_it_does_not_exist() {
         let d = tmp_dir();
-        let result = replace_file_atomic(d.path(), "climon-beta", b"data").unwrap();
+        let result = replace_file_atomic(d.path(), "climon-server", b"data").unwrap();
         assert!(result.applied);
         assert_eq!(
-            std::fs::read(d.path().join("climon-beta")).unwrap(),
+            std::fs::read(d.path().join("climon-server")).unwrap(),
             b"data"
         );
     }
@@ -208,8 +239,8 @@ mod tests {
     fn a_newly_created_binary_is_executable() {
         use std::os::unix::fs::PermissionsExt;
         let d = tmp_dir();
-        replace_file_atomic(d.path(), "climon-beta", b"data").unwrap();
-        let mode = std::fs::metadata(d.path().join("climon-beta"))
+        replace_file_atomic(d.path(), "climon-server", b"data").unwrap();
+        let mode = std::fs::metadata(d.path().join("climon-server"))
             .unwrap()
             .permissions()
             .mode();

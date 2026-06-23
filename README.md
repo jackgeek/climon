@@ -503,17 +503,16 @@ This outputs per-platform zip archives to `dist/`:
 
 | File | Platform | Contents |
 | --- | --- | --- |
-| `climon-linux-x64.zip` | Linux x86_64 | `install` (Rust client), `climon-server`, `climon-beta`, `climon-alpha` |
-| `climon-linux-arm64.zip` | Linux aarch64 | `install` (Rust client), `climon-server`, `climon-beta`, `climon-alpha` |
-| `climon-darwin-x64.zip` | macOS Intel | `install` (Rust client), `climon-server`, `climon-beta`, `climon-alpha` |
-| `climon-darwin-arm64.zip` | macOS Apple Silicon | `install` (Rust client), `climon-server`, `climon-beta`, `climon-alpha` |
-| `climon-windows-x64.zip` | Windows x86_64 | `install.exe` (Rust client), `climon-server.exe`, `climon-beta`, `climon-alpha` |
+| `climon-linux-x64.zip` | Linux x86_64 | `install` (Rust client), `climon-server`, `climon-alpha` |
+| `climon-linux-arm64.zip` | Linux aarch64 | `install` (Rust client), `climon-server`, `climon-alpha` |
+| `climon-darwin-x64.zip` | macOS Intel | `install` (Rust client), `climon-server`, `climon-alpha` |
+| `climon-darwin-arm64.zip` | macOS Apple Silicon | `install` (Rust client), `climon-server`, `climon-alpha` |
+| `climon-windows-x64.zip` | Windows x86_64 | `install.exe` (Rust client), `climon-server.exe`, `climon-alpha` |
 
 Inside each zip the `install` binary is the Rust `climon` client. The `climon-alpha`
 entry is a small **sentinel marker**: when `install` runs and finds `climon-alpha`
 beside it, it runs the native Rust self-installer (copies itself to `climon`, places
-`climon-server`/`climon-beta`, sets up PATH, writes `.version`, prints the changelog).
-`climon-beta` is the in-process server bundle used only by the legacy Bun client.
+`climon-server`, sets up PATH, writes `.version`, prints the changelog).
 
 Each binary is fully standalone — no Bun installation or `node_modules` needed.
 Unzip the archive for your platform and run `install` (it self-installs `climon`
