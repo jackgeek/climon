@@ -19,3 +19,6 @@ CUsersjackallan.superpowers/
 # Stray Windows-path / tunnel artifacts (never part of the repo)
 C:Usersjackallan/
 DevTunnels/
+
+# File-viewer manual-test scratch dir (created by file-viewer-test.sh)
+.fv-scratch/
