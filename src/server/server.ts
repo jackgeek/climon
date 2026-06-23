@@ -103,6 +103,8 @@ const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+/** Host suffix of Microsoft dev tunnels; the only non-loopback host the dashboard is served on. */
+const DEV_TUNNEL_HOST_SUFFIX = ".devtunnels.ms";
 
 function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -479,6 +481,19 @@ export function isSameOriginRequest(
     return false;
   }
   return originHost === host.trim().toLowerCase();
+}
+
+/**
+ * Allowlists the `Host` the dashboard may legitimately be reached on: loopback
+ * (direct/tunnel-relay) or the dev-tunnel domain. Rejecting everything else
+ * defeats DNS-rebinding, where a page on `evil.com` rebinds to `127.0.0.1` and
+ * sends `Host: evil.com`.
+ */
+export function isAllowedDashboardHost(host: string | null): boolean {
+  if (host === null) return false;
+  const hostname = hostHeaderHostname(host);
+  if (LOOPBACK_HOSTS.has(hostname)) return true;
+  return hostname.endsWith(DEV_TUNNEL_HOST_SUFFIX);
 }
 
 export function splitCommand(command: string): string[] {
@@ -1685,6 +1700,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/sessions") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         return new Response(await sessionsPayload(), { headers: { "content-type": "application/json" } });
       }
 
@@ -1776,6 +1794,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const sessionMatch = SESSION_PATH.exec(url.pathname);
       if (sessionMatch && request.method === "DELETE") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         // The optional `kill` query parameter decides whether to also stop the
         // per-session daemon. Absent/`none` is cleanup only (metadata +
         // scrollback): it deliberately does NOT signal the daemon, so any climon
@@ -1802,6 +1823,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const scrollbackMatch = SCROLLBACK_PATH.exec(url.pathname);
       if (scrollbackMatch) {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         const data = await readScrollback(scrollbackMatch[1]);
         if (!data) {
           return new Response("Not found", { status: 404 });
@@ -1812,6 +1836,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/events") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -1842,6 +1869,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const attachMatch = ATTACH_PATH.exec(url.pathname);
       if (attachMatch) {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         const meta = await readSessionMeta(attachMatch[1]);
         if (!meta) {
           return new Response("Not found", { status: 404 });
