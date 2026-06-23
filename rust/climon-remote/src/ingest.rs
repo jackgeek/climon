@@ -1286,6 +1286,13 @@ async fn handle_control(
             }
         }
         "read-file-result" => {
+            // When a spawn secret is configured the legitimate uplink signs its
+            // ReadFileResult (resolved via the verified "signed" arm). Refuse
+            // unsigned results then, so a peer cannot forge file content —
+            // mirroring the "session-list" stance.
+            if spawn_secret.is_some() {
+                return;
+            }
             if let Some(registry) = registry {
                 if let Ok(inner) =
                     serde_json::from_value::<crate::mux::ControlMessage>(value.clone())
