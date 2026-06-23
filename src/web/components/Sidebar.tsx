@@ -26,6 +26,7 @@ import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
+import { remoteHostsMenuLabel } from "./RemoteHostsPanel.js";
 import { TunnelExpiryBanner } from "./TunnelExpiryBanner.js";
 import { useFeature } from "../hooks/useFeature.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
@@ -155,6 +156,7 @@ interface Props {
   onEdit: (session: SessionMeta) => void;
   onPauseToggle: (session: SessionMeta) => void;
   onManageRemote: () => void;
+  onShowRemoteHosts: () => void;
   notificationsEnabled: boolean;
   onToggleNotifications: () => void;
   canInstallPwa: boolean;
@@ -189,6 +191,7 @@ export function Sidebar({
   onEdit,
   onPauseToggle,
   onManageRemote,
+  onShowRemoteHosts,
   notificationsEnabled,
   onToggleNotifications,
   canInstallPwa,
@@ -255,6 +258,7 @@ export function Sidebar({
                   <MenuItem onClick={onCloseTunnelLink}>{closeTunnelLinkMenuLabel}</MenuItem>
                 )}
                 {showRemotesMenu && <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>}
+                <MenuItem onClick={onShowRemoteHosts}>{remoteHostsMenuLabel}</MenuItem>
                 {sessions.some((s) => s.status === "completed" || s.status === "failed" || s.status === "disconnected") && (
                   <MenuItem onClick={onRemoveDisconnected}>{removeDisconnectedMenuLabel}</MenuItem>
                 )}
