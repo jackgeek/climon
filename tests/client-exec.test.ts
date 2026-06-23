@@ -58,4 +58,27 @@ describe("resolveClientInvocation", () => {
       args: ["run"]
     });
   });
+
+  test("ignores a non-absolute CLIMON_CLIENT_BIN and warns", () => {
+    const dir = tmp();
+    const execPath = join(dir, "climon-server");
+    const env = { CLIMON_CLIENT_BIN: "./evil-climon" } as NodeJS.ProcessEnv;
+    const original = process.stderr.write.bind(process.stderr);
+    let warned = "";
+    process.stderr.write = ((chunk: string) => {
+      warned += chunk;
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      // The relative override is ignored; resolution falls through to PATH.
+      expect(resolveClientInvocation(["run"], env, execPath, undefined, "linux")).toEqual({
+        file: "climon",
+        args: ["run"]
+      });
+    } finally {
+      process.stderr.write = original;
+    }
+    expect(warned).toContain("CLIMON_CLIENT_BIN");
+    expect(warned).toContain("absolute");
+  });
 });

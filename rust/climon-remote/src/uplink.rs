@@ -237,6 +237,7 @@ pub struct UplinkBridgeOptions {
     pub store_env: StoreEnv,
     pub client_id: String,
     pub keep_alive_seconds: Option<f64>,
+    pub peer: bool,
 }
 
 /// An attached local session socket: a writer channel feeding the blocking
@@ -286,6 +287,7 @@ struct Bridge {
     attached: AttachedMap,
     advertised: HashSet<String>,
     store_env: Arc<StoreEnv>,
+    spawn_secret: Option<String>,
 }
 
 impl Bridge {
@@ -330,6 +332,21 @@ async fn reconcile(bridge: &mut Bridge) {
             }));
         }
     }
+    let ids: Vec<String> = current.iter().cloned().collect();
+    let snapshot = ControlMessage::SessionList { ids };
+    // When a spawn secret is configured, the destructive snapshot must be a
+    // verified Signed envelope so a clientId spoofer cannot delete sessions.
+    let frame = match &bridge.spawn_secret {
+        Some(secret) => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+            encode_control(&crate::spawn_auth::sign_now(secret, &snapshot, now_ms))
+        }
+        None => encode_control(&snapshot),
+    };
+    bridge.write(frame);
     bridge.advertised = current;
 }
 
@@ -436,15 +453,31 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
         let _ = write_half.shutdown().await;
     });
 
+    // Resolve the spawn secret + feature gate once. When a secret is present,
+    // every inbound control frame MUST be a verified Signed envelope, a Spawn is
+    // only honored when feature.remoteSpawn is enabled, and the outbound
+    // session-list snapshot is signed (see reconcile).
+    let config_env = ConfigEnv::real();
+    let spawn_secret: Option<String> = as_string(resolve_config_setting(
+        "remote.spawnSecret",
+        &config_env,
+        Path::new("."),
+    ));
+    let remote_spawn_enabled = climon_config::config::load_config(&config_env)
+        .map(|cfg| climon_config::features::is_feature_enabled(&cfg, "remoteSpawn"))
+        .unwrap_or(false);
+
     let mut bridge = Bridge {
         send_tx: send_tx.clone(),
         attached: Arc::new(AsyncMutex::new(HashMap::new())),
         advertised: HashSet::new(),
         store_env: Arc::new(options.store_env),
+        spawn_secret: spawn_secret.clone(),
     };
 
     bridge.write(encode_control(&ControlMessage::Hello {
         client_id: options.client_id.clone(),
+        peer: options.peer,
     }));
     reconcile(&mut bridge).await;
 
@@ -488,18 +521,6 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
 
     let mut decoder = MuxDecoder::new();
     let mut buf = vec![0u8; 64 * 1024];
-    // Resolve the spawn secret + feature gate once. When a secret is present,
-    // every inbound control frame MUST be a verified Signed envelope, and a
-    // Spawn is only honored when feature.remoteSpawn is enabled.
-    let config_env = ConfigEnv::real();
-    let spawn_secret: Option<String> = as_string(resolve_config_setting(
-        "remote.spawnSecret",
-        &config_env,
-        Path::new("."),
-    ));
-    let remote_spawn_enabled = climon_config::config::load_config(&config_env)
-        .map(|cfg| climon_config::features::is_feature_enabled(&cfg, "remoteSpawn"))
-        .unwrap_or(false);
     let mut replay_guard = ReplayGuard::new(DEFAULT_FRESHNESS_WINDOW_MS);
     loop {
         tokio::select! {
@@ -782,6 +803,7 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         } else {
             None
         };
+        let is_peer_connection = peer_target.is_some();
         let config = resolve_uplink_config(&config_env, cwd);
 
         let mut host: Option<String> = None;
@@ -858,6 +880,7 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
                         store_env: store_env.clone(),
                         client_id: client_id.clone(),
                         keep_alive_seconds: Some(resolve_keep_alive(&config_env, cwd)),
+                        peer: is_peer_connection,
                     },
                 )
                 .await;
@@ -1034,6 +1057,7 @@ mod tests {
             ControlMessage::SessionAdded { .. } => "session-added",
             ControlMessage::SessionUpdated { .. } => "session-updated",
             ControlMessage::SessionRemoved { .. } => "session-removed",
+            ControlMessage::SessionList { .. } => "session-list",
             ControlMessage::Attach { .. } => "attach",
             ControlMessage::Detach { .. } => "detach",
             ControlMessage::Spawn { .. } => "spawn",
@@ -1063,6 +1087,7 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.0),
+                peer: false,
             },
         ));
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1098,6 +1123,7 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.0),
+                peer: false,
             },
         ));
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1106,7 +1132,7 @@ mod tests {
         let _ = server.await;
 
         let kinds = received.lock().unwrap().clone();
-        assert_eq!(kinds, vec!["hello".to_string()]);
+        assert_eq!(kinds, vec!["hello".to_string(), "session-list".to_string()]);
         std::fs::remove_dir_all(&home).ok();
     }
 
@@ -1141,6 +1167,7 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.05),
+                peer: false,
             },
         )
         .await;

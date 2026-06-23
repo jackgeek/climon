@@ -31,6 +31,23 @@ describe("ingest beacon round-trip", () => {
     expect(parseIngestState(serializeIngestState(state))).toEqual(state);
   });
 
+  test("serialize then parse preserves the control token", () => {
+    const state: IngestState = {
+      pid: 1234,
+      port: 3132,
+      controlSocket: "tcp://127.0.0.1:5000",
+      controlToken: "abc123"
+    };
+    expect(parseIngestState(serializeIngestState(state))).toEqual(state);
+  });
+
+  test("an empty control token is dropped", () => {
+    expect(parseIngestState(JSON.stringify({ pid: 1, port: 3132, controlToken: "" }))).toEqual({
+      pid: 1,
+      port: 3132
+    });
+  });
+
   test("write then read from dir returns the same state", async () => {
     const state: IngestState = { pid: 4321, port: 3140 };
     await writeIngestState(state, env);

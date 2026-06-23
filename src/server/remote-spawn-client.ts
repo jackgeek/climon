@@ -16,6 +16,10 @@ export async function requestRemoteSpawn(
   if (!state?.controlSocket) {
     return { type: "spawn-result", requestId: req.requestId, error: "ingest not running" };
   }
+  // Authenticate to the running ingest by echoing its per-run control token.
+  const authedReq: SpawnControlRequest = state.controlToken
+    ? { ...req, controlToken: state.controlToken }
+    : req;
   return new Promise<SpawnControlResponse>((resolve) => {
     const socket = connectSessionSocket(state.controlSocket!);
     let buf = "";
@@ -31,7 +35,7 @@ export async function requestRemoteSpawn(
       timeoutMs
     );
     timer.unref?.();
-    socket.on("connect", () => socket.write(JSON.stringify(req) + "\n"));
+    socket.on("connect", () => socket.write(JSON.stringify(authedReq) + "\n"));
     socket.on("data", (chunk: Buffer) => {
       buf += chunk.toString("utf8");
       const nl = buf.indexOf("\n");

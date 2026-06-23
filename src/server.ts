@@ -5,7 +5,6 @@ import { createAppInsightsStream } from "./logging/appinsights.js";
 import { getLogger, initLogger } from "./logging/logger.js";
 import { logMsg } from "./i18n/log-msg.js";
 import { writeStderr } from "./logging/cli-io.js";
-import { runIngestDaemon } from "./remote/ingest.js";
 import { startServer } from "./server/server.js";
 import { ensureInstallId } from "./setup/install-id.js";
 import { resolveTelemetryConnection } from "./telemetry/connection.js";
@@ -41,10 +40,6 @@ async function main(): Promise<number> {
   if (parsed.command === "server") {
     await initServerLogging();
     await startServer({ port: parsed.port, noTakeover: parsed.noTakeover });
-    return 0;
-  }
-  if (parsed.command === "ingest") {
-    await runIngestDaemon();
     return 0;
   }
   writeStderr("climon-server: expected the `server` command.\n");

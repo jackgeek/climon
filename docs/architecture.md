@@ -316,11 +316,16 @@ notification on no/late reply.
 
 A devbox runs a singleton **uplink** agent (`climon __uplink`) that connects to
 the home machine through a Microsoft dev tunnel. The home machine runs a
-loopback-only **ingest** daemon (`climon-server __ingest`) when
-`feature.remotes` is enabled and either hosts the tunnel automatically via the
-`devtunnel` CLI or records a manually-created tunnel in
-`~/.climon/remote-host.json`. `climon server` no longer accepts a remotes
-startup flag; config is the only switch.
+loopback-only **ingest** daemon (`climon __ingest` — the Rust client binary,
+resolved by the dashboard server; a dev source run requires the Rust binary to
+be built and never falls back to the Bun ingest) when `feature.remotes` is
+enabled and either hosts the tunnel automatically via the `devtunnel` CLI or
+records a manually-created tunnel in `~/.climon/remote-host.json`. `climon
+server` no longer accepts a remotes startup flag; config is the only switch. The
+ingest also serves a loopback-only **remote-spawn control socket** (advertised
+as `controlSocket` in `ingest.json`), dual-listens on `127.0.0.1` when bound to
+a non-loopback host so `devtunnel`-forwarded connections still land, and runs a
+sessions-dir **dismiss watcher** that suppresses sessions a user deletes locally.
 
 Session I/O is multiplexed over the dev-tunnel TCP stream using a small framed
 protocol (`src/remote/mux.ts`): a `hello` frame advertises the devbox's stable
@@ -334,6 +339,10 @@ WS ⇄ unix socket bridge) then works unchanged — it cannot tell local and rem
 sessions apart except for the origin tag. Attach is on demand: a browser
 connecting to the local socket triggers an `attach` control to the devbox, which
 connects to the real daemon socket (replaying scrollback) and bridges bytes back.
+The uplink also emits an authoritative `session-list` snapshot each reconcile so
+the ingest can garbage-collect ghost sessions deleted on the source (including
+those left on disk by a previous connection), while preserving still-present
+disconnected sessions and never re-materializing dismissed ones.
 
 ## Same-machine WSL <-> Windows discovery (`src/remote/peer.ts`, `discovery.ts`, `link.ts`)
 
