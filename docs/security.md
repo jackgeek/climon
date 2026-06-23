@@ -308,7 +308,7 @@ loopback-only:
 
 The dashboard can open a file referenced in the terminal (a path printed by the
 shell, clicked via an xterm link provider) in a **read-only** in-browser viewer.
-The feature is **off by default** (`fileViewer.enabled`) and adds no
+The feature is **off by default** (`feature.fileViewer`) and adds no
 remote-code-execution surface: it only ever *reads and renders* a file — it never
 spawns an editor, runs a program, or writes anything.
 
@@ -316,7 +316,7 @@ spawns an editor, runs a program, or writes anything.
   content-type plus an `Origin` host matching `Host`), like the preferences and
   push endpoints, so a Remote Tunnel Link viewer can use it while cross-origin /
   CSRF / DNS-rebinding requests are blocked. The endpoint is disabled (`404`)
-  unless `fileViewer.enabled` is true.
+  unless `feature.fileViewer` is true.
 - **cwd-subtree confinement.** The session `cwd` comes from server-side metadata,
   never from the client. The requested path is resolved against the canonical
   cwd, fully canonicalized (so `..` and symlinks that escape are rejected),

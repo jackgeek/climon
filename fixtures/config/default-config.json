@@ -38,7 +38,8 @@
     "sessionSpawning": "disabled",
     "remoteSpawn": "disabled",
     "wslBridge": "disabled",
-    "remotes": "disabled"
+    "remotes": "disabled",
+    "fileViewer": "disabled"
   },
   "eula": {
     "accepted": false
@@ -50,7 +51,6 @@
     "auto": false
   },
   "fileViewer": {
-    "enabled": false,
     "maxFileSizeBytes": 2097152
   }
 }

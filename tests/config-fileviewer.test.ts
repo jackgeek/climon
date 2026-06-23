@@ -7,6 +7,7 @@ import {
   dashboardWritableSettings,
   findConfigSetting
 } from "../src/config-settings.js";
+import { isFeatureEnabled } from "../src/features.js";
 
 async function withConfigHome<T>(
   name: string,
@@ -24,11 +25,11 @@ async function withConfigHome<T>(
 }
 
 describe("fileViewer config settings", () => {
-  test("declares fileViewer.enabled (default false)", () => {
-    const setting = findConfigSetting("fileViewer.enabled");
+  test("file viewer toggle is the feature.fileViewer flag (default disabled)", () => {
+    const setting = findConfigSetting("feature.fileViewer");
     expect(setting).toBeDefined();
-    expect(setting?.type).toBe("boolean");
-    expect(setting?.defaultValue).toBe(false);
+    expect(setting?.type).toBe("string");
+    expect(setting?.defaultValue).toBe("disabled");
   });
 
   test("declares fileViewer.maxFileSizeBytes (default 2 MiB)", () => {
@@ -48,6 +49,7 @@ describe("fileViewer config settings", () => {
   test("no fileViewer.* setting is dashboard-writable (SEC-7)", () => {
     const writable = dashboardWritableSettings().map((s) => s.path);
     expect(writable.some((p) => p.startsWith("fileViewer."))).toBe(false);
+    expect(writable.includes("feature.fileViewer")).toBe(false);
     expect(CONFIG_SETTINGS.some((s) => s.path.startsWith("fileViewer."))).toBe(true);
   });
 
@@ -59,11 +61,12 @@ describe("fileViewer config settings", () => {
         server: { host: "127.0.0.1", port: 3131 },
         terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
         attention: { idleSeconds: 10 },
-        fileViewer: { enabled: true, maxFileSizeBytes: 4096 }
+        feature: { fileViewer: "enabled" },
+        fileViewer: { maxFileSizeBytes: 4096 }
       },
       async (home) => {
         const config = await loadConfig({ CLIMON_HOME: home } as NodeJS.ProcessEnv);
-        expect(config.fileViewer?.enabled).toBe(true);
+        expect(isFeatureEnabled(config, "fileViewer")).toBe(true);
         expect(config.fileViewer?.maxFileSizeBytes).toBe(4096);
       }
     );
@@ -80,7 +83,7 @@ describe("fileViewer config settings", () => {
       },
       async (home) => {
         const config = await loadConfig({ CLIMON_HOME: home } as NodeJS.ProcessEnv);
-        expect(config.fileViewer?.enabled).toBe(false);
+        expect(isFeatureEnabled(config, "fileViewer")).toBe(false);
         expect(config.fileViewer?.maxFileSizeBytes).toBe(2 * 1024 * 1024);
       }
     );

@@ -189,6 +189,12 @@
     Connect sessions from a remote devbox to this dashboard over the ingest/uplink
     bridge. Set to "enabled" or "disabled". [status: experimental]
 
+  feature.fileViewer
+    Type: string; Default: disabled; Scope: client, daemon, server, browser
+    Allow the web dashboard to open files referenced in the terminal in a read-only
+    viewer confined to the session working directory. Set to "enabled" or "disabled".
+    [status: experimental]
+
   eula.accepted
     Type: boolean; Default: false; Scope: client; internal
     Whether the current EULA version has been accepted. Set by the installer/setup flow;
@@ -232,11 +238,6 @@
     Type: string; Default: unset; Scope: client, server; internal
     Anonymous, randomly generated install identifier used only when telemetry is
     enabled. Contains no personal information.
-
-  fileViewer.enabled
-    Type: boolean; Default: false; Scope: server
-    When true, the web dashboard may open files referenced in the terminal in a
-    read-only viewer (confined to the session working directory). Off by default.
 
   fileViewer.maxFileSizeBytes
     Type: number; Default: 2097152; Scope: server

@@ -433,15 +433,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     internal: true
   },
   {
-    path: "fileViewer.enabled",
-    type: "boolean",
-    defaultValue: false,
-    acceptInput: true,
-    purpose:
-      "When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default.",
-    scope: ["server"]
-  },
-  {
     path: "fileViewer.maxFileSizeBytes",
     type: "number",
     defaultValue: 2 * 1024 * 1024,

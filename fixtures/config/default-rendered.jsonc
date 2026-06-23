@@ -59,7 +59,9 @@
     // Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard. Set to "enabled" or "disabled". [status: experimental]
     "wslBridge": "disabled",
     // Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge. Set to "enabled" or "disabled". [status: experimental]
-    "remotes": "disabled"
+    "remotes": "disabled",
+    // Allow the web dashboard to open files referenced in the terminal in a read-only viewer confined to the session working directory. Set to "enabled" or "disabled". [status: experimental]
+    "fileViewer": "disabled"
   },
   "eula": {
     // Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.
@@ -74,8 +76,6 @@
     "auto": false
   },
   "fileViewer": {
-    // When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default.
-    "enabled": false,
     // Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show a "too large" notice. Default 2 MiB.
     "maxFileSizeBytes": 2097152
   }

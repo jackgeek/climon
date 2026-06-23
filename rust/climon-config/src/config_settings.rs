@@ -588,14 +588,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         )
         .internal(),
         ConfigSetting::new(
-            "fileViewer.enabled",
-            Boolean,
-            "When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default.",
-            vec![Server],
-        )
-        .default(Value::from(false))
-        .accept_input(),
-        ConfigSetting::new(
             "fileViewer.maxFileSizeBytes",
             Number,
             "Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show a \"too large\" notice. Default 2 MiB.",
@@ -879,6 +871,7 @@ mod tests {
                 "feature.remoteSpawn",
                 "feature.wslBridge",
                 "feature.remotes",
+                "feature.fileViewer",
                 "eula.accepted",
                 "eula.version",
                 "eula.acceptedAt",
@@ -888,7 +881,6 @@ mod tests {
                 "update.lastCheck",
                 "update.availableVersion",
                 "install.id",
-                "fileViewer.enabled",
                 "fileViewer.maxFileSizeBytes",
             ]
         );
@@ -931,24 +923,19 @@ mod tests {
                     "sessionSpawning": "disabled",
                     "remoteSpawn": "disabled",
                     "wslBridge": "disabled",
-                    "remotes": "disabled"
+                    "remotes": "disabled",
+                    "fileViewer": "disabled"
                 },
                 "eula": { "accepted": false },
                 "telemetry": { "enabled": false },
                 "update": { "auto": false },
-                "fileViewer": { "enabled": false, "maxFileSizeBytes": 2097152 }
+                "fileViewer": { "maxFileSizeBytes": 2097152 }
             })
         );
     }
 
     #[test]
     fn file_viewer_settings_are_server_scoped_and_settable() {
-        let enabled = find_config_setting("fileViewer.enabled").unwrap();
-        assert_eq!(enabled.kind, ConfigType::Boolean);
-        assert_eq!(enabled.default_value, Some(json!(false)));
-        assert_eq!(enabled.scope, vec![ConfigProcessScope::Server]);
-        assert!(enabled.accept_input);
-
         let max_size = find_config_setting("fileViewer.maxFileSizeBytes").unwrap();
         assert_eq!(max_size.kind, ConfigType::Number);
         assert_eq!(max_size.default_value, Some(json!(2 * 1024 * 1024)));
@@ -1015,10 +1002,10 @@ mod tests {
                 "feature.remoteSpawn",
                 "feature.wslBridge",
                 "feature.remotes",
+                "feature.fileViewer",
                 "telemetry.enabled",
                 "update.auto",
                 "update.password",
-                "fileViewer.enabled",
                 "fileViewer.maxFileSizeBytes",
             ]
         );

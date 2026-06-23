@@ -6,14 +6,14 @@ from `POST /api/file` (same-origin guarded); the cwd-subtree confinement
 (canonicalize + containment + regular-file + size cap + binary screen) is applied
 on the local read and re-applied on the remote host by the uplink. Content renders
 in a sandboxed iframe (no scripts) under a strict CSP, so opening a file never
-executes its contents. The feature is **off by default** (`fileViewer.enabled`).
+executes its contents. The feature is **off by default** (`feature.fileViewer`).
 
 ## FV-1 — Local: click a path opens the file at the referenced line
 
 - **Feature:** File viewer — local read + link parsing
-- **Preconditions:** `climon config fileViewer.enabled true`. Dashboard open with a
+- **Preconditions:** `climon config feature.fileViewer enabled`. Dashboard open with a
   live local session whose cwd is the climon repo root.
-- **Config-matrix cell:** `fileViewer.enabled = true`; local session; desktop browser.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session; desktop browser.
 - **Steps:**
   1. In the attached terminal, run `echo src/index.ts:1`.
   2. In the dashboard terminal, click the `src/index.ts:1` link.
@@ -25,9 +25,9 @@ executes its contents. The feature is **off by default** (`fileViewer.enabled`).
 ## FV-2 — Confinement: a path outside the cwd is refused
 
 - **Feature:** File viewer — cwd-subtree confinement (SEC)
-- **Preconditions:** `fileViewer.enabled true`; live local session with a normal
+- **Preconditions:** `feature.fileViewer enabled`; live local session with a normal
   project cwd (not `/`).
-- **Config-matrix cell:** `fileViewer.enabled = true`; local session.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session.
 - **Steps:**
   1. Run `echo /etc/hosts` (or `echo ../../../../etc/passwd`) in the terminal.
   2. Click the resulting link.
@@ -41,8 +41,8 @@ executes its contents. The feature is **off by default** (`fileViewer.enabled`).
 ## FV-3 — Markdown renders without executing scripts
 
 - **Feature:** File viewer — sandboxed markdown render
-- **Preconditions:** `fileViewer.enabled true`; live local session in the repo root.
-- **Config-matrix cell:** `fileViewer.enabled = true`; local session.
+- **Preconditions:** `feature.fileViewer enabled`; live local session in the repo root.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session.
 - **Steps:**
   1. Run `echo README.md` and click the link.
   2. (Optional) Open a markdown file containing a raw `<script>` or
@@ -56,9 +56,9 @@ executes its contents. The feature is **off by default** (`fileViewer.enabled`).
 ## FV-4 — Binary file shows a "binary" notice
 
 - **Feature:** File viewer — binary screen
-- **Preconditions:** `fileViewer.enabled true`; live local session; a binary file in
+- **Preconditions:** `feature.fileViewer enabled`; live local session; a binary file in
   the cwd subtree (e.g. a compiled binary or an image).
-- **Config-matrix cell:** `fileViewer.enabled = true`; local session.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session.
 - **Steps:**
   1. `echo` the path to a binary file in the cwd and click the link.
 - **Expected result:** The viewer shows a "binary file" notice instead of garbled
@@ -69,7 +69,7 @@ executes its contents. The feature is **off by default** (`fileViewer.enabled`).
 ## FV-5 — File over the size cap shows a "too large" notice
 
 - **Feature:** File viewer — size cap (`fileViewer.maxFileSizeBytes`)
-- **Preconditions:** `fileViewer.enabled true`. Set a small cap, e.g.
+- **Preconditions:** `feature.fileViewer enabled`. Set a small cap, e.g.
   `climon config fileViewer.maxFileSizeBytes 1024`. Have a file > 1 KiB in the cwd.
 - **Config-matrix cell:** `fileViewer.maxFileSizeBytes = 1024`; local session.
 - **Steps:**
@@ -82,8 +82,8 @@ executes its contents. The feature is **off by default** (`fileViewer.enabled`).
 ## FV-6 — Disabled by default / when turned off
 
 - **Feature:** File viewer — feature gate
-- **Preconditions:** `climon config fileViewer.enabled false` (or unset).
-- **Config-matrix cell:** `fileViewer.enabled = false`; local session.
+- **Preconditions:** `climon config feature.fileViewer disabled` (or unset).
+- **Config-matrix cell:** `feature.fileViewer = disabled`; local session.
 - **Steps:**
   1. Run `echo src/index.ts:1` and attempt to click the link.
   2. (Optional) `POST /api/file` directly and observe the status.
@@ -95,10 +95,10 @@ executes its contents. The feature is **off by default** (`fileViewer.enabled`).
 ## FV-7 — Remote: file loads over the mux; escape refused on the remote host
 
 - **Feature:** File viewer — remote read routing (ingest ↔ uplink mux)
-- **Preconditions:** `fileViewer.enabled true` on the dashboard host. A remote
+- **Preconditions:** `feature.fileViewer enabled` on the dashboard host. A remote
   (dev-tunnel) session is connected and visible in the dashboard, with a known cwd
   containing a text file.
-- **Config-matrix cell:** `fileViewer.enabled = true`; remote (dev tunnel) session.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; remote (dev tunnel) session.
 - **Steps:**
   1. In the remote session's terminal, `echo` a path to a text file inside its cwd
      and click the link.
@@ -114,7 +114,7 @@ executes its contents. The feature is **off by default** (`fileViewer.enabled`).
 ## FV-8 — Tunnel/mobile render; cross-origin rejected
 
 - **Feature:** File viewer — same-origin guard over tunnel
-- **Preconditions:** `fileViewer.enabled true`. A dev-tunnel (Tunnel Link) session is
+- **Preconditions:** `feature.fileViewer enabled`. A dev-tunnel (Tunnel Link) session is
   active; open the dashboard via the tunnel URL (optionally on a phone).
 - **Config-matrix cell:** Remote = dev tunnel; Browser = mobile or desktop.
 - **Steps:**

@@ -50,6 +50,7 @@ describe("config settings registry", () => {
       "feature.remoteSpawn",
       "feature.wslBridge",
       "feature.remotes",
+      "feature.fileViewer",
       "eula.accepted",
       "eula.version",
       "eula.acceptedAt",
@@ -59,7 +60,6 @@ describe("config settings registry", () => {
       "update.lastCheck",
       "update.availableVersion",
       "install.id",
-      "fileViewer.enabled",
       "fileViewer.maxFileSizeBytes"
     ]);
 
@@ -110,11 +110,11 @@ describe("config settings registry", () => {
       session: { color: "auto", priority: 500 },
       tunnelLink: { keepAlive: 60 },
       logging: { level: "trace" },
-      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled" },
+      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled", fileViewer: "disabled" },
       eula: { accepted: false },
       telemetry: { enabled: false },
       update: { auto: false },
-      fileViewer: { enabled: false, maxFileSizeBytes: 2 * 1024 * 1024 }
+      fileViewer: { maxFileSizeBytes: 2 * 1024 * 1024 }
     });
   });
 
@@ -170,10 +170,10 @@ describe("config settings registry", () => {
       "feature.remoteSpawn",
       "feature.wslBridge",
       "feature.remotes",
+      "feature.fileViewer",
       "telemetry.enabled",
       "update.auto",
       "update.password",
-      "fileViewer.enabled",
       "fileViewer.maxFileSizeBytes"
     ]);
   });

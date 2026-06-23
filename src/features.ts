@@ -60,6 +60,13 @@ export const FEATURE_FLAGS = defineFeatureFlags([
     status: "experimental",
     description:
       "Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge."
+  },
+  {
+    name: "fileViewer",
+    default: "disabled",
+    status: "experimental",
+    description:
+      "Allow the web dashboard to open files referenced in the terminal in a read-only viewer confined to the session working directory."
   }
 ] as const satisfies readonly FeatureFlag[]);
 

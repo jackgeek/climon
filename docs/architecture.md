@@ -184,7 +184,7 @@ and asset serving live in `src/server/assets.ts`.
 
 ### File viewer (`src/web/` + `src/server/file-*`)
 
-An optional, read-only file viewer (`fileViewer.enabled`, off by default). An
+An optional, read-only file viewer (`feature.fileViewer`, off by default). An
 xterm link provider detects file paths (with optional `:line:col`) printed in the
 terminal and, on click, opens a Fluent `Dialog` that renders the file inside a
 sandboxed `<iframe>` (no scripts) under a strict CSP. The data flow:

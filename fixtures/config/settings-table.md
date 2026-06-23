@@ -35,6 +35,7 @@
 | `feature.remoteSpawn` | string | `disabled` | client, daemon, server, browser | Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel. Set to "enabled" or "disabled". [status: experimental] |
 | `feature.wslBridge` | string | `disabled` | client, daemon, server, browser | Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard. Set to "enabled" or "disabled". [status: experimental] |
 | `feature.remotes` | string | `disabled` | client, daemon, server, browser | Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge. Set to "enabled" or "disabled". [status: experimental] |
+| `feature.fileViewer` | string | `disabled` | client, daemon, server, browser | Allow the web dashboard to open files referenced in the terminal in a read-only viewer confined to the session working directory. Set to "enabled" or "disabled". [status: experimental] |
 | `eula.accepted` | boolean | `false` | client | Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing. (**internal**) |
 | `eula.version` | string | unset | client | The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance. (**internal**) |
 | `eula.acceptedAt` | string | unset | client | ISO-8601 timestamp recording when the EULA was accepted. (**internal**) |
@@ -44,5 +45,4 @@
 | `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |
 | `update.availableVersion` | string | unset | client | Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update. (**internal**) |
 | `install.id` | string | unset | client, server | Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information. (**internal**) |
-| `fileViewer.enabled` | boolean | `false` | server | When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default. |
 | `fileViewer.maxFileSizeBytes` | number | `2097152` | server | Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show a "too large" notice. Default 2 MiB. |

@@ -1985,7 +1985,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         const result = await handleFileRequest(
           { session: String(parsed.session ?? ""), path: String(parsed.path ?? "") },
           {
-            enabled: config.fileViewer?.enabled === true,
+            enabled: isFeatureEnabled(config, "fileViewer"),
             maxBytes: config.fileViewer?.maxFileSizeBytes ?? 2 * 1024 * 1024,
             loadMeta: async (id) => {
               try {

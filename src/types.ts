@@ -73,8 +73,6 @@ export interface DashboardConfig {
 }
 
 export interface FileViewerConfig {
-  /** Master on/off for the dashboard file viewer. Off by default. */
-  enabled?: boolean;
   /** Maximum file size (bytes) the viewer will read. */
   maxFileSizeBytes?: number;
 }
