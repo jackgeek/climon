@@ -267,6 +267,32 @@ dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port �
 Revoke a devbox by deleting the dev tunnel or removing its identity from the
 tunnel's access list.
 
+### Seeing which remotes are connected (`climon remotes`)
+
+`climon remotes` reports the live remote topology from the local status beacons
+(`ingest-status.json` / `uplink-status.json` under `$CLIMON_HOME`):
+
+```bash
+climon remotes            # one-shot snapshot
+climon remotes --watch    # live-refreshing view (clears + redraws)
+climon remotes --json     # machine-readable; pipe to jq
+```
+
+The human output has two sections: the local **uplink** (when this machine is a
+devbox, its connection target + state) and the **ingest** connections (each
+remote host currently connected to this machine, with its friendly
+hostname/OS, address, and session count). A leading `●` marks a healthy entry;
+`○` marks a **stale** one. Staleness is derived live by the reader — an entry is
+stale when the writing process is gone or there has been no recent
+ping/heartbeat — so a crashed uplink or ingest shows as stale rather than
+lingering as healthy. The same data drives the dashboard's **Remote hosts**
+menu, updated live over SSE.
+
+`--json` emits a stable shape (top-level `uplink`, `ingest`, and
+`remotesEnabled`) suitable for `jq`. When neither `feature.remotes` nor
+`feature.wslBridge` is enabled, the command prints a short hint that remotes are
+disabled instead of an empty list.
+
 ## Connecting Windows and WSL on the same machine
 
 Windows and WSL each keep their own `CLIMON_HOME`, but the two filesystems are

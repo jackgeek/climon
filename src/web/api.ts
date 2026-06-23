@@ -360,6 +360,31 @@ export async function fetchRemoteStatus(): Promise<RemoteStatus> {
   return (await res.json()) as RemoteStatus;
 }
 
+export interface RemotesConnection {
+  clientId: string;
+  hostname: string;
+  os: string;
+  address?: string;
+  connectedAt: number;
+  sessionCount: number;
+  lastPingAt?: number;
+  stale: boolean;
+}
+
+export interface RemotesResponse {
+  connections: RemotesConnection[];
+  ingestRunning: boolean;
+  remotesActive: boolean;
+}
+
+export async function fetchRemotes(): Promise<RemotesResponse> {
+  const res = await fetch(withQuery("/api/remotes"));
+  if (!res.ok) {
+    return { connections: [], ingestRunning: false, remotesActive: false };
+  }
+  return (await res.json()) as RemotesResponse;
+}
+
 /** Auto-creates a dev tunnel on the home machine (requires the devtunnel CLI). */
 export async function createRemoteTunnel(): Promise<RemoteStatus> {
   const res = await fetch(withQuery("/api/remote/tunnel"), {

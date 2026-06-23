@@ -240,6 +240,31 @@ fn as_integer(value: &Value) -> Option<i64> {
     }
 }
 
+/// Trust boundary for attacker-controlled hello identity. Caps length and drops
+/// C0/C1 control bytes (incl. ESC) so a hostname can't smuggle ANSI escapes into a
+/// terminal (`climon remotes`) or blow up the status file. Returns None if empty.
+fn sanitize_identity(raw: Option<String>, max: usize) -> Option<String> {
+    let s: String = raw?
+        .chars()
+        .filter(|c| !c.is_control() && *c != '\u{7f}' && (*c < '\u{80}' || *c > '\u{9f}'))
+        .take(max)
+        .collect();
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// `os` is a small enum from our own client; allowlist it and fold anything else to None.
+fn sanitize_os(raw: Option<String>) -> Option<String> {
+    match raw.as_deref() {
+        Some("darwin") | Some("win32") | Some("linux") => raw,
+        _ => None,
+    }
+}
+
 /// Builds an allow-listed patch from an untrusted advertised patch. Mirrors
 /// `sanitizeRemotePatch`: every field is type-checked and string fields bounded;
 /// server-controlled fields (socketPath, origin, clientLabel, ...) are dropped.
@@ -404,6 +429,12 @@ struct ActiveConn {
     shutdown: Arc<Notify>,
     teardown_done: Arc<Notify>,
     send_tx: mpsc::UnboundedSender<Vec<u8>>,
+    hostname: Option<String>,
+    os: Option<String>,
+    address: Option<String>,
+    connected_at: u64,
+    session_count: u32,
+    last_ping_at: Option<u64>,
 }
 
 impl IngestConnectionRegistry {
@@ -461,6 +492,12 @@ impl IngestConnectionRegistry {
                 shutdown,
                 teardown_done,
                 send_tx,
+                hostname: None,
+                os: None,
+                address: None,
+                connected_at: crate::time::now_ms(),
+                session_count: 0,
+                last_ping_at: None,
             },
         );
     }
@@ -528,6 +565,63 @@ impl IngestConnectionRegistry {
                 active.remove(client_id);
             }
         }
+    }
+
+    /// Records friendly identity for a connected client (from the hello frame).
+    pub fn set_identity(
+        &self,
+        client_id: &str,
+        hostname: Option<String>,
+        os: Option<String>,
+        address: Option<String>,
+    ) {
+        if let Some(conn) = self.active.lock().unwrap().get_mut(client_id) {
+            conn.hostname = hostname;
+            conn.os = os;
+            conn.address = address;
+        }
+    }
+
+    /// Updates the materialized-session count for a client.
+    pub fn set_session_count(&self, client_id: &str, count: u32) {
+        if let Some(conn) = self.active.lock().unwrap().get_mut(client_id) {
+            conn.session_count = count;
+        }
+    }
+
+    /// Records the timestamp of the most recent inbound ping.
+    pub fn touch_ping(&self, client_id: &str, now_ms: u64) {
+        if let Some(conn) = self.active.lock().unwrap().get_mut(client_id) {
+            conn.last_ping_at = Some(now_ms);
+        }
+    }
+
+    /// Snapshots all active connections for the status-file writer. `now_ms` is
+    /// unused for the shape but kept for symmetry with staleness derivation.
+    pub fn connected_snapshot(
+        &self,
+        _now_ms: u64,
+    ) -> Vec<crate::ingest_status::IngestConnectionStatus> {
+        self.active
+            .lock()
+            .unwrap()
+            .iter()
+            .map(
+                |(client_id, conn)| crate::ingest_status::IngestConnectionStatus {
+                    client_id: client_id.clone(),
+                    hostname: conn
+                        .hostname
+                        .clone()
+                        .filter(|h| !h.is_empty())
+                        .unwrap_or_else(|| client_id.clone()),
+                    os: conn.os.clone().unwrap_or_else(|| "unknown".to_string()),
+                    address: conn.address.clone(),
+                    connected_at: conn.connected_at,
+                    session_count: conn.session_count,
+                    last_ping_at: conn.last_ping_at,
+                },
+            )
+            .collect()
     }
 }
 
@@ -662,6 +756,7 @@ pub struct IngestConnOptions {
     pub registry: Option<Arc<IngestConnectionRegistry>>,
     pub spawn_secret: Option<String>,
     pub wsl_bridge_enabled: bool,
+    pub on_change: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl IngestConnOptions {
@@ -673,6 +768,7 @@ impl IngestConnOptions {
             registry: None,
             spawn_secret: None,
             wsl_bridge_enabled: false,
+            on_change: None,
         }
     }
 }
@@ -693,6 +789,8 @@ pub async fn run_ingest_connection(channel: TcpStream, options: IngestConnOption
     let registry = options.registry.clone();
     let spawn_secret = options.spawn_secret;
     let wsl_bridge_enabled = options.wsl_bridge_enabled;
+    let on_change = options.on_change.clone();
+    let peer_addr = channel.peer_addr().ok().map(|a| a.to_string());
     let mut replay_guard =
         crate::spawn_auth::ReplayGuard::new(crate::spawn_auth::DEFAULT_FRESHNESS_WINDOW_MS);
 
@@ -789,6 +887,8 @@ pub async fn run_ingest_connection(channel: TcpStream, options: IngestConnOption
                                 spawn_secret.as_deref(),
                                 Some(&mut replay_guard),
                                 wsl_bridge_enabled,
+                                peer_addr.as_deref(),
+                                &on_change,
                             )
                             .await;
                         }
@@ -820,6 +920,9 @@ pub async fn run_ingest_connection(channel: TcpStream, options: IngestConnOption
     if let (Some(label), Some(registry)) = (&label, &registry) {
         registry.mark_torn_down(label, &shutdown);
     }
+    if let Some(cb) = &on_change {
+        cb();
+    }
     drop(send_tx);
     let _ = send;
     let _ = writer.await;
@@ -839,6 +942,8 @@ async fn handle_control(
     spawn_secret: Option<&str>,
     replay_guard: Option<&mut crate::spawn_auth::ReplayGuard>,
     wsl_bridge_enabled: bool,
+    peer_addr: Option<&str>,
+    on_change: &Option<Arc<dyn Fn() + Send + Sync>>,
 ) {
     let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     match kind {
@@ -854,6 +959,15 @@ async fn handle_control(
                 if let Some(client_id) = value.get("clientId").and_then(|v| v.as_str()) {
                     if is_valid_remote_id(client_id) {
                         *label = Some(client_id.to_string());
+                        let hostname = sanitize_identity(
+                            value
+                                .get("hostname")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            64,
+                        );
+                        let os =
+                            sanitize_os(value.get("os").and_then(|v| v.as_str()).map(String::from));
                         if let Some(registry) = registry {
                             registry
                                 .evict_and_register(
@@ -863,6 +977,15 @@ async fn handle_control(
                                     send_tx.clone(),
                                 )
                                 .await;
+                            registry.set_identity(
+                                client_id,
+                                hostname,
+                                os,
+                                peer_addr.map(String::from),
+                            );
+                        }
+                        if let Some(cb) = on_change {
+                            cb();
                         }
                     }
                 }
@@ -870,6 +993,9 @@ async fn handle_control(
         }
         "ping" => {
             let _ = send_tx.send(encode_control(&ControlMessage::Pong));
+            if let (Some(registry), Some(label)) = (registry, label.as_deref()) {
+                registry.touch_ping(label, crate::time::now_ms());
+            }
         }
         "pong" => {}
         "session-added" => {
@@ -884,6 +1010,7 @@ async fn handle_control(
                     registry,
                 )
                 .await;
+                update_session_count(registry, label, sessions, on_change);
             }
         }
         "session-updated" => {
@@ -905,6 +1032,7 @@ async fn handle_control(
                 return;
             }
             remove_session_deleting(sessions, id, store_env).await;
+            update_session_count(registry, label, sessions, on_change);
         }
         "session-list" => {
             // Unsigned snapshots are only honored when no spawn secret is
@@ -914,11 +1042,12 @@ async fn handle_control(
             if spawn_secret.is_some() {
                 return;
             }
-            let Some(label) = label.clone() else {
+            let Some(label_value) = label.clone() else {
                 return;
             };
             let ids = session_list_ids(value);
-            apply_session_list(&ids, &label, sessions, store_env, registry).await;
+            apply_session_list(&ids, &label_value, sessions, store_env, registry).await;
+            update_session_count(registry, label, sessions, on_change);
         }
         "signed" => {
             if let (Some(secret), Some(guard)) = (spawn_secret, replay_guard) {
@@ -939,9 +1068,16 @@ async fn handle_control(
                                 }
                             }
                             crate::mux::ControlMessage::SessionList { ids } => {
-                                if let Some(label) = label.clone() {
-                                    apply_session_list(ids, &label, sessions, store_env, registry)
-                                        .await;
+                                if let Some(label_value) = label.clone() {
+                                    apply_session_list(
+                                        ids,
+                                        &label_value,
+                                        sessions,
+                                        store_env,
+                                        registry,
+                                    )
+                                    .await;
+                                    update_session_count(registry, label, sessions, on_change);
                                 }
                             }
                             _ => {}
@@ -962,6 +1098,22 @@ async fn handle_control(
             }
         }
         _ => {}
+    }
+}
+
+/// Recomputes the per-connection session count for `label` and publishes it to
+/// the registry, then fires `on_change` so the status file is rewritten.
+fn update_session_count(
+    registry: &Option<Arc<IngestConnectionRegistry>>,
+    label: &Option<String>,
+    sessions: &HashMap<String, RemoteSession>,
+    on_change: &Option<Arc<dyn Fn() + Send + Sync>>,
+) {
+    if let (Some(registry), Some(label)) = (registry, label.as_deref()) {
+        registry.set_session_count(label, sessions.len() as u32);
+    }
+    if let Some(cb) = on_change {
+        cb();
     }
 }
 
@@ -1527,6 +1679,34 @@ pub async fn run_ingest_daemon(
 
     let registry = Arc::new(IngestConnectionRegistry::new());
 
+    // Durable status beacon: written on connect/disconnect/identity change and
+    // refreshed by a heartbeat so `climon remotes` + the dashboard can detect a
+    // dead or stale ingest. `on_change` (below) is wired into every connection.
+    let status_registry = registry.clone();
+    let status_env = config_env.clone();
+    let write_status: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let status = crate::ingest_status::IngestStatus {
+            pid: std::process::id(),
+            updated_at: crate::time::now_ms(),
+            connections: status_registry.connected_snapshot(crate::time::now_ms()),
+        };
+        let _ = crate::ingest_status::write_ingest_status(&status, &status_env);
+    });
+    // Initial write so `climon remotes` shows "running, 0 connections".
+    (write_status)();
+    // Heartbeat: refresh updatedAt every 10s so readers can detect staleness.
+    {
+        let write_status = write_status.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(10));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                (write_status)();
+            }
+        });
+    }
+
     // Bound concurrent connections. Data + loopback share the ingest budget;
     // loopback control connections have a smaller separate budget.
     let ingest_conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1555,6 +1735,7 @@ pub async fn run_ingest_daemon(
         let secret = spawn_secret.clone();
         let ka = keep_alive_seconds;
         let counter = ingest_conns.clone();
+        let on_change = write_status.clone();
         tokio::spawn(async move {
             while let Ok((socket, _)) = lb.accept().await {
                 let Some(guard) = ConnGuard::acquire(&counter, MAX_INGEST_CONNECTIONS) else {
@@ -1566,6 +1747,7 @@ pub async fn run_ingest_daemon(
                 opts.registry = Some(reg.clone());
                 opts.spawn_secret = secret.clone();
                 opts.wsl_bridge_enabled = wsl_bridge_enabled;
+                opts.on_change = Some(on_change.clone());
                 tokio::spawn(async move {
                     let _guard = guard;
                     run_ingest_connection(socket, opts).await;
@@ -1588,6 +1770,7 @@ pub async fn run_ingest_daemon(
                         opts.registry = Some(registry.clone());
                         opts.spawn_secret = spawn_secret.clone();
                         opts.wsl_bridge_enabled = wsl_bridge_enabled;
+                        opts.on_change = Some(write_status.clone());
                         tokio::spawn(async move {
                             let _guard = guard;
                             run_ingest_connection(socket, opts).await;
@@ -1637,6 +1820,7 @@ pub async fn run_ingest_daemon(
 
 fn remove_beacons(config_env: &ConfigEnv) {
     let _ = std::fs::remove_file(crate::ingest_state::get_ingest_state_path(config_env));
+    let _ = std::fs::remove_file(crate::ingest_status::get_ingest_status_path(config_env));
     let _ = std::fs::remove_file(ingest_pid_path(config_env));
     let _ = std::fs::remove_file(crate::shutdown_request::get_shutdown_request_path(
         config_env,
@@ -1693,6 +1877,52 @@ mod tests {
             ControlMessage::SpawnResult { id, .. } => assert_eq!(id.as_deref(), Some("sess-1")),
             other => panic!("unexpected result: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn registry_snapshot_reports_enriched_connection() {
+        use crate::ingest_status::IngestConnectionStatus;
+        let registry = IngestConnectionRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+        let teardown = std::sync::Arc::new(tokio::sync::Notify::new());
+        registry
+            .evict_and_register("c1", shutdown, teardown, tx)
+            .await;
+        registry.set_identity(
+            "c1",
+            Some("jacks-box".into()),
+            Some("linux".into()),
+            Some("10.0.0.7:5".into()),
+        );
+        registry.set_session_count("c1", 3);
+        registry.touch_ping("c1", 1_234);
+
+        let snap: Vec<IngestConnectionStatus> = registry.connected_snapshot(1_000_000);
+        assert_eq!(snap.len(), 1);
+        let c = &snap[0];
+        assert_eq!(c.client_id, "c1");
+        assert_eq!(c.hostname, "jacks-box");
+        assert_eq!(c.os, "linux");
+        assert_eq!(c.address.as_deref(), Some("10.0.0.7:5"));
+        assert_eq!(c.session_count, 3);
+        assert_eq!(c.last_ping_at, Some(1_234));
+    }
+
+    #[tokio::test]
+    async fn registry_snapshot_defaults_identity_to_client_id() {
+        use crate::ingest_status::IngestConnectionStatus;
+        let registry = IngestConnectionRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+        let teardown = std::sync::Arc::new(tokio::sync::Notify::new());
+        registry
+            .evict_and_register("c2", shutdown, teardown, tx)
+            .await;
+        // No set_identity call: hostname falls back to clientId, os to "unknown".
+        let snap: Vec<IngestConnectionStatus> = registry.connected_snapshot(1_000_000);
+        assert_eq!(snap[0].hostname, "c2");
+        assert_eq!(snap[0].os, "unknown");
     }
 
     #[tokio::test]
@@ -1981,6 +2211,48 @@ mod tests {
         assert_eq!(patch.status, Some(SessionStatus::Completed));
     }
 
+    #[test]
+    fn sanitize_identity_truncates_oversized_hostname() {
+        let raw = "h".repeat(200);
+        let out = sanitize_identity(Some(raw), 64).unwrap();
+        assert_eq!(out.chars().count(), 64);
+    }
+
+    #[test]
+    fn sanitize_identity_strips_escape_sequences() {
+        let out = sanitize_identity(Some("\u{1b}[2J\u{1b}[31mX".to_string()), 64).unwrap();
+        assert_eq!(out, "[2J[31mX");
+        assert!(!out.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn sanitize_identity_empty_becomes_none() {
+        assert_eq!(sanitize_identity(Some("   ".to_string()), 64), None);
+        assert_eq!(sanitize_identity(None, 64), None);
+    }
+
+    #[test]
+    fn sanitize_os_allowlists_known_values_and_folds_others() {
+        assert_eq!(
+            sanitize_os(Some("linux".to_string())).as_deref(),
+            Some("linux")
+        );
+        assert_eq!(
+            sanitize_os(Some("darwin".to_string())).as_deref(),
+            Some("darwin")
+        );
+        assert_eq!(
+            sanitize_os(Some("win32".to_string())).as_deref(),
+            Some("win32")
+        );
+        assert_eq!(
+            sanitize_os(Some("linux\u{1b}]0;pwn\u{07}".to_string())),
+            None
+        );
+        assert_eq!(sanitize_os(Some("freebsd".to_string())), None);
+        assert_eq!(sanitize_os(None), None);
+    }
+
     fn unique_home(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "climon-ingest-{tag}-{}-{}",
@@ -2246,6 +2518,8 @@ mod tests {
             Some("sekret"),
             Some(&mut guard),
             false,
+            None,
+            &None,
         )
         .await;
 
@@ -2294,6 +2568,8 @@ mod tests {
             Some("sekret"),
             Some(&mut guard),
             false,
+            None,
+            &None,
         )
         .await;
 
@@ -2341,6 +2617,8 @@ mod tests {
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             }))
             .await
             .unwrap();
@@ -2392,6 +2670,8 @@ mod tests {
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             }))
             .await
             .unwrap();
@@ -2429,6 +2709,8 @@ mod tests {
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             }))
             .await
             .unwrap();
@@ -2480,6 +2762,8 @@ mod tests {
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             }))
             .await
             .unwrap();

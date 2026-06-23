@@ -344,6 +344,43 @@ the ingest can garbage-collect ghost sessions deleted on the source (including
 those left on disk by a previous connection), while preserving still-present
 disconnected sessions and never re-materializing dismissed ones.
 
+## Remote visibility (`ingest-status.json`, `uplink-status.json`, `climon remotes`)
+
+Two single-writer status beacons under `$CLIMON_HOME` make the live remote
+topology observable without touching the mux:
+
+- **`ingest-status.json`** — written by the ingest daemon (single writer). It
+  carries the ingest `pid`, an `updatedAt` heartbeat (~10s), and one entry per
+  connected uplink: `clientId`, friendly `hostname`/`os` (from the enriched
+  `hello`), `address`, `connectedAt`, `sessionCount`, and `lastPingAt`.
+- **`uplink-status.json`** — written by the uplink supervisor on a devbox
+  (single writer): its connection `target`, `connectedAt`, and the current
+  lifecycle `state` (`connecting`/`connected`/`reconnecting`/`disconnected`).
+
+Both files are mode `0600` and carry only hostnames/addresses — no secrets, and
+they are never network-exposed. **Staleness is always derived by the reader**
+(pid dead, or no heartbeat/ping within `STALE_AFTER_MS`); it is never trusted
+from the file. The data flow is:
+
+```
+ingest / uplink supervisor
+        │  (single writer)
+        ▼
+ingest-status.json / uplink-status.json   ($CLIMON_HOME, 0600)
+        │                         │
+        ▼                         ▼
+  climon remotes          GET /api/remotes (loopback-only)
+  (--watch / --json)              │
+                                  ▼  SSE "remotes" event
+                          dashboard "Remote hosts" menu + panel
+```
+
+`hello.hostname`/`hello.os` are untrusted remote input: the ingest sanitizes
+them at the trust boundary (cap `hostname` to 64 chars + strip control/ESC
+bytes; allowlist `os` to `darwin`/`win32`/`linux`, else `unknown`) before they
+are stored, so every downstream sink (`climon remotes` TTY, `--json`, the
+dashboard) only ever formats already-safe strings.
+
 ## Same-machine WSL <-> Windows discovery (`src/remote/peer.ts`, `discovery.ts`, `link.ts`)
 
 WSL and Windows each keep their own `CLIMON_HOME`, but the filesystems are

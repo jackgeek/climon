@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as RealIcons from "@fluentui/react-icons";
+import * as RealComponents from "@fluentui/react-components";
 import {
   getStableSessionItemRef,
   keyBarPinnedMenuLabel,
@@ -21,10 +22,17 @@ function Passthrough({ children }: PassthroughProps) {
 }
 
 mock.module("@fluentui/react-components", () => ({
+  // Spread every real export so unrelated named imports (Input, Field, etc.)
+  // resolve; override only the components this suite needs as lightweight stubs.
+  ...RealComponents,
   Button: ({ children, title }: PassthroughProps & { title?: string }) =>
     createElement("button", { title }, children),
   Menu: Passthrough,
+  MenuDivider: () => createElement("hr", null),
+  MenuGroup: Passthrough,
+  MenuGroupHeader: Passthrough,
   MenuItem: ({ children }: PassthroughProps) => createElement("div", null, children),
+  MenuItemRadio: ({ children }: PassthroughProps) => createElement("div", null, children),
   MenuList: Passthrough,
   MenuPopover: Passthrough,
   MenuTrigger: Passthrough,
@@ -103,6 +111,7 @@ describe("Sidebar menu", () => {
       onEdit: () => {},
       onPauseToggle: () => {},
       onManageRemote: () => {},
+      onShowRemoteHosts: () => {},
       notificationsEnabled: false,
       onToggleNotifications: () => {},
       canInstallPwa: false,
@@ -186,6 +195,7 @@ describe("Sidebar menu", () => {
       onEdit: () => {},
       onPauseToggle: () => {},
       onManageRemote: () => {},
+      onShowRemoteHosts: () => {},
       notificationsEnabled: false,
       onToggleNotifications: () => {},
       canInstallPwa: false,
@@ -225,6 +235,7 @@ describe("Sidebar menu", () => {
       onEdit: () => {},
       onPauseToggle: () => {},
       onManageRemote: () => {},
+      onShowRemoteHosts: () => {},
       notificationsEnabled: false,
       onToggleNotifications: () => {},
       canInstallPwa: false,

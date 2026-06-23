@@ -47,6 +47,8 @@ Usage:
                                (--no-takeover: never terminate an existing
                                server; start on the next available port)
   climon ls                    List monitored sessions
+  climon remotes [--watch] [--json]
+                               Show connected remote hosts and uplinks
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order

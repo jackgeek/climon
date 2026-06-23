@@ -37,6 +37,10 @@ pub enum ControlMessage {
         client_id: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         peer: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hostname: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        os: Option<String>,
     },
     SessionAdded {
         meta: Box<SessionMeta>,
@@ -484,6 +488,8 @@ mod tests {
         let frame = encode_control(&ControlMessage::Hello {
             client_id: "devbox-abc".into(),
             peer: false,
+            hostname: None,
+            os: None,
         });
         let msgs = decoder.push(&frame).unwrap();
         assert_eq!(msgs.len(), 1);
@@ -492,7 +498,41 @@ mod tests {
             MuxMessage::Control(ControlMessage::Hello {
                 client_id: "devbox-abc".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             })
+        );
+    }
+
+    #[test]
+    fn hello_roundtrips_hostname_and_os() {
+        let msg = ControlMessage::Hello {
+            client_id: "c1".into(),
+            peer: false,
+            hostname: Some("jacks-devbox".into()),
+            os: Some("linux".into()),
+        };
+        let frame = encode_control(&msg);
+        let json = std::str::from_utf8(&frame[5..]).unwrap();
+        let back: ControlMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(back, msg);
+        assert!(json.contains("\"hostname\":\"jacks-devbox\""));
+        assert!(json.contains("\"os\":\"linux\""));
+    }
+
+    #[test]
+    fn hello_without_hostname_os_still_parses() {
+        // An old uplink frame: clientId only (no peer/hostname/os).
+        let back: ControlMessage =
+            serde_json::from_str(r#"{"kind":"hello","clientId":"c1"}"#).unwrap();
+        assert_eq!(
+            back,
+            ControlMessage::Hello {
+                client_id: "c1".into(),
+                peer: false,
+                hostname: None,
+                os: None,
+            }
         );
     }
 
@@ -508,6 +548,8 @@ mod tests {
         let frame = encode_control(&ControlMessage::Hello {
             client_id: "d".into(),
             peer: false,
+            hostname: None,
+            os: None,
         });
         assert_eq!(&frame[5..], br#"{"kind":"hello","clientId":"d"}"#);
         // session-removed -> {"kind":"session-removed","id":"a"}
