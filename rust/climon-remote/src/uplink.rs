@@ -330,6 +330,8 @@ async fn reconcile(bridge: &mut Bridge) {
             }));
         }
     }
+    let ids: Vec<String> = current.iter().cloned().collect();
+    bridge.write(encode_control(&ControlMessage::SessionList { ids }));
     bridge.advertised = current;
 }
 
@@ -1034,6 +1036,7 @@ mod tests {
             ControlMessage::SessionAdded { .. } => "session-added",
             ControlMessage::SessionUpdated { .. } => "session-updated",
             ControlMessage::SessionRemoved { .. } => "session-removed",
+            ControlMessage::SessionList { .. } => "session-list",
             ControlMessage::Attach { .. } => "attach",
             ControlMessage::Detach { .. } => "detach",
             ControlMessage::Spawn { .. } => "spawn",
@@ -1106,7 +1109,7 @@ mod tests {
         let _ = server.await;
 
         let kinds = received.lock().unwrap().clone();
-        assert_eq!(kinds, vec!["hello".to_string()]);
+        assert_eq!(kinds, vec!["hello".to_string(), "session-list".to_string()]);
         std::fs::remove_dir_all(&home).ok();
     }
 

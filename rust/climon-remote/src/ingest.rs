@@ -375,6 +375,11 @@ impl IngestConnectionRegistry {
         self.dismissed.lock().unwrap().remove(local_id);
     }
 
+    /// A copy of the dismissed-local-id set (for snapshot reconciliation).
+    pub fn dismissed_snapshot(&self) -> std::collections::HashSet<String> {
+        self.dismissed.lock().unwrap().clone()
+    }
+
     /// Registers a connection for `client_id`, evicting and awaiting the
     /// teardown of any previous one. Mirrors `evictAndRegister`.
     pub async fn evict_and_register(
@@ -791,7 +796,35 @@ async fn handle_control(
             if !is_valid_remote_id(id) {
                 return;
             }
-            remove_session(sessions, id, store_env).await;
+            remove_session_deleting(sessions, id, store_env).await;
+        }
+        "session-list" => {
+            let Some(label) = label.as_deref() else {
+                return;
+            };
+            let ids: Vec<String> = value
+                .get("ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let dismissed = registry
+                .as_ref()
+                .map(|r| r.dismissed_snapshot())
+                .unwrap_or_default();
+            let live: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+            let to_drop: Vec<String> = sessions
+                .keys()
+                .filter(|rid| !live.contains(rid.as_str()))
+                .cloned()
+                .collect();
+            for rid in to_drop {
+                remove_session_deleting(sessions, &rid, store_env).await;
+            }
+            reconcile_against_snapshot(store_env, label, &ids, &dismissed);
         }
         "signed" => {
             if let (Some(secret), Some(guard)) = (spawn_secret, replay_guard) {
@@ -963,7 +996,52 @@ async fn remove_session(
     }
 }
 
-/// A running `devtunnel host` process. Mirrors `HostProcess`.
+/// Removes a session because the source deleted it: tears down the in-memory
+/// entry AND deletes the materialized meta file. Mirrors the `session-removed`
+/// semantics (vs. connection teardown which only disconnects).
+async fn remove_session_deleting(
+    sessions: &mut HashMap<String, RemoteSession>,
+    remote_id: &str,
+    store_env: &Arc<StoreEnv>,
+) {
+    if let Some(session) = sessions.remove(remote_id) {
+        session.accept_handle.abort();
+        session.sockets.lock().await.clear();
+        let _ = remove_session_meta(store_env, &session.local_id);
+    }
+}
+
+/// Deletes materialized sessions for `label` whose remote id is not in the
+/// authoritative `snapshot_ids` and is not dismissed. Disk-based so it catches
+/// ghosts left by a previous connection. Mirrors the `session-list` semantics.
+fn reconcile_against_snapshot(
+    store_env: &StoreEnv,
+    label: &str,
+    snapshot_ids: &[String],
+    dismissed: &std::collections::HashSet<String>,
+) {
+    let live: std::collections::HashSet<&str> = snapshot_ids.iter().map(String::as_str).collect();
+    let prefix = format!("{label}~");
+    let metas = match list_sessions(store_env) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    for meta in metas {
+        if meta.origin != Some(Origin::Remote) {
+            continue;
+        }
+        let Some(remote_id) = meta.id.strip_prefix(&prefix) else {
+            continue;
+        };
+        if dismissed.contains(&meta.id) {
+            let _ = remove_session_meta(store_env, &meta.id);
+            continue;
+        }
+        if !live.contains(remote_id) {
+            let _ = remove_session_meta(store_env, &meta.id);
+        }
+    }
+}
 pub trait HostProcess: Send {
     fn stop(&mut self);
 }
@@ -1642,6 +1720,80 @@ mod tests {
 
     async fn connect(port: u16) -> TcpStream {
         TcpStream::connect(("127.0.0.1", port)).await.unwrap()
+    }
+
+    fn make_test_store_env() -> StoreEnv {
+        let home = unique_home("ghost");
+        StoreEnv::with_home(&home)
+    }
+
+    fn write_remote_meta(store_env: &StoreEnv, label: &str, remote_id: &str) -> String {
+        let local_id = namespaced_id(label, remote_id);
+        let meta = to_local_meta(
+            &serde_json::json!({
+                "id": remote_id, "command": ["bash"], "displayCommand": "bash", "cwd": "/home/dev",
+                "status": "running", "priorityReason": "running",
+                "cols": 80, "rows": 24, "createdAt": "t", "updatedAt": "t", "lastActivityAt": "t"
+            }),
+            label,
+            &local_id,
+            "tcp://127.0.0.1:5000",
+        );
+        write_session_meta(store_env, &meta).unwrap();
+        local_id
+    }
+
+    #[tokio::test]
+    async fn session_removed_deletes_the_materialized_meta() {
+        let store_env = make_test_store_env();
+        let label = "dev1";
+        let remote_id = "s1";
+        let local_id = write_remote_meta(&store_env, label, remote_id);
+        assert!(read_meta(&store_env, &local_id).is_some());
+
+        let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
+        sessions.insert(
+            remote_id.to_string(),
+            RemoteSession {
+                local_id: local_id.clone(),
+                sockets: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                accept_handle: tokio::spawn(async {}),
+            },
+        );
+        remove_session_deleting(&mut sessions, remote_id, &Arc::new(store_env.clone())).await;
+
+        assert!(read_meta(&store_env, &local_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn session_list_snapshot_gcs_missing_sessions() {
+        let store_env = make_test_store_env();
+        let label = "client-1";
+        write_remote_meta(&store_env, label, "keep");
+        write_remote_meta(&store_env, label, "drop");
+        assert!(read_meta(&store_env, &namespaced_id(label, "keep")).is_some());
+        assert!(read_meta(&store_env, &namespaced_id(label, "drop")).is_some());
+
+        reconcile_against_snapshot(
+            &store_env,
+            label,
+            &["keep".to_string()],
+            &Default::default(),
+        );
+
+        assert!(read_meta(&store_env, &namespaced_id(label, "keep")).is_some());
+        assert!(read_meta(&store_env, &namespaced_id(label, "drop")).is_none());
+    }
+
+    #[tokio::test]
+    async fn session_list_snapshot_preserves_dismissed_handling() {
+        let store_env = make_test_store_env();
+        let label = "client-1";
+        write_remote_meta(&store_env, label, "drop");
+        let dismissed: std::collections::HashSet<String> =
+            [namespaced_id(label, "drop")].into_iter().collect();
+        reconcile_against_snapshot(&store_env, label, &[], &dismissed);
+        assert!(read_meta(&store_env, &namespaced_id(label, "drop")).is_none());
     }
 
     async fn wait_meta(

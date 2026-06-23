@@ -47,6 +47,9 @@ pub enum ControlMessage {
     SessionRemoved {
         id: String,
     },
+    SessionList {
+        ids: Vec<String>,
+    },
     Attach {
         id: String,
     },
@@ -463,6 +466,14 @@ mod tests {
             &frame[5..],
             br#"{"kind":"signed","payload":"{}","nonce":"n","ts":7,"sig":"s"}"#
         );
+    }
+
+    #[test]
+    fn encodes_session_list_with_kind_tag() {
+        let frame = encode_control(&ControlMessage::SessionList {
+            ids: vec!["a".into(), "b".into()],
+        });
+        assert_eq!(&frame[5..], br#"{"kind":"session-list","ids":["a","b"]}"#);
     }
 
     #[test]
