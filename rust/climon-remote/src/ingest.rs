@@ -112,6 +112,39 @@ pub fn namespaced_id(label: &str, remote_id: &str) -> String {
     format!("{label}~{remote_id}")
 }
 
+/// Returns the `<clientId>~<remoteId>` local id if `filename` is a namespaced
+/// remote-session meta file, else `None`. Mirrors the Bun `NAMESPACED_RE`.
+fn match_namespaced_session_file(filename: &str) -> Option<String> {
+    let stem = filename.strip_suffix(".json")?;
+    let (left, right) = stem.split_once('~')?;
+    let ok = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    if ok(left) && ok(right) {
+        Some(stem.to_string())
+    } else {
+        None
+    }
+}
+
+/// Scans `dir` for namespaced remote-session meta files, returning their local
+/// ids. Missing/unreadable dirs yield an empty set.
+fn scan_namespaced_session_files(dir: &std::path::Path) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if let Some(local_id) = match_namespaced_session_file(name) {
+                    set.insert(local_id);
+                }
+            }
+        }
+    }
+    set
+}
+
 fn bounded_string(value: &Value, fallback: &str) -> String {
     match value.as_str() {
         None => fallback.to_string(),
@@ -1235,6 +1268,23 @@ pub async fn run_ingest_daemon(
 
     let registry = Arc::new(IngestConnectionRegistry::new());
 
+    // Dismiss watcher: when a materialized remote-session meta file disappears
+    // (e.g. removed via the dashboard), dismiss its local id so it is not
+    // re-materialized. Mirrors the Bun sessions-dir watcher.
+    let sessions_dir = store_env.sessions_dir();
+    let dismiss_registry = registry.clone();
+    let _dismiss_watcher = {
+        use std::collections::HashSet;
+        let mut prev: HashSet<String> = scan_namespaced_session_files(&sessions_dir);
+        crate::shutdown_watch::spawn_poll(crate::shutdown_watch::DEFAULT_POLL_MS, move || {
+            let current = scan_namespaced_session_files(&sessions_dir);
+            for gone in prev.difference(&current) {
+                dismiss_registry.dismiss(gone);
+            }
+            prev = current;
+        })
+    };
+
     let loopback_task = loopback_listener.map(|lb| {
         let reg = registry.clone();
         let store = store_env.clone();
@@ -1312,6 +1362,16 @@ fn remove_beacons(config_env: &ConfigEnv) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namespaced_session_filename_matcher() {
+        assert_eq!(
+            match_namespaced_session_file("client-1~abc123.json"),
+            Some("client-1~abc123".to_string())
+        );
+        assert_eq!(match_namespaced_session_file("not-namespaced.json"), None);
+        assert_eq!(match_namespaced_session_file("client-1~abc123.txt"), None);
+    }
 
     #[tokio::test]
     async fn registry_channel_and_pending_spawn_roundtrip() {
