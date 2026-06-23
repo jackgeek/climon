@@ -68,6 +68,7 @@ import { logMsg } from "../i18n/log-msg.js";
 import { createPushService, type PushService } from "./push/service.js";
 import { isValidSubscription } from "./push/subscriptions.js";
 import { isFeatureEnabled, resolveFeatureFlags } from "../features.js";
+import { handleFileRequest } from "./file-endpoint.js";
 
 
 interface StartServerOptions {
@@ -1962,6 +1963,39 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           return undefined;
         }
         return new Response("Expected WebSocket upgrade", { status: 426 });
+      }
+
+      if (url.pathname === "/api/file" && request.method === "POST") {
+        if (
+          !isSameOriginRequest(
+            request.headers.get("content-type"),
+            request.headers.get("origin"),
+            request.headers.get("host")
+          )
+        ) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let parsed: { session?: unknown; path?: unknown };
+        try {
+          parsed = (await request.json()) as { session?: unknown; path?: unknown };
+        } catch {
+          return new Response("Bad request", { status: 400 });
+        }
+        const result = await handleFileRequest(
+          { session: String(parsed.session ?? ""), path: String(parsed.path ?? "") },
+          {
+            enabled: config.fileViewer?.enabled === true,
+            maxBytes: config.fileViewer?.maxFileSizeBytes ?? 2 * 1024 * 1024,
+            loadMeta: async (id) => {
+              try {
+                return (await readSessionMeta(id)) ?? null;
+              } catch {
+                return null;
+              }
+            }
+          }
+        );
+        return Response.json(result.body, { status: result.status });
       }
 
       return new Response("Not found", { status: 404 });
