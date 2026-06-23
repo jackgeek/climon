@@ -175,11 +175,17 @@ unix).
 4. `climon config session.priority` → prints `250`.
 5. `climon config --debug` → lists config files, keys, and values in resolution
    order.
-6. `climon config bogus.key 1` → parse/validation error, exit 2.
+6. `climon config remote.spawnSecret S3CR3T-do-not-leak` → writes the global
+   config.
+7. `climon config remote.spawnSecret` → prints `[REDACTED]`, not the raw secret.
+8. `climon config --list` → includes `remote.spawnSecret=[REDACTED]` and does
+   not include `S3CR3T-do-not-leak`.
+9. `climon config bogus.key 1` → parse/validation error, exit 2.
 
 **Expected:** Get/set/unset, `--help`, `--debug`, and `--purge` mirror the TS
 config command output, scopes, and exit codes (parse error → 2, get-miss → 1,
-runtime error → 2).
+runtime error → 2). Sensitive values are redacted in user-facing `get` and
+`--list` output.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|

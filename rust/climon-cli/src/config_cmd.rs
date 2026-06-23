@@ -12,7 +12,7 @@ use climon_config::config::{
     list_existing_config_files, resolve_config_setting, should_warn_global_only_local_write,
     unset_config_setting, write_config_setting, Env, WriteScope,
 };
-use climon_config::config_settings::render_config_settings_help;
+use climon_config::config_settings::{find_config_setting, render_config_settings_help};
 use climon_config::features::{
     feature_status, is_feature_locked, parse_feature_config_key, FeatureStatus,
 };
@@ -179,6 +179,15 @@ fn js_string_value(value: &Value) -> String {
     }
 }
 
+/// Renders a config value for `list`/`get`, redacting sensitive or unknown keys
+/// to the documented `[REDACTED]` token.
+fn display_config_value(key: &str, value: &Value) -> String {
+    match find_config_setting(key) {
+        Some(setting) if !setting.sensitive => js_string_value(value),
+        _ => "[REDACTED]".to_string(),
+    }
+}
+
 /// IO sinks for [`run_config_command`], allowing tests to capture output and
 /// drive the purge confirmation.
 pub struct ConfigCommandIo<'a> {
@@ -266,7 +275,7 @@ fn run_action(
             let mut lines: Vec<String> = Vec::new();
             for key in known_config_keys() {
                 if let Some(value) = resolve_config_setting(&key, env, cwd) {
-                    lines.push(format!("{key}={}", js_string_value(&value)));
+                    lines.push(format!("{key}={}", display_config_value(&key, &value)));
                 }
             }
             if !lines.is_empty() {
@@ -277,7 +286,7 @@ fn run_action(
         ConfigAction::Get { key, .. } => match resolve_config_setting(&key, env, cwd) {
             None => Ok(1),
             Some(value) => {
-                let _ = writeln!(io.stdout, "{}", js_string_value(&value));
+                let _ = writeln!(io.stdout, "{}", display_config_value(&key, &value));
                 Ok(0)
             }
         },
@@ -322,7 +331,10 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn v(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
@@ -355,6 +367,60 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let rust_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("climon-cli lives under rust/")
+            .to_path_buf();
+        let unique = format!(
+            "{}-{}-{}-{}",
+            name,
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::SeqCst),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time after epoch")
+                .as_nanos()
+        );
+        rust_dir
+            .join("target")
+            .join("config-cmd-tests")
+            .join(unique)
+    }
+
+    fn write_global_config(root: &Path, jsonc: &str) -> (Env, PathBuf) {
+        let home = root.join("home");
+        let climon_home = root.join("climon-home");
+        let cwd = home.join("cwd");
+        fs::create_dir_all(&home).expect("create home");
+        fs::create_dir_all(&climon_home).expect("create climon home");
+        fs::create_dir_all(&cwd).expect("create cwd");
+        fs::write(climon_home.join("config.jsonc"), jsonc).expect("write global config");
+        let env = Env::new(Some(climon_home.to_str().expect("utf-8 climon home")), home);
+        (env, cwd)
+    }
+
+    fn run_config_capture(argv: &[&str], env: &Env, cwd: &Path) -> (i32, String, String) {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        fn no_confirm(_: &str) -> bool {
+            false
+        }
+        let mut confirm = no_confirm;
+        let mut io = ConfigCommandIo {
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            confirm: &mut confirm,
+        };
+        let code = run_config_command(&v(argv), env, cwd, &mut io);
+        (
+            code,
+            String::from_utf8(stdout).expect("stdout is utf-8"),
+            String::from_utf8(stderr).expect("stderr is utf-8"),
+        )
+    }
     }
 
     #[test]
@@ -418,6 +484,59 @@ mod tests {
     fn unknown_key_errors() {
         assert!(parse_config_args(&v(&["not.a.key"])).is_err());
         assert!(parse_config_args(&v(&["not.a.key", "x"])).is_err());
+    }
+
+    #[test]
+    fn list_redacts_sensitive_values() {
+        let root = test_root("list-redacts-sensitive-values");
+        let (env, cwd) = write_global_config(
+            &root,
+            r#"{"remote":{"enabled":true,"spawnSecret":"S3CR3T-do-not-leak"}}"#,
+        );
+
+        let (code, out, err) = run_config_capture(&["--list"], &env, &cwd);
+
+        assert_eq!(code, 0);
+        assert_eq!(err, "");
+        assert!(!out.contains("S3CR3T-do-not-leak"));
+        assert!(out.contains("remote.enabled=true"));
+        assert!(out.contains("remote.spawnSecret=[REDACTED]"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_redacts_sensitive_value() {
+        let root = test_root("get-redacts-sensitive-value");
+        let (env, cwd) =
+            write_global_config(&root, r#"{"remote":{"spawnSecret":"S3CR3T-do-not-leak"}}"#);
+
+        let (code, out, err) = run_config_capture(&["remote.spawnSecret"], &env, &cwd);
+
+        assert_eq!(code, 0);
+        assert_eq!(err, "");
+        assert_eq!(out, "[REDACTED]\n");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn get_prints_non_sensitive_value() {
+        let root = test_root("get-prints-non-sensitive-value");
+        let (env, cwd) = write_global_config(&root, r#"{"session":{"priority":250}}"#);
+
+        let (code, out, err) = run_config_capture(&["session.priority"], &env, &cwd);
+
+        assert_eq!(code, 0);
+        assert_eq!(err, "");
+        assert_eq!(out, "250\n");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn display_config_value_redacts_unknown_keys() {
+        assert_eq!(
+            display_config_value("not.a.real.key", &Value::String("secret".to_string())),
+            "[REDACTED]"
+        );
     }
 
     #[test]
