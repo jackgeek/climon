@@ -55,6 +55,11 @@ describe("handleFileRequest", () => {
     expect(res.status).toBe(400);
   });
 
+  test("rejects an empty path with 400", async () => {
+    const res = await handleFileRequest({ session: "local1", path: "" }, deps);
+    expect(res.status).toBe(400);
+  });
+
   test("returns 404 for an unknown session", async () => {
     const res = await handleFileRequest({ session: "missing", path: "a.txt" }, deps);
     expect(res.status).toBe(404);

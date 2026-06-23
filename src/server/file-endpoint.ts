@@ -19,6 +19,8 @@ export interface FileResponse {
 }
 
 function isValidSessionId(id: unknown): id is string {
+  // Remote session ids are namespaced as label~remoteId; isValidRemoteId excludes "~",
+  // so validate each segment instead of rejecting every remote session.
   return typeof id === "string" && id.split("~").every((part) => isValidRemoteId(part));
 }
 
