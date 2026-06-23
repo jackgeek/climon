@@ -185,16 +185,21 @@ pub fn default_config() -> Value {
 pub fn candidate_config_dirs(env: &Env, cwd: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     let home_boundary = resolve(env.home());
-    let mut dir = resolve(cwd);
-    loop {
-        if dir == home_boundary {
-            break;
+    let start = resolve(cwd);
+    if start.starts_with(&home_boundary) {
+        let mut dir = start;
+        loop {
+            if dir == home_boundary {
+                break;
+            }
+            dirs.push(dir.join(".climon"));
+            match dir.parent() {
+                Some(parent) if parent != dir => dir = parent.to_path_buf(),
+                _ => break,
+            }
         }
-        dirs.push(dir.join(".climon"));
-        match dir.parent() {
-            Some(parent) if parent != dir => dir = parent.to_path_buf(),
-            _ => break,
-        }
+    } else {
+        dirs.push(start.join(".climon"));
     }
     let home = get_climon_home(env);
     if !dirs.contains(&home) {
@@ -291,6 +296,17 @@ pub fn resolve_write_dir(scope: WriteScope, env: &Env, cwd: &Path) -> PathBuf {
     }
 }
 
+fn resolve_write_dir_for_key(key: &str, scope: WriteScope, env: &Env, cwd: &Path) -> PathBuf {
+    if scope == WriteScope::Auto
+        && find_config_setting(key)
+            .map(|setting| setting.global_only)
+            .unwrap_or(false)
+    {
+        return get_climon_home(env);
+    }
+    resolve_write_dir(scope, env, cwd)
+}
+
 /// Whether `key` is a registry key users may set.
 pub fn is_known_config_key(key: &str) -> bool {
     crate::config_settings::accepted_config_keys()
@@ -351,7 +367,7 @@ pub fn write_config_setting(
     env: &Env,
     cwd: &Path,
 ) -> Result<PathBuf, String> {
-    let dir = resolve_write_dir(scope, env, cwd);
+    let dir = resolve_write_dir_for_key(key, scope, env, cwd);
     let mut current = Value::Object(read_sparse_config(&dir));
     let (section, field) = split_two(key);
     let coerced = coerce_config_value(key, value)?;
@@ -372,7 +388,7 @@ pub fn unset_config_setting(
     env: &Env,
     cwd: &Path,
 ) -> Result<(), String> {
-    let dir = resolve_write_dir(scope, env, cwd);
+    let dir = resolve_write_dir_for_key(key, scope, env, cwd);
     if existing_config_path_for_dir(&dir).is_none() {
         return Ok(());
     }
@@ -972,6 +988,22 @@ mod tests {
     }
 
     #[test]
+    fn cascade_does_not_walk_ancestors_outside_home() {
+        let t = TempDir::new("outsidehome");
+        let home_root = t.path().join("home");
+        let global = home_root.join(".climon");
+        let cwd = t.path().join("outside").join("work").join("project");
+        let env = Env::new(Some(global.to_str().unwrap()), home_root);
+
+        let dirs = candidate_config_dirs(&env, &cwd);
+
+        assert!(dirs.contains(&cwd.join(".climon")));
+        assert!(!dirs.contains(&t.path().join("outside").join("work").join(".climon")));
+        assert!(!dirs.contains(&t.path().join("outside").join(".climon")));
+        assert_eq!(dirs[dirs.len() - 1], global);
+    }
+
+    #[test]
     fn write_to_nearest_existing_and_creates_home() {
         let t = TempDir::new("write");
         let (env, home) = cascade_env(t.path());
@@ -999,6 +1031,46 @@ mod tests {
             Some(json!(42))
         );
         let _ = home;
+    }
+
+    #[test]
+    fn auto_write_of_global_only_setting_targets_global_config() {
+        let t = TempDir::new("writeglobalonly");
+        let (env, home) = cascade_env(t.path());
+        let repo = t.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        write_json(
+            &repo.join(".climon"),
+            json!({ "session": { "color": "red" } }),
+        );
+
+        write_config_setting(
+            "session.terminalProgram",
+            "safe-term {cmd}",
+            WriteScope::Auto,
+            &env,
+            &repo,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_config_setting("session.terminalProgram", &env, &repo),
+            Some(json!("safe-term {cmd}"))
+        );
+        assert_eq!(
+            read_dotted_key(
+                &read_sparse_config(&repo.join(".climon")),
+                "session.terminalProgram"
+            ),
+            None
+        );
+        assert_eq!(
+            read_dotted_key(
+                &read_sparse_config(&home.join(".climon")),
+                "session.terminalProgram"
+            ),
+            Some(&json!("safe-term {cmd}"))
+        );
     }
 
     #[test]

@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { resolveConfigSetting } from "../src/config.js";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, parse } from "node:path";
+import { homedir } from "node:os";
+import { candidateConfigDirs, resolveConfigSetting, writeConfigSetting } from "../src/config.js";
 import { CONFIG_SETTINGS } from "../src/config-settings.js";
 
 const dirs: string[] = [];
@@ -65,5 +66,28 @@ describe("globalOnly settings", () => {
     expect(resolveConfigSetting("session.terminalProgram", env, repo)).toBe("safe {cmd}");
     expect(resolveConfigSetting("remote.port", env, repo)).toBe(3131);
     expect(resolveConfigSetting("update.password", env, repo)).toBe("safe-password");
+  });
+
+  it("does not walk ancestor config dirs when cwd is outside the user home", () => {
+    const { home } = setup();
+    const outsideRoot = join(parse(homedir()).root, "climon-outside-home");
+    const cwd = join(outsideRoot, "work", "project");
+    const dirs = candidateConfigDirs({ CLIMON_HOME: home }, cwd);
+
+    expect(dirs).toContain(join(cwd, ".climon"));
+    expect(dirs).not.toContain(join(outsideRoot, "work", ".climon"));
+    expect(dirs).not.toContain(join(outsideRoot, ".climon"));
+    expect(dirs.at(-1)).toBe(home);
+  });
+
+  it("writes auto-scoped globalOnly settings to global config", () => {
+    const { home, repo } = setup();
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+
+    writeConfigSetting("session.terminalProgram", "safe-auto {cmd}", "auto", env, repo);
+
+    expect(resolveConfigSetting("session.terminalProgram", env, repo)).toBe("safe-auto {cmd}");
+    expect(readFileSync(join(home, "config.jsonc"), "utf8")).toContain("safe-auto {cmd}");
+    expect(readFileSync(join(repo, ".climon", "config.jsonc"), "utf8")).not.toContain("safe-auto {cmd}");
   });
 });
