@@ -93,6 +93,18 @@ pub enum ControlMessage {
         ts: i64,
         sig: String,
     },
+    #[serde(rename_all = "camelCase")]
+    ReadFile {
+        request_id: String,
+        session_id: String,
+        path: String,
+        max_bytes: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    ReadFileResult {
+        request_id: String,
+        result: serde_json::Value,
+    },
     Ping,
     Pong,
 }
@@ -480,6 +492,39 @@ mod tests {
             ids: vec!["a".into(), "b".into()],
         });
         assert_eq!(&frame[5..], br#"{"kind":"session-list","ids":["a","b"]}"#);
+    }
+
+    #[test]
+    fn read_file_round_trips() {
+        let msg = ControlMessage::ReadFile {
+            request_id: "r1".into(),
+            session_id: "s1".into(),
+            path: "src/a.ts".into(),
+            max_bytes: 2048,
+        };
+        let bytes = encode_control(&msg);
+        let json = &bytes[5..]; // strip 5-byte header
+        let value: serde_json::Value = serde_json::from_slice(json).unwrap();
+        assert_eq!(value["kind"], "read-file");
+        assert_eq!(value["requestId"], "r1");
+        assert_eq!(value["sessionId"], "s1");
+        assert_eq!(value["maxBytes"], 2048);
+
+        let mut decoder = MuxDecoder::new();
+        let msgs = decoder.push(&bytes).unwrap();
+        assert_eq!(msgs, vec![MuxMessage::Control(msg)]);
+    }
+
+    #[test]
+    fn read_file_result_round_trips() {
+        let msg = ControlMessage::ReadFileResult {
+            request_id: "r1".into(),
+            result: serde_json::json!({ "status": "ok", "path": "/abs/src/a.ts", "content": "x" }),
+        };
+        let bytes = encode_control(&msg);
+        let mut decoder = MuxDecoder::new();
+        let msgs = decoder.push(&bytes).unwrap();
+        assert_eq!(msgs, vec![MuxMessage::Control(msg)]);
     }
 
     #[test]

@@ -1235,6 +1235,8 @@ mod tests {
             ControlMessage::Spawn { .. } => "spawn",
             ControlMessage::SpawnResult { .. } => "spawn-result",
             ControlMessage::Signed { .. } => "signed",
+            ControlMessage::ReadFile { .. } => "read-file",
+            ControlMessage::ReadFileResult { .. } => "read-file-result",
             ControlMessage::Ping => "ping",
             ControlMessage::Pong => "pong",
         }

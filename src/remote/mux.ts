@@ -11,6 +11,7 @@
  */
 import { Buffer } from "node:buffer";
 import type { SessionMeta, SessionMetaPatch } from "../types.js";
+import type { FileReadResult } from "../server/file-read.js";
 
 export enum MuxType {
   Control = 1,
@@ -43,6 +44,8 @@ export type ControlMessage =
     }
   | { kind: "spawn-result"; requestId: string; id?: string; warning?: string; error?: string }
   | { kind: "signed"; payload: string; nonce: string; ts: number; sig: string }
+  | { kind: "read-file"; requestId: string; sessionId: string; path: string; maxBytes: number }
+  | { kind: "read-file-result"; requestId: string; result: FileReadResult }
   | { kind: "ping" }
   | { kind: "pong" };
 
