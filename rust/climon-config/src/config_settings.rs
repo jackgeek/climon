@@ -593,7 +593,8 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default.",
             vec![Server],
         )
-        .default(Value::from(false)),
+        .default(Value::from(false))
+        .accept_input(),
         ConfigSetting::new(
             "fileViewer.maxFileSizeBytes",
             Number,
@@ -601,6 +602,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Server],
         )
         .default(Value::from(2 * 1024 * 1024))
+        .accept_input()
         .with_validate(v_file_viewer_max_size),
     ]);
     s
@@ -940,18 +942,18 @@ mod tests {
     }
 
     #[test]
-    fn file_viewer_settings_are_server_scoped_default_only() {
+    fn file_viewer_settings_are_server_scoped_and_settable() {
         let enabled = find_config_setting("fileViewer.enabled").unwrap();
         assert_eq!(enabled.kind, ConfigType::Boolean);
         assert_eq!(enabled.default_value, Some(json!(false)));
         assert_eq!(enabled.scope, vec![ConfigProcessScope::Server]);
-        assert!(!enabled.accept_input);
+        assert!(enabled.accept_input);
 
         let max_size = find_config_setting("fileViewer.maxFileSizeBytes").unwrap();
         assert_eq!(max_size.kind, ConfigType::Number);
         assert_eq!(max_size.default_value, Some(json!(2 * 1024 * 1024)));
         assert_eq!(max_size.scope, vec![ConfigProcessScope::Server]);
-        assert!(!max_size.accept_input);
+        assert!(max_size.accept_input);
 
         assert!(coerce_config_value_from_settings("fileViewer.maxFileSizeBytes", "0").is_err());
         assert!(coerce_config_value_from_settings("fileViewer.maxFileSizeBytes", "-1").is_err());
@@ -1016,6 +1018,8 @@ mod tests {
                 "telemetry.enabled",
                 "update.auto",
                 "update.password",
+                "fileViewer.enabled",
+                "fileViewer.maxFileSizeBytes",
             ]
         );
     }

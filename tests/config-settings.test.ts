@@ -58,7 +58,9 @@ describe("config settings registry", () => {
       "update.password",
       "update.lastCheck",
       "update.availableVersion",
-      "install.id"
+      "install.id",
+      "fileViewer.enabled",
+      "fileViewer.maxFileSizeBytes"
     ]);
 
     for (const setting of CONFIG_SETTINGS) {
@@ -111,7 +113,8 @@ describe("config settings registry", () => {
       feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled" },
       eula: { accepted: false },
       telemetry: { enabled: false },
-      update: { auto: false }
+      update: { auto: false },
+      fileViewer: { enabled: false, maxFileSizeBytes: 2 * 1024 * 1024 }
     });
   });
 
@@ -169,13 +172,15 @@ describe("config settings registry", () => {
       "feature.remotes",
       "telemetry.enabled",
       "update.auto",
-      "update.password"
+      "update.password",
+      "fileViewer.enabled",
+      "fileViewer.maxFileSizeBytes"
     ]);
   });
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(44);
+    expect(allConfigKeys().length).toBe(46);
   });
 
   test("coerces values through registry validators", () => {

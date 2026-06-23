@@ -436,6 +436,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "fileViewer.enabled",
     type: "boolean",
     defaultValue: false,
+    acceptInput: true,
     purpose:
       "When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default.",
     scope: ["server"]
@@ -444,6 +445,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "fileViewer.maxFileSizeBytes",
     type: "number",
     defaultValue: 2 * 1024 * 1024,
+    acceptInput: true,
     purpose:
       'Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show a "too large" notice. Default 2 MiB.',
     scope: ["server"],
