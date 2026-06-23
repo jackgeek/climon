@@ -89,6 +89,10 @@ pub enum ParsedCommand {
         id: String,
     },
     Cleanup,
+    Remotes {
+        watch: bool,
+        json: bool,
+    },
     Update {
         argv: Vec<String>,
     },
@@ -125,6 +129,8 @@ Usage:
                                (--no-takeover: never terminate an existing
                                server; start on the next available port)
   climon ls                    List monitored sessions
+  climon remotes [--watch] [--json]
+                               Show connected remote hosts and uplinks
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order
@@ -402,6 +408,18 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
         }
         "config" => Ok(ParsedCommand::Config { argv: rest }),
         "cleanup" => Ok(ParsedCommand::Cleanup),
+        "remotes" => {
+            let mut watch = false;
+            let mut json = false;
+            for arg in &rest {
+                match arg.as_str() {
+                    "--watch" | "-w" => watch = true,
+                    "--json" => json = true,
+                    other => return Err(format!("Unknown flag for remotes: {other}")),
+                }
+            }
+            Ok(ParsedCommand::Remotes { watch, json })
+        }
         "link" => Ok(ParsedCommand::Link { argv: rest }),
         "__uplink" => Ok(ParsedCommand::Uplink),
         "__ingest" => Ok(ParsedCommand::Ingest),
@@ -655,6 +673,36 @@ mod tests {
             }
         );
         assert_eq!(parse(&["kill", "--all"]), ParsedCommand::KillAll);
+    }
+
+    #[test]
+    fn parses_remotes_command_and_flags() {
+        assert_eq!(
+            parse(&["remotes"]),
+            ParsedCommand::Remotes {
+                watch: false,
+                json: false
+            }
+        );
+        assert_eq!(
+            parse(&["remotes", "--watch"]),
+            ParsedCommand::Remotes {
+                watch: true,
+                json: false
+            }
+        );
+        assert_eq!(
+            parse(&["remotes", "--json"]),
+            ParsedCommand::Remotes {
+                watch: false,
+                json: true
+            }
+        );
+    }
+
+    #[test]
+    fn help_text_documents_remotes() {
+        assert!(help_text().contains("climon remotes"));
     }
 
     #[test]
