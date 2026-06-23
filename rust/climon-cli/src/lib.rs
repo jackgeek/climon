@@ -31,6 +31,7 @@ pub mod link_cmd;
 pub mod pathenv;
 pub mod process_kill;
 pub mod query_title;
+pub mod remotes_cmd;
 pub mod self_spawn;
 pub mod server_exec;
 pub mod spawn;

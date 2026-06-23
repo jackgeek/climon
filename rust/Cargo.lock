@@ -154,6 +154,7 @@ dependencies = [
  "climon-store",
  "climon-update",
  "libc",
+ "serde",
  "serde_json",
  "tokio",
  "windows-sys 0.59.0",

@@ -23,6 +23,7 @@ climon-logging = { path = "../climon-logging", version = "0.1.0" }
 climon-install = { path = "../climon-install", version = "0.1.0" }
 climon-update = { path = "../climon-update", version = "0.1.0" }
 climon-remote = { path = "../climon-remote", version = "0.1.0" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = [
     "rt-multi-thread",
