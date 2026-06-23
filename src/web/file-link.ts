@@ -10,10 +10,13 @@ export interface FileTokenMatch {
   ref: ParsedFileRef;
 }
 
-// A path-ish token: contains a "/" or a "." and at least one path-safe char,
-// optionally followed by :line or :line:col. Deliberately conservative — a token
-// is only a candidate; the server enforces all real confinement.
-const TOKEN = /(?:[A-Za-z0-9._\-~/]*[/.][A-Za-z0-9._\-~/]+)(?::\d+(?::\d+)?)?/g;
+// A path-ish token: a run of path-safe chars, optionally followed by :line or
+// :line:col. Deliberately conservative — a token is only a candidate; the server
+// enforces all real confinement. The scan deliberately matches a single linear
+// run (no ambiguous "[c]*[/.][c]+" shape) to avoid O(n^2) backtracking on long
+// word-runs in attacker-influenceable terminal lines; parseFileToken then rejects
+// candidates lacking a path separator or extension dot.
+const TOKEN = /[A-Za-z0-9._\-~/]+(?::\d+(?::\d+)?)?/g;
 
 /** Parses a single token into a ParsedFileRef, or null if it is not path-like. */
 export function parseFileToken(token: string): ParsedFileRef | null {

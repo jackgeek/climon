@@ -35,4 +35,15 @@ describe("findFileTokens", () => {
       ref: { path: "src/app.ts", line: 10, col: 2 }
     });
   });
+
+  test("handles long non-path word-runs quickly without false positives", () => {
+    // A long run of path-safe chars with no separator/extension must not match,
+    // and must scan in linear time (a quadratic scanner would time out here).
+    const line = "x".repeat(200000);
+    const start = performance.now();
+    const found = findFileTokens(line);
+    const elapsed = performance.now() - start;
+    expect(found).toEqual([]);
+    expect(elapsed).toBeLessThan(1000);
+  });
 });
