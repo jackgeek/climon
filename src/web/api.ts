@@ -145,18 +145,25 @@ export type FileReadResponse =
   | { status: "error"; message: string };
 
 export async function fetchFile(session: string, path: string): Promise<FileReadResponse> {
-  const res = await fetch(withQuery("/api/file"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ session, path })
-  });
-  if (res.status === 404) {
-    return { status: "error", message: "File viewer is disabled on the server." };
+  try {
+    const res = await fetch(withQuery("/api/file"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session, path })
+    });
+    if (res.status === 404) {
+      return { status: "error", message: "File viewer is disabled on the server." };
+    }
+    if (!res.ok && res.status !== 200) {
+      return { status: "error", message: `Request failed (${res.status})` };
+    }
+    return (await res.json()) as FileReadResponse;
+  } catch {
+    // fetch rejects on network failure and res.json() throws on a malformed
+    // body; surface both as an error status so the viewer shows a message
+    // instead of hanging on the spinner with an unhandled rejection.
+    return { status: "error", message: "Could not load the file (network error)." };
   }
-  if (!res.ok && res.status !== 200) {
-    return { status: "error", message: `Request failed (${res.status})` };
-  }
-  return (await res.json()) as FileReadResponse;
 }
 
 export interface UpdateSessionBody {
