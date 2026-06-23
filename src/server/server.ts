@@ -108,6 +108,64 @@ const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
+function isLoopbackBindHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  const unbracketed = normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  return LOOPBACK_HOSTS.has(unbracketed) || unbracketed === "::ffff:127.0.0.1";
+}
+
+export function buildInterimWslExposureWarning(input: {
+  remotesActive: boolean;
+  wslBridgeEnabled: boolean;
+  ingestBindHost: string;
+}): string | undefined {
+  if (!input.remotesActive || input.wslBridgeEnabled || isLoopbackBindHost(input.ingestBindHost)) {
+    return undefined;
+  }
+  return "climon: ingest is listening on the vEthernet (WSL) interface while the WSL bridge is disabled; the transport guard (gate #3) ships with the ingest cutover — same-machine WSL processes can reach this port until then.";
+}
+
+export function shouldWatchPeerShutdown(peerHome: string | undefined, remotesActive: boolean): boolean {
+  return Boolean(peerHome) && !remotesActive;
+}
+
+/**
+ * Whether a request's `Host` header targets a loopback hostname. The source IP
+ * alone cannot distinguish truly-local traffic from dashboard requests arriving
+ * over the dev tunnel: `devtunnel host` forwards tunnelled traffic from the local
+ * connector, so those requests still present a 127.0.0.1 peer address. A browser
+ * loading the dashboard over the tunnel sends its tunnel `Host` (e.g.
+ * `<id>.devtunnels.ms`), so requiring a loopback `Host` keeps internal `/health`
+ * fields off the tunnel-facing surface.
+ */
+export function isLoopbackHostHeader(host: string | null): boolean {
+  return host !== null && LOOPBACK_HOSTS.has(hostHeaderHostname(host));
+}
+
+export interface HealthServerPorts {
+  /** Main dashboard HTTP port this server process binds. */
+  dashboard: number;
+  /** Ingest daemon port, when the remote ingest listener is running. */
+  ingest?: number;
+}
+
+export function buildHealthPayload(input: {
+  config: ClimonConfig;
+  remotesActive: boolean;
+  isLocalRequest: boolean;
+  ports: HealthServerPorts;
+}): Record<string, unknown> {
+  return {
+    ok: true,
+    version: VERSION,
+    remotesEnabled: input.remotesActive,
+    ...(input.isLocalRequest ? { features: resolveFeatureFlags(input.config) } : {}),
+    shortcuts: { focusTopSession: input.config.hotKeys?.focusTopSession ?? "Alt+J" },
+    preferences: collectDashboardPreferences(input.config),
+    ports: input.ports
+  };
+}
+
 function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
@@ -1153,6 +1211,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   if (remotesActive) {
     startupLog("ensuring ingest daemon is running");
     await ensureIngestDaemon();
+    const exposureWarning = buildInterimWslExposureWarning({
+      remotesActive,
+      wslBridgeEnabled,
+      ingestBindHost: await resolveIngestBindAddress(process.env)
+    });
+    if (exposureWarning) {
+      process.stderr.write(`${exposureWarning}\n`);
+    }
     startupLog("ingest daemon ready");
     // Reconcile the tunnel port mapping with the ingest's actual bound port.
     // Read ingest.json directly — we just verified the daemon is alive, so its
@@ -1204,21 +1270,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }
   }
 
-  interface ServerPorts {
-    /** Main dashboard HTTP port this server process binds. */
-    dashboard: number;
-    /** Ingest daemon port, when the remote ingest listener is running. */
-    ingest?: number;
-  }
-
   /**
    * Reports every TCP port opened on behalf of this server so the state is
    * discoverable from `/health`. The dashboard port is always present; the
    * ingest port is included only when the ingest daemon is running. Kept cheap
    * (filesystem reads only) so it never slows or hangs the health probe.
    */
-  async function collectServerPorts(): Promise<ServerPorts> {
-    const ports: ServerPorts = { dashboard: dashboardPort.port };
+  async function collectServerPorts(): Promise<HealthServerPorts> {
+    const ports: HealthServerPorts = { dashboard: dashboardPort.port };
     try {
       if (await isIngestDaemonAlive()) {
         ports.ingest = await resolveIngestPort();
@@ -1275,15 +1334,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       const url = new URL(request.url);
 
       if (url.pathname === "/health") {
-        return Response.json({
-          ok: true,
-          version: VERSION,
-          remotesEnabled: remotesActive,
-          features: resolveFeatureFlags(config),
-          shortcuts: { focusTopSession: config.hotKeys?.focusTopSession ?? "Alt+J" },
-          preferences: collectDashboardPreferences(config),
+        return Response.json(buildHealthPayload({
+          config,
+          remotesActive,
+          isLocalRequest: isLocal(request, srv) && isLoopbackHostHeader(request.headers.get("host")),
           ports: await collectServerPorts()
-        });
+        }));
       }
 
       // Internal graceful shutdown endpoint — loopback only, no auth token
@@ -2049,7 +2105,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // When a peer is configured but no ingest daemon is running, the server
     // itself must watch for shutdown-request.json. Without this, a peer that
     // wins the dual-promote tie-break writes a request that nobody consumes.
-    if (peerHome && wslBridgeEnabled && !remotesActive) {
+    if (shouldWatchPeerShutdown(peerHome, remotesActive)) {
       const shutdownWatcher = createShutdownRequestWatcher({
         dir: getClimonHome(),
         onValid: (req) => {

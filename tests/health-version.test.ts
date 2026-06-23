@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
+import { readServerStateFromDir } from "../src/server-state.js";
 import { VERSION } from "../src/version.js";
 
 const home = join(process.cwd(), ".test-home", `climon-health-${process.pid}`);
@@ -80,11 +81,14 @@ describe("GET /health", () => {
       [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
-    const base = `http://127.0.0.1:${port}`;
+    let base = `http://127.0.0.1:${port}`;
     try {
       const body = await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
-        return res?.ok ? ((await res.json()) as { ok?: boolean; version?: string }) : undefined;
+        if (res?.ok) return (await res.json()) as { ok?: boolean; version?: string };
+        const state = await readServerStateFromDir(home);
+        if (state?.port) base = `http://127.0.0.1:${state.port}`;
+        return undefined;
       });
       expect(body.ok).toBe(true);
       expect(body.version).toBe(VERSION);
@@ -100,11 +104,14 @@ describe("GET /health", () => {
       [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
-    const base = `http://127.0.0.1:${port}`;
+    let base = `http://127.0.0.1:${port}`;
     try {
       const body = await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
-        return res?.ok ? ((await res.json()) as { remotesEnabled?: boolean }) : undefined;
+        if (res?.ok) return (await res.json()) as { remotesEnabled?: boolean };
+        const state = await readServerStateFromDir(home);
+        if (state?.port) base = `http://127.0.0.1:${state.port}`;
+        return undefined;
       });
       expect(body.remotesEnabled).toBe(false);
     } finally {
@@ -112,19 +119,29 @@ describe("GET /health", () => {
       await server.exited;
     }
 
+    const ingestPort = await freePort();
     await mkdir(home, { recursive: true });
-    await writeFile(join(home, "config.jsonc"), JSON.stringify({ feature: { remotes: "enabled" } }));
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        feature: { remotes: "enabled" },
+        remote: { ingestHost: "127.0.0.1", port: ingestPort, ingestPortRetryAttempts: 5 }
+      })
+    );
 
     const enabledPort = await freePort();
     const enabledServer = Bun.spawn(
       [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(enabledPort)],
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
-    const enabledBase = `http://127.0.0.1:${enabledPort}`;
+    let enabledBase = `http://127.0.0.1:${enabledPort}`;
     try {
       const body = await waitFor(async () => {
         const res = await fetch(`${enabledBase}/health`).catch(() => undefined);
-        return res?.ok ? ((await res.json()) as { remotesEnabled?: boolean }) : undefined;
+        if (res?.ok) return (await res.json()) as { remotesEnabled?: boolean };
+        const state = await readServerStateFromDir(home);
+        if (state?.port) enabledBase = `http://127.0.0.1:${state.port}`;
+        return undefined;
       });
       expect(body.remotesEnabled).toBe(true);
     } finally {
