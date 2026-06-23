@@ -478,6 +478,8 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
     bridge.write(encode_control(&ControlMessage::Hello {
         client_id: options.client_id.clone(),
         peer: options.peer,
+        hostname: Some(climon_store::paths::hostname()).filter(|h| !h.is_empty()),
+        os: Some(climon_store::paths::node_platform().to_string()),
     }));
     reconcile(&mut bridge).await;
 

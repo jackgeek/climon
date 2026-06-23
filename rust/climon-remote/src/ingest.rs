@@ -2341,6 +2341,8 @@ mod tests {
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             }))
             .await
             .unwrap();
@@ -2392,6 +2394,8 @@ mod tests {
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             }))
             .await
             .unwrap();
@@ -2429,6 +2433,8 @@ mod tests {
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             }))
             .await
             .unwrap();
@@ -2480,6 +2486,8 @@ mod tests {
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
                 peer: false,
+                hostname: None,
+                os: None,
             }))
             .await
             .unwrap();
