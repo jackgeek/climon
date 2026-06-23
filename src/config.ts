@@ -439,6 +439,11 @@ function resolveWriteDirForKey(
   return resolveWriteDir(scope, env, cwd);
 }
 
+/** Whether a write is explicitly local for a key that is only read from global config. */
+export function shouldWarnGlobalOnlyLocalWrite(key: string, scope: WriteScope): boolean {
+  return scope === "local" && findConfigSetting(key)?.globalOnly === true;
+}
+
 /** Registry-backed config key helpers */
 export function isKnownConfigKey(key: string): boolean {
   return acceptedConfigKeys().includes(key);

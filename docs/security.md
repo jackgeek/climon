@@ -37,6 +37,8 @@ settings. Execution, network, and update trust-boundary settings are marked
 `globalOnly`/`global_only` in the TypeScript and Rust registries and are resolved
 solely from the global `$CLIMON_HOME/config.jsonc`: `session.terminalProgram`, all
 `remote.*` settings, and all `update.*` settings.
+An explicit `climon config --local` write for one of these keys warns that the
+local value is not honored and suggests using `--global`.
 
 ## Transport: identity-based dev tunnels
 

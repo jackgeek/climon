@@ -307,6 +307,15 @@ fn resolve_write_dir_for_key(key: &str, scope: WriteScope, env: &Env, cwd: &Path
     resolve_write_dir(scope, env, cwd)
 }
 
+/// Whether a config write is an explicit local write of a key that is only read
+/// from the global config.
+pub fn should_warn_global_only_local_write(key: &str, scope: WriteScope) -> bool {
+    scope == WriteScope::Local
+        && find_config_setting(key)
+            .map(|setting| setting.global_only)
+            .unwrap_or(false)
+}
+
 /// Whether `key` is a registry key users may set.
 pub fn is_known_config_key(key: &str) -> bool {
     crate::config_settings::accepted_config_keys()

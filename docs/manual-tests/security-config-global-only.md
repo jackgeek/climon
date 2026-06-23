@@ -70,6 +70,8 @@ where `session.terminalProgram` is supported.
 **Expected result:**
 - Effective `remote.*` and `update.*` values come from the global `$CLIMON_HOME`
   config, not the project-local `.climon/config.jsonc`.
+- An explicit `climon config --local <global-only-key> ...` write prints a
+  warning that the local value will not be read and suggests `--global`.
 - Non-security settings such as `session.color` still honor project-local config.
 
 **Result-tracking row:**

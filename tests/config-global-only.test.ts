@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, parse } from "node:path";
 import { homedir } from "node:os";
+import { runConfigCommand } from "../src/cli/config-cmd.js";
 import { candidateConfigDirs, resolveConfigSetting, writeConfigSetting } from "../src/config.js";
 import { CONFIG_SETTINGS } from "../src/config-settings.js";
 
@@ -89,5 +90,25 @@ describe("globalOnly settings", () => {
     expect(resolveConfigSetting("session.terminalProgram", env, repo)).toBe("safe-auto {cmd}");
     expect(readFileSync(join(home, "config.jsonc"), "utf8")).toContain("safe-auto {cmd}");
     expect(readFileSync(join(repo, ".climon", "config.jsonc"), "utf8")).not.toContain("safe-auto {cmd}");
+  });
+
+  it("warns when an explicit local write targets a globalOnly setting", () => {
+    const { home, repo } = setup();
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    const stderr: string[] = [];
+
+    const code = runConfigCommand(
+      ["--local", "session.terminalProgram", "dead-local {cmd}"],
+      env,
+      repo,
+      { stderr: (chunk) => stderr.push(chunk) }
+    );
+
+    expect(code).toBe(0);
+    expect(stderr.join("")).toContain(
+      "climon config: session.terminalProgram is global-only; the local value will not be read. Use --global to set the effective value."
+    );
+    expect(readFileSync(join(repo, ".climon", "config.jsonc"), "utf8")).toContain("dead-local {cmd}");
+    expect(resolveConfigSetting("session.terminalProgram", env, repo)).toBe("safe {cmd}");
   });
 });
