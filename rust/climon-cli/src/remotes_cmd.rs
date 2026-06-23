@@ -69,16 +69,25 @@ pub fn render_human(view: &RemotesView, now_ms: u64, _color: bool) -> String {
         Some(u) if !view.uplink_stale && u.state == "connected" => {
             let target = u.target.as_ref();
             let kind = target.map(|t| t.kind.as_str()).unwrap_or("direct");
+            let detail = target
+                .and_then(|t| {
+                    t.tunnel_id.clone().or_else(|| match (&t.host, t.port) {
+                        (Some(h), Some(p)) => Some(format!("{h}:{p}")),
+                        (Some(h), None) => Some(h.clone()),
+                        _ => None,
+                    })
+                })
+                .unwrap_or_else(|| "-".into());
             let url = target.and_then(|t| t.url.clone());
             let up = u
                 .connected_at
                 .map(|c| fmt_ago(now_ms, c))
                 .unwrap_or_default();
             out.push_str(&format!(
-                "  {} {:<16} {:<8} {} sessions  up {}\n",
+                "  {} {:<8} {:<16} {} sessions  up {}\n",
                 dot(true),
                 kind,
-                kind,
+                detail,
                 u.session_count,
                 up
             ));
@@ -235,6 +244,31 @@ mod tests {
         assert!(out.contains("3 sessions"));
         assert!(out.contains("ingest: running"));
         assert!(out.contains("uplink: running"));
+    }
+
+    #[test]
+    fn connected_uplink_shows_target_detail_not_duplicate_kind() {
+        // Regression: render_human previously printed `kind` in both columns,
+        // dropping the target detail. A direct target must show host:port once.
+        let uplink = UplinkStatus {
+            pid: std::process::id(),
+            updated_at: now(),
+            target: Some(UplinkTarget {
+                kind: "direct".into(),
+                host: Some("10.0.0.9".into()),
+                port: Some(3131),
+                tunnel_id: None,
+                url: None,
+            }),
+            state: "connected".into(),
+            connected_at: Some(now() - 5_000),
+            session_count: 1,
+            last_error: None,
+        };
+        let view = build_view(Some(uplink), None, now(), true);
+        let out = render_human(&view, now(), false);
+        assert!(out.contains("10.0.0.9:3131"));
+        assert_eq!(out.matches("direct").count(), 1);
     }
 
     #[test]

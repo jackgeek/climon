@@ -523,6 +523,34 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
         }));
     }
 
+    // Status heartbeat: refresh uplink-status.json's updatedAt + session count
+    // every 10s while connected, so the reader-derived staleness does not flip a
+    // healthy uplink to stale between the (infrequent) supervisor state
+    // transitions. Mirrors the ingest's status heartbeat.
+    let status_task = {
+        let store_env = bridge.store_env.clone();
+        let cfg = config_env.clone();
+        let target = bridge.target.clone();
+        let connected_at = bridge.connected_at;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(10));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let status = crate::uplink_status::UplinkStatus {
+                    pid: std::process::id(),
+                    updated_at: crate::time::now_ms(),
+                    target: target.clone(),
+                    state: "connected".into(),
+                    connected_at,
+                    session_count: live_session_count(&store_env),
+                    last_error: None,
+                };
+                let _ = crate::uplink_status::write_uplink_status(&status, &cfg);
+            }
+        })
+    };
+
     // Idle teardown: destroy the channel if no inbound frames arrive in time.
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let mut idle_task: Option<tokio::task::JoinHandle<()>> = None;
@@ -614,6 +642,7 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
     }
 
     // Teardown.
+    status_task.abort();
     if let Some(t) = keepalive_task.take() {
         t.abort();
     }
