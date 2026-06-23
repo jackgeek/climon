@@ -472,4 +472,6 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |
 | `update.availableVersion` | string | unset | client | Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update. (**internal**) |
 | `install.id` | string | unset | client, server | Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information. (**internal**) |
+| `fileViewer.enabled` | boolean | `false` | server | When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default. |
+| `fileViewer.maxFileSizeBytes` | number | `2097152` | server | Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show a "too large" notice. Default 2 MiB. |
 <!-- END GENERATED CONFIG SETTINGS -->

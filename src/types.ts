@@ -72,6 +72,13 @@ export interface DashboardConfig {
   keyBarPinned?: boolean;
 }
 
+export interface FileViewerConfig {
+  /** Master on/off for the dashboard file viewer. Off by default. */
+  enabled?: boolean;
+  /** Maximum file size (bytes) the viewer will read. */
+  maxFileSizeBytes?: number;
+}
+
 export interface RemoteConfig {
   enabled?: boolean;
   /** Direct remote uplink host for same-machine or LAN setups. */
@@ -180,6 +187,7 @@ export interface ClimonConfig {
   telemetry?: TelemetryConfig;
   update?: UpdateConfig;
   install?: InstallConfig;
+  fileViewer?: FileViewerConfig;
 }
 
 export interface SessionMeta {

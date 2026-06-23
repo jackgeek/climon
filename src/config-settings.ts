@@ -431,6 +431,27 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
       "Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information.",
     scope: ["client", "server"],
     internal: true
+  },
+  {
+    path: "fileViewer.enabled",
+    type: "boolean",
+    defaultValue: false,
+    purpose:
+      "When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default.",
+    scope: ["server"]
+  },
+  {
+    path: "fileViewer.maxFileSizeBytes",
+    type: "number",
+    defaultValue: 2 * 1024 * 1024,
+    purpose:
+      'Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show a "too large" notice. Default 2 MiB.',
+    scope: ["server"],
+    validate: (value: unknown) => {
+      if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+        throw new Error("fileViewer.maxFileSizeBytes must be a positive integer");
+      }
+    }
   }
 ];
 

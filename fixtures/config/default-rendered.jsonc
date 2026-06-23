@@ -72,5 +72,11 @@
   "update": {
     // When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`.
     "auto": false
+  },
+  "fileViewer": {
+    // When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default.
+    "enabled": false,
+    // Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show a "too large" notice. Default 2 MiB.
+    "maxFileSizeBytes": 2097152
   }
 }

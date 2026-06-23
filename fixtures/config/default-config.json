@@ -48,5 +48,9 @@
   },
   "update": {
     "auto": false
+  },
+  "fileViewer": {
+    "enabled": false,
+    "maxFileSizeBytes": 2097152
   }
 }

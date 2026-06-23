@@ -152,6 +152,7 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
     const parsedSession = isObjectRecord(parsed.session) ? parsed.session : {};
     const parsedFeature = isObjectRecord(parsed.feature) ? (parsed.feature as Record<string, string>) : {};
     const parsedHotKeys = isObjectRecord(parsed.hotKeys) ? parsed.hotKeys : {};
+    const parsedFileViewer = isObjectRecord(parsed.fileViewer) ? parsed.fileViewer : {};
     const parsedPriority = typeof parsedSession.priority === "number" ? { priority: parsedSession.priority } : {};
     const parsedColor = typeof parsedSession.color === "string" ? { color: parsedSession.color } : {};
     const parsedConfig = {
@@ -162,7 +163,8 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
       remote: isObjectRecord(parsed.remote) ? parsed.remote : undefined,
       session: { ...defaults.session, ...parsedPriority, ...parsedColor },
       feature: { ...(defaults.feature ?? {}), ...parsedFeature },
-      hotKeys: { ...(defaults.hotKeys ?? {}), ...parsedHotKeys }
+      hotKeys: { ...(defaults.hotKeys ?? {}), ...parsedHotKeys },
+      fileViewer: { ...(defaults.fileViewer ?? {}), ...parsedFileViewer }
     };
     const parsedConfigObject = parsedConfig as ClimonConfig;
     // Backfill sections added after a config file was first written.

@@ -231,6 +231,13 @@ fn v_logging_level(_p: &str, v: &Value) -> Result<(), String> {
     }
 }
 
+fn v_file_viewer_max_size(_p: &str, v: &Value) -> Result<(), String> {
+    match v.as_f64() {
+        Some(n) if is_int(n) && n > 0.0 => Ok(()),
+        _ => Err("fileViewer.maxFileSizeBytes must be a positive integer".into()),
+    }
+}
+
 fn v_feature(path: &str, v: &Value) -> Result<(), String> {
     match v.as_str() {
         Some("enabled") | Some("disabled") => Ok(()),
@@ -580,6 +587,21 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             vec![Client, Server],
         )
         .internal(),
+        ConfigSetting::new(
+            "fileViewer.enabled",
+            Boolean,
+            "When true, the web dashboard may open files referenced in the terminal in a read-only viewer (confined to the session working directory). Off by default.",
+            vec![Server],
+        )
+        .default(Value::from(false)),
+        ConfigSetting::new(
+            "fileViewer.maxFileSizeBytes",
+            Number,
+            "Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show a \"too large\" notice. Default 2 MiB.",
+            vec![Server],
+        )
+        .default(Value::from(2 * 1024 * 1024))
+        .with_validate(v_file_viewer_max_size),
     ]);
     s
 }
@@ -864,13 +886,15 @@ mod tests {
                 "update.lastCheck",
                 "update.availableVersion",
                 "install.id",
+                "fileViewer.enabled",
+                "fileViewer.maxFileSizeBytes",
             ]
         );
         for s in config_settings() {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 44);
+        assert_eq!(all_config_keys().len(), 46);
     }
 
     #[test]
@@ -909,8 +933,32 @@ mod tests {
                 },
                 "eula": { "accepted": false },
                 "telemetry": { "enabled": false },
-                "update": { "auto": false }
+                "update": { "auto": false },
+                "fileViewer": { "enabled": false, "maxFileSizeBytes": 2097152 }
             })
+        );
+    }
+
+    #[test]
+    fn file_viewer_settings_are_server_scoped_default_only() {
+        let enabled = find_config_setting("fileViewer.enabled").unwrap();
+        assert_eq!(enabled.kind, ConfigType::Boolean);
+        assert_eq!(enabled.default_value, Some(json!(false)));
+        assert_eq!(enabled.scope, vec![ConfigProcessScope::Server]);
+        assert!(!enabled.accept_input);
+
+        let max_size = find_config_setting("fileViewer.maxFileSizeBytes").unwrap();
+        assert_eq!(max_size.kind, ConfigType::Number);
+        assert_eq!(max_size.default_value, Some(json!(2 * 1024 * 1024)));
+        assert_eq!(max_size.scope, vec![ConfigProcessScope::Server]);
+        assert!(!max_size.accept_input);
+
+        assert!(coerce_config_value_from_settings("fileViewer.maxFileSizeBytes", "0").is_err());
+        assert!(coerce_config_value_from_settings("fileViewer.maxFileSizeBytes", "-1").is_err());
+        assert!(coerce_config_value_from_settings("fileViewer.maxFileSizeBytes", "1.5").is_err());
+        assert_eq!(
+            coerce_config_value_from_settings("fileViewer.maxFileSizeBytes", "1024").unwrap(),
+            json!(1024)
         );
     }
 

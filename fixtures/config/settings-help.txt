@@ -232,3 +232,13 @@
     Type: string; Default: unset; Scope: client, server; internal
     Anonymous, randomly generated install identifier used only when telemetry is
     enabled. Contains no personal information.
+
+  fileViewer.enabled
+    Type: boolean; Default: false; Scope: server
+    When true, the web dashboard may open files referenced in the terminal in a
+    read-only viewer (confined to the session working directory). Off by default.
+
+  fileViewer.maxFileSizeBytes
+    Type: number; Default: 2097152; Scope: server
+    Maximum size (in bytes) of a file the dashboard viewer will read. Larger files show
+    a "too large" notice. Default 2 MiB.
