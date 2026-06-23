@@ -951,6 +951,11 @@ async fn handle_control(
             }
         }
         "spawn-result" => {
+            // When a spawn secret is configured, SpawnResult is only trusted
+            // after the "signed" arm verifies the envelope.
+            if spawn_secret.is_some() {
+                return;
+            }
             if let Some(registry) = registry {
                 if let Ok(inner) =
                     serde_json::from_value::<crate::mux::ControlMessage>(value.clone())
@@ -1982,14 +1987,17 @@ mod tests {
     }
 
     fn unique_home(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "climon-ingest-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join(".copilot-tmp")
+            .join(format!(
+                "climon-ingest-{tag}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
         std::fs::create_dir_all(dir.join("sessions")).unwrap();
         dir
     }
@@ -2251,6 +2259,86 @@ mod tests {
 
         // "drop" was NOT removed because the unsigned snapshot was ignored.
         assert!(read_meta(&store_env, &namespaced_id(label, "drop")).is_some());
+    }
+
+    #[tokio::test]
+    async fn unsigned_spawn_result_is_ignored_when_secret_set() {
+        use crate::mux::ControlMessage;
+
+        let store_env = Arc::new(make_test_store_env());
+        let mut lbl = Some("client-1".to_string());
+        let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let registry = Arc::new(IngestConnectionRegistry::new());
+        let registry_arg = Some(registry.clone());
+        let shutdown = Arc::new(Notify::new());
+        let teardown = Arc::new(Notify::new());
+        let mut guard = crate::spawn_auth::ReplayGuard::new(30_000);
+
+        let pending = registry.register_pending_spawn("req-secret", 5_000);
+        tokio::pin!(pending);
+        let result = ControlMessage::SpawnResult {
+            request_id: "req-secret".into(),
+            id: Some("sess-secret".into()),
+            warning: None,
+            error: None,
+        };
+        let unsigned = serde_json::to_value(&result).unwrap();
+
+        handle_control(
+            &unsigned,
+            &mut lbl,
+            &mut sessions,
+            &store_env,
+            16,
+            &tx,
+            &registry_arg,
+            &shutdown,
+            &teardown,
+            Some("sekret"),
+            Some(&mut guard),
+            false,
+        )
+        .await;
+
+        assert!(
+            registry
+                .pending_spawns
+                .lock()
+                .unwrap()
+                .contains_key("req-secret"),
+            "unsigned spawn-result must not resolve while a spawn secret is configured"
+        );
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let signed = crate::spawn_auth::sign_now("sekret", &result, now_ms);
+        let signed_value = serde_json::to_value(&signed).unwrap();
+
+        handle_control(
+            &signed_value,
+            &mut lbl,
+            &mut sessions,
+            &store_env,
+            16,
+            &tx,
+            &registry_arg,
+            &shutdown,
+            &teardown,
+            Some("sekret"),
+            Some(&mut guard),
+            false,
+        )
+        .await;
+
+        match pending.await {
+            ControlMessage::SpawnResult { id, .. } => {
+                assert_eq!(id.as_deref(), Some("sess-secret"));
+            }
+            other => panic!("expected signed SpawnResult to resolve pending spawn, got {other:?}"),
+        }
     }
 
     #[tokio::test]
