@@ -421,7 +421,6 @@ mod tests {
             String::from_utf8(stderr).expect("stderr is utf-8"),
         )
     }
-    }
 
     #[test]
     fn parses_help() {
