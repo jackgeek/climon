@@ -35,6 +35,8 @@ pub enum ControlMessage {
     #[serde(rename_all = "camelCase")]
     Hello {
         client_id: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        peer: bool,
     },
     SessionAdded {
         meta: Box<SessionMeta>,
@@ -481,13 +483,15 @@ mod tests {
         let mut decoder = MuxDecoder::new();
         let frame = encode_control(&ControlMessage::Hello {
             client_id: "devbox-abc".into(),
+            peer: false,
         });
         let msgs = decoder.push(&frame).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(
             msgs[0],
             MuxMessage::Control(ControlMessage::Hello {
-                client_id: "devbox-abc".into()
+                client_id: "devbox-abc".into(),
+                peer: false,
             })
         );
     }
@@ -503,6 +507,7 @@ mod tests {
         // hello -> {"kind":"hello","clientId":"d"}
         let frame = encode_control(&ControlMessage::Hello {
             client_id: "d".into(),
+            peer: false,
         });
         assert_eq!(&frame[5..], br#"{"kind":"hello","clientId":"d"}"#);
         // session-removed -> {"kind":"session-removed","id":"a"}

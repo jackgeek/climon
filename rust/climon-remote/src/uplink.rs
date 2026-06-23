@@ -237,6 +237,7 @@ pub struct UplinkBridgeOptions {
     pub store_env: StoreEnv,
     pub client_id: String,
     pub keep_alive_seconds: Option<f64>,
+    pub peer: bool,
 }
 
 /// An attached local session socket: a writer channel feeding the blocking
@@ -447,6 +448,7 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
 
     bridge.write(encode_control(&ControlMessage::Hello {
         client_id: options.client_id.clone(),
+        peer: options.peer,
     }));
     reconcile(&mut bridge).await;
 
@@ -784,6 +786,7 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         } else {
             None
         };
+        let is_peer_connection = peer_target.is_some();
         let config = resolve_uplink_config(&config_env, cwd);
 
         let mut host: Option<String> = None;
@@ -860,6 +863,7 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
                         store_env: store_env.clone(),
                         client_id: client_id.clone(),
                         keep_alive_seconds: Some(resolve_keep_alive(&config_env, cwd)),
+                        peer: is_peer_connection,
                     },
                 )
                 .await;
@@ -1066,6 +1070,7 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.0),
+                peer: false,
             },
         ));
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1101,6 +1106,7 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.0),
+                peer: false,
             },
         ));
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1144,6 +1150,7 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.05),
+                peer: false,
             },
         )
         .await;

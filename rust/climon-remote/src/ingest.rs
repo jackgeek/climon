@@ -574,6 +574,7 @@ pub struct IngestConnOptions {
     pub keep_alive_seconds: f64,
     pub registry: Option<Arc<IngestConnectionRegistry>>,
     pub spawn_secret: Option<String>,
+    pub wsl_bridge_enabled: bool,
 }
 
 impl IngestConnOptions {
@@ -584,6 +585,7 @@ impl IngestConnOptions {
             keep_alive_seconds: DEFAULT_KEEPALIVE_SECONDS,
             registry: None,
             spawn_secret: None,
+            wsl_bridge_enabled: false,
         }
     }
 }
@@ -603,6 +605,7 @@ pub async fn run_ingest_connection(channel: TcpStream, options: IngestConnOption
     let max_sessions = options.max_sessions;
     let registry = options.registry.clone();
     let spawn_secret = options.spawn_secret;
+    let wsl_bridge_enabled = options.wsl_bridge_enabled;
     let mut replay_guard =
         crate::spawn_auth::ReplayGuard::new(crate::spawn_auth::DEFAULT_FRESHNESS_WINDOW_MS);
 
@@ -698,6 +701,7 @@ pub async fn run_ingest_connection(channel: TcpStream, options: IngestConnOption
                                 &teardown_done,
                                 spawn_secret.as_deref(),
                                 Some(&mut replay_guard),
+                                wsl_bridge_enabled,
                             )
                             .await;
                         }
@@ -747,11 +751,19 @@ async fn handle_control(
     teardown_done: &Arc<Notify>,
     spawn_secret: Option<&str>,
     replay_guard: Option<&mut crate::spawn_auth::ReplayGuard>,
+    wsl_bridge_enabled: bool,
 ) {
     let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     match kind {
         "hello" => {
             if label.is_none() {
+                let is_peer = value.get("peer").and_then(|v| v.as_bool()).unwrap_or(false);
+                if should_reject_peer_hello(is_peer, wsl_bridge_enabled) {
+                    // Defense-in-depth: a same-machine peer must not bridge while
+                    // feature.wslBridge is off. Tear the connection down.
+                    shutdown.notify_one();
+                    return;
+                }
                 if let Some(client_id) = value.get("clientId").and_then(|v| v.as_str()) {
                     if is_valid_remote_id(client_id) {
                         *label = Some(client_id.to_string());
@@ -994,6 +1006,12 @@ async fn remove_session(
         };
         let _ = patch_session_meta(store_env, &session.local_id, patch);
     }
+}
+
+/// Whether the ingest must reject an inbound hello: a same-machine peer
+/// connection is refused when the WSL bridge feature is disabled (gate #3).
+fn should_reject_peer_hello(is_peer: bool, wsl_bridge_enabled: bool) -> bool {
+    is_peer && !wsl_bridge_enabled
 }
 
 /// Removes a session because the source deleted it: tears down the in-memory
@@ -1295,6 +1313,10 @@ pub async fn run_ingest_daemon(
         resolve_config_setting("remote.spawnSecret", &config_env, std::path::Path::new("."))
             .and_then(|v| v.as_str().filter(|s| !s.is_empty()).map(String::from));
 
+    let wsl_bridge_enabled = climon_config::config::load_config(&config_env)
+        .map(|cfg| climon_config::features::is_feature_enabled(&cfg, "wslBridge"))
+        .unwrap_or(false);
+
     let control_listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let control_port = control_listener.local_addr()?.port();
     let control_socket =
@@ -1374,6 +1396,7 @@ pub async fn run_ingest_daemon(
                 opts.keep_alive_seconds = ka;
                 opts.registry = Some(reg.clone());
                 opts.spawn_secret = secret.clone();
+                opts.wsl_bridge_enabled = wsl_bridge_enabled;
                 tokio::spawn(run_ingest_connection(socket, opts));
             }
         })
@@ -1391,6 +1414,7 @@ pub async fn run_ingest_daemon(
                     opts.keep_alive_seconds = keep_alive_seconds;
                     opts.registry = Some(registry.clone());
                     opts.spawn_secret = spawn_secret.clone();
+                    opts.wsl_bridge_enabled = wsl_bridge_enabled;
                     tokio::spawn(run_ingest_connection(socket, opts));
                 }
             }
@@ -1722,6 +1746,14 @@ mod tests {
         TcpStream::connect(("127.0.0.1", port)).await.unwrap()
     }
 
+    #[test]
+    fn peer_hello_is_rejected_only_when_wsl_bridge_disabled() {
+        assert!(should_reject_peer_hello(true, false));
+        assert!(!should_reject_peer_hello(true, true));
+        assert!(!should_reject_peer_hello(false, false));
+        assert!(!should_reject_peer_hello(false, true));
+    }
+
     fn make_test_store_env() -> StoreEnv {
         let home = unique_home("ghost");
         StoreEnv::with_home(&home)
@@ -1835,6 +1867,7 @@ mod tests {
         client
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
+                peer: false,
             }))
             .await
             .unwrap();
@@ -1885,6 +1918,7 @@ mod tests {
         client
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
+                peer: false,
             }))
             .await
             .unwrap();
@@ -1921,6 +1955,7 @@ mod tests {
         client
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
+                peer: false,
             }))
             .await
             .unwrap();
@@ -1971,6 +2006,7 @@ mod tests {
         client
             .write_all(&encode_control(&ControlMessage::Hello {
                 client_id: "dev1".into(),
+                peer: false,
             }))
             .await
             .unwrap();
