@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { makeStyles } from "@fluentui/react-components";
 import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -17,6 +17,8 @@ import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from ".
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { DEFAULT_FONT_SIZE } from "../fontSize.js";
+import { findFileTokens, type ParsedFileRef } from "../file-link.js";
+import { FileViewer, type FileViewerTarget } from "./FileViewer.js";
 
 interface FocusableTerminal {
   focus: () => void;
@@ -305,6 +307,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const replayAfterNextResizeRef = useRef(false);
   const lastServerReconnectTokenRef = useRef(serverReconnectToken);
   const onLiveInteractionRef = useRef(onLiveInteraction);
+  const [fileTarget, setFileTarget] = useState<FileViewerTarget | null>(null);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -665,6 +668,32 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const webLinks = new WebLinksAddon();
     loadTerminalAddons(term, fit, webLinks);
     term.open(container);
+    const linkProvider = term.registerLinkProvider({
+      provideLinks(lineNumber, callback) {
+        const line = term.buffer.active.getLine(lineNumber - 1);
+        if (!line) {
+          callback(undefined);
+          return;
+        }
+        const text = line.translateToString(true);
+        const sessionId = selectedSessionRef.current?.id;
+        if (!sessionId) {
+          callback(undefined);
+          return;
+        }
+        const links = findFileTokens(text).map((token) => ({
+          range: {
+            start: { x: token.startIndex + 1, y: lineNumber },
+            end: { x: token.startIndex + token.length, y: lineNumber }
+          },
+          text: text.slice(token.startIndex, token.startIndex + token.length),
+          activate: () => {
+            setFileTarget({ sessionId, ref: token.ref as ParsedFileRef });
+          }
+        }));
+        callback(links.length > 0 ? links : undefined);
+      }
+    });
     termRef.current = term;
     fitRef.current = fit;
     fitNow();
@@ -729,6 +758,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       window.removeEventListener("resize", onWindowResize);
       dataDisposable.dispose();
       closeWs();
+      linkProvider.dispose();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -836,17 +866,20 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }));
 
   return (
-    <div
-      ref={containerRef}
-      className={styles.root}
-      style={{
-        backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
-        ...(accentColor
-          ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
-          : {})
-      }}
-      onClick={focusActiveTerminal}
-      onFocusCapture={refreshActiveTerminal}
-    />
+    <>
+      <div
+        ref={containerRef}
+        className={styles.root}
+        style={{
+          backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
+          ...(accentColor
+            ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
+            : {})
+        }}
+        onClick={focusActiveTerminal}
+        onFocusCapture={refreshActiveTerminal}
+      />
+      <FileViewer target={fileTarget} onClose={() => setFileTarget(null)} />
+    </>
   );
 });

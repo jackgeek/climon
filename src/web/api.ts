@@ -136,6 +136,29 @@ export async function createSession(body: CreateSessionBody): Promise<CreateSess
   }
 }
 
+export type FileReadResponse =
+  | { status: "ok"; path: string; content: string }
+  | { status: "binary"; path: string }
+  | { status: "too-large"; path: string; size: number }
+  | { status: "refused"; path: string }
+  | { status: "not-found"; path: string }
+  | { status: "error"; message: string };
+
+export async function fetchFile(session: string, path: string): Promise<FileReadResponse> {
+  const res = await fetch(withQuery("/api/file"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ session, path })
+  });
+  if (res.status === 404) {
+    return { status: "error", message: "File viewer is disabled on the server." };
+  }
+  if (!res.ok && res.status !== 200) {
+    return { status: "error", message: `Request failed (${res.status})` };
+  }
+  return (await res.json()) as FileReadResponse;
+}
+
 export interface UpdateSessionBody {
   name?: string;
   priority?: number;
