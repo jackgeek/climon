@@ -5,6 +5,8 @@ describe("isAllowedPushEndpoint", () => {
   it("accepts a normal https push endpoint", () => {
     expect(isAllowedPushEndpoint("https://fcm.googleapis.com/fcm/send/abc")).toBe(true);
     expect(isAllowedPushEndpoint("https://updates.push.services.mozilla.com/wpush/v2/xyz")).toBe(true);
+    expect(isAllowedPushEndpoint("https://172.15.0.1/x")).toBe(true);
+    expect(isAllowedPushEndpoint("https://172.32.0.1/x")).toBe(true);
   });
 
   it("rejects non-https", () => {
@@ -13,11 +15,18 @@ describe("isAllowedPushEndpoint", () => {
   });
 
   it("rejects loopback / private / link-local IP-literal hosts", () => {
+    expect(isAllowedPushEndpoint("https://0.0.0.0/x")).toBe(false);
     expect(isAllowedPushEndpoint("https://127.0.0.1/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://127.1/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://2130706433/x")).toBe(false);
     expect(isAllowedPushEndpoint("https://10.0.0.5:8443/internal")).toBe(false);
+    expect(isAllowedPushEndpoint("https://172.16.0.1/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://172.31.255.254/x")).toBe(false);
     expect(isAllowedPushEndpoint("https://192.168.1.1/x")).toBe(false);
     expect(isAllowedPushEndpoint("https://169.254.169.254/latest/meta-data")).toBe(false);
     expect(isAllowedPushEndpoint("https://[::1]/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://[::ffff:127.0.0.1]/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://[::ffff:10.0.0.5]/x")).toBe(false);
     expect(isAllowedPushEndpoint("https://[::ffff:a00:1]/")).toBe(false);
     expect(isAllowedPushEndpoint("https://[::ffff:ac10:1]/")).toBe(false);
     expect(isAllowedPushEndpoint("https://[::ffff:c0a8:101]/")).toBe(false);
