@@ -47,7 +47,6 @@ import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dash
 import { runPromote } from "./promote.js";
 import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
-import { resolveServerInvocation } from "../cli/server-exec.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 import { resolveSessionDefaults } from "../launcher.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
@@ -719,25 +718,29 @@ export function resolveParentSpawnCwd(cwd: unknown, parentCwd: string): string {
   return typeof cwd === "string" && cwd.trim().length > 0 ? cwd.trim() : parentCwd;
 }
 
-function resolveDevIngestEntrypoint(): string | undefined {
-  if (!import.meta.url.startsWith("file:")) {
-    return undefined;
-  }
-  try {
-    const candidate = fileURLToPath(new URL("../server.ts", import.meta.url));
-    return existsSync(candidate) ? candidate : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveIngestInvocation(
   env: NodeJS.ProcessEnv,
-  execPath: string,
-  devEntrypoint: string | undefined = resolveDevIngestEntrypoint()
+  execPath: string
 ): { file: string; args: string[] } {
-  const inv = resolveServerInvocation([], env, execPath, devEntrypoint);
-  return { file: inv.file, args: [...inv.args, "__ingest"] };
+  const inv = resolveClientInvocation(["__ingest"], env, execPath);
+  if (inv.file !== "climon") {
+    // CLIMON_CLIENT_BIN override or a sibling binary next to the server exe.
+    return inv;
+  }
+  const devBinary = resolveDevClientBinary();
+  if (devBinary) {
+    return { file: devBinary, args: ["__ingest"] };
+  }
+  if (import.meta.url.startsWith("file:")) {
+    // Dev checkout with no built binary: require it; never fall back to the Bun ingest.
+    throw new Error(
+      "climon: the Rust client binary is not built; the ingest cannot start. " +
+        "Build it with `cargo build` in rust/ (or set CLIMON_CLIENT_BIN)."
+    );
+  }
+  // Production with a bare `climon` on PATH (mirrors resolveSpawnInvocation):
+  // still the Rust client `__ingest`, never the Bun ingest.
+  return inv;
 }
 
 /**

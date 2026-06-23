@@ -363,28 +363,23 @@ describe("server shutdown ingest lifecycle", () => {
 });
 
 describe("resolveIngestInvocation", () => {
-  test("uses the dev server entrypoint when running from source", () => {
-    const testTmp = join(process.cwd(), ".copilot-tmp");
-    mkdirSync(testTmp, { recursive: true });
-    const dir = mkdtempSync(join(testTmp, "climon-ingest-invocation-"));
-    const devEntry = join(dir, "server.ts");
-    writeFileSync(devEntry, "");
-
+  test("resolves the Rust client binary with __ingest", () => {
     const resolveIngestInvocation = (
       serverModule as typeof serverModule & {
         resolveIngestInvocation?: (
           env: NodeJS.ProcessEnv,
-          execPath: string,
-          devEntrypoint?: string
+          execPath: string
         ) => { file: string; args: string[] };
       }
     ).resolveIngestInvocation;
 
     expect(typeof resolveIngestInvocation).toBe("function");
-    expect(resolveIngestInvocation?.({} as NodeJS.ProcessEnv, "/usr/bin/bun", devEntry)).toEqual({
-      file: "/usr/bin/bun",
-      args: [devEntry, "__ingest"]
-    });
+    expect(
+      resolveIngestInvocation?.(
+        { CLIMON_CLIENT_BIN: "/opt/climon/climon" } as unknown as NodeJS.ProcessEnv,
+        "/usr/bin/bun"
+      )
+    ).toEqual({ file: "/opt/climon/climon", args: ["__ingest"] });
   });
 });
 

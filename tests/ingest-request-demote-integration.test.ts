@@ -7,6 +7,20 @@ import { readIngestStateFromDir } from "../src/remote/ingest-state.js";
 import { getShutdownRequestPathInDir, writeShutdownRequestToDir } from "../src/remote/shutdown-request.js";
 
 let home: string;
+const rustExe = process.platform === "win32" ? ".exe" : "";
+
+function resolveRustIngestBinary(): string | undefined {
+  for (const profile of ["debug", "release"]) {
+    const candidate = join(process.cwd(), "rust", "target", profile, `climon${rustExe}`);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+const rustIngestBinary = resolveRustIngestBinary();
+const testWithRustIngest = rustIngestBinary ? test : test.skip;
 
 afterEach(() => {
   if (home) rmSync(home, { recursive: true, force: true });
@@ -49,10 +63,13 @@ function portFree(host: string, port: number): Promise<boolean> {
 }
 
 describe("ingest filesystem shutdown-request (integration)", () => {
-  test("a request demotes the ingest, frees the port, and consumes the beacons", async () => {
+  testWithRustIngest("a request demotes the ingest, frees the port, and consumes the beacons", async () => {
+    if (!rustIngestBinary) {
+      return;
+    }
     home = mkdtempSync(join(tmpdir(), "climon-ingest-req-"));
     const env = { ...process.env, CLIMON_HOME: home };
-    const ingest = Bun.spawn([process.execPath, "src/server.ts", "__ingest"], {
+    const ingest = Bun.spawn([rustIngestBinary, "__ingest"], {
       cwd: process.cwd(),
       env,
       stdout: "pipe",
