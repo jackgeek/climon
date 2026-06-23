@@ -31,6 +31,7 @@ async fn registry_spawn_roundtrip_via_public_api() {
         color: None,
         theme: None,
         headless: false,
+        control_token: None,
     };
     let reg = registry.clone();
     let handle = tokio::spawn(async move {

@@ -28,6 +28,13 @@ export interface IngestState {
    * compatibility with beacons that predate remote spawn.
    */
   controlSocket?: string;
+  /**
+   * Per-run bearer token the dashboard server must echo on every control-socket
+   * spawn request to authenticate to the running ingest. Published in the
+   * (0700-dir-protected) beacon. Optional for backward compatibility with
+   * beacons that predate control-socket authentication.
+   */
+  controlToken?: string;
 }
 
 export const INGEST_STATE_BASENAME = "ingest.json";
@@ -52,6 +59,9 @@ export function parseIngestState(raw: string): IngestState | undefined {
   if (typeof parsed.controlSocket === "string" && parsed.controlSocket.length > 0) {
     state.controlSocket = parsed.controlSocket;
   }
+  if (typeof parsed.controlToken === "string" && parsed.controlToken.length > 0) {
+    state.controlToken = parsed.controlToken;
+  }
   return state;
 }
 
@@ -60,6 +70,9 @@ export function serializeIngestState(state: IngestState): string {
   if (state.host !== undefined && state.host.length > 0) payload.host = state.host;
   if (state.controlSocket !== undefined && state.controlSocket.length > 0) {
     payload.controlSocket = state.controlSocket;
+  }
+  if (state.controlToken !== undefined && state.controlToken.length > 0) {
+    payload.controlToken = state.controlToken;
   }
   return `${JSON.stringify(payload)}\n`;
 }

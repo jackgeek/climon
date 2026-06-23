@@ -30,6 +30,12 @@ pub struct IngestState {
         skip_serializing_if = "Option::is_none"
     )]
     pub control_socket: Option<String>,
+    #[serde(
+        rename = "controlToken",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub control_token: Option<String>,
 }
 
 /// `$CLIMON_HOME/ingest.json`. Mirrors `getIngestStatePath`.
@@ -54,11 +60,17 @@ pub fn parse_ingest_state(raw: &str) -> Option<IngestState> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
+    let control_token = obj
+        .get("controlToken")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
     Some(IngestState {
         pid: pid as u32,
         port: port as u16,
         host,
         control_socket,
+        control_token,
     })
 }
 
@@ -151,6 +163,7 @@ mod tests {
             port: 3132,
             host: None,
             control_socket: None,
+            control_token: None,
         };
         assert_eq!(
             parse_ingest_state(&serialize_ingest_state(&state)),
@@ -165,6 +178,7 @@ mod tests {
             port: 3132,
             host: Some("172.30.192.1".into()),
             control_socket: Some("tcp://127.0.0.1:54321".into()),
+            control_token: None,
         };
         assert_eq!(
             parse_ingest_state(&serialize_ingest_state(&state)),
@@ -179,6 +193,7 @@ mod tests {
             port: 3132,
             host: None,
             control_socket: Some("tcp://127.0.0.1:5/".into()),
+            control_token: None,
         };
         assert!(serialize_ingest_state(&state).contains("\"controlSocket\""));
     }
@@ -192,6 +207,7 @@ mod tests {
             port: 3140,
             host: None,
             control_socket: None,
+            control_token: None,
         };
         write_ingest_state(&state, &env).unwrap();
         assert_eq!(read_ingest_state_from_dir(&home), Some(state));
@@ -207,6 +223,7 @@ mod tests {
                 port: 3132,
                 host: None,
                 control_socket: None,
+                control_token: None,
             })
         );
     }
@@ -220,6 +237,7 @@ mod tests {
                 port: 3132,
                 host: None,
                 control_socket: None,
+                control_token: None,
             })
         );
     }
@@ -246,6 +264,7 @@ mod tests {
             port: 3132,
             host: Some("172.30.192.1".into()),
             control_socket: None,
+            control_token: None,
         };
         assert_eq!(
             parse_ingest_state(&serialize_ingest_state(&state)),
@@ -263,6 +282,7 @@ mod tests {
                 port: 3140,
                 host: None,
                 control_socket: None,
+                control_token: None,
             },
             &env,
         )
@@ -302,6 +322,7 @@ mod tests {
                 port: 3199,
                 host: None,
                 control_socket: None,
+                control_token: None,
             },
             &env,
         )

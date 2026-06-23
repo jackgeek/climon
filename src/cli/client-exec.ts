@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 const CLIENT_BIN_NAME = "climon";
 
@@ -23,7 +23,15 @@ export function resolveClientInvocation(
 ): ClientInvocation {
   const override = env.CLIMON_CLIENT_BIN?.trim();
   if (override) {
-    return { file: override, args: forwardArgs };
+    // Only honor an ABSOLUTE override: a relative path would resolve against
+    // the (possibly attacker-influenced) cwd, allowing client-binary hijack.
+    if (isAbsolute(override)) {
+      return { file: override, args: forwardArgs };
+    }
+    process.stderr.write(
+      `climon: warning: ignoring non-absolute CLIMON_CLIENT_BIN=${override}; ` +
+        `it must be an absolute path.\n`
+    );
   }
 
   const exe = platform === "win32" ? ".exe" : "";

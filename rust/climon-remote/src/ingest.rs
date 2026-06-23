@@ -38,6 +38,54 @@ const INGEST_PORT_RETRY_ATTEMPTS: u32 = 100;
 /// Loopback control-socket spawn timeout (ms). Mirrors the Bun control server.
 pub const DEFAULT_SPAWN_TIMEOUT_MS: u64 = 10_000;
 
+/// Maximum bytes buffered for a single newline-delimited control-socket request
+/// before the connection is dropped, bounding memory from a misbehaving or
+/// hostile loopback caller.
+const MAX_CONTROL_LINE: usize = 64 * 1024;
+
+/// Maximum concurrent uplink (mux) connections accepted by the ingest data
+/// listener. Beyond this, new connections are accepted then immediately closed.
+const MAX_INGEST_CONNECTIONS: usize = 64;
+
+/// Maximum concurrent loopback control-socket connections.
+const MAX_CONTROL_CONNECTIONS: usize = 8;
+
+/// Constant-time byte-slice comparison, used to compare bearer tokens without
+/// leaking length-dependent timing about the expected value.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// RAII slot guard bounding concurrent connections. [`ConnGuard::acquire`]
+/// increments a shared counter if below `max`; the slot is released on drop.
+struct ConnGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl ConnGuard {
+    /// Acquires a slot up to `max`. Returns `None` when already at capacity.
+    fn acquire(counter: &Arc<std::sync::atomic::AtomicUsize>, max: usize) -> Option<ConnGuard> {
+        let prev = counter.fetch_add(1, Ordering::SeqCst);
+        if prev >= max {
+            counter.fetch_sub(1, Ordering::SeqCst);
+            None
+        } else {
+            Some(ConnGuard(counter.clone()))
+        }
+    }
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// A spawn request received on the loopback control socket. Mirrors the Bun
 /// `SpawnControlRequest` (the dashboard server's `requestRemoteSpawn` sends this
 /// JSON verbatim).
@@ -60,6 +108,10 @@ pub struct SpawnControlRequest {
     pub theme: Option<String>,
     #[serde(default)]
     pub headless: bool,
+    /// Per-run bearer token published in the ingest beacon. Required: requests
+    /// whose token does not match the running ingest's token are rejected.
+    #[serde(default)]
+    pub control_token: Option<String>,
 }
 
 /// The response written back on the loopback control socket. Mirrors the Bun
@@ -529,6 +581,7 @@ async fn serve_control_connection(
     socket: TcpStream,
     registry: Arc<IngestConnectionRegistry>,
     spawn_secret: Option<String>,
+    control_token: Option<String>,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (mut rd, mut wr) = socket.into_split();
@@ -548,13 +601,20 @@ async fn serve_control_connection(
             }
             let response = match serde_json::from_slice::<SpawnControlRequest>(line) {
                 Ok(req) => {
-                    handle_spawn_control_request(
-                        req,
-                        &registry,
-                        spawn_secret.clone(),
-                        DEFAULT_SPAWN_TIMEOUT_MS,
-                    )
-                    .await
+                    if !control_token_matches(
+                        control_token.as_deref(),
+                        req.control_token.as_deref(),
+                    ) {
+                        SpawnControlResponse::error(&req.request_id, "unauthorized")
+                    } else {
+                        handle_spawn_control_request(
+                            req,
+                            &registry,
+                            spawn_secret.clone(),
+                            DEFAULT_SPAWN_TIMEOUT_MS,
+                        )
+                        .await
+                    }
                 }
                 Err(_) => SpawnControlResponse::error("", "bad request"),
             };
@@ -564,6 +624,24 @@ async fn serve_control_connection(
                 return;
             }
         }
+        // Bound the unparsed accumulator: a connection that never sends a
+        // newline must not buffer unboundedly.
+        if acc.len() > MAX_CONTROL_LINE {
+            return;
+        }
+    }
+}
+
+/// Returns true when the request's token authenticates against the running
+/// ingest's expected token. When no token is configured (e.g. tests / older
+/// beacons) any request is accepted, preserving backward compatibility.
+fn control_token_matches(expected: Option<&str>, provided: Option<&str>) -> bool {
+    match expected {
+        None => true,
+        Some(expected) => match provided {
+            Some(provided) => constant_time_eq(expected.as_bytes(), provided.as_bytes()),
+            None => false,
+        },
     }
 }
 
@@ -811,32 +889,18 @@ async fn handle_control(
             remove_session_deleting(sessions, id, store_env).await;
         }
         "session-list" => {
-            let Some(label) = label.as_deref() else {
+            // Unsigned snapshots are only honored when no spawn secret is
+            // configured. When a secret is set, the authoritative snapshot must
+            // arrive signed (handled in the "signed" arm) so a peer cannot
+            // forge a snapshot that deletes sessions.
+            if spawn_secret.is_some() {
+                return;
+            }
+            let Some(label) = label.clone() else {
                 return;
             };
-            let ids: Vec<String> = value
-                .get("ids")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let dismissed = registry
-                .as_ref()
-                .map(|r| r.dismissed_snapshot())
-                .unwrap_or_default();
-            let live: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
-            let to_drop: Vec<String> = sessions
-                .keys()
-                .filter(|rid| !live.contains(rid.as_str()))
-                .cloned()
-                .collect();
-            for rid in to_drop {
-                remove_session_deleting(sessions, &rid, store_env).await;
-            }
-            reconcile_against_snapshot(store_env, label, &ids, &dismissed);
+            let ids = session_list_ids(value);
+            apply_session_list(&ids, &label, sessions, store_env, registry).await;
         }
         "signed" => {
             if let (Some(secret), Some(guard)) = (spawn_secret, replay_guard) {
@@ -850,10 +914,19 @@ async fn handle_control(
                     if let Ok(inner) =
                         crate::spawn_auth::verify_signed_control(secret, &envelope, guard, now_ms)
                     {
-                        if let crate::mux::ControlMessage::SpawnResult { request_id, .. } = &inner {
-                            if let Some(registry) = registry {
-                                registry.resolve_pending_spawn(request_id, inner.clone());
+                        match &inner {
+                            crate::mux::ControlMessage::SpawnResult { request_id, .. } => {
+                                if let Some(registry) = registry {
+                                    registry.resolve_pending_spawn(request_id, inner.clone());
+                                }
                             }
+                            crate::mux::ControlMessage::SessionList { ids } => {
+                                if let Some(label) = label.clone() {
+                                    apply_session_list(ids, &label, sessions, store_env, registry)
+                                        .await;
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1060,6 +1133,51 @@ fn reconcile_against_snapshot(
         }
     }
 }
+/// Extracts the `ids` array from a `session-list` control value.
+fn session_list_ids(value: &Value) -> Vec<String> {
+    value
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Reconciles both the in-memory session map and persisted metadata for `label`
+/// against an authoritative snapshot of live remote ids. Invalid ids are
+/// ignored; in-memory sessions absent from the snapshot are torn down and their
+/// metadata deleted; persisted ghosts are GC'd (respecting dismissed ids).
+async fn apply_session_list(
+    ids: &[String],
+    label: &str,
+    sessions: &mut HashMap<String, RemoteSession>,
+    store_env: &Arc<StoreEnv>,
+    registry: &Option<Arc<IngestConnectionRegistry>>,
+) {
+    let valid: Vec<String> = ids
+        .iter()
+        .filter(|id| is_valid_remote_id(id))
+        .cloned()
+        .collect();
+    let dismissed = registry
+        .as_ref()
+        .map(|r| r.dismissed_snapshot())
+        .unwrap_or_default();
+    let live: std::collections::HashSet<&str> = valid.iter().map(String::as_str).collect();
+    let to_drop: Vec<String> = sessions
+        .keys()
+        .filter(|rid| !live.contains(rid.as_str()))
+        .cloned()
+        .collect();
+    for rid in to_drop {
+        remove_session_deleting(sessions, &rid, store_env).await;
+    }
+    reconcile_against_snapshot(store_env, label, &valid, &dismissed);
+}
+
 pub trait HostProcess: Send {
     fn stop(&mut self);
 }
@@ -1321,6 +1439,10 @@ pub async fn run_ingest_daemon(
     let control_port = control_listener.local_addr()?.port();
     let control_socket =
         climon_session::socket::format_session_socket_ref("127.0.0.1", control_port);
+    // Per-run bearer token authenticating control-socket callers. Published in
+    // the (0700-dir-protected) ingest beacon so only same-machine readers can
+    // learn it; required on every spawn-control request.
+    let control_token = crate::spawn_auth::new_nonce();
 
     // Dual-listen: when a tunnel is configured and the data listener is NOT on
     // loopback, also bind 127.0.0.1:port so same-machine clients can connect.
@@ -1362,11 +1484,17 @@ pub async fn run_ingest_daemon(
             port,
             host: Some(host.clone()),
             control_socket: Some(control_socket.clone()),
+            control_token: Some(control_token.clone()),
         },
         &config_env,
     )?;
 
     let registry = Arc::new(IngestConnectionRegistry::new());
+
+    // Bound concurrent connections. Data + loopback share the ingest budget;
+    // loopback control connections have a smaller separate budget.
+    let ingest_conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let control_conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     // Dismiss watcher: when a materialized remote-session meta file disappears
     // (e.g. removed via the dashboard), dismiss its local id so it is not
@@ -1390,14 +1518,22 @@ pub async fn run_ingest_daemon(
         let store = store_env.clone();
         let secret = spawn_secret.clone();
         let ka = keep_alive_seconds;
+        let counter = ingest_conns.clone();
         tokio::spawn(async move {
             while let Ok((socket, _)) = lb.accept().await {
+                let Some(guard) = ConnGuard::acquire(&counter, MAX_INGEST_CONNECTIONS) else {
+                    drop(socket);
+                    continue;
+                };
                 let mut opts = IngestConnOptions::new(store.clone());
                 opts.keep_alive_seconds = ka;
                 opts.registry = Some(reg.clone());
                 opts.spawn_secret = secret.clone();
                 opts.wsl_bridge_enabled = wsl_bridge_enabled;
-                tokio::spawn(run_ingest_connection(socket, opts));
+                tokio::spawn(async move {
+                    let _guard = guard;
+                    run_ingest_connection(socket, opts).await;
+                });
             }
         })
     });
@@ -1410,19 +1546,30 @@ pub async fn run_ingest_daemon(
         tokio::select! {
             accepted = listener.accept() => {
                 if let Ok((socket, _)) = accepted {
-                    let mut opts = IngestConnOptions::new(store_env.clone());
-                    opts.keep_alive_seconds = keep_alive_seconds;
-                    opts.registry = Some(registry.clone());
-                    opts.spawn_secret = spawn_secret.clone();
-                    opts.wsl_bridge_enabled = wsl_bridge_enabled;
-                    tokio::spawn(run_ingest_connection(socket, opts));
+                    if let Some(guard) = ConnGuard::acquire(&ingest_conns, MAX_INGEST_CONNECTIONS) {
+                        let mut opts = IngestConnOptions::new(store_env.clone());
+                        opts.keep_alive_seconds = keep_alive_seconds;
+                        opts.registry = Some(registry.clone());
+                        opts.spawn_secret = spawn_secret.clone();
+                        opts.wsl_bridge_enabled = wsl_bridge_enabled;
+                        tokio::spawn(async move {
+                            let _guard = guard;
+                            run_ingest_connection(socket, opts).await;
+                        });
+                    }
                 }
             }
             accepted = control_listener.accept() => {
                 if let Ok((socket, _)) = accepted {
-                    let reg = registry.clone();
-                    let secret = spawn_secret.clone();
-                    tokio::spawn(serve_control_connection(socket, reg, secret));
+                    if let Some(guard) = ConnGuard::acquire(&control_conns, MAX_CONTROL_CONNECTIONS) {
+                        let reg = registry.clone();
+                        let secret = spawn_secret.clone();
+                        let token = Some(control_token.clone());
+                        tokio::spawn(async move {
+                            let _guard = guard;
+                            serve_control_connection(socket, reg, secret, token).await;
+                        });
+                    }
                 }
             }
             _ = poll.tick() => {
@@ -1549,6 +1696,7 @@ mod tests {
             color: None,
             theme: None,
             headless: false,
+            control_token: None,
         };
 
         let reg = registry.clone();
@@ -1587,6 +1735,7 @@ mod tests {
             color: None,
             theme: None,
             headless: false,
+            control_token: None,
         };
         let res = handle_spawn_control_request(req, &registry, Some("s".into()), 1_000).await;
         assert_eq!(res.error.as_deref(), Some("client not connected"));
@@ -1615,6 +1764,7 @@ mod tests {
             color: None,
             theme: None,
             headless: false,
+            control_token: None,
         };
         let res = handle_spawn_control_request(req, &registry, Some("s".into()), 1_000).await;
         assert_eq!(res.error.as_deref(), Some("client not connected"));
@@ -1675,6 +1825,7 @@ mod tests {
             port: 3132,
             host: host.map(String::from),
             control_socket: None,
+            control_token: None,
         }
     }
 
@@ -1754,6 +1905,41 @@ mod tests {
         assert!(!should_reject_peer_hello(false, true));
     }
 
+    #[test]
+    fn constant_time_eq_matches_only_equal_slices() {
+        assert!(constant_time_eq(b"abc123", b"abc123"));
+        assert!(!constant_time_eq(b"abc123", b"abc124"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn control_token_matches_enforces_expected_token() {
+        // No token configured: accept anything (backward compatible).
+        assert!(control_token_matches(None, None));
+        assert!(control_token_matches(None, Some("anything")));
+        // Token configured: only an exact match authenticates.
+        assert!(control_token_matches(Some("tok"), Some("tok")));
+        assert!(!control_token_matches(Some("tok"), Some("nope")));
+        assert!(!control_token_matches(Some("tok"), None));
+    }
+
+    #[test]
+    fn conn_guard_enforces_capacity_and_releases_on_drop() {
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let g1 = ConnGuard::acquire(&counter, 2);
+        let g2 = ConnGuard::acquire(&counter, 2);
+        assert!(g1.is_some());
+        assert!(g2.is_some());
+        // At capacity: a further acquire fails and does not leak a slot.
+        assert!(ConnGuard::acquire(&counter, 2).is_none());
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+        // Releasing one slot lets a new connection in.
+        drop(g1);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert!(ConnGuard::acquire(&counter, 2).is_some());
+    }
+
     fn make_test_store_env() -> StoreEnv {
         let home = unique_home("ghost");
         StoreEnv::with_home(&home)
@@ -1825,6 +2011,192 @@ mod tests {
         let dismissed: std::collections::HashSet<String> =
             [namespaced_id(label, "drop")].into_iter().collect();
         reconcile_against_snapshot(&store_env, label, &[], &dismissed);
+        assert!(read_meta(&store_env, &namespaced_id(label, "drop")).is_none());
+    }
+
+    /// Drives `serve_control_connection` over a real loopback socket and returns
+    /// the single JSON response line for `request`.
+    async fn control_roundtrip(
+        control_token: Option<String>,
+        request: serde_json::Value,
+    ) -> serde_json::Value {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let registry = Arc::new(IngestConnectionRegistry::new());
+        let server = tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            serve_control_connection(sock, registry, None, control_token).await;
+        });
+        let mut client = connect(port).await;
+        let mut line = serde_json::to_vec(&request).unwrap();
+        line.push(b'\n');
+        client.write_all(&line).await.unwrap();
+        let mut buf = Vec::new();
+        // Read until we have a full line or the server closes.
+        let mut tmp = [0u8; 1024];
+        loop {
+            let n = client.read(&mut tmp).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if buf.contains(&b'\n') {
+                break;
+            }
+        }
+        server.abort();
+        let nl = buf.iter().position(|&b| b == b'\n').unwrap_or(buf.len());
+        serde_json::from_slice(&buf[..nl]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn control_request_without_token_is_unauthorized() {
+        let resp = control_roundtrip(
+            Some("expected-token".to_string()),
+            serde_json::json!({
+                "requestId": "r1", "clientId": "c1", "command": ["bash"],
+                "cwd": "/tmp", "cols": 80, "rows": 24, "headless": false
+            }),
+        )
+        .await;
+        assert_eq!(resp["type"], "spawn-result");
+        assert_eq!(resp["error"], "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn control_request_with_wrong_token_is_unauthorized() {
+        let resp = control_roundtrip(
+            Some("expected-token".to_string()),
+            serde_json::json!({
+                "requestId": "r2", "clientId": "c1", "command": ["bash"],
+                "cwd": "/tmp", "cols": 80, "rows": 24, "headless": false,
+                "controlToken": "wrong"
+            }),
+        )
+        .await;
+        assert_eq!(resp["error"], "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn control_request_with_correct_token_passes_auth() {
+        // The correct token authenticates; the request then fails only because
+        // no client is connected (proving it cleared the auth gate).
+        let resp = control_roundtrip(
+            Some("expected-token".to_string()),
+            serde_json::json!({
+                "requestId": "r3", "clientId": "c1", "command": ["bash"],
+                "cwd": "/tmp", "cols": 80, "rows": 24, "headless": false,
+                "controlToken": "expected-token"
+            }),
+        )
+        .await;
+        assert_ne!(resp["error"], "unauthorized");
+        assert_eq!(resp["error"], "remote spawn not configured");
+    }
+
+    #[tokio::test]
+    async fn control_connection_drops_oversized_line() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let registry = Arc::new(IngestConnectionRegistry::new());
+        let server = tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            serve_control_connection(sock, registry, None, None).await;
+        });
+        let mut client = connect(port).await;
+        // Send more than MAX_CONTROL_LINE without a newline; the server must
+        // drop the connection rather than buffer unboundedly.
+        let blob = vec![b'a'; MAX_CONTROL_LINE + 1];
+        let _ = client.write_all(&blob).await;
+        let mut tmp = [0u8; 64];
+        let n = client.read(&mut tmp).await.unwrap_or(0);
+        assert_eq!(n, 0, "server should close the connection (EOF)");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn unsigned_session_list_is_ignored_when_secret_is_set() {
+        let store_env = Arc::new(make_test_store_env());
+        let label = "client-1";
+        write_remote_meta(&store_env, label, "keep");
+        write_remote_meta(&store_env, label, "drop");
+
+        let mut lbl = Some(label.to_string());
+        let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let registry: Option<Arc<IngestConnectionRegistry>> = None;
+        let shutdown = Arc::new(Notify::new());
+        let teardown = Arc::new(Notify::new());
+        let mut guard = crate::spawn_auth::ReplayGuard::new(30_000);
+
+        // A secret is configured, so an UNSIGNED session-list must be ignored.
+        handle_control(
+            &serde_json::json!({ "kind": "session-list", "ids": ["keep"] }),
+            &mut lbl,
+            &mut sessions,
+            &store_env,
+            16,
+            &tx,
+            &registry,
+            &shutdown,
+            &teardown,
+            Some("sekret"),
+            Some(&mut guard),
+            false,
+        )
+        .await;
+
+        // "drop" was NOT removed because the unsigned snapshot was ignored.
+        assert!(read_meta(&store_env, &namespaced_id(label, "drop")).is_some());
+    }
+
+    #[tokio::test]
+    async fn signed_session_list_gcs_when_secret_is_set() {
+        let store_env = Arc::new(make_test_store_env());
+        let label = "client-1";
+        write_remote_meta(&store_env, label, "keep");
+        write_remote_meta(&store_env, label, "drop");
+
+        let mut lbl = Some(label.to_string());
+        let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let registry: Option<Arc<IngestConnectionRegistry>> = None;
+        let shutdown = Arc::new(Notify::new());
+        let teardown = Arc::new(Notify::new());
+        let mut guard = crate::spawn_auth::ReplayGuard::new(30_000);
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let signed = crate::spawn_auth::sign_now(
+            "sekret",
+            &crate::mux::ControlMessage::SessionList {
+                ids: vec!["keep".to_string()],
+            },
+            now_ms,
+        );
+        let value = serde_json::to_value(&signed).unwrap();
+
+        handle_control(
+            &value,
+            &mut lbl,
+            &mut sessions,
+            &store_env,
+            16,
+            &tx,
+            &registry,
+            &shutdown,
+            &teardown,
+            Some("sekret"),
+            Some(&mut guard),
+            false,
+        )
+        .await;
+
+        assert!(read_meta(&store_env, &namespaced_id(label, "keep")).is_some());
         assert!(read_meta(&store_env, &namespaced_id(label, "drop")).is_none());
     }
 

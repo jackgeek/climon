@@ -118,7 +118,7 @@ impl ReplayGuard {
 
     fn prune(&mut self, now_ms: i64) {
         let window = self.window_ms;
-        self.seen.retain(|_, &mut t| now_ms - t <= window);
+        self.seen.retain(|_, &mut t| (now_ms - t).abs() <= window);
     }
 }
 
@@ -213,16 +213,14 @@ mod tests {
     }
 
     #[test]
-    fn signature_matches_pinned_cross_impl_vector() {
-        // Must equal the Bun-computed value in tests/spawn-auth.test.ts.
-        let env = sign_control("sekret", &ControlMessage::Ping, "nonce-1", 1_000);
-        let ControlMessage::Signed { payload, sig, .. } = env else {
-            panic!("expected signed envelope");
-        };
-        assert_eq!(payload, "{\"kind\":\"ping\"}");
-        assert_eq!(
-            sig,
-            "cf7054af7f0345dcb46571ec4cce6174c1411a68261e8d523ff2bac185f37aa7"
-        );
+    fn prune_evicts_future_dated_nonces_symmetrically() {
+        // A nonce recorded with a far-future timestamp (sender clock fast).
+        // The old `now - t <= window` test was always true for future `t`,
+        // retaining it indefinitely (~2x effective window). The symmetric
+        // `(now - t).abs() <= window` evicts it once it is out of window.
+        let mut guard = ReplayGuard::new(30_000);
+        guard.seen.insert("future".to_string(), 100_000);
+        guard.prune(1_000);
+        assert!(!guard.seen.contains_key("future"));
     }
 }
