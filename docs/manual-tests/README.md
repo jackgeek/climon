@@ -57,6 +57,7 @@ result-tracking row.
 | — | Per-session theme + default theme (CLI `--theme`, Edit/New dialogs, live inheritance) | [per-session-theme.md](per-session-theme.md) |
 | — | Windows — no console-window popups from remote child processes (`devtunnel`/`tasklist`/`taskkill`/peer discovery) | [windows-no-console-popups.md](windows-no-console-popups.md) |
 | — | Security — WebSocket attach Origin validation | [security-ws-attach-origin.md](security-ws-attach-origin.md) |
+| — | Security DNS-rebinding guard for dashboard reads/delete | [security-dns-rebind.md](security-dns-rebind.md) |
 
 ## Recording results
 

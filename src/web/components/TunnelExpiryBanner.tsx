@@ -28,7 +28,9 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke1}`
   },
   info: {
-    backgroundColor: tokens.colorBrandBackground,
+    // Fixed dark green so white text stays readable in both themes: the Fluent
+    // dark-green token resolves to a light green (#9ad29a) in light mode.
+    backgroundColor: "#0f5132",
     color: tokens.colorNeutralForegroundOnBrand
   },
   warn: {

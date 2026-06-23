@@ -107,6 +107,8 @@ const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+/** Host suffix of Microsoft dev tunnels; the only non-loopback host the dashboard is served on. */
+const DEV_TUNNEL_HOST_SUFFIX = ".devtunnels.ms";
 
 function isLoopbackBindHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
@@ -542,9 +544,6 @@ export function isSameOriginRequest(
   }
   return originHost === host.trim().toLowerCase();
 }
-
-/** Host suffix of Microsoft dev tunnels; the only non-loopback host the dashboard is served on. */
-const DEV_TUNNEL_HOST_SUFFIX = ".devtunnels.ms";
 
 /**
  * Allowlists the `Host` the dashboard may legitimately be reached on: loopback
@@ -1823,6 +1822,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/sessions") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         return new Response(await sessionsPayload(), { headers: { "content-type": "application/json" } });
       }
 
@@ -1914,6 +1916,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const sessionMatch = SESSION_PATH.exec(url.pathname);
       if (sessionMatch && request.method === "DELETE") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         // The optional `kill` query parameter decides whether to also stop the
         // per-session daemon. Absent/`none` is cleanup only (metadata +
         // scrollback): it deliberately does NOT signal the daemon, so any climon
@@ -1940,6 +1945,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const scrollbackMatch = SCROLLBACK_PATH.exec(url.pathname);
       if (scrollbackMatch) {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         const data = await readScrollback(scrollbackMatch[1]);
         if (!data) {
           return new Response("Not found", { status: 404 });
@@ -1950,6 +1958,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/events") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {

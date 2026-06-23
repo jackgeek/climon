@@ -269,6 +269,14 @@ requests must be same-origin with `Host`, and `Host` must be loopback or the
 dashboard dev-tunnel domain, defending against Cross-Site WebSocket Hijacking and
 DNS-rebinding for terminal attach traffic.
 
+Session read, SSE, and cleanup endpoints (`GET /api/sessions`,
+`GET /api/sessions/:id/scrollback`, `GET /api/events`, and
+`DELETE /api/sessions/:id`) also require an allowed dashboard `Host`: loopback
+for direct local access or `*.devtunnels.ms` for the tunnel relay. These routes
+do not require an `Origin` header, but the Host allowlist blocks DNS-rebinding
+requests such as `Host: evil.com` before session metadata, scrollback, SSE
+payloads, or delete side effects are produced.
+
 ## Web Push endpoints and subscription storage
 
 The push endpoints are reachable over the dev tunnel (the phone is not loopback),
@@ -325,6 +333,10 @@ loopback-only:
   `ingest-status.json` / `uplink-status.json` beacons are local files under
   `$CLIMON_HOME` (mode `0600`) carrying hostnames/addresses only — no secrets,
   not network-exposed; `GET /api/remotes` is loopback-only (403 otherwise).
+- **Dashboard HTTP Hosts** (`isAllowedDashboardHost`): session list,
+  scrollback, SSE, and DELETE handlers accept only loopback or
+  `*.devtunnels.ms` Host headers, preventing DNS-rebinding pages from using a
+  local source IP to read or remove sessions.
 
 ## Integrity of managed files
 
