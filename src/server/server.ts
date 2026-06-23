@@ -543,6 +543,35 @@ export function isSameOriginRequest(
   return originHost === host.trim().toLowerCase();
 }
 
+/** Host suffix of Microsoft dev tunnels; the only non-loopback host the dashboard is served on. */
+const DEV_TUNNEL_HOST_SUFFIX = ".devtunnels.ms";
+
+/**
+ * Allowlists the `Host` the dashboard may legitimately be reached on: loopback
+ * (direct/tunnel-relay) or the dev-tunnel domain. Rejecting everything else
+ * defeats DNS-rebinding, where a page on `evil.com` rebinds to `127.0.0.1` and
+ * sends `Host: evil.com`.
+ */
+export function isAllowedDashboardHost(host: string | null): boolean {
+  if (host === null) return false;
+  const hostname = hostHeaderHostname(host);
+  if (LOOPBACK_HOSTS.has(hostname)) return true;
+  return hostname.endsWith(DEV_TUNNEL_HOST_SUFFIX);
+}
+
+/**
+ * Authorizes a WebSocket attach upgrade. Browsers do NOT apply same-origin
+ * policy when opening a WebSocket, so the server must check the Origin itself.
+ * Requires: an Origin is present, it is same-origin with Host (blocks
+ * cross-site WebSocket hijacking), and Host is an allowed dashboard host
+ * (blocks DNS-rebinding). The handshake carries no JSON content-type, so this
+ * cannot reuse isAllowedSpawnRequest.
+ */
+export function isAllowedAttachUpgrade(origin: string | null, host: string | null): boolean {
+  if (!isAllowedDashboardHost(host)) return false;
+  return isSameOriginRequest("application/json", origin, host);
+}
+
 export function splitCommand(command: string): string[] {
   return command.trim().split(/\s+/).filter((part) => part.length > 0);
 }
@@ -1951,6 +1980,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const attachMatch = ATTACH_PATH.exec(url.pathname);
       if (attachMatch) {
+        if (!isAllowedAttachUpgrade(request.headers.get("origin"), request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         const meta = await readSessionMeta(attachMatch[1]);
         if (!meta) {
           return new Response("Not found", { status: 404 });
