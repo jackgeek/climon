@@ -17,8 +17,9 @@ executes its contents. The feature is **off by default** (`feature.fileViewer`).
 - **Steps:**
   1. In the attached terminal, run `echo src/index.ts:1`.
   2. In the dashboard terminal, click the `src/index.ts:1` link.
-- **Expected result:** A dialog opens showing the contents of `src/index.ts`. The
-  title/header reflects the resolved path. No page reload; the terminal stays live.
+- **Expected result:** A full-screen viewer opens showing the contents of
+  `src/index.ts` scrolled to the referenced line. The header reflects the resolved
+  path. No page reload; the terminal stays live.
 - **Platforms:** Desktop Chrome, Firefox, Safari.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
@@ -124,4 +125,114 @@ executes its contents. The feature is **off by default** (`feature.fileViewer`).
 - **Expected result:** The viewer renders over the tunnel. A cross-origin
   `POST /api/file` is rejected with `403` (same-origin guard).
 - **Platforms:** iOS Safari, Android Chrome, desktop over a dev tunnel.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## FV-UI-1 — Full-screen viewer with no dialog chrome
+
+- **Feature:** File viewer — full-screen overlay
+- **Preconditions:** `feature.fileViewer enabled`. Dashboard open with a live local
+  session whose cwd is the climon repo root.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session; desktop browser.
+- **Steps:**
+  1. In the terminal, run `echo src/index.ts:1` and click the link.
+- **Expected result:** The viewer covers the entire window (full screen) with no
+  Fluent dialog title bar, border, or surrounding backdrop. The editor surface fills
+  the viewport beneath a single header row.
+- **Platforms:** Desktop Chrome, Firefox, Safari.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## FV-UI-2 — Header shows session cwd and relative path
+
+- **Feature:** File viewer — cwd + relative-path header
+- **Preconditions:** `feature.fileViewer enabled`; live local session whose cwd is the
+  repo root.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session.
+- **Steps:**
+  1. Click a link to `src/index.ts:1`.
+  2. (If a file outside the cwd is reachable and displayable) observe its header.
+- **Expected result:** The header shows the session's working directory, then `/`,
+  then the path relative to that cwd (e.g. `src/index.ts`). For a file not under the
+  cwd, the absolute path is shown instead. Long paths ellipsize the cwd first.
+- **Platforms:** Desktop Chrome, Firefox, Safari.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## FV-UI-3 — Exit button closes the viewer
+
+- **Feature:** File viewer — Exit control (mobile-style)
+- **Preconditions:** `feature.fileViewer enabled`; viewer open on any file.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session; desktop + mobile.
+- **Steps:**
+  1. Open a file in the viewer.
+  2. Click the outline **Exit** button (Dismiss icon) at the top-right.
+- **Expected result:** The viewer closes and returns to the live terminal. The Exit
+  button matches the mobile terminal session view's exit control (outline, small,
+  Dismiss icon, top-right, respecting the visual-viewport offset).
+- **Platforms:** Desktop Chrome, Firefox, Safari; iOS Safari, Android Chrome.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## FV-UI-4 — Escape key closes the viewer
+
+- **Feature:** File viewer — Escape-to-close
+- **Preconditions:** `feature.fileViewer enabled`; viewer open on any file.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session; desktop browser.
+- **Steps:**
+  1. Open a file in the viewer.
+  2. Press `Escape` (with focus in the dashboard, not inside the iframe content).
+- **Expected result:** The viewer closes immediately.
+- **Platforms:** Desktop Chrome, Firefox, Safari.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## FV-UI-5 — Syntax highlighting across popular languages
+
+- **Feature:** File viewer — static syntax highlighting
+- **Preconditions:** `feature.fileViewer enabled`; repo-root session with source files.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session.
+- **Steps:**
+  1. Open files of several types: a `.ts`, a `.py`, a `.rs`, a `.json`, and a `.sh`.
+  2. Open one with `:line` (e.g. `src/index.ts:10`) to jump to a line.
+- **Expected result:** Keywords, strings, comments, and numbers are color-highlighted
+  appropriately for each language. Line-number gutter remains; the referenced line is
+  highlighted (active row). Files with an unknown/unmapped extension render as plain
+  (escaped) text with line numbers — no broken markup.
+- **Platforms:** Desktop Chrome, Firefox, Safari.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## FV-UI-6 — Markdown still renders as formatted markdown
+
+- **Feature:** File viewer — markdown rendering unchanged
+- **Preconditions:** `feature.fileViewer enabled`; a `.md` file in the cwd.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session.
+- **Steps:**
+  1. Open a `.md` file (e.g. `README.md`).
+- **Expected result:** The markdown renders as a formatted document (headings, lists,
+  code blocks), not as highlighted source. No scripts execute.
+- **Platforms:** Desktop Chrome, Firefox, Safari.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## FV-UI-7 — XSS guard: source/markup never executes
+
+- **Feature:** File viewer — sandbox/CSP XSS guard
+- **Preconditions:** `feature.fileViewer enabled`; a markdown file with embedded HTML
+  (e.g. `.fv-scratch/xss.md`) and a source file containing the literal text
+  `<script>`.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session.
+- **Steps:**
+  1. Open the malicious markdown file.
+  2. Open a `.ts`/`.js` file whose contents include `"<script>alert(1)</script>"`.
+- **Expected result:** No script runs; no alert. In source files the angle brackets
+  render as visible text (`&lt;script&gt;`), highlighted but inert.
+- **Platforms:** Desktop Chrome, Firefox, Safari.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## FV-UI-8 — Not-found link click is a silent no-op
+
+- **Feature:** File viewer — silent not-found
+- **Preconditions:** `feature.fileViewer enabled`; live local session.
+- **Config-matrix cell:** `feature.fileViewer = enabled`; local session.
+- **Steps:**
+  1. In the terminal, run `echo nonexistent/missing.ts:99` and click the link.
+- **Expected result:** Nothing happens — no viewer opens and no "file not found"
+  dialog/message is shown. (Other non-displayable states, e.g. a real binary or an
+  out-of-tree file, still open the viewer and show their explanatory message.)
+- **Platforms:** Desktop Chrome, Firefox, Safari.
 - **Result:** _date / tester / platform / pass-fail / notes_
