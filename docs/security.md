@@ -212,6 +212,11 @@ addition to a loopback source IP:
 which together defend against browser-mediated CSRF and DNS-rebinding from a page
 running on the same machine (`isAllowedSpawnRequest`).
 
+The WebSocket attach upgrade performs an equivalent `Origin` check: browser
+requests must be same-origin with `Host`, and `Host` must be loopback or the
+dashboard dev-tunnel domain, defending against Cross-Site WebSocket Hijacking and
+DNS-rebinding for terminal attach traffic.
+
 ## Web Push endpoints and subscription storage
 
 The push endpoints are reachable over the dev tunnel (the phone is not loopback),
