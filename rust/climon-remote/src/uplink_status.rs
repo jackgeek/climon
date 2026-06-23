@@ -58,10 +58,14 @@ pub fn parse_uplink_status(raw: &str) -> Option<UplinkStatus> {
 }
 
 pub fn write_uplink_status(status: &UplinkStatus, config_env: &ConfigEnv) -> std::io::Result<()> {
-    atomic_write(
-        &get_uplink_status_path(config_env),
-        serialize_uplink_status(status).as_bytes(),
-    )
+    let path = get_uplink_status_path(config_env);
+    atomic_write(&path, serialize_uplink_status(status).as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
 }
 
 pub fn read_uplink_status_from_dir(home_dir: &Path) -> Option<UplinkStatus> {

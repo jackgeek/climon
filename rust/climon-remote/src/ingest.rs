@@ -240,6 +240,31 @@ fn as_integer(value: &Value) -> Option<i64> {
     }
 }
 
+/// Trust boundary for attacker-controlled hello identity. Caps length and drops
+/// C0/C1 control bytes (incl. ESC) so a hostname can't smuggle ANSI escapes into a
+/// terminal (`climon remotes`) or blow up the status file. Returns None if empty.
+fn sanitize_identity(raw: Option<String>, max: usize) -> Option<String> {
+    let s: String = raw?
+        .chars()
+        .filter(|c| !c.is_control() && *c != '\u{7f}' && (*c < '\u{80}' || *c > '\u{9f}'))
+        .take(max)
+        .collect();
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// `os` is a small enum from our own client; allowlist it and fold anything else to None.
+fn sanitize_os(raw: Option<String>) -> Option<String> {
+    match raw.as_deref() {
+        Some("darwin") | Some("win32") | Some("linux") => raw,
+        _ => None,
+    }
+}
+
 /// Builds an allow-listed patch from an untrusted advertised patch. Mirrors
 /// `sanitizeRemotePatch`: every field is type-checked and string fields bounded;
 /// server-controlled fields (socketPath, origin, clientLabel, ...) are dropped.
@@ -934,11 +959,15 @@ async fn handle_control(
                 if let Some(client_id) = value.get("clientId").and_then(|v| v.as_str()) {
                     if is_valid_remote_id(client_id) {
                         *label = Some(client_id.to_string());
-                        let hostname = value
-                            .get("hostname")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        let os = value.get("os").and_then(|v| v.as_str()).map(String::from);
+                        let hostname = sanitize_identity(
+                            value
+                                .get("hostname")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            64,
+                        );
+                        let os =
+                            sanitize_os(value.get("os").and_then(|v| v.as_str()).map(String::from));
                         if let Some(registry) = registry {
                             registry
                                 .evict_and_register(
@@ -2180,6 +2209,48 @@ mod tests {
         }));
         assert_eq!(patch.socket_path, None);
         assert_eq!(patch.status, Some(SessionStatus::Completed));
+    }
+
+    #[test]
+    fn sanitize_identity_truncates_oversized_hostname() {
+        let raw = "h".repeat(200);
+        let out = sanitize_identity(Some(raw), 64).unwrap();
+        assert_eq!(out.chars().count(), 64);
+    }
+
+    #[test]
+    fn sanitize_identity_strips_escape_sequences() {
+        let out = sanitize_identity(Some("\u{1b}[2J\u{1b}[31mX".to_string()), 64).unwrap();
+        assert_eq!(out, "[2J[31mX");
+        assert!(!out.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn sanitize_identity_empty_becomes_none() {
+        assert_eq!(sanitize_identity(Some("   ".to_string()), 64), None);
+        assert_eq!(sanitize_identity(None, 64), None);
+    }
+
+    #[test]
+    fn sanitize_os_allowlists_known_values_and_folds_others() {
+        assert_eq!(
+            sanitize_os(Some("linux".to_string())).as_deref(),
+            Some("linux")
+        );
+        assert_eq!(
+            sanitize_os(Some("darwin".to_string())).as_deref(),
+            Some("darwin")
+        );
+        assert_eq!(
+            sanitize_os(Some("win32".to_string())).as_deref(),
+            Some("win32")
+        );
+        assert_eq!(
+            sanitize_os(Some("linux\u{1b}]0;pwn\u{07}".to_string())),
+            None
+        );
+        assert_eq!(sanitize_os(Some("freebsd".to_string())), None);
+        assert_eq!(sanitize_os(None), None);
     }
 
     fn unique_home(tag: &str) -> std::path::PathBuf {

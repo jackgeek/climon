@@ -46,6 +46,12 @@ pub fn build_view(
 
 /// Renders the human view. `color` enables `●`/`○` glyphs (TTY only — callers
 /// pass `false` for non-TTY/pipes).
+///
+/// Security: this relies on the ingest-side `sanitize_identity`/`sanitize_os`
+/// trust boundary (hostnames/os are stripped of control/ESC bytes and bounded
+/// before they ever reach the status file). Never re-introduce raw connection
+/// bytes here — printing unsanitized `hostname`/`os` could smuggle ANSI escapes
+/// into the user's terminal.
 pub fn render_human(view: &RemotesView, now_ms: u64, _color: bool) -> String {
     let mut out = String::new();
     let dot = |healthy: bool| if healthy { "●" } else { "○" };

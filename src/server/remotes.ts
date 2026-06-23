@@ -38,10 +38,20 @@ export function buildRemotesResponse(
   }
   const pidAlive = isAlive(status.pid);
   const statusStale = !pidAlive || nowMs - status.updatedAt > STALE_AFTER_MS;
+  const clip = (s: unknown) => (typeof s === "string" ? s.slice(0, 64) : "");
   const connections: RemotesConnection[] = status.connections.map((c) => {
     const reference = c.lastPingAt ?? c.connectedAt;
     const stale = statusStale || nowMs - reference > STALE_AFTER_MS;
-    return { ...c, stale };
+    return {
+      clientId: clip(c.clientId),
+      hostname: clip(c.hostname),
+      os: clip(c.os),
+      address: c.address ? clip(c.address) : undefined,
+      connectedAt: c.connectedAt,
+      sessionCount: c.sessionCount,
+      lastPingAt: c.lastPingAt,
+      stale,
+    };
   });
   return { connections, ingestRunning: pidAlive && !statusStale, remotesActive };
 }

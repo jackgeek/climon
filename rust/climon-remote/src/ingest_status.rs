@@ -53,10 +53,14 @@ pub fn parse_ingest_status(raw: &str) -> Option<IngestStatus> {
 }
 
 pub fn write_ingest_status(status: &IngestStatus, config_env: &ConfigEnv) -> std::io::Result<()> {
-    atomic_write(
-        &get_ingest_status_path(config_env),
-        serialize_ingest_status(status).as_bytes(),
-    )
+    let path = get_ingest_status_path(config_env);
+    atomic_write(&path, serialize_ingest_status(status).as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
 }
 
 pub fn read_ingest_status_from_dir(home_dir: &Path) -> Option<IngestStatus> {
