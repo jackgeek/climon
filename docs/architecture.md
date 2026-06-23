@@ -182,6 +182,32 @@ nesting). When there are no sessions at all, a single header **[+]** offers the
 same server-side creation. The HTML shell
 and asset serving live in `src/server/assets.ts`.
 
+### File viewer (`src/web/` + `src/server/file-*`)
+
+An optional, read-only file viewer (`fileViewer.enabled`, off by default). An
+xterm link provider detects file paths (with optional `:line:col`) printed in the
+terminal and, on click, opens a Fluent `Dialog` that renders the file inside a
+sandboxed `<iframe>` (no scripts) under a strict CSP. The data flow:
+
+1. The browser `POST`s `/api/file` (`{ session, path }`), same-origin guarded.
+2. `handleFileRequest` (`src/server/file-endpoint.ts`) validates the (namespaced)
+   session id and loads the session metadata to get the authoritative `cwd`.
+3. **Local session:** `readConfinedFile` (`src/server/file-read.ts`) resolves and
+   canonicalizes the path, confines it to the `cwd` subtree, enforces the size cap
+   and a binary screen, and returns the content.
+4. **Remote session:** `requestRemoteFileRead` (`src/server/remote-file-client.ts`)
+   forwards the read to the Rust **ingest** over its loopback control socket; the
+   ingest relays an additive `read-file` mux frame to the owning uplink, which runs
+   the *same* confinement (`climon-remote::file_read`) on the remote host and
+   replies with a `read-file-result` frame. The control-socket reply is
+   length-prefixed (JSON header + raw bytes) so a 2 MiB file is not limited by the
+   64 KiB control-line cap.
+5. The dashboard renders the returned content (markdown via `marked`, otherwise
+   plain text) in the sandboxed iframe.
+
+See `docs/security.md` ("Dashboard file viewer") for the confinement and
+same-origin guarantees.
+
 ## Onboarding, telemetry, and updates
 
 Several client-side module groups implement first-run onboarding and secure,

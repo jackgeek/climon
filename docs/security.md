@@ -304,6 +304,45 @@ loopback-only:
 - Effective values are exposed read-only via `/health` (`preferences`), which the
   server treats as the source of truth and the browser reconciles on load.
 
+## Dashboard file viewer
+
+The dashboard can open a file referenced in the terminal (a path printed by the
+shell, clicked via an xterm link provider) in a **read-only** in-browser viewer.
+The feature is **off by default** (`fileViewer.enabled`) and adds no
+remote-code-execution surface: it only ever *reads and renders* a file — it never
+spawns an editor, runs a program, or writes anything.
+
+- `POST /api/file` — same-origin guarded (`isSameOriginRequest`, JSON
+  content-type plus an `Origin` host matching `Host`), like the preferences and
+  push endpoints, so a Remote Tunnel Link viewer can use it while cross-origin /
+  CSRF / DNS-rebinding requests are blocked. The endpoint is disabled (`404`)
+  unless `fileViewer.enabled` is true.
+- **cwd-subtree confinement.** The session `cwd` comes from server-side metadata,
+  never from the client. The requested path is resolved against the canonical
+  cwd, fully canonicalized (so `..` and symlinks that escape are rejected),
+  required to be a regular file, size-capped (`fileViewer.maxFileSizeBytes`,
+  default 2 MiB), and binary-screened. A path outside the cwd subtree is refused.
+  This same confinement (`readConfinedFile` in `src/server/file-read.ts`) is
+  re-applied **on the remote host** by the Rust uplink
+  (`climon-remote::file_read::read_confined_file`), so a remote read can never
+  escape the remote session's cwd either.
+- **Remote routing.** For a remote session the dashboard server forwards the read
+  to the running Rust **ingest** over its loopback control socket (the same
+  channel as `requestRemoteSpawn`), which relays a new additive
+  `read-file` / `read-file-result` frame over the ingest↔uplink mux. Both frames
+  are bounded by `MAX_MUX_PAYLOAD = 8 MiB`; when a spawn secret is configured the
+  outbound `read-file` frame is signed (and the uplink rejects unsigned control),
+  exactly like a remote spawn. The reply rides a length-prefixed framing (a small
+  JSON header line + `len` raw content bytes) so a 2 MiB file is not constrained
+  by the 64 KiB control-line cap. The control socket is loopback-only and
+  authenticated with the per-run control token from the ingest beacon.
+- **Sandboxed rendering.** File content is rendered inside a sandboxed
+  `<iframe>` (`sandbox=""`, no scripts) under a strict CSP
+  (`default-src 'none'; script-src 'none'; …`). This is the primary XSS boundary;
+  markdown rendering + tag stripping are defense-in-depth only.
+- `fileViewer.*` settings are **server-scoped and not dashboard-writable** — a
+  same-origin request can neither enable the viewer nor change its size cap.
+
 ## Untrusted-input handling
 
 - **Session metadata** (`toLocalMeta` / `sanitizeRemotePatch`): server-controlled

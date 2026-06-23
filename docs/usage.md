@@ -209,6 +209,33 @@ instead, which asks the server to create a session for you (prompting for a
 command and optional working directory). Creation only works from the machine
 running the server (loopback).
 
+## Viewing files from the dashboard
+
+The dashboard can open a file referenced in the terminal in a **read-only**
+viewer. It is **off by default**; turn it on with:
+
+```bash
+climon config fileViewer.enabled true
+```
+
+Once enabled, file paths printed in the terminal (optionally with a
+`:line[:col]` suffix, e.g. `src/index.ts:42`) become clickable links. Clicking
+one opens a dialog that renders the file — markdown is rendered, everything else
+is shown as plain text. The viewer:
+
+- is confined to the **session's working directory** subtree; a path that points
+  outside it (or a symlink that escapes) is refused with an "outside the session
+  working directory" message;
+- reads at most `fileViewer.maxFileSizeBytes` (default 2 MiB) — larger files show
+  a "too large" notice — and shows a "binary file" notice for non-text files;
+- works for both local and remote (dev-tunnel) sessions; for remote sessions the
+  same confinement is enforced on the remote host;
+- renders content in a sandboxed iframe with scripts disabled, so opening a file
+  never executes its contents.
+
+It is read-only: there is no edit or save, and clicking a link never spawns an
+editor or runs anything. See the `fileViewer.*` rows in the config table below.
+
 ## Attention queue
 
 While you have a session attached locally, climon watches its rendered screen. If

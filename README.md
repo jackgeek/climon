@@ -29,6 +29,10 @@ interact with each one from the browser.
   dashboard.
 - **Completion pops.** Finished sessions move up the queue and keep their final
   scrollback so you can review the output.
+- **Read-only file viewer.** Optional (`fileViewer.enabled`, off by default):
+  click a file path printed in the terminal to open it in a read-only,
+  cwd-confined viewer (sandboxed iframe, no scripts) — works for local and remote
+  sessions. See [docs/usage.md](docs/usage.md#viewing-files-from-the-dashboard).
 - **Remote clients.** Monitor sessions running on another machine over Microsoft
   [dev tunnels](https://learn.microsoft.com/azure/developer/dev-tunnels/), or
   bridge Windows and WSL directly on the same machine without a dev tunnel. See
