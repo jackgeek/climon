@@ -48,6 +48,8 @@ describe("config settings registry", () => {
       "logging.appInsights.connectionString",
       "feature.sessionSpawning",
       "feature.remoteSpawn",
+      "feature.wslBridge",
+      "feature.remotes",
       "eula.accepted",
       "eula.version",
       "eula.acceptedAt",
@@ -106,7 +108,7 @@ describe("config settings registry", () => {
       session: { color: "auto", priority: 500 },
       tunnelLink: { keepAlive: 60 },
       logging: { level: "trace" },
-      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled" },
+      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled" },
       eula: { accepted: false },
       telemetry: { enabled: false },
       update: { auto: false }
@@ -163,6 +165,8 @@ describe("config settings registry", () => {
       "logging.appInsights.connectionString",
       "feature.sessionSpawning",
       "feature.remoteSpawn",
+      "feature.wslBridge",
+      "feature.remotes",
       "telemetry.enabled",
       "update.auto",
       "update.password"
@@ -171,7 +175,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(42);
+    expect(allConfigKeys().length).toBe(44);
   });
 
   test("coerces values through registry validators", () => {

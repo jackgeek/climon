@@ -46,11 +46,11 @@ describe("parseArgs", () => {
     });
   });
 
-  test("parses server with --enable-remotes", () => {
-    expect(parseArgs(["server", "--enable-remotes", "--port", "9000"])).toEqual({
+  test("server ignores the removed remotes flag", () => {
+    const removedRemotesFlag = ["--enable", "remotes"].join("-");
+    expect(parseArgs(["server", removedRemotesFlag, "--port", "9000"])).toEqual({
       command: "server",
-      port: 9000,
-      enableRemotes: true
+      port: 9000
     });
   });
 
@@ -59,10 +59,10 @@ describe("parseArgs", () => {
       command: "server",
       noTakeover: true
     });
-    expect(parseArgs(["server", "--no-takeover", "--port", "9000", "--enable-remotes"])).toEqual({
+    const removedRemotesFlag = ["--enable", "remotes"].join("-");
+    expect(parseArgs(["server", "--no-takeover", "--port", "9000", removedRemotesFlag])).toEqual({
       command: "server",
       port: 9000,
-      enableRemotes: true,
       noTakeover: true
     });
   });

@@ -102,7 +102,9 @@ A `Bun.serve` server, stateless with respect to PTYs:
 - `GET /health` — unauthenticated liveness probe returning
   `{ ok: true, version, remotesEnabled, ports }`. `ports` lists every TCP port
   this server process has opened: `ports.dashboard` (always) and `ports.ingest`
-  (only while the remote ingest daemon is running).
+  (only while the remote ingest daemon is running). Ingest startup is driven by
+  config: the server starts it when either `feature.remotes` or
+  `feature.wslBridge` is enabled, never by a server CLI flag.
 - `GET /` — dashboard HTML shell that loads the React app bundle (localhost
   allowed; LAN requires a token).
 - `GET /api/sessions` — current sessions, priority-sorted.
@@ -314,9 +316,11 @@ notification on no/late reply.
 
 A devbox runs a singleton **uplink** agent (`climon __uplink`) that connects to
 the home machine through a Microsoft dev tunnel. The home machine runs a
-loopback-only **ingest** daemon (`climon-server __ingest`) and either hosts the
-tunnel automatically via the `devtunnel` CLI or records a manually-created
-tunnel in `~/.climon/remote-host.json`.
+loopback-only **ingest** daemon (`climon-server __ingest`) when
+`feature.remotes` is enabled and either hosts the tunnel automatically via the
+`devtunnel` CLI or records a manually-created tunnel in
+`~/.climon/remote-host.json`. `climon server` no longer accepts a remotes
+startup flag; config is the only switch.
 
 Session I/O is multiplexed over the dev-tunnel TCP stream using a small framed
 protocol (`src/remote/mux.ts`): a `hello` frame advertises the devbox's stable
@@ -336,8 +340,11 @@ connects to the real daemon socket (replaying scrollback) and bridges bytes back
 WSL and Windows each keep their own `CLIMON_HOME`, but the filesystems are
 mutually visible (`/mnt/c/...` and `\\wsl.localhost\<distro>\...`). `climon link`
 (or a lazy auto-link on the first WSL run) records the peer OS's `CLIMON_HOME` in
-`remote.peerHome` on both sides. The auto-link only fires from WSL, only when a
-Windows climon is detected, and is suppressed by `remote.autoLink false`.
+`remote.peerHome` on both sides. Auto-link only wires discovery: it never enables
+the bridge. The bridge is activated only when `feature.wslBridge` is enabled
+(typically by accepting the `climon link` prompt or passing `--wsl-bridge`). The
+auto-link only fires from WSL, only when a Windows climon is detected, and is
+suppressed by `remote.autoLink false`.
 
 `discoverDashboard` resolves a dashboard by reading beacons: the local
 `server.json` first (validated by PID liveness), then the peer's by reading its
@@ -347,15 +354,21 @@ is unreachable from WSL, whereas the ingest is bound to a peer-reachable, publis
 interface). Ports come from the live beacons, so a collision-bumped port is handled
 transparently. The reachable host is the published ingest host, then the
 auto-detected candidates (`localhost`, or the WSL default-route gateway IP under
-NAT) overridable via `remote.peerHost`. When a peer is found, the local session's
-uplink is auto-wired to the peer's ingest port — reusing the same mux bridge as the
-dev-tunnel path, just over a loopback/host-IP TCP connection instead of a tunnel.
+NAT) overridable via `remote.peerHost`. When a peer is found and
+`feature.wslBridge` is enabled, the local session's uplink is auto-wired to the
+peer's ingest port — reusing the same mux bridge as the dev-tunnel path, just
+over a loopback/host-IP TCP connection instead of a tunnel. With
+`feature.remotes` enabled but `feature.wslBridge` disabled, dev-tunnel ingest can
+run without starting same-machine peer uplinks.
 
 ### Cross-OS dashboard handoff (WSL ⇄ Windows)
 
-A machine with `remote.peerHome` set is, at any moment, either **host** (runs the
-dashboard server + ingest) or **client** (runs an uplink to the host). Switching
-OS moves the host role:
+A machine with `remote.peerHome` set and `feature.wslBridge` enabled is, at any
+moment, either **host** (runs the dashboard server + ingest) or **client** (runs
+an uplink to the host). Switching OS moves the host role. Cross-OS promote and
+the settle/demotion handoff are gated on `feature.wslBridge` independently of
+`feature.remotes`; enabling dev-tunnel remotes alone never promotes, demotes, or
+spawns a same-machine peer uplink:
 
 - **Bind/publish**: the host's ingest binds a peer-reachable interface via
   `resolveIngestBindHost` (loopback when WSL hosts; the `vEthernet (WSL)` IPv4 when
@@ -382,11 +395,15 @@ OS moves the host role:
   consumed request), and exits. The ingest is the single demotion anchor, so a
   handoff works even when the peer's dashboard server has already been `Ctrl-C`'d.
 
-Two server shutdown modes: **plain** (Ctrl-C) leaves the ingest running when a
-peer is configured (so a same-OS restart reuses it and the cross-OS handoff has
-a surviving anchor); **handoff** demotion is driven by the ingest itself when it
-observes a `shutdown-request.json` in its home — it stops the co-located server,
-spawns an uplink toward the new host, frees its listener, and exits. The
+Two server shutdown modes: **plain** (Ctrl-C / SIGINT / SIGTERM / internal HTTP)
+stops the co-located ingest too, except when the shutdown was requested by the
+ingest itself as part of a demotion handoff (`shouldStopIngestForShutdown`);
+**handoff** demotion is driven
+by the ingest itself when it observes a `shutdown-request.json` in its home — it
+stops the co-located server, spawns an uplink toward the new host, frees its
+listener, and exits. The
 **ingest** is the durable control anchor: it owns `ingest.json`
-(`{pid,port,host}`) and survives both a server Ctrl-C and a crash. Every
+(`{pid,port,host}`) and, as a detached singleton, survives a server crash and an
+ingest-driven demotion stop (it is only torn down on a plain server shutdown).
+Every
 consumer reads the bound ingest port from `ingest.json` via `resolveIngestPort`.

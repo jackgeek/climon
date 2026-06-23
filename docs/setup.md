@@ -146,6 +146,14 @@ can connect through the tunnel. The devbox must be logged into `devtunnel` with
 the same identity that owns the tunnel. See [security.md](./security.md) for the
 threat model.
 
+Before hosting remote devboxes, enable the config flag that starts the ingest
+daemon, then restart or start the dashboard:
+
+```bash
+climon config feature.remotes enabled
+climon server
+```
+
 Manual tunnel creation on the home machine:
 
 ```bash

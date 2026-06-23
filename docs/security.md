@@ -60,6 +60,19 @@ Direct mode has no dev tunnel in front of the ingest port. Treat
 specific same-machine adapter where possible, not a broad LAN address, and rely
 on the OS firewall to keep that port scoped to the local Windows/WSL boundary.
 
+The WSL bridge is gated by the `feature.wslBridge` flag (and the shared ingest by
+`feature.wslBridge || feature.remotes`). The flag flips on **only by explicit user
+action** — the interactive `climon link` prompt, `climon link --wsl-bridge`, or
+`climon config feature.wslBridge enabled`. Auto-link wires read-only discovery
+(`remote.peerHome`) but never enables the bridge, and non-interactive `climon link`
+defaults to leaving it off. Flag changes take effect on the next server **restart**,
+not immediately. **Interim exposure:** the ingest's same-machine-`peer` transport
+guard (gate #3) ships with the Rust ingest cutover; until that lands, enabling
+`feature.remotes` alone on a Windows+WSL host starts an ingest bound to the
+`vEthernet (WSL)` adapter that a same-machine WSL process can reach even with
+`feature.wslBridge` off — so the WSL-bridge feature flag must not be released ahead
+of the ingest cutover.
+
 ### Beacon-based discovery (`remote.peerHome`)
 
 `climon link` (and the lazy auto-link on the first WSL run) records the peer

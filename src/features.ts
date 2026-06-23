@@ -46,6 +46,20 @@ export const FEATURE_FLAGS = defineFeatureFlags([
     status: "experimental",
     description:
       "Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel."
+  },
+  {
+    name: "wslBridge",
+    default: "disabled",
+    status: "experimental",
+    description:
+      "Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard."
+  },
+  {
+    name: "remotes",
+    default: "disabled",
+    status: "experimental",
+    description:
+      "Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge."
   }
 ] as const satisfies readonly FeatureFlag[]);
 
