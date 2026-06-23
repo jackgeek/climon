@@ -63,8 +63,8 @@ describe("config cascade", () => {
   test("walks ancestors up toward the home boundary", () => {
     const deep = join(root, "a", "b", "c");
     mkdirSync(deep, { recursive: true });
-    writeSetting(join(root, "a", ".climon"), { remote: { port: 6666 } });
-    expect(resolveConfigSetting("remote.port", env(), deep)).toBe(6666);
+    writeSetting(join(root, "a", ".climon"), { session: { priority: 123 } });
+    expect(resolveConfigSetting("session.priority", env(), deep)).toBe(123);
   });
 
   test("candidateConfigDirs lists cwd, ancestors, then home", () => {
@@ -268,7 +268,10 @@ describe("sparse writes preserve existing keys", () => {
     writeSetting(join(repo, ".climon"), { session: { color: "red" } });
     writeConfigSetting("remote.enabled", "true", "local", env(), repo);
     expect(resolveConfigSetting("session.color", env(), repo)).toBe("red");
-    expect(resolveConfigSetting("remote.enabled", env(), repo)).toBe(true);
+    const raw = JSON.parse(
+      require("node:fs").readFileSync(join(repo, ".climon", "config.jsonc"), "utf8").replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, "")
+    );
+    expect(raw).toEqual({ remote: { enabled: true }, session: { color: "red" } });
   });
 });
 

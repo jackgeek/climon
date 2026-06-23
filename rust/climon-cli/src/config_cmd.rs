@@ -9,8 +9,8 @@ use std::path::Path;
 
 use climon_config::config::{
     coerce_config_value, is_known_config_key, known_config_keys, list_config_debug_entries,
-    list_existing_config_files, resolve_config_setting, unset_config_setting, write_config_setting,
-    Env, WriteScope,
+    list_existing_config_files, resolve_config_setting, should_warn_global_only_local_write,
+    unset_config_setting, write_config_setting, Env, WriteScope,
 };
 use climon_config::config_settings::render_config_settings_help;
 use climon_config::features::{
@@ -282,6 +282,12 @@ fn run_action(
             }
         },
         ConfigAction::Set { scope, key, value } => {
+            if should_warn_global_only_local_write(&key, scope) {
+                let _ = writeln!(
+                    io.stderr,
+                    "climon config: {key} is global-only; the local value will not be read. Use --global to set the effective value."
+                );
+            }
             write_config_setting(&key, &value, scope, env, cwd)?;
             if let Some(flag) = parse_feature_config_key(&key) {
                 if is_feature_locked(flag) {
@@ -314,9 +320,41 @@ fn run_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn v(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(prefix: &str) -> Self {
+            let mut base = std::env::current_dir().unwrap();
+            base.push(".copilot-tmp");
+            fs::create_dir_all(&base).unwrap();
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = base.join(format!("{prefix}-{nonce}"));
+            fs::create_dir_all(&path).unwrap();
+            TestDir { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 
     #[test]
@@ -394,5 +432,52 @@ mod tests {
         assert!(text.starts_with("climon config — inspect and update climon configuration"));
         assert!(text.contains("Settings:\n\n"));
         assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn set_warns_when_explicit_local_targets_global_only_key() {
+        let t = TestDir::new("cfgcmd-global-only-local");
+        let home = t.path().join("home").join(".climon");
+        let repo = t.path().join("repo");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(repo.join(".climon")).unwrap();
+        fs::write(
+            home.join("config.jsonc"),
+            r#"{"session":{"terminalProgram":"safe {cmd}"}}"#,
+        )
+        .unwrap();
+        fs::write(repo.join(".climon").join("config.jsonc"), "{}").unwrap();
+
+        let env = Env::new(Some(home.to_str().unwrap()), t.path().join("home"));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut confirm = |_path: &str| false;
+        let mut io = ConfigCommandIo {
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            confirm: &mut confirm,
+        };
+
+        let code = run_config_command(
+            &v(&["--local", "session.terminalProgram", "dead-local {cmd}"]),
+            &env,
+            &repo,
+            &mut io,
+        );
+
+        assert_eq!(code, 0);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert!(warning.contains(
+            "climon config: session.terminalProgram is global-only; the local value will not be read. Use --global to set the effective value."
+        ));
+        assert!(
+            fs::read_to_string(repo.join(".climon").join("config.jsonc"))
+                .unwrap()
+                .contains("dead-local {cmd}")
+        );
+        assert_eq!(
+            resolve_config_setting("session.terminalProgram", &env, &repo),
+            Some(Value::String("safe {cmd}".to_string()))
+        );
     }
 }

@@ -185,16 +185,21 @@ pub fn default_config() -> Value {
 pub fn candidate_config_dirs(env: &Env, cwd: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     let home_boundary = resolve(env.home());
-    let mut dir = resolve(cwd);
-    loop {
-        if dir == home_boundary {
-            break;
+    let start = resolve(cwd);
+    if start.starts_with(&home_boundary) {
+        let mut dir = start;
+        loop {
+            if dir == home_boundary {
+                break;
+            }
+            dirs.push(dir.join(".climon"));
+            match dir.parent() {
+                Some(parent) if parent != dir => dir = parent.to_path_buf(),
+                _ => break,
+            }
         }
-        dirs.push(dir.join(".climon"));
-        match dir.parent() {
-            Some(parent) if parent != dir => dir = parent.to_path_buf(),
-            _ => break,
-        }
+    } else {
+        dirs.push(start.join(".climon"));
     }
     let home = get_climon_home(env);
     if !dirs.contains(&home) {
@@ -254,6 +259,12 @@ fn read_dotted_key<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a Val
 
 /// Resolves a dotted config key across the cascade; first dir defining it wins.
 pub fn resolve_config_setting(key: &str, env: &Env, cwd: &Path) -> Option<Value> {
+    if find_config_setting(key)
+        .map(|setting| setting.global_only)
+        .unwrap_or(false)
+    {
+        return read_global_config_setting(key, env);
+    }
     for dir in candidate_config_dirs(env, cwd) {
         let sparse = read_sparse_config(&dir);
         if let Some(v) = read_dotted_key(&sparse, key) {
@@ -283,6 +294,26 @@ pub fn resolve_write_dir(scope: WriteScope, env: &Env, cwd: &Path) -> PathBuf {
             get_climon_home(env)
         }
     }
+}
+
+fn resolve_write_dir_for_key(key: &str, scope: WriteScope, env: &Env, cwd: &Path) -> PathBuf {
+    if scope == WriteScope::Auto
+        && find_config_setting(key)
+            .map(|setting| setting.global_only)
+            .unwrap_or(false)
+    {
+        return get_climon_home(env);
+    }
+    resolve_write_dir(scope, env, cwd)
+}
+
+/// Whether a config write is an explicit local write of a key that is only read
+/// from the global config.
+pub fn should_warn_global_only_local_write(key: &str, scope: WriteScope) -> bool {
+    scope == WriteScope::Local
+        && find_config_setting(key)
+            .map(|setting| setting.global_only)
+            .unwrap_or(false)
 }
 
 /// Whether `key` is a registry key users may set.
@@ -345,7 +376,7 @@ pub fn write_config_setting(
     env: &Env,
     cwd: &Path,
 ) -> Result<PathBuf, String> {
-    let dir = resolve_write_dir(scope, env, cwd);
+    let dir = resolve_write_dir_for_key(key, scope, env, cwd);
     let mut current = Value::Object(read_sparse_config(&dir));
     let (section, field) = split_two(key);
     let coerced = coerce_config_value(key, value)?;
@@ -366,7 +397,7 @@ pub fn unset_config_setting(
     env: &Env,
     cwd: &Path,
 ) -> Result<(), String> {
-    let dir = resolve_write_dir(scope, env, cwd);
+    let dir = resolve_write_dir_for_key(key, scope, env, cwd);
     if existing_config_path_for_dir(&dir).is_none() {
         return Ok(());
     }
@@ -754,10 +785,13 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-            let dir = std::env::temp_dir().join(format!(
-                "climon-cfg-{label}-{}-{nanos}-{n}",
-                std::process::id()
-            ));
+            let dir = std::env::current_dir()
+                .unwrap()
+                .join(".copilot-tmp")
+                .join(format!(
+                    "climon-cfg-{label}-{}-{nanos}-{n}",
+                    std::process::id()
+                ));
             fs::create_dir_all(&dir).unwrap();
             TempDir(dir)
         }
@@ -780,9 +814,9 @@ mod tests {
         .unwrap();
     }
 
-    // Env whose home is `root/home` and CLIMON_HOME is `root/home/.climon`.
+    // Env whose home is `root` and CLIMON_HOME is `root/.climon`.
     fn cascade_env(root: &Path) -> (Env, PathBuf) {
-        let home = root.join("home");
+        let home = root.to_path_buf();
         fs::create_dir_all(&home).unwrap();
         let climon_home = home.join(".climon");
         let env = Env::new(Some(climon_home.to_str().unwrap()), home.clone());
@@ -872,6 +906,56 @@ mod tests {
     }
 
     #[test]
+    fn global_only_settings_ignore_project_local_config() {
+        let t = TempDir::new("globalonly");
+        let (env, home) = cascade_env(t.path());
+        let repo = t.path().join("repo");
+        fs::create_dir_all(home.join(".climon")).unwrap();
+        fs::create_dir_all(repo.join(".climon")).unwrap();
+        fs::write(
+            home.join(".climon").join("config.jsonc"),
+            r#"{"session":{"terminalProgram":"safe-term {cmd}"},"remote":{"port":3131},"update":{"password":"safe-password"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            repo.join(".climon").join("config.jsonc"),
+            r#"{"session":{"terminalProgram":"./evil.sh {cmd}"},"remote":{"port":4444},"update":{"password":"evil-password"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_config_setting("session.terminalProgram", &env, &repo),
+            Some(json!("safe-term {cmd}"))
+        );
+        assert_eq!(
+            resolve_config_setting("remote.port", &env, &repo),
+            Some(json!(3131))
+        );
+        assert_eq!(
+            resolve_config_setting("update.password", &env, &repo),
+            Some(json!("safe-password"))
+        );
+    }
+
+    #[test]
+    fn non_global_only_settings_still_honor_project_local_config() {
+        let t = TempDir::new("localok");
+        let (env, _) = cascade_env(t.path());
+        let repo = t.path().join("repo");
+        fs::create_dir_all(repo.join(".climon")).unwrap();
+        fs::write(
+            repo.join(".climon").join("config.jsonc"),
+            r#"{"session":{"color":"blue"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_config_setting("session.color", &env, &repo),
+            Some(json!("blue"))
+        );
+    }
+
+    #[test]
     fn cascade_walks_ancestors_and_returns_none() {
         let t = TempDir::new("walk");
         let (env, _) = cascade_env(t.path());
@@ -879,13 +963,13 @@ mod tests {
         fs::create_dir_all(&deep).unwrap();
         write_json(
             &t.path().join("a").join(".climon"),
-            json!({ "remote": { "port": 6666 } }),
+            json!({ "session": { "priority": 123 } }),
         );
         assert_eq!(
-            resolve_config_setting("remote.port", &env, &deep),
-            Some(json!(6666))
+            resolve_config_setting("session.priority", &env, &deep),
+            Some(json!(123))
         );
-        assert_eq!(resolve_config_setting("remote.tunnelId", &env, &deep), None);
+        assert_eq!(resolve_config_setting("session.color", &env, &deep), None);
     }
 
     #[test]
@@ -909,6 +993,22 @@ mod tests {
         let nested = home_root.join("proj").join("nested").join("work");
         let dirs = candidate_config_dirs(&env, &nested);
         assert!(!dirs.contains(&home_root.join(".climon")));
+        assert_eq!(dirs[dirs.len() - 1], global);
+    }
+
+    #[test]
+    fn cascade_does_not_walk_ancestors_outside_home() {
+        let t = TempDir::new("outsidehome");
+        let home_root = t.path().join("home");
+        let global = home_root.join(".climon");
+        let cwd = t.path().join("outside").join("work").join("project");
+        let env = Env::new(Some(global.to_str().unwrap()), home_root);
+
+        let dirs = candidate_config_dirs(&env, &cwd);
+
+        assert!(dirs.contains(&cwd.join(".climon")));
+        assert!(!dirs.contains(&t.path().join("outside").join("work").join(".climon")));
+        assert!(!dirs.contains(&t.path().join("outside").join(".climon")));
         assert_eq!(dirs[dirs.len() - 1], global);
     }
 
@@ -940,6 +1040,46 @@ mod tests {
             Some(json!(42))
         );
         let _ = home;
+    }
+
+    #[test]
+    fn auto_write_of_global_only_setting_targets_global_config() {
+        let t = TempDir::new("writeglobalonly");
+        let (env, home) = cascade_env(t.path());
+        let repo = t.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        write_json(
+            &repo.join(".climon"),
+            json!({ "session": { "color": "red" } }),
+        );
+
+        write_config_setting(
+            "session.terminalProgram",
+            "safe-term {cmd}",
+            WriteScope::Auto,
+            &env,
+            &repo,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_config_setting("session.terminalProgram", &env, &repo),
+            Some(json!("safe-term {cmd}"))
+        );
+        assert_eq!(
+            read_dotted_key(
+                &read_sparse_config(&repo.join(".climon")),
+                "session.terminalProgram"
+            ),
+            None
+        );
+        assert_eq!(
+            read_dotted_key(
+                &read_sparse_config(&home.join(".climon")),
+                "session.terminalProgram"
+            ),
+            Some(&json!("safe-term {cmd}"))
+        );
     }
 
     #[test]

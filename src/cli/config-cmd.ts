@@ -17,6 +17,7 @@ import {
   listExistingConfigFiles,
   knownConfigKeys,
   resolveConfigSetting,
+  shouldWarnGlobalOnlyLocalWrite,
   unsetConfigSetting,
   writeConfigSetting,
   type WriteScope
@@ -223,6 +224,11 @@ export function runConfigCommand(
         return 0;
       }
       case "set": {
+        if (shouldWarnGlobalOnlyLocalWrite(action.key, action.scope)) {
+          commandIO.stderr(
+            `climon config: ${action.key} is global-only; the local value will not be read. Use --global to set the effective value.\n`
+          );
+        }
         writeConfigSetting(action.key, action.value, action.scope, env, cwd);
         const flagName = parseFeatureConfigKey(action.key);
         if (flagName) {

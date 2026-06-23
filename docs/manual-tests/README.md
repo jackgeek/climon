@@ -58,6 +58,7 @@ result-tracking row.
 | — | Windows — no console-window popups from remote child processes (`devtunnel`/`tasklist`/`taskkill`/peer discovery) | [windows-no-console-popups.md](windows-no-console-popups.md) |
 | — | Security — WebSocket attach Origin validation | [security-ws-attach-origin.md](security-ws-attach-origin.md) |
 | — | Security DNS-rebinding guard for dashboard reads/delete | [security-dns-rebind.md](security-dns-rebind.md) |
+| — | Security — project-local config global-only settings | [security-config-global-only.md](security-config-global-only.md) |
 
 ## Recording results
 
