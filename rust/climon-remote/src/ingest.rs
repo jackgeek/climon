@@ -114,6 +114,23 @@ pub struct SpawnControlRequest {
     pub control_token: Option<String>,
 }
 
+/// A read-file request received on the loopback control socket. The dashboard
+/// server's `requestRemoteFileRead` sends this JSON verbatim, distinguished from
+/// a spawn request by `type: "read-file"`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadFileControlRequest {
+    pub request_id: String,
+    /// The namespaced dashboard session id (`<clientId>~<remoteId>`).
+    pub session_id: String,
+    pub path: String,
+    pub max_bytes: u64,
+    /// Per-run bearer token published in the ingest beacon (see
+    /// `SpawnControlRequest::control_token`).
+    #[serde(default)]
+    pub control_token: Option<String>,
+}
+
 /// The response written back on the loopback control socket. Mirrors the Bun
 /// `SpawnControlResponse`. `type` is always `"spawn-result"`.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -423,6 +440,8 @@ pub struct IngestConnectionRegistry {
     dismissed: Mutex<HashSet<String>>,
     pending_spawns:
         Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::mux::ControlMessage>>>>,
+    pending_reads:
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::mux::ControlMessage>>>>,
 }
 
 struct ActiveConn {
@@ -555,6 +574,50 @@ impl IngestConnectionRegistry {
         self.pending_spawns.lock().unwrap().remove(request_id);
     }
 
+    /// Registers an in-flight read; resolves on `resolve_pending_read` with the
+    /// same request id, or after `timeout_ms` with a `not-found` ReadFileResult.
+    /// Mirrors `register_pending_spawn`.
+    pub fn register_pending_read(
+        &self,
+        request_id: &str,
+        path: &str,
+        timeout_ms: u64,
+    ) -> impl std::future::Future<Output = crate::mux::ControlMessage> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pending_reads
+            .lock()
+            .unwrap()
+            .insert(request_id.to_string(), tx);
+        let request_id = request_id.to_string();
+        let path = path.to_string();
+        let pending_reads = self.pending_reads.clone();
+        async move {
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
+                Ok(Ok(msg)) => msg,
+                _ => {
+                    pending_reads.lock().unwrap().remove(&request_id);
+                    crate::mux::ControlMessage::ReadFileResult {
+                        request_id,
+                        result: serde_json::json!({ "status": "not-found", "path": path }),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Resolves the in-flight read for `request_id`, if any. Mirrors
+    /// `resolve_pending_spawn`.
+    pub fn resolve_pending_read(&self, request_id: &str, result: crate::mux::ControlMessage) {
+        if let Some(tx) = self.pending_reads.lock().unwrap().remove(request_id) {
+            let _ = tx.send(result);
+        }
+    }
+
+    /// Cancels an in-flight read without delivering a result.
+    pub fn cancel_pending_read(&self, request_id: &str) {
+        self.pending_reads.lock().unwrap().remove(request_id);
+    }
+
     /// Signals that the connection for `client_id` has fully torn down. Mirrors
     /// `markTornDown` (matched by `shutdown` pointer identity).
     pub fn mark_torn_down(&self, client_id: &str, shutdown: &Arc<Notify>) {
@@ -677,6 +740,83 @@ pub async fn handle_spawn_control_request(
     }
 }
 
+/// Routes a read-file request to the owning uplink and awaits the cwd-confined
+/// result. The namespaced session id `<clientId>~<remoteId>` selects both the
+/// uplink connection (by `clientId`) and the remote-native session id placed in
+/// the mux frame. When a spawn secret is configured the `ReadFile` frame is
+/// signed exactly like a `Spawn` (the uplink rejects unsigned control then).
+/// Returns a `FileReadResult` JSON value; any transport failure (no connection,
+/// timeout) maps to `{ "status": "not-found", "path": <path> }`.
+pub async fn handle_read_file_control_request(
+    req: ReadFileControlRequest,
+    registry: &IngestConnectionRegistry,
+    spawn_secret: Option<String>,
+    timeout_ms: u64,
+) -> serde_json::Value {
+    let not_found = || serde_json::json!({ "status": "not-found", "path": req.path });
+    let Some((client_id, remote_id)) = req.session_id.split_once('~') else {
+        return not_found();
+    };
+    let Some(channel) = registry.get_channel(client_id) else {
+        return not_found();
+    };
+    let pending = registry.register_pending_read(&req.request_id, &req.path, timeout_ms);
+    let read = crate::mux::ControlMessage::ReadFile {
+        request_id: req.request_id.clone(),
+        session_id: remote_id.to_string(),
+        path: req.path.clone(),
+        max_bytes: req.max_bytes,
+    };
+    let frame = match spawn_secret.as_deref() {
+        Some(secret) => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+            crate::mux::encode_control(&crate::spawn_auth::sign_now(secret, &read, now_ms))
+        }
+        None => crate::mux::encode_control(&read),
+    };
+    if channel.send(frame).is_err() {
+        registry.cancel_pending_read(&req.request_id);
+        return not_found();
+    }
+    match pending.await {
+        crate::mux::ControlMessage::ReadFileResult { result, .. } => result,
+        _ => not_found(),
+    }
+}
+
+/// Frames a read-file result for the loopback control socket: a newline-delimited
+/// JSON header (`type`, `requestId`, the result fields except `content`, and a
+/// `len` byte-count) followed by exactly `len` raw UTF-8 bytes of file content.
+/// This length-prefixed body sidesteps the 64 KiB `MAX_CONTROL_LINE` cap that a
+/// 2 MiB file would exceed. Kept in lockstep with `requestRemoteFileRead` in
+/// `src/server/remote-file-client.ts`.
+fn encode_read_file_reply(request_id: &str, result: &serde_json::Value) -> Vec<u8> {
+    let mut header = serde_json::Map::new();
+    header.insert("type".into(), serde_json::Value::from("read-file-result"));
+    header.insert("requestId".into(), serde_json::Value::from(request_id));
+    if let Some(obj) = result.as_object() {
+        for (k, v) in obj {
+            if k == "content" {
+                continue;
+            }
+            header.insert(k.clone(), v.clone());
+        }
+    }
+    let body: Vec<u8> = result
+        .get("content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.as_bytes().to_vec())
+        .unwrap_or_default();
+    header.insert("len".into(), serde_json::Value::from(body.len()));
+    let mut out = serde_json::to_vec(&serde_json::Value::Object(header)).unwrap_or_default();
+    out.push(b'\n');
+    out.extend_from_slice(&body);
+    out
+}
+
 /// Serves one loopback control-socket connection: newline-delimited JSON
 /// `SpawnControlRequest` in, `SpawnControlResponse` out. Mirrors the Bun
 /// `controlServer` connection handler.
@@ -700,6 +840,49 @@ async fn serve_control_connection(
             let line: Vec<u8> = acc.drain(..=pos).collect();
             let line = &line[..line.len() - 1];
             if line.iter().all(|b| b.is_ascii_whitespace()) {
+                continue;
+            }
+            // Dispatch by message `type`: `read-file` requests use the
+            // length-prefixed reply framing; everything else is a spawn request
+            // (which omits `type`), preserving backward compatibility.
+            let msg_type = serde_json::from_slice::<serde_json::Value>(line)
+                .ok()
+                .and_then(|v| {
+                    v.get("type")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.to_string())
+                });
+            if msg_type.as_deref() == Some("read-file") {
+                let out = match serde_json::from_slice::<ReadFileControlRequest>(line) {
+                    Ok(req) => {
+                        if !control_token_matches(
+                            control_token.as_deref(),
+                            req.control_token.as_deref(),
+                        ) {
+                            encode_read_file_reply(
+                                &req.request_id,
+                                &serde_json::json!({ "status": "not-found", "path": req.path }),
+                            )
+                        } else {
+                            let request_id = req.request_id.clone();
+                            let result = handle_read_file_control_request(
+                                req,
+                                &registry,
+                                spawn_secret.clone(),
+                                DEFAULT_SPAWN_TIMEOUT_MS,
+                            )
+                            .await;
+                            encode_read_file_reply(&request_id, &result)
+                        }
+                    }
+                    Err(_) => encode_read_file_reply(
+                        "",
+                        &serde_json::json!({ "status": "not-found", "path": "" }),
+                    ),
+                };
+                if wr.write_all(&out).await.is_err() {
+                    return;
+                }
                 continue;
             }
             let response = match serde_json::from_slice::<SpawnControlRequest>(line) {
@@ -1067,6 +1250,11 @@ async fn handle_control(
                                     registry.resolve_pending_spawn(request_id, inner.clone());
                                 }
                             }
+                            crate::mux::ControlMessage::ReadFileResult { request_id, .. } => {
+                                if let Some(registry) = registry {
+                                    registry.resolve_pending_read(request_id, inner.clone());
+                                }
+                            }
                             crate::mux::ControlMessage::SessionList { ids } => {
                                 if let Some(label_value) = label.clone() {
                                     apply_session_list(
@@ -1093,6 +1281,17 @@ async fn handle_control(
                 {
                     if let crate::mux::ControlMessage::SpawnResult { request_id, .. } = &inner {
                         registry.resolve_pending_spawn(request_id, inner.clone());
+                    }
+                }
+            }
+        }
+        "read-file-result" => {
+            if let Some(registry) = registry {
+                if let Ok(inner) =
+                    serde_json::from_value::<crate::mux::ControlMessage>(value.clone())
+                {
+                    if let crate::mux::ControlMessage::ReadFileResult { request_id, .. } = &inner {
+                        registry.resolve_pending_read(request_id, inner.clone());
                     }
                 }
             }
@@ -1877,6 +2076,119 @@ mod tests {
             ControlMessage::SpawnResult { id, .. } => assert_eq!(id.as_deref(), Some("sess-1")),
             other => panic!("unexpected result: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn read_file_control_request_routes_and_correlates() {
+        use crate::mux::{ControlMessage, MuxDecoder, MuxMessage};
+        let registry = std::sync::Arc::new(IngestConnectionRegistry::new());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+        let teardown = std::sync::Arc::new(tokio::sync::Notify::new());
+        registry
+            .evict_and_register("dev", shutdown, teardown, tx)
+            .await;
+
+        let req = ReadFileControlRequest {
+            request_id: "rf-1".into(),
+            session_id: "dev~abc".into(),
+            path: "src/a.ts".into(),
+            max_bytes: 1024,
+            control_token: None,
+        };
+        let reg = registry.clone();
+        let handle =
+            tokio::spawn(
+                async move { handle_read_file_control_request(req, &reg, None, 5_000).await },
+            );
+
+        // The uplink connection receives a ReadFile frame addressed to the
+        // remote-native id (the part after `~`).
+        let frame = rx.recv().await.expect("read-file frame sent");
+        let mut decoder = MuxDecoder::new();
+        let msgs = decoder.push(&frame).expect("decodes");
+        match &msgs[0] {
+            MuxMessage::Control(ControlMessage::ReadFile {
+                request_id,
+                session_id,
+                path,
+                max_bytes,
+            }) => {
+                assert_eq!(request_id, "rf-1");
+                assert_eq!(session_id, "abc");
+                assert_eq!(path, "src/a.ts");
+                assert_eq!(*max_bytes, 1024);
+            }
+            other => panic!("unexpected frame: {other:?}"),
+        }
+
+        // The uplink's reply resolves the pending read.
+        registry.resolve_pending_read(
+            "rf-1",
+            ControlMessage::ReadFileResult {
+                request_id: "rf-1".into(),
+                result: serde_json::json!({ "status": "ok", "path": "/p/src/a.ts", "content": "hi" }),
+            },
+        );
+        let result = handle.await.unwrap();
+        assert_eq!(result["status"], "ok");
+        assert_eq!(result["content"], "hi");
+    }
+
+    #[tokio::test]
+    async fn read_file_control_request_not_found_when_client_absent() {
+        let registry = IngestConnectionRegistry::new();
+        let req = ReadFileControlRequest {
+            request_id: "rf-2".into(),
+            session_id: "ghost~xyz".into(),
+            path: "a".into(),
+            max_bytes: 16,
+            control_token: None,
+        };
+        let result = handle_read_file_control_request(req, &registry, None, 50).await;
+        assert_eq!(result["status"], "not-found");
+        assert_eq!(result["path"], "a");
+    }
+
+    #[test]
+    fn encode_read_file_reply_frames_oversized_body() {
+        // A body larger than MAX_CONTROL_LINE must ride the length-prefixed
+        // framing intact (header line + exactly `len` raw bytes).
+        let big = "x".repeat(MAX_CONTROL_LINE + 4096);
+        let result =
+            serde_json::json!({ "status": "ok", "path": "/p/big.txt", "content": big.clone() });
+        let out = encode_read_file_reply("rf-3", &result);
+        let nl = out
+            .iter()
+            .position(|&b| b == b'\n')
+            .expect("header newline");
+        let header: serde_json::Value = serde_json::from_slice(&out[..nl]).expect("header json");
+        assert_eq!(header["type"], "read-file-result");
+        assert_eq!(header["requestId"], "rf-3");
+        assert_eq!(header["status"], "ok");
+        assert_eq!(header["path"], "/p/big.txt");
+        assert!(
+            header.get("content").is_none(),
+            "content stays out of header"
+        );
+        let len = header["len"].as_u64().unwrap() as usize;
+        assert_eq!(len, big.len());
+        let body = &out[nl + 1..];
+        assert_eq!(body.len(), len);
+        assert_eq!(std::str::from_utf8(body).unwrap(), big);
+    }
+
+    #[test]
+    fn encode_read_file_reply_carries_too_large_size_with_empty_body() {
+        let result =
+            serde_json::json!({ "status": "too-large", "path": "/p/big.bin", "size": 9000 });
+        let out = encode_read_file_reply("rf-4", &result);
+        let nl = out.iter().position(|&b| b == b'\n').unwrap();
+        let header: serde_json::Value = serde_json::from_slice(&out[..nl]).unwrap();
+        assert_eq!(header["status"], "too-large");
+        assert_eq!(header["size"], 9000);
+        assert_eq!(header["len"], 0);
+        assert_eq!(out.len(), nl + 1, "no body bytes follow the header");
     }
 
     #[tokio::test]

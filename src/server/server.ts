@@ -69,6 +69,7 @@ import { createPushService, type PushService } from "./push/service.js";
 import { isValidSubscription } from "./push/subscriptions.js";
 import { isFeatureEnabled, resolveFeatureFlags } from "../features.js";
 import { handleFileRequest } from "./file-endpoint.js";
+import { requestRemoteFileRead } from "./remote-file-client.js";
 
 
 interface StartServerOptions {
@@ -1992,7 +1993,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               } catch {
                 return null;
               }
-            }
+            },
+            readRemoteFile: (sessionId, filePath, maxBytes) =>
+              requestRemoteFileRead(sessionId, filePath, maxBytes)
           }
         );
         return Response.json(result.body, { status: result.status });
