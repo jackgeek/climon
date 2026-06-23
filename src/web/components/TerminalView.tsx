@@ -10,6 +10,7 @@ import {
   attachSocketUrl,
   attentionAckMessage,
   canSendAttentionAck,
+  fetchFile,
   fetchScrollback,
   isLiveStatus
 } from "../api.js";
@@ -18,7 +19,7 @@ import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { DEFAULT_FONT_SIZE } from "../fontSize.js";
 import { findFileTokens, type ParsedFileRef } from "../file-link.js";
-import { FileViewer, type FileViewerTarget } from "./FileViewer.js";
+import { FileViewer, shouldOpenFileViewer, type FileViewerTarget } from "./FileViewer.js";
 
 interface FocusableTerminal {
   focus: () => void;
@@ -676,11 +677,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
           return;
         }
         const text = line.translateToString(true);
-        const sessionId = selectedSessionRef.current?.id;
+        const liveSession = selectedSessionRef.current;
+        const sessionId = liveSession?.id;
         if (!sessionId) {
           callback(undefined);
           return;
         }
+        const cwd = liveSession?.cwd ?? "";
         const links = findFileTokens(text).map((token) => ({
           range: {
             start: { x: token.startIndex + 1, y: lineNumber },
@@ -688,7 +691,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
           },
           text: text.slice(token.startIndex, token.startIndex + token.length),
           activate: () => {
-            setFileTarget({ sessionId, ref: token.ref as ParsedFileRef });
+            const ref = token.ref as ParsedFileRef;
+            void fetchFile(sessionId, ref.path).then((resp) => {
+              if (!shouldOpenFileViewer(resp)) return; // not-found: silent no-op
+              setFileTarget({ sessionId, cwd, ref, resp });
+            });
           }
         }));
         callback(links.length > 0 ? links : undefined);
