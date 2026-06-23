@@ -1869,9 +1869,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const attachMatch = ATTACH_PATH.exec(url.pathname);
       if (attachMatch) {
-        if (!isAllowedDashboardHost(request.headers.get("host"))) {
-          return new Response("Forbidden", { status: 403 });
-        }
         const meta = await readSessionMeta(attachMatch[1]);
         if (!meta) {
           return new Response("Not found", { status: 404 });

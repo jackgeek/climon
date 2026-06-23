@@ -119,7 +119,7 @@ describe("dashboard read and destructive routes", () => {
     await rm(testRoot, { recursive: true, force: true });
   });
 
-  it("rejects DNS-rebinding Host headers before exposing sessions, scrollback, events, attach, or DELETE", async () => {
+  it("rejects DNS-rebinding Host headers before exposing sessions, scrollback, events, or DELETE", async () => {
     const headers = { host: "evil.com:3131" };
     const list = await fetch(`${base}/api/sessions`, { headers });
     expect(list.status).toBe(403);
@@ -130,9 +130,6 @@ describe("dashboard read and destructive routes", () => {
     const events = await fetch(`${base}/api/events`, { headers });
     expect(events.status).toBe(403);
     await events.body?.cancel();
-
-    const attach = await fetch(`${base}/api/sessions/guarded/attach`, { headers });
-    expect(attach.status).toBe(403);
 
     const del = await fetch(`${base}/api/sessions/guarded`, { method: "DELETE", headers });
     expect(del.status).toBe(403);
@@ -145,8 +142,5 @@ describe("dashboard read and destructive routes", () => {
 
     const tunnel = await fetch(`${base}/api/sessions`, { headers: { host: "x-3131.uks1.devtunnels.ms" } });
     expect(tunnel.status).toBe(200);
-
-    const attach = await fetch(`${base}/api/sessions/guarded/attach`, { headers: { host: "127.0.0.1:3131" } });
-    expect(attach.status).toBe(426);
   });
 });

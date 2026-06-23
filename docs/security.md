@@ -212,14 +212,13 @@ addition to a loopback source IP:
 which together defend against browser-mediated CSRF and DNS-rebinding from a page
 running on the same machine (`isAllowedSpawnRequest`).
 
-Session read, terminal attach, and cleanup endpoints (`GET /api/sessions`,
-`GET /api/sessions/:id/scrollback`, `GET /api/events`,
-`GET /api/sessions/:id/attach`, and `DELETE /api/sessions/:id`) also require an
-allowed dashboard `Host`: loopback for direct local access or `*.devtunnels.ms`
-for the tunnel relay. These routes do not require an `Origin` header, but the
-Host allowlist blocks DNS-rebinding requests such as `Host: evil.com` before
-session metadata, scrollback, SSE payloads, WebSocket upgrades, or delete side
-effects are produced.
+Session read, SSE, and cleanup endpoints (`GET /api/sessions`,
+`GET /api/sessions/:id/scrollback`, `GET /api/events`, and
+`DELETE /api/sessions/:id`) also require an allowed dashboard `Host`: loopback
+for direct local access or `*.devtunnels.ms` for the tunnel relay. These routes
+do not require an `Origin` header, but the Host allowlist blocks DNS-rebinding
+requests such as `Host: evil.com` before session metadata, scrollback, SSE
+payloads, or delete side effects are produced.
 
 ## Web Push endpoints and subscription storage
 
@@ -269,7 +268,7 @@ loopback-only:
   (`MAX_MUX_PAYLOAD = 8 MiB`); an oversize or malformed frame tears the
   connection down rather than allocating unbounded memory.
 - **Dashboard HTTP Hosts** (`isAllowedDashboardHost`): session list,
-  scrollback, SSE, WebSocket attach, and DELETE handlers accept only loopback or
+  scrollback, SSE, and DELETE handlers accept only loopback or
   `*.devtunnels.ms` Host headers, preventing DNS-rebinding pages from using a
   local source IP to read or remove sessions.
 
