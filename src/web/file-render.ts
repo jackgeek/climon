@@ -1,4 +1,5 @@
 import { marked } from "marked";
+import { highlightToLines, languageForFilename } from "./highlight.js";
 
 export interface RenderOptions {
   content: string;
@@ -11,15 +12,6 @@ const CSP =
 
 export function isMarkdownFilename(filename: string): boolean {
   return /\.(md|markdown)$/i.test(filename);
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 /**
@@ -38,13 +30,15 @@ function stripDangerous(html: string): string {
     .replace(/(href|src)\s*=\s*javascript:[^\s>]+/gi, '$1="#"');
 }
 
-function renderText(content: string, line?: number): string {
-  const rows = content.split("\n").map((text, index) => {
+function renderText(content: string, filename: string, line?: number): string {
+  const language = languageForFilename(filename);
+  const lineHtml = highlightToLines(content, language);
+  const rows = lineHtml.map((html, index) => {
     const n = index + 1;
     const active = line === n ? " line-active" : "";
     return (
       `<div class="line${active}" data-line="${n}">` +
-      `<span class="ln">${n}</span><span class="lt">${escapeHtml(text)}</span>` +
+      `<span class="ln">${n}</span><span class="lt">${html}</span>` +
       `</div>`
     );
   });
@@ -65,13 +59,25 @@ const STYLE = `
   .code .line-active { background: #3a3d41; }
   .markdown { padding: 1em 1.25em; font-family: system-ui, sans-serif; }
   .markdown pre { background: #111; padding: .75em; overflow:auto; }
+  .code .lt .hljs-comment, .code .lt .hljs-quote { color: #6a9955; }
+  .code .lt .hljs-keyword, .code .lt .hljs-selector-tag, .code .lt .hljs-built_in { color: #569cd6; }
+  .code .lt .hljs-string, .code .lt .hljs-attr, .code .lt .hljs-template-variable { color: #ce9178; }
+  .code .lt .hljs-number, .code .lt .hljs-literal { color: #b5cea8; }
+  .code .lt .hljs-title, .code .lt .hljs-section, .code .lt .hljs-function .hljs-title { color: #dcdcaa; }
+  .code .lt .hljs-type, .code .lt .hljs-class .hljs-title { color: #4ec9b0; }
+  .code .lt .hljs-meta, .code .lt .hljs-symbol, .code .lt .hljs-bullet { color: #c586c0; }
+  .code .lt .hljs-variable, .code .lt .hljs-name, .code .lt .hljs-attribute { color: #9cdcfe; }
+  .code .lt .hljs-deletion { color: #f48771; }
+  .code .lt .hljs-addition { color: #b5cea8; }
+  .code .lt .hljs-emphasis { font-style: italic; }
+  .code .lt .hljs-strong { font-weight: bold; }
 `;
 
 /** Builds a complete, self-contained HTML document for the viewer iframe srcdoc. */
 export function renderFileHtml(opts: RenderOptions): string {
   const body = isMarkdownFilename(opts.filename)
     ? renderMarkdown(opts.content)
-    : renderText(opts.content, opts.line);
+    : renderText(opts.content, opts.filename, opts.line);
   return (
     `<!doctype html><html><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="${CSP}">` +

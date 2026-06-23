@@ -56,9 +56,10 @@ describe("highlightToLines", () => {
     }
   });
 
-  test("falls back to auto highlight when language is undefined", () => {
+  test("falls back to plain escaped lines when language is undefined", () => {
     const lines = highlightToLines("def f():\n    return 1", undefined);
     expect(lines).toHaveLength(2);
+    expect(lines.join("\n")).not.toContain("hljs-");
   });
 
   test("empty content yields a single empty line", () => {

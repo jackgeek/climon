@@ -32,4 +32,24 @@ describe("renderFileHtml", () => {
     expect(html.toLowerCase()).not.toContain("javascript:");
     expect(html.toLowerCase()).not.toContain("onerror");
   });
+
+  test("highlights code files with hljs classes and keeps line numbers", () => {
+    const html = renderFileHtml({ content: "const x = 1;\nconst y = 2;", filename: "a.ts", line: 2 });
+    expect(html).toContain("hljs-keyword"); // 'const'
+    expect(html).toContain('data-line="1"');
+    expect(html).toContain('data-line="2"');
+    expect(html).toContain("line-active"); // line 2
+  });
+
+  test("escapes angle brackets in highlighted source (no live tags)", () => {
+    const html = renderFileHtml({ content: 'const t = "<script>";', filename: "a.ts" });
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  test("unknown extensions still render numbered lines", () => {
+    const html = renderFileHtml({ content: "alpha\nbeta", filename: "notes.unknownext" });
+    expect(html).toContain('data-line="1"');
+    expect(html).toContain('data-line="2"');
+  });
 });

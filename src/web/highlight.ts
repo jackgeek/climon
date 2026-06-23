@@ -117,15 +117,16 @@ function escapeHtmlForHighlight(text: string): string {
 
 /**
  * Highlight `content` and return per-line, HTML-escaped, span-wrapped strings.
- * Highlighting failure (or unknown language) falls back to auto-detection, and
- * then to plain escaped lines, so the viewer never breaks on highlighting.
+ * Only files with a known language are highlighted; unknown languages (and any
+ * highlighting failure) fall back to plain escaped lines, so prose/logs are not
+ * mis-tokenized and the viewer never breaks on highlighting.
  */
 export function highlightToLines(content: string, language: string | undefined): string[] {
+  if (!language || !hljs.getLanguage(language)) {
+    return content.split("\n").map(escapeHtmlForHighlight);
+  }
   try {
-    const result =
-      language && hljs.getLanguage(language)
-        ? hljs.highlight(content, { language, ignoreIllegals: true })
-        : hljs.highlightAuto(content);
+    const result = hljs.highlight(content, { language, ignoreIllegals: true });
     return splitHighlightedHtml(result.value);
   } catch {
     return content.split("\n").map(escapeHtmlForHighlight);
