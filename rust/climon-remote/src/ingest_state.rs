@@ -1,13 +1,13 @@
 //! Durable ingest beacon (`ingest.json`). 1:1 port of `src/remote/ingest-state.ts`.
 //!
 //! The ingest is the single writer; the beacon carries the bound pid, port, and
-//! published host. The cross-OS control plane is authorized by filesystem
-//! permissions, so the beacon carries no token.
+//! published host. When the loopback control socket is enabled, it also carries
+//! the same-user bearer token and is written as an explicit `0600` file.
 
 use std::path::Path;
 
 use climon_config::config::{get_climon_home, Env as ConfigEnv};
-use climon_store::atomic::atomic_write;
+use climon_store::atomic::atomic_write_with_mode;
 use serde::{Deserialize, Serialize};
 
 use crate::ingest_port::DEFAULT_INGEST_PORT;
@@ -89,11 +89,12 @@ pub fn serialize_ingest_state(state: &IngestState) -> String {
     format!("{}\n", serde_json::to_string(state).unwrap())
 }
 
-/// Atomically writes the local ingest beacon. Mirrors `writeIngestState`.
+/// Atomically writes the local ingest beacon as `0600`. Mirrors `writeIngestState`.
 pub fn write_ingest_state(state: &IngestState, config_env: &ConfigEnv) -> std::io::Result<()> {
-    atomic_write(
+    atomic_write_with_mode(
         &get_ingest_state_path(config_env),
         serialize_ingest_state(state).as_bytes(),
+        0o600,
     )
 }
 
@@ -144,14 +145,17 @@ mod tests {
     }
 
     fn tmp_home(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "climon-ingest-state-{tag}-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join(".copilot-tmp")
+            .join(format!(
+                "climon-ingest-state-{tag}-{}-{:?}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -211,6 +215,32 @@ mod tests {
         };
         write_ingest_state(&state, &env).unwrap();
         assert_eq!(read_ingest_state_from_dir(&home), Some(state));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_ingest_state_creates_0600_beacon() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tmp_home("mode");
+        let env = env_for(&home);
+        let state = IngestState {
+            pid: 4321,
+            port: 3140,
+            host: None,
+            control_socket: Some("tcp://127.0.0.1:54321".into()),
+            control_token: Some("secret-token".into()),
+        };
+
+        write_ingest_state(&state, &env).unwrap();
+
+        let mode = std::fs::metadata(get_ingest_state_path(&env))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
         std::fs::remove_dir_all(&home).ok();
     }
 

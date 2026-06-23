@@ -8,8 +8,9 @@ import { DEFAULT_INGEST_PORT } from "./ingest-port.js";
 /**
  * Durable beacon for the ingest daemon, written atomically after it binds its
  * port. The ingest is the single writer of this file. It carries the bound pid,
- * port, and published host; the cross-OS control plane is authorized by
- * filesystem permissions, so the beacon carries no token.
+ * port, and published host. When the loopback control socket is enabled, it
+ * also carries the same-user bearer token and is written as an explicit 0600
+ * file.
  */
 export interface IngestState {
   /** PID of the running ingest daemon process. */
@@ -31,7 +32,7 @@ export interface IngestState {
   /**
    * Per-run bearer token the dashboard server must echo on every control-socket
    * spawn request to authenticate to the running ingest. Published in the
-   * (0700-dir-protected) beacon. Optional for backward compatibility with
+   * 0600 ingest beacon. Optional for backward compatibility with
    * beacons that predate control-socket authentication.
    */
   controlToken?: string;
@@ -81,7 +82,7 @@ export async function writeIngestState(
   state: IngestState,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
-  await atomicWrite(getIngestStatePath(env), serializeIngestState(state));
+  await atomicWrite(getIngestStatePath(env), serializeIngestState(state), { mode: 0o600 });
 }
 
 async function readIngestStateFromPath(path: string): Promise<IngestState | undefined> {

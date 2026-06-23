@@ -1476,8 +1476,8 @@ pub async fn run_ingest_daemon(
     let control_socket =
         climon_session::socket::format_session_socket_ref("127.0.0.1", control_port);
     // Per-run bearer token authenticating control-socket callers. Published in
-    // the (0700-dir-protected) ingest beacon so only same-machine readers can
-    // learn it; required on every spawn-control request.
+    // the 0600 ingest beacon so only same-user readers can learn it; required
+    // on every spawn-control request.
     let control_token = crate::spawn_auth::new_nonce();
 
     // Dual-listen: when a tunnel is configured and the data listener is NOT on

@@ -102,12 +102,7 @@ fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
-/// Writes `data` to `path` atomically (temp file then rename), creating parent
-/// directories as needed. Mirrors `atomicWrite`.
-pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+fn temp_path_for(path: &Path) -> std::path::PathBuf {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -118,9 +113,39 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
     // the target's stem: `<path>.<pid>.<ms>.<n>.tmp`, matching `store.ts`.
     let mut temp_os = path.as_os_str().to_os_string();
     temp_os.push(format!(".{pid}.{now_ms}.{counter}.tmp"));
-    let temp_path = std::path::PathBuf::from(temp_os);
+    std::path::PathBuf::from(temp_os)
+}
 
+/// Writes `data` to `path` atomically (temp file then rename), creating parent
+/// directories as needed. Mirrors `atomicWrite`.
+pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
+    atomic_write_with_mode(path, data, 0o666)
+}
+
+/// Like [`atomic_write`] but creates the temp file with `mode` (Unix) before
+/// writing, so a secret-bearing file (e.g. the ingest beacon with controlToken)
+/// is never world-readable even momentarily. On non-Unix, `mode` is ignored.
+pub fn atomic_write_with_mode(path: &Path, data: &[u8], _mode: u32) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temp_path = temp_path_for(path);
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(_mode)
+            .open(&temp_path)?;
+        file.write_all(data)?;
+    }
+    #[cfg(not(unix))]
     fs::write(&temp_path, data)?;
+
     match rename_with_retry(&temp_path, path) {
         Ok(()) => Ok(()),
         Err(err) => {
@@ -193,6 +218,21 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_with_mode_sets_0600() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = unique_dir("mode");
+        let target = dir.join("ingest.json");
+
+        atomic_write_with_mode(&target, b"{\"controlToken\":\"x\"}", 0o600).unwrap();
+
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
         let _ = fs::remove_dir_all(&dir);
     }
 }

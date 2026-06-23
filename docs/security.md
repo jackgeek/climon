@@ -161,6 +161,9 @@ sends an *imperative command* to a client, so it is gated and authenticated:
 - `~/.climon/remote-host.json` — the home machine's tunnel-host state. Written
   atomically (temp file + `rename`, so the ingest watcher never observes a torn
   or empty file) with `0600` permissions inside a `0700` directory.
+- `~/.climon/ingest.json` — the home machine's live ingest beacon. When the
+  loopback control socket is enabled, it includes the per-run `controlToken` and
+  is written atomically with `0600` permissions.
 - `remote.spawnSecret` (in `config.jsonc`) — the pre-shared HMAC key for the
   remote spawn command channel. Generated only when `feature.remoteSpawn` is
   enabled, stored in the `0700` config directory, and redacted from logs and
