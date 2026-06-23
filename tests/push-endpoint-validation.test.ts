@@ -4,7 +4,11 @@ import { isAllowedPushEndpoint, isValidSubscription } from "../src/server/push/s
 describe("isAllowedPushEndpoint", () => {
   it("accepts a normal https push endpoint", () => {
     expect(isAllowedPushEndpoint("https://fcm.googleapis.com/fcm/send/abc")).toBe(true);
+    expect(isAllowedPushEndpoint("https://fcm.googleapis.com/x")).toBe(true);
     expect(isAllowedPushEndpoint("https://updates.push.services.mozilla.com/wpush/v2/xyz")).toBe(true);
+    expect(isAllowedPushEndpoint("https://updates.push.services.mozilla.com/x")).toBe(true);
+    expect(isAllowedPushEndpoint("https://web.push.apple.com/x")).toBe(true);
+    expect(isAllowedPushEndpoint("https://fd-cdn.example.com/x")).toBe(true);
     expect(isAllowedPushEndpoint("https://172.15.0.1/x")).toBe(true);
     expect(isAllowedPushEndpoint("https://172.32.0.1/x")).toBe(true);
   });
@@ -30,6 +34,17 @@ describe("isAllowedPushEndpoint", () => {
     expect(isAllowedPushEndpoint("https://[::ffff:a00:1]/")).toBe(false);
     expect(isAllowedPushEndpoint("https://[::ffff:ac10:1]/")).toBe(false);
     expect(isAllowedPushEndpoint("https://[::ffff:c0a8:101]/")).toBe(false);
+  });
+
+  it("rejects loopback / internal DNS hostnames", () => {
+    expect(isAllowedPushEndpoint("https://localhost/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://localhost:8443/internal")).toBe(false);
+    expect(isAllowedPushEndpoint("https://localhost./x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://foo.localhost/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://printer.local/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://metadata.google.internal/latest/meta-data")).toBe(false);
+    expect(isAllowedPushEndpoint("https://svc.internal/x")).toBe(false);
+    expect(isAllowedPushEndpoint("https://ip6-localhost/x")).toBe(false);
   });
 
   it("rejects IPv6 unique-local IP literals without rejecting fd-prefixed DNS names", () => {

@@ -2,7 +2,10 @@
 
 These checks prove that tunnel-reachable push subscription writes cannot register
 an internal HTTPS endpoint that the home machine would later contact via
-`web-push`, while normal browser push subscriptions still work.
+`web-push`, while normal browser push subscriptions still work. The guard rejects
+internal IP literals and known-internal hostnames such as `localhost`,
+`*.localhost`, `local`, `*.local`, `metadata.google.internal`, `*.internal`,
+`ip6-localhost`, and `ip6-loopback`.
 
 Preconditions common to all cases:
 
@@ -41,9 +44,39 @@ otherwise ignores the write) and the internal endpoint is not stored.
 
 ---
 
-## MT-PUSH-SSRF-02 — Real browser push subscription still registers
+## MT-PUSH-SSRF-02 — Internal hostname subscription is rejected
 
 - **ID:** MT-PUSH-SSRF-02
+- **Feature:** Web Push endpoint SSRF guard
+- **Preconditions:** Common preconditions; same-origin request headers available.
+- **Config-matrix cell:** Remote = dev tunnel; Endpoint = internal DNS hostname.
+- **Platforms:** macOS, Linux, Windows host; any tunnel-capable browser/device.
+
+**Steps:**
+1. Send a same-origin JSON request to the tunnel URL:
+   ```sh
+   curl -i "$TUNNEL_ORIGIN/api/push/subscribe" \
+     -H "Content-Type: application/json" \
+     -H "Origin: $TUNNEL_ORIGIN" \
+     -H "Host: ${TUNNEL_ORIGIN#https://}" \
+     --data '{"endpoint":"https://localhost:8443/internal","keys":{"p256dh":"a","auth":"b"}}'
+   ```
+2. Repeat step 1 with a cloud-metadata or internal suffix hostname such as
+   `https://metadata.google.internal/latest/meta-data` or `https://svc.internal/x`.
+3. Inspect `$CLIMON_HOME/push/subscriptions.json` if it exists.
+
+**Expected result:** Each request returns HTTP 400 `Invalid subscription` (or
+otherwise ignores the write) and no `localhost`, `local`/`*.local`, cloud
+metadata, `*.internal`, or `ip6-*` loopback endpoint is stored.
+
+**Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
+| --- | --- | --- | --- | --- | --- |
+
+---
+
+## MT-PUSH-SSRF-03 — Real browser push subscription still registers
+
+- **ID:** MT-PUSH-SSRF-03
 - **Feature:** Web Push endpoint SSRF guard
 - **Preconditions:** Common preconditions; notifications not yet blocked for the
   tunnel origin.
@@ -60,18 +93,18 @@ otherwise ignores the write) and the internal endpoint is not stored.
 
 **Expected result:** The subscription succeeds (HTTP 204). The stored endpoint is
 an `https:` URL using a public DNS hostname from the browser push service, not an
-internal IP literal.
+internal IP literal or known-internal hostname.
 
 **Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
 | --- | --- | --- | --- | --- | --- |
 
 ---
 
-## MT-PUSH-SSRF-03 — Attention push still delivers after validation
+## MT-PUSH-SSRF-04 — Attention push still delivers after validation
 
-- **ID:** MT-PUSH-SSRF-03
+- **ID:** MT-PUSH-SSRF-04
 - **Feature:** Web Push endpoint SSRF guard
-- **Preconditions:** MT-PUSH-SSRF-02 has passed; at least one climon session is
+- **Preconditions:** MT-PUSH-SSRF-03 has passed; at least one climon session is
   available to drive into `needs-attention`.
 - **Config-matrix cell:** Remote = dev tunnel; Notification delivery = browser
   push service.

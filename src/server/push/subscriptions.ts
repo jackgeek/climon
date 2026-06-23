@@ -11,6 +11,25 @@ export function subscriptionsPath(climonHome: string): string {
   return join(climonHome, "push", "subscriptions.json");
 }
 
+const INTERNAL_HOST_EXACT = new Set([
+  "localhost",
+  "local",
+  "ip6-localhost",
+  "ip6-loopback",
+  "metadata.google.internal",
+]);
+const INTERNAL_HOST_SUFFIXES = [".localhost", ".local", ".internal"];
+
+function normalizeEndpointHostname(hostname: string): string {
+  const lower = hostname.toLowerCase();
+  return lower.endsWith(".") ? lower.slice(0, -1) : lower;
+}
+
+function isInternalHostname(hostname: string): boolean {
+  if (INTERNAL_HOST_EXACT.has(hostname)) return true;
+  return INTERNAL_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+}
+
 function ipv4OctetsFromLiteral(hostname: string): [number, number, number, number] | undefined {
   const match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!match) return undefined;
@@ -73,8 +92,8 @@ function isPrivateIpLiteral(hostname: string): boolean {
 
 /**
  * Restricts a web-push endpoint to an https URL that is not aimed at an
- * internal IP literal, closing the SSRF vector where a tunnel client registers
- * an endpoint pointing at an internal service.
+ * internal IP literal or known-internal DNS hostname, closing the SSRF vector
+ * where a tunnel client registers an endpoint pointing at an internal service.
  */
 export function isAllowedPushEndpoint(endpoint: string): boolean {
   let url: URL;
@@ -84,7 +103,9 @@ export function isAllowedPushEndpoint(endpoint: string): boolean {
     return false;
   }
   if (url.protocol !== "https:") return false;
-  return !isPrivateIpLiteral(url.hostname);
+  const hostname = normalizeEndpointHostname(url.hostname);
+  if (isInternalHostname(hostname)) return false;
+  return !isPrivateIpLiteral(hostname);
 }
 
 export function isValidSubscription(value: unknown): value is StoredPushSubscription {
