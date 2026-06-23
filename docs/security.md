@@ -29,6 +29,15 @@ networks. We assume:
 - Input arriving over the wire (mux frames, session metadata, labels) is
   untrusted.
 
+## Project-local config trust
+
+Project-local `.climon/config.jsonc` files are treated as untrusted when a user
+starts climon inside a cloned repository. They may override only non-security
+settings. Execution, network, and update trust-boundary settings are marked
+`globalOnly`/`global_only` in the TypeScript and Rust registries and are resolved
+solely from the global `$CLIMON_HOME/config.jsonc`: `session.terminalProgram`, all
+`remote.*` settings, and all `update.*` settings.
+
 ## Transport: identity-based dev tunnels
 
 Remote traffic rides a Microsoft **dev tunnel** rather than SSH. The home

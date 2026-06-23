@@ -322,6 +322,9 @@ export function resolveConfigSetting(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): unknown {
+  if (findConfigSetting(key)?.globalOnly) {
+    return readGlobalConfigSetting(key, env);
+  }
   for (const dir of candidateConfigDirs(env, cwd)) {
     const value = readDottedKey(readSparseConfig(dir), key);
     if (value !== undefined) return value;
