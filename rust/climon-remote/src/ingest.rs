@@ -35,6 +35,9 @@ const DEFAULT_MAX_SESSIONS: usize = 256;
 const DEFAULT_KEEPALIVE_SECONDS: f64 = 60.0;
 const INGEST_PORT_RETRY_ATTEMPTS: u32 = 100;
 
+/// Loopback control-socket spawn timeout (ms). Mirrors the Bun control server.
+pub const DEFAULT_SPAWN_TIMEOUT_MS: u64 = 10_000;
+
 /// A spawn request received on the loopback control socket. Mirrors the Bun
 /// `SpawnControlRequest` (the dashboard server's `requestRemoteSpawn` sends this
 /// JSON verbatim).
@@ -478,6 +481,51 @@ pub async fn handle_spawn_control_request(
             error,
         },
         _ => SpawnControlResponse::error(&req.request_id, "internal error"),
+    }
+}
+
+/// Serves one loopback control-socket connection: newline-delimited JSON
+/// `SpawnControlRequest` in, `SpawnControlResponse` out. Mirrors the Bun
+/// `controlServer` connection handler.
+async fn serve_control_connection(
+    socket: TcpStream,
+    registry: Arc<IngestConnectionRegistry>,
+    spawn_secret: Option<String>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (mut rd, mut wr) = socket.into_split();
+    let mut buf = vec![0u8; 8 * 1024];
+    let mut acc: Vec<u8> = Vec::new();
+    loop {
+        let n = match rd.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        acc.extend_from_slice(&buf[..n]);
+        while let Some(pos) = acc.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = acc.drain(..=pos).collect();
+            let line = &line[..line.len() - 1];
+            if line.iter().all(|b| b.is_ascii_whitespace()) {
+                continue;
+            }
+            let response = match serde_json::from_slice::<SpawnControlRequest>(line) {
+                Ok(req) => {
+                    handle_spawn_control_request(
+                        req,
+                        &registry,
+                        spawn_secret.clone(),
+                        DEFAULT_SPAWN_TIMEOUT_MS,
+                    )
+                    .await
+                }
+                Err(_) => SpawnControlResponse::error("", "bad request"),
+            };
+            let mut out = serde_json::to_vec(&response).unwrap_or_default();
+            out.push(b'\n');
+            if wr.write_all(&out).await.is_err() {
+                return;
+            }
+        }
     }
 }
 
@@ -1132,6 +1180,37 @@ pub async fn run_ingest_daemon(
 
     let listener = TcpListener::bind((host.as_str(), port)).await?;
 
+    let spawn_secret =
+        resolve_config_setting("remote.spawnSecret", &config_env, std::path::Path::new("."))
+            .and_then(|v| v.as_str().filter(|s| !s.is_empty()).map(String::from));
+
+    let control_listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let control_port = control_listener.local_addr()?.port();
+    let control_socket =
+        climon_session::socket::format_session_socket_ref("127.0.0.1", control_port);
+
+    // Dual-listen: when a tunnel is configured and the data listener is NOT on
+    // loopback, also bind 127.0.0.1:port so same-machine clients can connect.
+    let needs_loopback = state
+        .as_ref()
+        .map(|s| !s.tunnel_id.is_empty())
+        .unwrap_or(false)
+        && host != "127.0.0.1"
+        && host != "::1";
+    let loopback_listener = if needs_loopback {
+        match TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(l) => Some(l),
+            Err(e) => {
+                eprintln!(
+                    "climon: warning: ingest could not bind loopback 127.0.0.1:{port} ({e}). Dev tunnel connections may fail."
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let mut supervisor = TunnelHostSupervisor::new(config_env.clone(), deps.spawn_host);
     supervisor.reconcile();
 
@@ -1149,12 +1228,29 @@ pub async fn run_ingest_daemon(
             pid: std::process::id(),
             port,
             host: Some(host.clone()),
-            control_socket: None,
+            control_socket: Some(control_socket.clone()),
         },
         &config_env,
     )?;
 
     let registry = Arc::new(IngestConnectionRegistry::new());
+
+    let loopback_task = loopback_listener.map(|lb| {
+        let reg = registry.clone();
+        let store = store_env.clone();
+        let secret = spawn_secret.clone();
+        let ka = keep_alive_seconds;
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = lb.accept().await {
+                let mut opts = IngestConnOptions::new(store.clone());
+                opts.keep_alive_seconds = ka;
+                opts.registry = Some(reg.clone());
+                opts.spawn_secret = secret.clone();
+                tokio::spawn(run_ingest_connection(socket, opts));
+            }
+        })
+    });
+
     let mut poll = tokio::time::interval(Duration::from_secs(5));
     poll.tick().await;
 
@@ -1166,7 +1262,15 @@ pub async fn run_ingest_daemon(
                     let mut opts = IngestConnOptions::new(store_env.clone());
                     opts.keep_alive_seconds = keep_alive_seconds;
                     opts.registry = Some(registry.clone());
+                    opts.spawn_secret = spawn_secret.clone();
                     tokio::spawn(run_ingest_connection(socket, opts));
+                }
+            }
+            accepted = control_listener.accept() => {
+                if let Ok((socket, _)) = accepted {
+                    let reg = registry.clone();
+                    let secret = spawn_secret.clone();
+                    tokio::spawn(serve_control_connection(socket, reg, secret));
                 }
             }
             _ = poll.tick() => {
@@ -1185,6 +1289,9 @@ pub async fn run_ingest_daemon(
 
     supervisor.stop();
     drop(listener);
+    if let Some(task) = loopback_task {
+        task.abort();
+    }
     if exit == IngestExit::Demoted {
         (deps.spawn_uplink)();
         (deps.stop_local_server)();
