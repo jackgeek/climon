@@ -190,6 +190,14 @@ for example to type into a REPL or respond to a prompt.
 
 Detach without stopping the command using: `Ctrl-\` then `d`.
 
+### `climon remotes`
+
+Show which remote hosts are currently connected (and, on a devbox, the dashboard
+this machine's uplink is connected to). Healthy entries are marked `●` and stale
+ones `○`. Use `--watch` for a live-refreshing view or `--json` for a
+machine-readable snapshot. The same live data drives the dashboard's **Remote
+hosts** menu (updated over SSE).
+
 ### `climon kill <id>`
 
 Terminate a monitored session and its underlying process. Use this to clean up

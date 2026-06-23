@@ -201,6 +201,36 @@ local paths. The ingest connection handler enforces this:
   FIFO chain), so the routine duplicate `session-added` frames the devbox emits
   on every file-watch tick cannot race two concurrent binds onto one socket.
 
+### Remote visibility status files + untrusted hello identity
+
+The remote-visibility feature publishes two local status beacons under
+`$CLIMON_HOME` — `ingest-status.json` (written by the ingest) and
+`uplink-status.json` (written by a devbox uplink supervisor). They carry only
+hostnames, LAN addresses, and connection counts — **no secrets** — and are
+never network-exposed: they are plain files written `0600` inside the `0700`
+`$CLIMON_HOME`, readable by the owning user only. `GET /api/remotes` (and its
+SSE `remotes` event), which surfaces this data to the dashboard, is
+**loopback-only** (it returns `403` for non-loopback callers, like the other
+privileged dashboard APIs).
+
+`hello.hostname` and `hello.os` are **attacker-controlled** (a devbox is
+untrusted input). They are sanitized once at the ingest trust boundary, before
+they are stored or rendered anywhere:
+
+- `hostname` is capped to **64 chars** and stripped of C0/C1 control bytes
+  (including `ESC`), so a malicious devbox cannot smuggle ANSI escape sequences
+  into the `climon remotes` terminal output (clear-screen, color, title) or
+  oversize the status file.
+- `os` is **allowlisted** to `darwin`/`win32`/`linux`; anything else folds to
+  `unknown`.
+
+Because sanitization happens at storage time, every downstream sink (the
+`climon remotes` TTY renderer, `--json`, and the dashboard, which additionally
+renders via auto-escaping React text nodes) only ever formats already-safe
+strings. The server payload for `/api/remotes` is also built field-by-field
+(not spread from the file) so an unexpected field in the status file cannot ride
+into the API response.
+
 ### Limitation: shared-identity namespaces are self-asserted
 
 The tunnel ACL authenticates each connection, but there is **no per-client
