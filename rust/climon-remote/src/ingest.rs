@@ -250,11 +250,14 @@ pub fn to_local_meta(
 pub struct IngestConnectionRegistry {
     active: Mutex<HashMap<String, ActiveConn>>,
     dismissed: Mutex<HashSet<String>>,
+    pending_spawns:
+        Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::mux::ControlMessage>>>,
 }
 
 struct ActiveConn {
     shutdown: Arc<Notify>,
     teardown_done: Arc<Notify>,
+    send_tx: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 impl IngestConnectionRegistry {
@@ -285,6 +288,7 @@ impl IngestConnectionRegistry {
         client_id: &str,
         shutdown: Arc<Notify>,
         teardown_done: Arc<Notify>,
+        send_tx: mpsc::UnboundedSender<Vec<u8>>,
     ) {
         let existing = self.active.lock().unwrap().remove(client_id);
         if let Some(existing) = existing {
@@ -296,8 +300,53 @@ impl IngestConnectionRegistry {
             ActiveConn {
                 shutdown,
                 teardown_done,
+                send_tx,
             },
         );
+    }
+
+    /// Returns the live send channel for `client_id`, if any. Mirrors `getChannel`.
+    pub fn get_channel(&self, client_id: &str) -> Option<mpsc::UnboundedSender<Vec<u8>>> {
+        self.active
+            .lock()
+            .unwrap()
+            .get(client_id)
+            .map(|c| c.send_tx.clone())
+    }
+
+    /// Registers an in-flight spawn; resolves on `resolve_pending_spawn` with the
+    /// same request id, or after `timeout_ms` with a `timeout` SpawnResult.
+    /// Mirrors `registerPendingSpawn`.
+    pub fn register_pending_spawn(
+        &self,
+        request_id: &str,
+        timeout_ms: u64,
+    ) -> impl std::future::Future<Output = crate::mux::ControlMessage> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.pending_spawns
+            .lock()
+            .unwrap()
+            .insert(request_id.to_string(), tx);
+        let request_id = request_id.to_string();
+        async move {
+            match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
+                Ok(Ok(msg)) => msg,
+                _ => crate::mux::ControlMessage::SpawnResult {
+                    request_id,
+                    id: None,
+                    warning: None,
+                    error: Some("timeout".to_string()),
+                },
+            }
+        }
+    }
+
+    /// Resolves the in-flight spawn for `request_id`, if any. Mirrors
+    /// `resolvePendingSpawn`.
+    pub fn resolve_pending_spawn(&self, request_id: &str, result: crate::mux::ControlMessage) {
+        if let Some(tx) = self.pending_spawns.lock().unwrap().remove(request_id) {
+            let _ = tx.send(result);
+        }
     }
 
     /// Signals that the connection for `client_id` has fully torn down. Mirrors
@@ -498,6 +547,7 @@ async fn handle_control(
                                     client_id,
                                     shutdown.clone(),
                                     teardown_done.clone(),
+                                    send_tx.clone(),
                                 )
                                 .await;
                         }
@@ -995,6 +1045,56 @@ fn remove_beacons(config_env: &ConfigEnv) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn registry_channel_and_pending_spawn_roundtrip() {
+        use crate::mux::ControlMessage;
+        let registry = IngestConnectionRegistry::new();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+        let teardown = std::sync::Arc::new(tokio::sync::Notify::new());
+        registry
+            .evict_and_register("client-1", shutdown, teardown, tx)
+            .await;
+
+        // Channel is retrievable and usable.
+        let chan = registry
+            .get_channel("client-1")
+            .expect("channel registered");
+        chan.send(crate::mux::encode_control(&ControlMessage::Ping))
+            .unwrap();
+        assert!(rx.recv().await.is_some());
+
+        // Pending spawn resolves when resolve_pending_spawn is called.
+        let pending = registry.register_pending_spawn("req-1", 5_000);
+        registry.resolve_pending_spawn(
+            "req-1",
+            ControlMessage::SpawnResult {
+                request_id: "req-1".into(),
+                id: Some("sess-1".into()),
+                warning: None,
+                error: None,
+            },
+        );
+        let result = pending.await;
+        match result {
+            ControlMessage::SpawnResult { id, .. } => assert_eq!(id.as_deref(), Some("sess-1")),
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_spawn_times_out() {
+        use crate::mux::ControlMessage;
+        let registry = IngestConnectionRegistry::new();
+        let pending = registry.register_pending_spawn("req-timeout", 20);
+        match pending.await {
+            ControlMessage::SpawnResult { error, .. } => {
+                assert_eq!(error.as_deref(), Some("timeout"))
+            }
+            other => panic!("expected timeout SpawnResult, got {other:?}"),
+        }
+    }
 
     #[test]
     fn is_valid_remote_id_accepts_safe_ids() {
