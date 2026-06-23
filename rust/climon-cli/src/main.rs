@@ -386,7 +386,7 @@ fn run_ingest_entry() -> i32 {
         let deps = IngestDaemonDeps {
             spawn_uplink: Box::new(spawn_uplink_detached),
             stop_local_server: Box::new(|| {}),
-            spawn_host: IngestDaemonDeps::default().spawn_host,
+            spawn_host: Box::new(|id: &str| climon_remote::ingest::spawn_devtunnel_host(id)),
         };
         match run_ingest_daemon(config_env, store_env, stop, deps).await {
             Ok(IngestExit::AlreadyRunning) => 0,

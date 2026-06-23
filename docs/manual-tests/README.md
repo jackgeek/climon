@@ -61,6 +61,7 @@ result-tracking row.
 | — | Security DNS-rebinding guard for dashboard reads/delete | [security-dns-rebind.md](security-dns-rebind.md) |
 | — | Security — project-local config global-only settings | [security-config-global-only.md](security-config-global-only.md) |
 | — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
+| — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
 
 ## Recording results
 
