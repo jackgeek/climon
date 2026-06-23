@@ -441,10 +441,19 @@ impl IngestConnectionRegistry {
         teardown_done: Arc<Notify>,
         send_tx: mpsc::UnboundedSender<Vec<u8>>,
     ) {
-        let existing = self.active.lock().unwrap().remove(client_id);
-        if let Some(existing) = existing {
-            existing.shutdown.notify_one();
-            existing.teardown_done.notified().await;
+        // Mirror Bun `evictAndRegister`: keep the existing entry in the map
+        // while awaiting its teardown. `mark_torn_down` is gated on finding the
+        // entry, so removing it here would make teardown_done never fire and
+        // deadlock this await (leaking the connection slot).
+        let existing = self
+            .active
+            .lock()
+            .unwrap()
+            .get(client_id)
+            .map(|c| (c.shutdown.clone(), c.teardown_done.clone()));
+        if let Some((old_shutdown, old_teardown)) = existing {
+            old_shutdown.notify_one();
+            old_teardown.notified().await;
         }
         self.active.lock().unwrap().insert(
             client_id.to_string(),
@@ -865,7 +874,16 @@ async fn handle_control(
         "pong" => {}
         "session-added" => {
             if let Some(meta) = value.get("meta") {
-                add_session(meta, label, sessions, store_env, max_sessions, send_tx).await;
+                add_session(
+                    meta,
+                    label,
+                    sessions,
+                    store_env,
+                    max_sessions,
+                    send_tx,
+                    registry,
+                )
+                .await;
             }
         }
         "session-updated" => {
@@ -954,6 +972,7 @@ async fn add_session(
     store_env: &Arc<StoreEnv>,
     max_sessions: usize,
     send_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    registry: &Option<Arc<IngestConnectionRegistry>>,
 ) {
     let label = match label {
         Some(label) => label.clone(),
@@ -965,6 +984,23 @@ async fn add_session(
     }
     let remote_id = remote_id.to_string();
     let local_id = namespaced_id(&label, &remote_id);
+
+    // Check dismissal first: if the user deleted this session from the
+    // dashboard, do NOT re-materialize or patch it (the devbox re-sends
+    // `session-added` on every fs.watch tick, which would otherwise recreate
+    // the meta file). Tear down any in-memory entry so we stop bridging data.
+    // Mirrors the Bun `addSession` dismissal branch.
+    let dismissed = registry
+        .as_ref()
+        .map(|r| r.is_dismissed(&local_id))
+        .unwrap_or(false);
+    if dismissed {
+        if let Some(existing) = sessions.remove(&remote_id) {
+            existing.accept_handle.abort();
+            existing.sockets.lock().await.clear();
+        }
+        return;
+    }
 
     if let Some(existing) = sessions.get(&remote_id) {
         let patch = sanitize_remote_patch(&serde_json::json!({
@@ -1657,6 +1693,71 @@ mod tests {
             ControlMessage::SpawnResult { id, .. } => assert_eq!(id.as_deref(), Some("sess-1")),
             other => panic!("unexpected result: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn evict_and_register_awaits_previous_teardown_without_deadlock() {
+        // Regression: evict_and_register must keep the existing entry in the map
+        // while awaiting teardown, so the old connection's mark_torn_down can
+        // find it and fire teardown_done. Removing it first deadlocks this await.
+        let registry = Arc::new(IngestConnectionRegistry::new());
+        let sh_a = Arc::new(Notify::new());
+        let td_a = Arc::new(Notify::new());
+        let (tx_a, _rx_a) = mpsc::unbounded_channel::<Vec<u8>>();
+        registry
+            .evict_and_register("client-1", sh_a.clone(), td_a.clone(), tx_a)
+            .await;
+
+        let reg2 = registry.clone();
+        let sh_b = Arc::new(Notify::new());
+        let td_b = Arc::new(Notify::new());
+        let (tx_b, _rx_b) = mpsc::unbounded_channel::<Vec<u8>>();
+        let join = tokio::spawn(async move {
+            reg2.evict_and_register("client-1", sh_b, td_b, tx_b).await;
+        });
+
+        // The second registration fires shutdown on A, then awaits A's teardown.
+        sh_a.notified().await;
+        // Simulate the old connection observing shutdown and tearing down.
+        registry.mark_torn_down("client-1", &sh_a);
+
+        tokio::time::timeout(Duration::from_secs(2), join)
+            .await
+            .expect("evict_and_register deadlocked")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn add_session_respects_dismissal() {
+        // A dismissed session must not be re-materialized by a `session-added`
+        // tick, and any in-memory entry must be torn down.
+        let store_env = Arc::new(make_test_store_env());
+        let label = "client-1";
+        let remote_id = "s1";
+        let local_id = namespaced_id(label, remote_id);
+        let registry = Arc::new(IngestConnectionRegistry::new());
+        registry.dismiss(&local_id);
+
+        let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
+        let (tx, _rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let meta = serde_json::json!({
+            "id": remote_id, "command": ["bash"], "displayCommand": "bash", "cwd": "/home/dev",
+            "status": "running", "priorityReason": "running",
+            "cols": 80, "rows": 24, "createdAt": "t", "updatedAt": "t", "lastActivityAt": "t"
+        });
+        add_session(
+            &meta,
+            &Some(label.to_string()),
+            &mut sessions,
+            &store_env,
+            16,
+            &tx,
+            &Some(registry),
+        )
+        .await;
+
+        assert!(read_meta(&store_env, &local_id).is_none());
+        assert!(sessions.is_empty());
     }
 
     #[tokio::test]
