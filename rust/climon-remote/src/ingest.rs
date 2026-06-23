@@ -35,6 +35,64 @@ const DEFAULT_MAX_SESSIONS: usize = 256;
 const DEFAULT_KEEPALIVE_SECONDS: f64 = 60.0;
 const INGEST_PORT_RETRY_ATTEMPTS: u32 = 100;
 
+/// A spawn request received on the loopback control socket. Mirrors the Bun
+/// `SpawnControlRequest` (the dashboard server's `requestRemoteSpawn` sends this
+/// JSON verbatim).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnControlRequest {
+    pub request_id: String,
+    pub client_id: String,
+    pub command: Vec<String>,
+    pub cwd: String,
+    pub cols: u16,
+    pub rows: u16,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub headless: bool,
+}
+
+/// The response written back on the loopback control socket. Mirrors the Bun
+/// `SpawnControlResponse`. `type` is always `"spawn-result"`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnControlResponse {
+    #[serde(rename = "type")]
+    pub kind: SpawnResultTag,
+    pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub enum SpawnResultTag {
+    #[serde(rename = "spawn-result")]
+    SpawnResult,
+}
+
+impl SpawnControlResponse {
+    fn error(request_id: &str, message: &str) -> Self {
+        Self {
+            kind: SpawnResultTag::SpawnResult,
+            request_id: request_id.to_string(),
+            id: None,
+            warning: None,
+            error: Some(message.to_string()),
+        }
+    }
+}
+
 /// Validates a remote session/client id against the strict allow-list
 /// `^[A-Za-z0-9._-]{1,64}$`. Mirrors `isValidRemoteId`.
 pub fn is_valid_remote_id(id: &str) -> bool {
@@ -251,7 +309,7 @@ pub struct IngestConnectionRegistry {
     active: Mutex<HashMap<String, ActiveConn>>,
     dismissed: Mutex<HashSet<String>>,
     pending_spawns:
-        Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::mux::ControlMessage>>>,
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::mux::ControlMessage>>>>,
 }
 
 struct ActiveConn {
@@ -328,15 +386,19 @@ impl IngestConnectionRegistry {
             .unwrap()
             .insert(request_id.to_string(), tx);
         let request_id = request_id.to_string();
+        let pending_spawns = self.pending_spawns.clone();
         async move {
             match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
                 Ok(Ok(msg)) => msg,
-                _ => crate::mux::ControlMessage::SpawnResult {
-                    request_id,
-                    id: None,
-                    warning: None,
-                    error: Some("timeout".to_string()),
-                },
+                _ => {
+                    pending_spawns.lock().unwrap().remove(&request_id);
+                    crate::mux::ControlMessage::SpawnResult {
+                        request_id,
+                        id: None,
+                        warning: None,
+                        error: Some("timeout".to_string()),
+                    }
+                }
             }
         }
     }
@@ -347,6 +409,11 @@ impl IngestConnectionRegistry {
         if let Some(tx) = self.pending_spawns.lock().unwrap().remove(request_id) {
             let _ = tx.send(result);
         }
+    }
+
+    /// Cancels an in-flight spawn without delivering a result.
+    pub fn cancel_pending_spawn(&self, request_id: &str) {
+        self.pending_spawns.lock().unwrap().remove(request_id);
     }
 
     /// Signals that the connection for `client_id` has fully torn down. Mirrors
@@ -362,12 +429,65 @@ impl IngestConnectionRegistry {
     }
 }
 
+/// Signs and forwards a `Spawn` to the target devbox channel, awaiting the
+/// correlated `SpawnResult`. Mirrors `handleSpawnControlRequest`.
+pub async fn handle_spawn_control_request(
+    req: SpawnControlRequest,
+    registry: &IngestConnectionRegistry,
+    spawn_secret: Option<String>,
+    timeout_ms: u64,
+) -> SpawnControlResponse {
+    let Some(secret) = spawn_secret else {
+        return SpawnControlResponse::error(&req.request_id, "remote spawn not configured");
+    };
+    let Some(channel) = registry.get_channel(&req.client_id) else {
+        return SpawnControlResponse::error(&req.request_id, "client not connected");
+    };
+    let pending = registry.register_pending_spawn(&req.request_id, timeout_ms);
+    let spawn = crate::mux::ControlMessage::Spawn {
+        request_id: req.request_id.clone(),
+        command: req.command,
+        cwd: req.cwd,
+        cols: req.cols,
+        rows: req.rows,
+        name: req.name,
+        priority: req.priority,
+        color: req.color,
+        headless: req.headless,
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let signed = crate::spawn_auth::sign_now(&secret, &spawn, now_ms);
+    if channel.send(crate::mux::encode_control(&signed)).is_err() {
+        registry.cancel_pending_spawn(&req.request_id);
+        return SpawnControlResponse::error(&req.request_id, "client not connected");
+    }
+    match pending.await {
+        crate::mux::ControlMessage::SpawnResult {
+            request_id,
+            id,
+            warning,
+            error,
+        } => SpawnControlResponse {
+            kind: SpawnResultTag::SpawnResult,
+            request_id,
+            id,
+            warning,
+            error,
+        },
+        _ => SpawnControlResponse::error(&req.request_id, "internal error"),
+    }
+}
+
 /// Options for [`run_ingest_connection`]. Mirrors `IngestConnOptions`.
 pub struct IngestConnOptions {
     pub store_env: StoreEnv,
     pub max_sessions: usize,
     pub keep_alive_seconds: f64,
     pub registry: Option<Arc<IngestConnectionRegistry>>,
+    pub spawn_secret: Option<String>,
 }
 
 impl IngestConnOptions {
@@ -377,6 +497,7 @@ impl IngestConnOptions {
             max_sessions: DEFAULT_MAX_SESSIONS,
             keep_alive_seconds: DEFAULT_KEEPALIVE_SECONDS,
             registry: None,
+            spawn_secret: None,
         }
     }
 }
@@ -395,6 +516,9 @@ pub async fn run_ingest_connection(channel: TcpStream, options: IngestConnOption
     let store_env = Arc::new(options.store_env);
     let max_sessions = options.max_sessions;
     let registry = options.registry.clone();
+    let spawn_secret = options.spawn_secret;
+    let mut replay_guard =
+        crate::spawn_auth::ReplayGuard::new(crate::spawn_auth::DEFAULT_FRESHNESS_WINDOW_MS);
 
     let (mut read_half, write_half) = channel.into_split();
 
@@ -486,6 +610,8 @@ pub async fn run_ingest_connection(channel: TcpStream, options: IngestConnOption
                                 &registry,
                                 &shutdown,
                                 &teardown_done,
+                                spawn_secret.as_deref(),
+                                Some(&mut replay_guard),
                             )
                             .await;
                         }
@@ -533,6 +659,8 @@ async fn handle_control(
     registry: &Option<Arc<IngestConnectionRegistry>>,
     shutdown: &Arc<Notify>,
     teardown_done: &Arc<Notify>,
+    spawn_secret: Option<&str>,
+    replay_guard: Option<&mut crate::spawn_auth::ReplayGuard>,
 ) {
     let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     match kind {
@@ -583,6 +711,38 @@ async fn handle_control(
                 return;
             }
             remove_session(sessions, id, store_env).await;
+        }
+        "signed" => {
+            if let (Some(secret), Some(guard)) = (spawn_secret, replay_guard) {
+                if let Ok(envelope) =
+                    serde_json::from_value::<crate::mux::ControlMessage>(value.clone())
+                {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as i64;
+                    if let Ok(inner) =
+                        crate::spawn_auth::verify_signed_control(secret, &envelope, guard, now_ms)
+                    {
+                        if let crate::mux::ControlMessage::SpawnResult { request_id, .. } = &inner {
+                            if let Some(registry) = registry {
+                                registry.resolve_pending_spawn(request_id, inner.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "spawn-result" => {
+            if let Some(registry) = registry {
+                if let Ok(inner) =
+                    serde_json::from_value::<crate::mux::ControlMessage>(value.clone())
+                {
+                    if let crate::mux::ControlMessage::SpawnResult { request_id, .. } = &inner {
+                        registry.resolve_pending_spawn(request_id, inner.clone());
+                    }
+                }
+            }
         }
         _ => {}
     }
@@ -1094,6 +1254,102 @@ mod tests {
             }
             other => panic!("expected timeout SpawnResult, got {other:?}"),
         }
+        assert!(registry.pending_spawns.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn spawn_control_request_signs_and_correlates() {
+        use crate::mux::ControlMessage;
+        let registry = std::sync::Arc::new(IngestConnectionRegistry::new());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+        let teardown = std::sync::Arc::new(tokio::sync::Notify::new());
+        registry
+            .evict_and_register("client-1", shutdown, teardown, tx)
+            .await;
+
+        let req = SpawnControlRequest {
+            request_id: "req-9".into(),
+            client_id: "client-1".into(),
+            command: vec!["bash".into()],
+            cwd: "/tmp".into(),
+            cols: 80,
+            rows: 24,
+            name: None,
+            priority: None,
+            color: None,
+            theme: None,
+            headless: false,
+        };
+
+        let reg = registry.clone();
+        let handle = tokio::spawn(async move {
+            handle_spawn_control_request(req, &reg, Some("sekret".to_string()), 5_000).await
+        });
+
+        let frame = rx.recv().await.expect("spawn frame sent");
+        registry.resolve_pending_spawn(
+            "req-9",
+            ControlMessage::SpawnResult {
+                request_id: "req-9".into(),
+                id: Some("sess-9".into()),
+                warning: None,
+                error: None,
+            },
+        );
+        let res = handle.await.unwrap();
+        assert_eq!(res.request_id, "req-9");
+        assert_eq!(res.id.as_deref(), Some("sess-9"));
+        let _ = frame;
+    }
+
+    #[tokio::test]
+    async fn spawn_control_request_errors_when_client_absent() {
+        let registry = std::sync::Arc::new(IngestConnectionRegistry::new());
+        let req = SpawnControlRequest {
+            request_id: "r".into(),
+            client_id: "nobody".into(),
+            command: vec!["sh".into()],
+            cwd: "/".into(),
+            cols: 80,
+            rows: 24,
+            name: None,
+            priority: None,
+            color: None,
+            theme: None,
+            headless: false,
+        };
+        let res = handle_spawn_control_request(req, &registry, Some("s".into()), 1_000).await;
+        assert_eq!(res.error.as_deref(), Some("client not connected"));
+    }
+
+    #[tokio::test]
+    async fn spawn_control_request_cleans_pending_when_send_fails() {
+        let registry = std::sync::Arc::new(IngestConnectionRegistry::new());
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+        let teardown = std::sync::Arc::new(tokio::sync::Notify::new());
+        registry
+            .evict_and_register("client-1", shutdown, teardown, tx)
+            .await;
+        drop(rx);
+
+        let req = SpawnControlRequest {
+            request_id: "send-fail".into(),
+            client_id: "client-1".into(),
+            command: vec!["sh".into()],
+            cwd: "/".into(),
+            cols: 80,
+            rows: 24,
+            name: None,
+            priority: None,
+            color: None,
+            theme: None,
+            headless: false,
+        };
+        let res = handle_spawn_control_request(req, &registry, Some("s".into()), 1_000).await;
+        assert_eq!(res.error.as_deref(), Some("client not connected"));
+        assert!(registry.pending_spawns.lock().unwrap().is_empty());
     }
 
     #[test]
