@@ -46,6 +46,9 @@ export async function readConfinedFile(
     return { status: "refused", path: real };
   }
 
+  // This path was canonicalized and checked for containment before open. A
+  // residual swap race is acceptable here because the threat model is the
+  // user's own session cwd, not a hostile multi-writer directory.
   let handle;
   try {
     handle = await open(real, "r");
@@ -61,11 +64,22 @@ export async function readConfinedFile(
       return { status: "too-large", path: real, size: stat.size };
     }
     const buffer = Buffer.alloc(stat.size);
-    await handle.read(buffer, 0, stat.size, 0);
-    if (buffer.includes(0)) {
+    let offset = 0;
+    while (offset < stat.size) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        offset,
+        stat.size - offset,
+        offset
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    const content = buffer.subarray(0, offset);
+    if (content.includes(0)) {
       return { status: "binary", path: real };
     }
-    return { status: "ok", path: real, content: buffer.toString("utf8") };
+    return { status: "ok", path: real, content: content.toString("utf8") };
   } finally {
     await handle.close();
   }

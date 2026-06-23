@@ -6,12 +6,17 @@ import { readConfinedFile } from "../src/server/file-read.js";
 
 let root = "";
 let cwd = "";
+const largeText = Array.from(
+  { length: 8192 },
+  (_, i) => `line ${i.toString().padStart(4, "0")} abcdefghijklmnopqrstuvwxyz\n`
+).join("");
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "climon-fileread-"));
   cwd = join(root, "project");
   await mkdir(join(cwd, "sub"), { recursive: true });
   await writeFile(join(cwd, "readme.txt"), "hello world\nsecond line\n");
+  await writeFile(join(cwd, "large.txt"), largeText);
   await writeFile(join(cwd, "sub", "nested.txt"), "nested\n");
   await writeFile(join(root, "secret.txt"), "TOP SECRET\n");
   await writeFile(join(cwd, "binary.bin"), Buffer.from([0x41, 0x00, 0x42]));
@@ -32,6 +37,12 @@ describe("readConfinedFile", () => {
   test("reads a cwd-relative nested file", async () => {
     const r = await readConfinedFile(cwd, "sub/nested.txt", 1024);
     expect(r.status).toBe("ok");
+  });
+
+  test("reads a multi-KB text file as text", async () => {
+    const r = await readConfinedFile(cwd, "large.txt", largeText.length);
+    expect(r.status).toBe("ok");
+    if (r.status === "ok") expect(r.content).toBe(largeText);
   });
 
   test("refuses ../ escape", async () => {
