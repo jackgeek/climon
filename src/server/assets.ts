@@ -178,7 +178,7 @@ export function renderDashboard(): string {
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no" />
 <title>climon</title>
 <link rel="icon" type="image/png" href="/favicon.png" />
 <link rel="manifest" href="/manifest.webmanifest" />
@@ -190,7 +190,11 @@ export function renderDashboard(): string {
 <link rel="stylesheet" href="/assets/xterm.css" />
 <style>
   html, body, #root { height: 100%; }
-  body { margin: 0; }
+  /* Lock the PWA to a 1:1 view: block rubber-band/overscroll page movement on
+     swipe and pinch-zoom. The terminal and lists manage their own internal
+     scrolling, so the page itself never needs to scroll or zoom. */
+  html, body { overscroll-behavior: none; }
+  body { margin: 0; overflow: hidden; touch-action: pan-x pan-y; }
 </style>
 </head>
 <body>
