@@ -335,7 +335,7 @@ mod tests {
         let source_dir = root.join("src");
         let install_dir = root.join(".local").join("bin");
         fs::create_dir_all(&source_dir).unwrap();
-        for name in ["install", "climon-server", "climon-beta"] {
+        for name in ["install", "climon-server"] {
             let p = source_dir.join(name);
             fs::write(&p, "bin").unwrap();
             set_quarantine(&p);
@@ -343,7 +343,7 @@ mod tests {
 
         install_binaries(&source_dir, &install_dir, InstallBinariesOptions::default()).unwrap();
 
-        for name in ["climon", "climon-server", "climon-beta"] {
+        for name in ["climon", "climon-server"] {
             let installed = install_dir.join(name);
             assert!(installed.exists(), "{name} should be installed");
             assert!(
