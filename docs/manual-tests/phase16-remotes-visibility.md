@@ -123,11 +123,13 @@ glyphs, so it is safe to consume programmatically.
 1. Confirm both flags are off (`climon config feature.remotes`,
    `climon config feature.wslBridge`).
 2. Run `climon remotes`.
-3. Open the dashboard **Remote hosts** panel.
+3. Open the dashboard hamburger menu and look for the **Remotes** /
+   **Remote hosts** items.
 
 **Expected result:** The CLI prints a short hint that remotes are disabled (and
-how to enable them) instead of an empty list; the dashboard panel shows the
-"remotes are disabled" empty-state message rather than an empty host list.
+how to enable them) instead of an empty list; the dashboard hamburger menu hides
+both the **Remotes** and **Remote hosts** items entirely (so the panel is not
+reachable) while `feature.remotes` is off.
 
 - **Result:** _date / tester / platform / config-matrix cell / pass-fail / notes_
 
