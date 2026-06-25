@@ -1,5 +1,11 @@
 [
   {
+    "version": "2.2.1",
+    "changes": [
+      "Hide the dashboard Remote hosts menu item when feature.remotes is disabled"
+    ]
+  },
+  {
     "version": "2.2.0",
     "changes": [
       "View connected remote hosts live from the new dashboard Remote hosts menu and panel",
