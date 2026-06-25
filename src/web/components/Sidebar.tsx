@@ -258,7 +258,7 @@ export function Sidebar({
                   <MenuItem onClick={onCloseTunnelLink}>{closeTunnelLinkMenuLabel}</MenuItem>
                 )}
                 {showRemotesMenu && <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>}
-                <MenuItem onClick={onShowRemoteHosts}>{remoteHostsMenuLabel}</MenuItem>
+                {showRemotesMenu && <MenuItem onClick={onShowRemoteHosts}>{remoteHostsMenuLabel}</MenuItem>}
                 {sessions.some((s) => s.status === "completed" || s.status === "failed" || s.status === "disconnected") && (
                   <MenuItem onClick={onRemoveDisconnected}>{removeDisconnectedMenuLabel}</MenuItem>
                 )}
