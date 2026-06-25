@@ -53,6 +53,7 @@ result-tracking row.
 | — | Remotes visibility — `ingest-status.json`/`uplink-status.json` beacons, `climon remotes` (`--watch`/`--json`), loopback `GET /api/remotes` + SSE, dashboard "Remote hosts" panel, hello identity sanitization | [phase16-remotes-visibility.md](phase16-remotes-visibility.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
+| — | PWA zoom lock & no overscroll (pinch-zoom disabled, page pinned 1:1 on swipe) | [pwa-zoom-lock.md](pwa-zoom-lock.md) |
 | — | Security — Web Push endpoint SSRF guard | [security-push-ssrf.md](security-push-ssrf.md) |
 | — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |
 | — | Per-session theme + default theme (CLI `--theme`, Edit/New dialogs, live inheritance) | [per-session-theme.md](per-session-theme.md) |
@@ -60,6 +61,7 @@ result-tracking row.
 | — | Security — WebSocket attach Origin validation | [security-ws-attach-origin.md](security-ws-attach-origin.md) |
 | — | Security DNS-rebinding guard for dashboard reads/delete | [security-dns-rebind.md](security-dns-rebind.md) |
 | — | Security — project-local config global-only settings | [security-config-global-only.md](security-config-global-only.md) |
+| — | Interactive install opt-ins default to Yes (telemetry + auto-update prompts) | [optin-default-yes.md](optin-default-yes.md) |
 | — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
 | — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
 
