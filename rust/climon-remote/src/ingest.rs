@@ -1378,6 +1378,58 @@ impl<F: FnMut() + Send> HostProcess for ClosureHostProcess<F> {
     }
 }
 
+/// Builds the `devtunnel host <tunnelId>` command that binds the remotes dev
+/// tunnel to the local ingest port. Mirrors the legacy `defaultSpawnHost`
+/// (and the `devtunnel_command` helper in `uplink`): applies `devtunnel_env`,
+/// detaches stdin, inherits stdout/stderr into the ingest log, and suppresses
+/// the console window on Windows.
+fn devtunnel_host_command(tunnel_id: &str) -> std::process::Command {
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let mut cmd = std::process::Command::new("devtunnel");
+    cmd.arg("host");
+    cmd.arg(tunnel_id);
+    for (k, v) in crate::tunnel::devtunnel_env(&env) {
+        cmd.env(k, v);
+    }
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::inherit());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // devtunnel.exe is a console app; without CREATE_NO_WINDOW the
+        // supervisor's host process flashes a console window on Windows.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// A running `devtunnel host` child that is terminated and reaped on `stop()`.
+struct DevtunnelHostProcess {
+    child: Option<std::process::Child>,
+}
+
+impl HostProcess for DevtunnelHostProcess {
+    fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Spawns `devtunnel host <tunnelId>` to bind the remotes dev tunnel to the
+/// local ingest. This is the production `spawn_host` wired into the ingest
+/// daemon. If the spawn fails (e.g. the `devtunnel` CLI is missing) it returns
+/// a no-op host process so the ingest keeps running instead of crashing.
+pub fn spawn_devtunnel_host(tunnel_id: &str) -> Box<dyn HostProcess> {
+    match devtunnel_host_command(tunnel_id).spawn() {
+        Ok(child) => Box::new(DevtunnelHostProcess { child: Some(child) }),
+        Err(_) => Box::new(ClosureHostProcess(|| {})),
+    }
+}
+
 /// Factory closure that spawns a `devtunnel host` process for a tunnel id.
 pub type SpawnHostFn<'a> = Box<dyn FnMut(&str) -> Box<dyn HostProcess> + Send + 'a>;
 
@@ -2783,6 +2835,20 @@ mod tests {
         .expect("disconnected via idle");
         assert_eq!(after.status, SessionStatus::Disconnected);
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn devtunnel_host_command_targets_the_tunnel() {
+        let cmd = devtunnel_host_command("majestic-chair-4g4f6wz.eun1");
+        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("devtunnel"));
+        let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            vec![
+                std::ffi::OsStr::new("host"),
+                std::ffi::OsStr::new("majestic-chair-4g4f6wz.eun1"),
+            ]
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@
       "Read security-sensitive settings from global config only and warn on local overrides",
       "Harden the dashboard server against SSRF, DNS-rebinding, and cross-site WebSocket hijacking",
       "Clean up ghost remote sessions and fix an ingest reconnect deadlock",
+      "Fix configured remote hosts never connecting because the dashboard ingest did not host its dev tunnel",
       "Stop console windows from flashing for Windows child processes",
       "Move the mobile Open terminal button above the status and client details"
     ]
