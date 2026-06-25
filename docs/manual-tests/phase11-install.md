@@ -260,3 +260,42 @@ swap, matching the TS behavior.
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
 | | | | | |
+
+---
+
+## MT-P11-09 — macOS install strips the `com.apple.quarantine` Gatekeeper flag
+
+- **ID:** MT-P11-09
+- **Feature / phase:** Phase 11 — `climon-install` crate (macOS Gatekeeper fix)
+- **Preconditions:** A real Mac (Apple Silicon or Intel). A release `.zip`
+  downloaded **through a browser** (Safari/Chrome) so macOS applies the
+  `com.apple.quarantine` attribute, or a stand-in dir whose `install`,
+  `climon-server`, and `climon-beta` files have been quarantined manually with
+  `xattr -w com.apple.quarantine "0081;0;manual;" <file>`.
+- **Config-matrix cell:** INST-macos
+- **Platforms:** macOS (arm64 / x64)
+
+**Background:** Without this, the binaries inherit quarantine through the install
+copy and Gatekeeper refuses to launch the unsigned `climon-server` with
+*"climon-server is damaged and can't be opened. You should move it to the
+Trash."*
+
+**Steps:**
+1. Confirm the **source** binaries are quarantined:
+   `xattr -p com.apple.quarantine <source>/climon-server` prints a value (does
+   not error).
+2. Run the install (placement) flow into an empty install dir (default
+   `~/.local/bin`).
+3. For each installed binary, check the attribute is gone:
+   `xattr -p com.apple.quarantine ~/.local/bin/climon` → prints
+   `No such xattr` (and likewise for `climon-server` and `climon-beta`).
+4. Run `climon server` → it starts (Gatekeeper does **not** report it as
+   "damaged").
+
+**Expected:** After install, none of `climon`, `climon-server`, or `climon-beta`
+carry `com.apple.quarantine`, and `climon server` launches normally. (No-op on
+Linux/Windows.)
+
+| Date | Tester | OS | Result | Notes |
+|---|---|---|---|---|
+| | | | | |

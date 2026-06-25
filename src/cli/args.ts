@@ -17,7 +17,7 @@ export type ParsedCommand =
   | { command: "help" }
   | { command: "version" }
   | { command: "shell"; priority?: number; color?: SessionColorMode | null; name?: string }
-  | { command: "server"; port?: number; enableRemotes?: boolean; noTakeover?: boolean }
+  | { command: "server"; port?: number; noTakeover?: boolean }
   | { command: "ls" }
   | { command: "kill"; id: string }
   | { command: "kill-all" }
@@ -42,11 +42,13 @@ Usage:
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white;
                                theme: a dashboard theme name, e.g. "Dracula")
-  climon server [--port N] [--enable-remotes] [--no-takeover]
+  climon server [--port N] [--no-takeover]
                                Start the dashboard web server (loopback only)
                                (--no-takeover: never terminate an existing
                                server; start on the next available port)
   climon ls                    List monitored sessions
+  climon remotes [--watch] [--json]
+                               Show connected remote hosts and uplinks
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order
@@ -144,7 +146,6 @@ export function parseArgs(argv: string[]): ParsedCommand {
       return { command: "update-check" };
     case "server": {
       let port: number | undefined;
-      let enableRemotes = false;
       let noTakeover = false;
       for (let i = 0; i < rest.length; i += 1) {
         const arg = rest[i];
@@ -153,8 +154,6 @@ export function parseArgs(argv: string[]): ParsedCommand {
           i += 1;
         } else if (arg.startsWith("--port=")) {
           port = Number(arg.slice("--port=".length));
-        } else if (arg === "--enable-remotes") {
-          enableRemotes = true;
         } else if (arg === "--no-takeover") {
           noTakeover = true;
         }
@@ -162,7 +161,6 @@ export function parseArgs(argv: string[]): ParsedCommand {
       return {
         command: "server",
         port,
-        ...(enableRemotes ? { enableRemotes } : {}),
         ...(noTakeover ? { noTakeover } : {})
       };
     }

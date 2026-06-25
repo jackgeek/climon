@@ -33,7 +33,6 @@ beforeEach(async () => {
   mkdirSync(installDir, { recursive: true });
   writeFileSync(join(installDir, "climon"), "old-binary");
   writeFileSync(join(installDir, "climon-server"), "old-server");
-  writeFileSync(join(installDir, "climon-beta"), "old-beta");
 
   keypair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, [
     "sign",
@@ -46,7 +45,6 @@ beforeEach(async () => {
   zipBytesFixture = zipSync({
     install: new TextEncoder().encode("new-binary"),
     "climon-server": new TextEncoder().encode("new-server"),
-    "climon-beta": new TextEncoder().encode("new-beta"),
   });
   const sigB64 = await sign(zipBytesFixture);
 
@@ -90,7 +88,6 @@ describe("runUpdateCommand", () => {
     expect(result.status).toBe("updated");
     expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("new-binary");
     expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("new-server");
-    expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("new-beta");
   });
 
   test("tampered artifact is rejected and files are unchanged", async () => {

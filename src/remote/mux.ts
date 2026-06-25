@@ -1,3 +1,14 @@
+/**
+ * ⚠️ LEGACY TypeScript client — frozen. Fix the Rust client instead.
+ *
+ * The shipping `climon` *client* is the Rust workspace under `rust/` (crates
+ * `climon-cli`, `climon-session`, `climon-pty`, `climon-store`, `climon-config`,
+ * `climon-remote`, `climon-install`, `climon-update`, …). This module belongs to
+ * the legacy Bun/TypeScript client, kept only for local development and the Bun
+ * test suite. Do NOT add features or fix client bugs here — make all client
+ * changes in the Rust crates. (The Bun dashboard *server* under `src/server*`
+ * and `src/web/` is NOT legacy and is still maintained.)
+ */
 import { Buffer } from "node:buffer";
 import type { SessionMeta, SessionMetaPatch } from "../types.js";
 
@@ -10,10 +21,11 @@ const HEADER_SIZE = 5; // 4-byte length + 1-byte type
 export const MAX_MUX_PAYLOAD = 8 * 1024 * 1024;
 
 export type ControlMessage =
-  | { kind: "hello"; clientId: string }
+  | { kind: "hello"; clientId: string; peer?: boolean; hostname?: string; os?: string }
   | { kind: "session-added"; meta: SessionMeta }
   | { kind: "session-updated"; id: string; patch: SessionMetaPatch }
   | { kind: "session-removed"; id: string }
+  | { kind: "session-list"; ids: string[] }
   | { kind: "attach"; id: string }
   | { kind: "detach"; id: string }
   | {

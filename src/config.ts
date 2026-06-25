@@ -1,7 +1,7 @@
 import { chmodSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseColorMode } from "./session-meta.js";
 import type { ClimonConfig } from "./types.js";
 import { parseJsoncConfig, renderJsoncConfig } from "./config-jsonc.js";
@@ -255,14 +255,21 @@ export function candidateConfigDirs(
   cwd: string = process.cwd()
 ): string[] {
   const dirs: string[] = [];
-  const homeBoundary = resolve(homedir());
-  let dir = resolve(cwd);
-  for (;;) {
-    if (dir === homeBoundary) break;
-    dirs.push(join(dir, ".climon"));
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+  const homeBoundary = resolve(env.HOME ?? env.USERPROFILE ?? homedir());
+  const start = resolve(cwd);
+  const relativeToHome = relative(homeBoundary, start);
+  const underHome = relativeToHome === "" || (!relativeToHome.startsWith("..") && !isAbsolute(relativeToHome));
+  if (underHome) {
+    let dir = start;
+    for (;;) {
+      if (dir === homeBoundary) break;
+      dirs.push(join(dir, ".climon"));
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } else {
+    dirs.push(join(start, ".climon"));
   }
   const home = getClimonHome(env);
   if (!dirs.includes(home)) dirs.push(home);
@@ -322,6 +329,9 @@ export function resolveConfigSetting(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): unknown {
+  if (findConfigSetting(key)?.globalOnly) {
+    return readGlobalConfigSetting(key, env);
+  }
   for (const dir of candidateConfigDirs(env, cwd)) {
     const value = readDottedKey(readSparseConfig(dir), key);
     if (value !== undefined) return value;
@@ -417,6 +427,23 @@ export function resolveWriteDir(
   return getClimonHome(env);
 }
 
+function resolveWriteDirForKey(
+  key: string,
+  scope: WriteScope,
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd()
+): string {
+  if (scope === "auto" && findConfigSetting(key)?.globalOnly) {
+    return getClimonHome(env);
+  }
+  return resolveWriteDir(scope, env, cwd);
+}
+
+/** Whether a write is explicitly local for a key that is only read from global config. */
+export function shouldWarnGlobalOnlyLocalWrite(key: string, scope: WriteScope): boolean {
+  return scope === "local" && findConfigSetting(key)?.globalOnly === true;
+}
+
 /** Registry-backed config key helpers */
 export function isKnownConfigKey(key: string): boolean {
   return acceptedConfigKeys().includes(key);
@@ -477,7 +504,7 @@ export function writeConfigSetting(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): string {
-  const dir = resolveWriteDir(scope, env, cwd);
+  const dir = resolveWriteDirForKey(key, scope, env, cwd);
   const current = readSparseConfig(dir);
   const [section, field] = key.split(".");
   const sub = (current[section] && typeof current[section] === "object"
@@ -496,7 +523,7 @@ export function unsetConfigSetting(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd()
 ): void {
-  const dir = resolveWriteDir(scope, env, cwd);
+  const dir = resolveWriteDirForKey(key, scope, env, cwd);
   const existingPath = existingConfigPathForDir(dir);
   if (!existingPath) return;
   const current = readSparseConfig(dir);

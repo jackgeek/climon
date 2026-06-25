@@ -174,6 +174,8 @@ export interface SpawnControlRequest {
   color?: string;
   theme?: string;
   headless: boolean;
+  /** Per-run bearer token authenticating the caller to the running ingest. */
+  controlToken?: string;
 }
 
 /** A spawn response written back on the control socket. */

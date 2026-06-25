@@ -81,7 +81,6 @@ pub fn install_files_for_platform(platform: Platform) -> Vec<InstallFile> {
     vec![
         InstallFile::new(format!("install{exe}"), format!("climon{exe}")),
         InstallFile::new(format!("climon-server{exe}"), format!("climon-server{exe}")),
-        InstallFile::new("climon-beta", "climon-beta"),
     ]
 }
 
@@ -90,13 +89,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unix_installs_climon_and_beta_from_bare_source_names() {
+    fn unix_installs_climon_and_server_from_bare_source_names() {
         assert_eq!(
             install_files_for_platform(Platform::Linux),
             vec![
                 InstallFile::new("install", "climon"),
                 InstallFile::new("climon-server", "climon-server"),
-                InstallFile::new("climon-beta", "climon-beta"),
             ]
         );
     }
@@ -108,7 +106,6 @@ mod tests {
             vec![
                 InstallFile::new("install.exe", "climon.exe"),
                 InstallFile::new("climon-server.exe", "climon-server.exe"),
-                InstallFile::new("climon-beta", "climon-beta"),
             ]
         );
     }

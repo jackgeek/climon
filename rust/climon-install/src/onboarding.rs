@@ -1,6 +1,8 @@
 //! Onboarding flow: EULA gate + telemetry/auto-update opt-ins + install id.
-//! 1:1 port of `src/setup/onboarding.ts`. Both opt-ins default OFF; a
-//! non-interactive re-run without flags never silently revokes a prior opt-in.
+//! The interactive opt-in prompts default to YES (Enter opts in) and re-prompt
+//! on unrecognised input; the underlying config-setting defaults are unchanged
+//! (still false). A non-interactive re-run without flags never silently revokes
+//! a prior opt-in.
 
 use climon_config::config::{write_config_setting, Env, WriteScope};
 use std::path::Path;
@@ -10,9 +12,9 @@ use crate::install_id::ensure_install_id;
 
 // i18n strings (English) mirrored from `src/i18n/messages.en.json`.
 const MSG_TELEMETRY_PROMPT: &str =
-    "Help improve climon by sending anonymous usage telemetry? [y/N] ";
+    "Help improve climon by sending anonymous usage telemetry? [Y/n] ";
 const MSG_AUTO_UPDATE_PROMPT: &str =
-    "Automatically download and apply climon updates in the background? [y/N] ";
+    "Automatically download and apply climon updates in the background? [Y/n] ";
 
 /// Parsed `climon setup` / installer options.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -68,9 +70,30 @@ pub struct OnboardingIo<'a> {
     pub prompt: &'a mut dyn FnMut(&str) -> String,
 }
 
-/// Reads a yes/no answer; default is NO when the user just presses enter.
-fn is_yes(answer: &str) -> bool {
-    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+/// Classifies a single yes/no answer. Returns `Some(true)` for `y`/`yes`,
+/// `Some(false)` for `n`/`no`, and `None` for empty input (use the default).
+/// Any other (non-empty) input is unrecognised and returns `Err(())`.
+fn classify_yes_no(answer: &str) -> Result<Option<bool>, ()> {
+    match answer.trim().to_lowercase().as_str() {
+        "" => Ok(None),
+        "y" | "yes" => Ok(Some(true)),
+        "n" | "no" => Ok(Some(false)),
+        _ => Err(()),
+    }
+}
+
+/// Prompts for a yes/no answer, re-prompting on unrecognised (typo) input.
+/// Empty input (just Enter) resolves to `default`. EOF / read errors surface as
+/// an empty string from `prompt`, which resolves to `default`, so this never
+/// loops forever in piped or interrupted runs.
+fn prompt_yes_no(prompt: &mut dyn FnMut(&str) -> String, question: &str, default: bool) -> bool {
+    loop {
+        match classify_yes_no(&prompt(question)) {
+            Ok(Some(value)) => return value,
+            Ok(None) => return default,
+            Err(()) => continue,
+        }
+    }
 }
 
 /// Runs the full onboarding flow: EULA gate, telemetry opt-in, auto-update
@@ -97,13 +120,14 @@ pub fn run_onboarding(io: OnboardingIo<'_>) -> Result<OnboardingResult, String> 
         return Ok(OnboardingResult { accepted: false });
     }
 
-    // Telemetry opt-in (default OFF). An explicit option or interactive answer
-    // is persisted; a non-interactive run without the flag leaves the existing
-    // value untouched so re-running setup never silently revokes a prior opt-in.
+    // Telemetry opt-in. An explicit option or interactive answer is persisted;
+    // the interactive prompt defaults to YES (Enter opts in). A non-interactive
+    // run without the flag leaves the existing value untouched so re-running
+    // setup never silently revokes a prior opt-in.
     let telemetry = if let Some(value) = options.telemetry {
         Some(value)
     } else if interactive {
-        Some(is_yes(&prompt(MSG_TELEMETRY_PROMPT)))
+        Some(prompt_yes_no(prompt, MSG_TELEMETRY_PROMPT, true))
     } else {
         None
     };
@@ -117,11 +141,12 @@ pub fn run_onboarding(io: OnboardingIo<'_>) -> Result<OnboardingResult, String> 
         )?;
     }
 
-    // Auto-update opt-in (default OFF). Same leave-at-current semantics.
+    // Auto-update opt-in. Interactive prompt defaults to YES; same
+    // leave-at-current semantics for non-interactive runs.
     let auto_update = if let Some(value) = options.auto_update {
         Some(value)
     } else if interactive {
-        Some(is_yes(&prompt(MSG_AUTO_UPDATE_PROMPT)))
+        Some(prompt_yes_no(prompt, MSG_AUTO_UPDATE_PROMPT, true))
     } else {
         None
     };
@@ -311,9 +336,23 @@ mod tests {
     }
 
     #[test]
-    fn interactive_blank_answers_leave_opt_ins_off() {
+    fn interactive_blank_answers_enable_opt_ins() {
         let (_h, env) = temp_env();
         run_with(&env, SetupOptions::default(), &["i agree", "", ""]);
+        assert_eq!(
+            read_global_config_setting("telemetry.enabled", &env),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            read_global_config_setting("update.auto", &env),
+            Some(Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn interactive_explicit_no_disables_opt_ins() {
+        let (_h, env) = temp_env();
+        run_with(&env, SetupOptions::default(), &["i agree", "n", "no"]);
         assert_eq!(
             read_global_config_setting("telemetry.enabled", &env),
             Some(Value::Bool(false))
@@ -321,6 +360,21 @@ mod tests {
         assert_eq!(
             read_global_config_setting("update.auto", &env),
             Some(Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn interactive_typo_reprompts_then_honours_next_answer() {
+        let (_h, env) = temp_env();
+        // EULA accept, then telemetry: typo then "n"; auto-update: "y".
+        run_with(&env, SetupOptions::default(), &["i agree", "huh", "n", "y"]);
+        assert_eq!(
+            read_global_config_setting("telemetry.enabled", &env),
+            Some(Value::Bool(false))
+        );
+        assert_eq!(
+            read_global_config_setting("update.auto", &env),
+            Some(Value::Bool(true))
         );
     }
 }

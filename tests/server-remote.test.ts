@@ -6,10 +6,181 @@ import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
 import { readServerStateFromDir, getServerStatePath, serializeServerState } from "../src/server-state.js";
+import { computeRemotesActive } from "../src/server/server.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
 const { shouldMarkDisconnected, shouldStopIngestForShutdown } = serverModule;
+
+test("remotes are active when wslBridge or remotes flag is enabled", () => {
+  expect(computeRemotesActive({} as never)).toBe(false);
+  expect(computeRemotesActive({ feature: { wslBridge: "enabled" } } as never)).toBe(true);
+  expect(computeRemotesActive({ feature: { remotes: "enabled" } } as never)).toBe(true);
+  expect(computeRemotesActive({ feature: { remoteSpawn: "enabled" } } as never)).toBe(false);
+});
+
+describe("buildInterimWslExposureWarning", () => {
+  const buildInterimWslExposureWarning = (
+    serverModule as typeof serverModule & {
+      buildInterimWslExposureWarning?: (input: {
+        remotesActive: boolean;
+        wslBridgeEnabled: boolean;
+        ingestBindHost: string;
+      }) => string | undefined;
+    }
+  ).buildInterimWslExposureWarning;
+  const warningFor = (input: {
+    remotesActive: boolean;
+    wslBridgeEnabled: boolean;
+    ingestBindHost: string;
+  }) => {
+    expect(typeof buildInterimWslExposureWarning).toBe("function");
+    return buildInterimWslExposureWarning(input);
+  };
+
+  test("warns when remotes are active without WSL bridge on a vEthernet bind", () => {
+    const warning = warningFor({
+      remotesActive: true,
+      wslBridgeEnabled: false,
+      ingestBindHost: "172.30.192.1"
+    });
+
+    expect(warning).toContain("vEthernet (WSL)");
+    expect(warning).toContain("WSL bridge is disabled");
+    expect(warning).toMatch(/gate #3|ingest cutover/);
+  });
+
+  test("does not warn when WSL bridge is enabled", () => {
+    expect(
+      warningFor({
+        remotesActive: true,
+        wslBridgeEnabled: true,
+        ingestBindHost: "172.30.192.1"
+      })
+    ).toBeUndefined();
+  });
+
+  test("does not warn for loopback ingest binds", () => {
+    for (const ingestBindHost of ["127.0.0.1", "::1", "localhost"]) {
+      expect(
+        warningFor({
+          remotesActive: true,
+          wslBridgeEnabled: false,
+          ingestBindHost
+        })
+      ).toBeUndefined();
+    }
+  });
+
+  test("does not warn when remotes are inactive", () => {
+    expect(
+      warningFor({
+        remotesActive: false,
+        wslBridgeEnabled: false,
+        ingestBindHost: "172.30.192.1"
+      })
+    ).toBeUndefined();
+  });
+});
+
+describe("shouldWatchPeerShutdown", () => {
+  const shouldWatchPeerShutdown = (
+    serverModule as typeof serverModule & {
+      shouldWatchPeerShutdown?: (peerHome: string | undefined, remotesActive: boolean) => boolean;
+    }
+  ).shouldWatchPeerShutdown;
+  const shouldWatch = (peerHome: string | undefined, remotesActive: boolean) => {
+    expect(typeof shouldWatchPeerShutdown).toBe("function");
+    return shouldWatchPeerShutdown(peerHome, remotesActive);
+  };
+
+  test("watches when a peer is configured but this host is not serving remotes", () => {
+    expect(shouldWatch("/peer/home", false)).toBe(true);
+  });
+
+  test("does not watch when this host is serving remotes", () => {
+    expect(shouldWatch("/peer/home", true)).toBe(false);
+  });
+
+  test("does not watch when no peer is configured", () => {
+    expect(shouldWatch(undefined, false)).toBe(false);
+  });
+});
+
+describe("buildHealthPayload", () => {
+  const buildHealthPayload = (
+    serverModule as typeof serverModule & {
+      buildHealthPayload?: (input: {
+        config: ClimonConfig;
+        remotesActive: boolean;
+        isLocalRequest: boolean;
+        ports: { dashboard: number; ingest?: number };
+      }) => Record<string, unknown>;
+    }
+  ).buildHealthPayload;
+  const baseConfig = {
+    version: 1 as const,
+    server: { host: "127.0.0.1", port: 3131 },
+    terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+    attention: { idleSeconds: 30 },
+    hotKeys: { focusTopSession: "Alt+J" },
+    feature: { remotes: "enabled" as const }
+  } satisfies ClimonConfig;
+
+  test("includes feature flags on loopback health requests", () => {
+    expect(typeof buildHealthPayload).toBe("function");
+    const payload = buildHealthPayload({
+      config: baseConfig,
+      remotesActive: true,
+      isLocalRequest: true,
+      ports: { dashboard: 3131 }
+    });
+
+    expect(payload.features).toEqual(expect.objectContaining({
+      remotes: expect.objectContaining({ enabled: true })
+    }));
+  });
+
+  test("omits feature flags on non-loopback health requests", () => {
+    expect(typeof buildHealthPayload).toBe("function");
+    const payload = buildHealthPayload({
+      config: baseConfig,
+      remotesActive: true,
+      isLocalRequest: false,
+      ports: { dashboard: 3131 }
+    });
+
+    expect(payload).not.toHaveProperty("features");
+  });
+});
+
+describe("isLoopbackHostHeader", () => {
+  const isLoopbackHostHeader = (
+    serverModule as typeof serverModule & {
+      isLoopbackHostHeader?: (host: string | null) => boolean;
+    }
+  ).isLoopbackHostHeader;
+  const check = (host: string | null) => {
+    expect(typeof isLoopbackHostHeader).toBe("function");
+    return isLoopbackHostHeader(host);
+  };
+
+  test("accepts loopback Host headers with and without a port", () => {
+    expect(check("127.0.0.1:3131")).toBe(true);
+    expect(check("localhost:3131")).toBe(true);
+    expect(check("127.0.0.1")).toBe(true);
+    expect(check("[::1]:3131")).toBe(true);
+  });
+
+  test("rejects a tunnel Host so /health internals stay off the dev tunnel", () => {
+    // A browser loading the dashboard over the tunnel still presents a loopback
+    // source IP (the local devtunnel connector forwards the request), so the
+    // tunnel Host header is the only signal that withholds internal fields.
+    expect(check("abc123-3131.uks1.devtunnels.ms")).toBe(false);
+    expect(check("192.168.1.50:3131")).toBe(false);
+    expect(check(null)).toBe(false);
+  });
+});
 
 function meta(over: Partial<SessionMeta>): SessionMeta {
   const now = new Date().toISOString();
@@ -144,12 +315,15 @@ describe("server shutdown ingest lifecycle", () => {
           ingestHost: "127.0.0.1",
           port: ingestPort,
           ingestPortRetryAttempts: 5
+        },
+        feature: {
+          remotes: "enabled"
         }
       })
     );
 
     const server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(dashboardPort), "--enable-remotes"],
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(dashboardPort)],
       { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
     );
     let serverExited = false;
@@ -189,28 +363,23 @@ describe("server shutdown ingest lifecycle", () => {
 });
 
 describe("resolveIngestInvocation", () => {
-  test("uses the dev server entrypoint when running from source", () => {
-    const testTmp = join(process.cwd(), ".copilot-tmp");
-    mkdirSync(testTmp, { recursive: true });
-    const dir = mkdtempSync(join(testTmp, "climon-ingest-invocation-"));
-    const devEntry = join(dir, "server.ts");
-    writeFileSync(devEntry, "");
-
+  test("resolves the Rust client binary with __ingest", () => {
     const resolveIngestInvocation = (
       serverModule as typeof serverModule & {
         resolveIngestInvocation?: (
           env: NodeJS.ProcessEnv,
-          execPath: string,
-          devEntrypoint?: string
+          execPath: string
         ) => { file: string; args: string[] };
       }
     ).resolveIngestInvocation;
 
     expect(typeof resolveIngestInvocation).toBe("function");
-    expect(resolveIngestInvocation?.({} as NodeJS.ProcessEnv, "/usr/bin/bun", devEntry)).toEqual({
-      file: "/usr/bin/bun",
-      args: [devEntry, "__ingest"]
-    });
+    expect(
+      resolveIngestInvocation?.(
+        { CLIMON_CLIENT_BIN: "/opt/climon/climon" } as unknown as NodeJS.ProcessEnv,
+        "/usr/bin/bun"
+      )
+    ).toEqual({ file: "/opt/climon/climon", args: ["__ingest"] });
   });
 });
 

@@ -142,20 +142,29 @@ tunnel-mode uplink discovers + connects; clear auth rejection stops retrying.
 - **Platforms:** Windows + WSL
 
 **Steps:**
-1. From WSL, run `climon link` (no args). Confirm it auto-detects the Windows
-   `CLIMON_HOME`, writes the local `remote.peerHome` pointer, and (when running
-   on WSL) writes the reverse pointer into the Windows config.
-2. Start the Windows dashboard (`climon server`).
-3. From WSL, start a session (`climon run -- bash`). Confirm the launcher
+1. In non-interactive automation, run `climon link --no-wsl-bridge`. Confirm it
+   writes `remote.peerHome` but does not prompt and does not write
+   `feature.wslBridge`.
+2. From WSL in a TTY, run `climon link` (or `climon link --wsl-bridge`) and
+   accept the prompt. Confirm it auto-detects the Windows `CLIMON_HOME`, writes
+   the local `remote.peerHome` pointer, writes the reverse pointer into the
+   Windows config, and writes `feature.wslBridge enabled` on both sides.
+3. Start the Windows dashboard (`climon server`).
+4. From WSL, start a session (`climon run -- bash`). Confirm the launcher
    discovers the peer dashboard (`server.json` beacon + ingest TCP probe),
    prints "dashboard detected on the peer OS …", and bridges via the uplink to
    the Windows ingest port.
-4. Toggle `remote.autoLink false` and confirm auto-link stays silent on a fresh
+5. Clear `remote.peerHome`, leave `feature.wslBridge` unset, then start a fresh
+   WSL session so auto-link runs. Confirm auto-link configures discovery and
+   explicitly says the WSL bridge is NOT enabled.
+6. Toggle `remote.autoLink false` and confirm auto-link stays silent on a fresh
    WSL session.
 
-**Expected:** `linkPeer` configures both directions; `discoverDashboard` returns
-a `peer` target validated by the ingest beacon + TCP probe; `maybeAutoLink`
-announces/advises/links unless disabled or already linked.
+**Expected:** `linkPeer` configures both directions and only enables the WSL
+bridge after an explicit prompt/`--wsl-bridge`; `discoverDashboard` returns a
+`peer` target validated by the ingest beacon + TCP probe; `maybeAutoLink`
+announces/advises/links unless disabled or already linked and never enables the
+bridge automatically.
 
 ---
 

@@ -55,6 +55,9 @@ fn canonical_controls() -> Vec<(&'static str, ControlMessage)> {
             "control:hello",
             ControlMessage::Hello {
                 client_id: "devbox-abc".into(),
+                peer: false,
+                hostname: None,
+                os: None,
             },
         ),
         (

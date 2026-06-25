@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 const SERVER_BIN_NAME: &str = "climon-server";
-const SERVER_BUNDLE_NAME: &str = "climon-beta";
 
 /// How to launch the dashboard server. Mirrors `ServerInvocation`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,22 +45,6 @@ pub fn resolve_server_env(
     let mut out = env.clone();
     out.insert("CLIMON_CLIENT_BIN".to_string(), exec_path.to_string());
     out
-}
-
-/// Resolves a sibling encrypted server bundle that could be loaded in-process.
-/// The Rust client never loads it; ported for parity/testing. Mirrors
-/// `resolveServerBundle`.
-pub fn resolve_server_bundle(env: &HashMap<String, String>, exec_path: &str) -> Option<String> {
-    if let Some(override_path) = trimmed_nonempty(env, "CLIMON_SERVER_BUNDLE") {
-        if Path::new(&override_path).exists() {
-            return Some(override_path);
-        }
-    }
-    let sibling = dir_of(exec_path).join(SERVER_BUNDLE_NAME);
-    if sibling.exists() {
-        return Some(sibling.to_string_lossy().into_owned());
-    }
-    None
 }
 
 /// Resolves how to launch the dashboard server, without spawning it. Order:
@@ -354,40 +337,6 @@ mod tests {
         let env = env_with(&[("PATH", "/usr/bin")]);
         let out = resolve_server_env(&env, "/usr/bin/bun", Some("/repo/src/server.ts"));
         assert!(!out.contains_key("CLIMON_CLIENT_BIN"));
-    }
-
-    #[test]
-    fn resolve_server_bundle_finds_sibling() {
-        let dir = tmp();
-        let bundle = dir.join("climon-beta");
-        std::fs::write(&bundle, "bundle-content").unwrap();
-        let exec_path = dir.join("climon");
-        assert_eq!(
-            resolve_server_bundle(&HashMap::new(), exec_path.to_str().unwrap()),
-            Some(bundle.to_string_lossy().into_owned())
-        );
-    }
-
-    #[test]
-    fn resolve_server_bundle_honors_override() {
-        let dir = tmp();
-        let bundle = dir.join("custom-server");
-        std::fs::write(&bundle, "encrypted-content").unwrap();
-        let env = env_with(&[("CLIMON_SERVER_BUNDLE", bundle.to_str().unwrap())]);
-        assert_eq!(
-            resolve_server_bundle(&env, "/some/other/path/climon"),
-            Some(bundle.to_string_lossy().into_owned())
-        );
-    }
-
-    #[test]
-    fn resolve_server_bundle_none_when_missing() {
-        let dir = tmp();
-        let exec_path = dir.join("climon");
-        assert_eq!(
-            resolve_server_bundle(&HashMap::new(), exec_path.to_str().unwrap()),
-            None
-        );
     }
 
     #[test]

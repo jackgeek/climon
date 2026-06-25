@@ -345,6 +345,16 @@ fn maybe_auto_link() {
     remote_maybe_auto_link(&env, &cwd, &mut out, &LinkDeps::default());
 }
 
+/// Whether the same-machine peer uplink should be spawned. Pure decision split
+/// out of `ensure_uplink` for testing gate #1.
+pub fn should_spawn_peer_uplink(
+    peer_home_set: bool,
+    wsl_bridge_enabled: bool,
+    peer_dashboard_found: bool,
+) -> bool {
+    peer_home_set && wsl_bridge_enabled && peer_dashboard_found
+}
+
 /// Spawns a detached uplink if the local session should appear on a remote (or
 /// peer) dashboard. Mirrors `ensureUplink`.
 fn ensure_uplink() {
@@ -357,13 +367,16 @@ fn ensure_uplink() {
     let tunnel_id = config_string(&env, &cwd, "remote.tunnelId");
     let port = config_u16(&env, &cwd, "remote.port");
     let peer_home = config_string(&env, &cwd, "remote.peerHome");
+    let wsl_bridge_enabled = load_config(&env)
+        .map(|cfg| climon_config::features::is_feature_enabled(&cfg, "wslBridge"))
+        .unwrap_or(false);
 
     let mut should_spawn = false;
 
-    if peer_home.is_some() {
+    if peer_home.is_some() && wsl_bridge_enabled {
         if let Some(target) = discover_dashboard(&env, &cwd, &DiscoveryDeps::default()) {
             if target.location == DashboardLocation::Peer {
-                should_spawn = true;
+                should_spawn = should_spawn_peer_uplink(true, wsl_bridge_enabled, true);
                 write_stdout(
                     &format!(
                         "climon: dashboard detected on the peer OS; this session will appear at {}\r\n",
@@ -752,6 +765,19 @@ pub fn default_kill() -> KillFn {
 /// Default alive check for production callers.
 pub fn default_alive() -> AliveFn {
     is_process_alive
+}
+
+#[cfg(test)]
+mod ensure_uplink_gate_tests {
+    use super::should_spawn_peer_uplink;
+
+    #[test]
+    fn peer_uplink_requires_wsl_bridge_enabled() {
+        assert!(should_spawn_peer_uplink(true, true, true));
+        assert!(!should_spawn_peer_uplink(true, false, true)); // remotes on, wslBridge off -> no peer uplink
+        assert!(!should_spawn_peer_uplink(true, true, false)); // no peer dashboard
+        assert!(!should_spawn_peer_uplink(false, true, true)); // no peerHome
+    }
 }
 
 #[cfg(test)]

@@ -21,18 +21,16 @@ afterEach(() => {
 });
 
 describe("installBinaries (Unix)", () => {
-  test("copies install as climon, climon-server, and climon-beta into the install directory", async () => {
+  test("copies install as climon and climon-server into the install directory", async () => {
     const sourceDir = makeTempDir();
     const installDir = join(makeTempDir(), ".local", "bin");
     writeFileSync(join(sourceDir, "install"), "client");
     writeFileSync(join(sourceDir, "climon-server"), "server");
-    writeFileSync(join(sourceDir, "climon-beta"), "server");
 
     await installBinaries(sourceDir, installDir);
 
     expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("client");
     expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("server");
-    expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 
   test("throws when a required sibling binary is missing", async () => {
@@ -57,14 +55,13 @@ describe("installBinaries (Unix)", () => {
     const installDir = join(makeTempDir(), ".local", "bin");
     writeFileSync(join(sourceDir, "install"), "client");
     writeFileSync(join(sourceDir, "climon-server"), "server");
-    writeFileSync(join(sourceDir, "climon-beta"), "server");
     let climonAttempts = 0;
     let prompted = 0;
     let killed = 0;
 
     await installBinaries(sourceDir, installDir, {
       copyFile(source, destination) {
-        if (destination.endsWith("climon") && !destination.endsWith("climon-beta") && climonAttempts++ === 0) {
+        if (destination.endsWith("climon") && climonAttempts++ === 0) {
           throw Object.assign(new Error("text busy"), { code: "ETXTBSY" });
         }
         writeFileSync(destination, readFileSync(source));
@@ -82,6 +79,5 @@ describe("installBinaries (Unix)", () => {
     expect(killed).toBe(1);
     expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("client");
     expect(readFileSync(join(installDir, "climon-server"), "utf8")).toBe("server");
-    expect(readFileSync(join(installDir, "climon-beta"), "utf8")).toBe("server");
   });
 });

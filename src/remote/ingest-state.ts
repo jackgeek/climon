@@ -1,3 +1,14 @@
+/**
+ * ⚠️ LEGACY TypeScript client — frozen. Fix the Rust client instead.
+ *
+ * The shipping `climon` *client* is the Rust workspace under `rust/` (crates
+ * `climon-cli`, `climon-session`, `climon-pty`, `climon-store`, `climon-config`,
+ * `climon-remote`, `climon-install`, `climon-update`, …). This module belongs to
+ * the legacy Bun/TypeScript client, kept only for local development and the Bun
+ * test suite. Do NOT add features or fix client bugs here — make all client
+ * changes in the Rust crates. (The Bun dashboard *server* under `src/server*`
+ * and `src/web/` is NOT legacy and is still maintained.)
+ */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getClimonHome } from "../config.js";
@@ -28,6 +39,13 @@ export interface IngestState {
    * compatibility with beacons that predate remote spawn.
    */
   controlSocket?: string;
+  /**
+   * Per-run bearer token the dashboard server must echo on every control-socket
+   * spawn request to authenticate to the running ingest. Published in the
+   * (0700-dir-protected) beacon. Optional for backward compatibility with
+   * beacons that predate control-socket authentication.
+   */
+  controlToken?: string;
 }
 
 export const INGEST_STATE_BASENAME = "ingest.json";
@@ -52,6 +70,9 @@ export function parseIngestState(raw: string): IngestState | undefined {
   if (typeof parsed.controlSocket === "string" && parsed.controlSocket.length > 0) {
     state.controlSocket = parsed.controlSocket;
   }
+  if (typeof parsed.controlToken === "string" && parsed.controlToken.length > 0) {
+    state.controlToken = parsed.controlToken;
+  }
   return state;
 }
 
@@ -60,6 +81,9 @@ export function serializeIngestState(state: IngestState): string {
   if (state.host !== undefined && state.host.length > 0) payload.host = state.host;
   if (state.controlSocket !== undefined && state.controlSocket.length > 0) {
     payload.controlSocket = state.controlSocket;
+  }
+  if (state.controlToken !== undefined && state.controlToken.length > 0) {
+    payload.controlToken = state.controlToken;
   }
   return `${JSON.stringify(payload)}\n`;
 }

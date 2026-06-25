@@ -34,7 +34,7 @@
     "ingestPortRetryAttempts": 100,
     // Interval in seconds between mux keepalive pings sent over the remote uplink/ingest connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0 to disable.
     "keepAlive": 60,
-    // When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking.
+    // When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Auto-link configures discovery only; it never enables feature.wslBridge. Set false to disable auto-linking.
     "autoLink": true
   },
   "session": {
@@ -55,7 +55,11 @@
     // Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled". [status: experimental]
     "sessionSpawning": "disabled",
     // Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel. Set to "enabled" or "disabled". [status: experimental]
-    "remoteSpawn": "disabled"
+    "remoteSpawn": "disabled",
+    // Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard. Set to "enabled" or "disabled". [status: experimental]
+    "wslBridge": "disabled",
+    // Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge. Set to "enabled" or "disabled". [status: experimental]
+    "remotes": "disabled"
   },
   "eula": {
     // Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.

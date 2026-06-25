@@ -1,5 +1,16 @@
+/**
+ * ⚠️ LEGACY TypeScript client — frozen. Fix the Rust client instead.
+ *
+ * The shipping `climon` *client* is the Rust workspace under `rust/` (crates
+ * `climon-cli`, `climon-session`, `climon-pty`, `climon-store`, `climon-config`,
+ * `climon-remote`, `climon-install`, `climon-update`, …). This module belongs to
+ * the legacy Bun/TypeScript client, kept only for local development and the Bun
+ * test suite. Do NOT add features or fix client bugs here — make all client
+ * changes in the Rust crates. (The Bun dashboard *server* under `src/server*`
+ * and `src/web/` is NOT legacy and is still maintained.)
+ */
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 const CLIENT_BIN_NAME = "climon";
 
@@ -23,7 +34,15 @@ export function resolveClientInvocation(
 ): ClientInvocation {
   const override = env.CLIMON_CLIENT_BIN?.trim();
   if (override) {
-    return { file: override, args: forwardArgs };
+    // Only honor an ABSOLUTE override: a relative path would resolve against
+    // the (possibly attacker-influenced) cwd, allowing client-binary hijack.
+    if (isAbsolute(override)) {
+      return { file: override, args: forwardArgs };
+    }
+    process.stderr.write(
+      `climon: warning: ignoring non-absolute CLIMON_CLIENT_BIN=${override}; ` +
+        `it must be an absolute path.\n`
+    );
   }
 
   const exe = platform === "win32" ? ".exe" : "";

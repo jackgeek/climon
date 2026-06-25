@@ -102,7 +102,9 @@ A `Bun.serve` server, stateless with respect to PTYs:
 - `GET /health` — unauthenticated liveness probe returning
   `{ ok: true, version, remotesEnabled, ports }`. `ports` lists every TCP port
   this server process has opened: `ports.dashboard` (always) and `ports.ingest`
-  (only while the remote ingest daemon is running).
+  (only while the remote ingest daemon is running). Ingest startup is driven by
+  config: the server starts it when either `feature.remotes` or
+  `feature.wslBridge` is enabled, never by a server CLI flag.
 - `GET /` — dashboard HTML shell that loads the React app bundle (localhost
   allowed; LAN requires a token).
 - `GET /api/sessions` — current sessions, priority-sorted.
@@ -145,23 +147,16 @@ A `Bun.serve` server, stateless with respect to PTYs:
 The client entrypoint (`src/index.ts`) never imports server code, so the React/
 Fluent/`@xterm/*` dependencies and the embedded dashboard bundle
 (`src/server/embedded-assets.ts`) stay out of the client binary and server-side
-growth never inflates the client. The server is shipped two ways, and a release zip
-contains both:
+growth never inflates the client. The server ships as a single compiled binary, and a
+release zip contains it:
 
 - **Compiled `climon-server` binary** — `src/server.ts` compiled with
   `bun build --compile` (per target in `scripts/compile.ts`) and installed alongside
-  `climon`. This is the **canonical** server path, and the **only** path usable by the
-  future Rust client, which cannot load a JS bundle in-process. The client's `server`
-  subcommand resolves and spawns it via `src/cli/server-exec.ts`
+  `climon`. This is the **canonical and only** server path: the shipped Rust client
+  always spawns this binary (it cannot load a JS bundle in-process). The client's
+  `server` subcommand resolves and spawns it via `src/cli/server-exec.ts`
   (`resolveServerInvocation`: `CLIMON_SERVER_BIN` → sibling `climon-server[.exe]` → dev
   source entrypoint → `PATH`).
-- **In-process `climon-beta` JS bundle** — a minified server bundle loaded inside the
-  Bun client process by `delegateToServer` (`runServerInProcess`) to avoid spawning a
-  second process. This is a Bun-client-only optimization; `delegateToServer` prefers it
-  when present and falls back to spawning the `climon-server` binary otherwise. The
-  shipped Rust client always spawns the `climon-server` binary (it cannot load a JS
-  bundle in-process), but `climon-beta` is still packaged so the legacy Bun client and
-  the updater's install-manifest layout stay unchanged.
 
 ### Dashboard UI (`src/web/`)
 
@@ -314,9 +309,16 @@ notification on no/late reply.
 
 A devbox runs a singleton **uplink** agent (`climon __uplink`) that connects to
 the home machine through a Microsoft dev tunnel. The home machine runs a
-loopback-only **ingest** daemon (`climon-server __ingest`) and either hosts the
-tunnel automatically via the `devtunnel` CLI or records a manually-created
-tunnel in `~/.climon/remote-host.json`.
+loopback-only **ingest** daemon (`climon __ingest` — the Rust client binary,
+resolved by the dashboard server; a dev source run requires the Rust binary to
+be built and never falls back to the Bun ingest) when `feature.remotes` is
+enabled and either hosts the tunnel automatically via the `devtunnel` CLI or
+records a manually-created tunnel in `~/.climon/remote-host.json`. `climon
+server` no longer accepts a remotes startup flag; config is the only switch. The
+ingest also serves a loopback-only **remote-spawn control socket** (advertised
+as `controlSocket` in `ingest.json`), dual-listens on `127.0.0.1` when bound to
+a non-loopback host so `devtunnel`-forwarded connections still land, and runs a
+sessions-dir **dismiss watcher** that suppresses sessions a user deletes locally.
 
 Session I/O is multiplexed over the dev-tunnel TCP stream using a small framed
 protocol (`src/remote/mux.ts`): a `hello` frame advertises the devbox's stable
@@ -330,14 +332,58 @@ WS ⇄ unix socket bridge) then works unchanged — it cannot tell local and rem
 sessions apart except for the origin tag. Attach is on demand: a browser
 connecting to the local socket triggers an `attach` control to the devbox, which
 connects to the real daemon socket (replaying scrollback) and bridges bytes back.
+The uplink also emits an authoritative `session-list` snapshot each reconcile so
+the ingest can garbage-collect ghost sessions deleted on the source (including
+those left on disk by a previous connection), while preserving still-present
+disconnected sessions and never re-materializing dismissed ones.
+
+## Remote visibility (`ingest-status.json`, `uplink-status.json`, `climon remotes`)
+
+Two single-writer status beacons under `$CLIMON_HOME` make the live remote
+topology observable without touching the mux:
+
+- **`ingest-status.json`** — written by the ingest daemon (single writer). It
+  carries the ingest `pid`, an `updatedAt` heartbeat (~10s), and one entry per
+  connected uplink: `clientId`, friendly `hostname`/`os` (from the enriched
+  `hello`), `address`, `connectedAt`, `sessionCount`, and `lastPingAt`.
+- **`uplink-status.json`** — written by the uplink supervisor on a devbox
+  (single writer): its connection `target`, `connectedAt`, and the current
+  lifecycle `state` (`connecting`/`connected`/`reconnecting`/`disconnected`).
+
+Both files are mode `0600` and carry only hostnames/addresses — no secrets, and
+they are never network-exposed. **Staleness is always derived by the reader**
+(pid dead, or no heartbeat/ping within `STALE_AFTER_MS`); it is never trusted
+from the file. The data flow is:
+
+```
+ingest / uplink supervisor
+        │  (single writer)
+        ▼
+ingest-status.json / uplink-status.json   ($CLIMON_HOME, 0600)
+        │                         │
+        ▼                         ▼
+  climon remotes          GET /api/remotes (loopback-only)
+  (--watch / --json)              │
+                                  ▼  SSE "remotes" event
+                          dashboard "Remote hosts" menu + panel
+```
+
+`hello.hostname`/`hello.os` are untrusted remote input: the ingest sanitizes
+them at the trust boundary (cap `hostname` to 64 chars + strip control/ESC
+bytes; allowlist `os` to `darwin`/`win32`/`linux`, else `unknown`) before they
+are stored, so every downstream sink (`climon remotes` TTY, `--json`, the
+dashboard) only ever formats already-safe strings.
 
 ## Same-machine WSL <-> Windows discovery (`src/remote/peer.ts`, `discovery.ts`, `link.ts`)
 
 WSL and Windows each keep their own `CLIMON_HOME`, but the filesystems are
 mutually visible (`/mnt/c/...` and `\\wsl.localhost\<distro>\...`). `climon link`
 (or a lazy auto-link on the first WSL run) records the peer OS's `CLIMON_HOME` in
-`remote.peerHome` on both sides. The auto-link only fires from WSL, only when a
-Windows climon is detected, and is suppressed by `remote.autoLink false`.
+`remote.peerHome` on both sides. Auto-link only wires discovery: it never enables
+the bridge. The bridge is activated only when `feature.wslBridge` is enabled
+(typically by accepting the `climon link` prompt or passing `--wsl-bridge`). The
+auto-link only fires from WSL, only when a Windows climon is detected, and is
+suppressed by `remote.autoLink false`.
 
 `discoverDashboard` resolves a dashboard by reading beacons: the local
 `server.json` first (validated by PID liveness), then the peer's by reading its
@@ -347,15 +393,21 @@ is unreachable from WSL, whereas the ingest is bound to a peer-reachable, publis
 interface). Ports come from the live beacons, so a collision-bumped port is handled
 transparently. The reachable host is the published ingest host, then the
 auto-detected candidates (`localhost`, or the WSL default-route gateway IP under
-NAT) overridable via `remote.peerHost`. When a peer is found, the local session's
-uplink is auto-wired to the peer's ingest port — reusing the same mux bridge as the
-dev-tunnel path, just over a loopback/host-IP TCP connection instead of a tunnel.
+NAT) overridable via `remote.peerHost`. When a peer is found and
+`feature.wslBridge` is enabled, the local session's uplink is auto-wired to the
+peer's ingest port — reusing the same mux bridge as the dev-tunnel path, just
+over a loopback/host-IP TCP connection instead of a tunnel. With
+`feature.remotes` enabled but `feature.wslBridge` disabled, dev-tunnel ingest can
+run without starting same-machine peer uplinks.
 
 ### Cross-OS dashboard handoff (WSL ⇄ Windows)
 
-A machine with `remote.peerHome` set is, at any moment, either **host** (runs the
-dashboard server + ingest) or **client** (runs an uplink to the host). Switching
-OS moves the host role:
+A machine with `remote.peerHome` set and `feature.wslBridge` enabled is, at any
+moment, either **host** (runs the dashboard server + ingest) or **client** (runs
+an uplink to the host). Switching OS moves the host role. Cross-OS promote and
+the settle/demotion handoff are gated on `feature.wslBridge` independently of
+`feature.remotes`; enabling dev-tunnel remotes alone never promotes, demotes, or
+spawns a same-machine peer uplink:
 
 - **Bind/publish**: the host's ingest binds a peer-reachable interface via
   `resolveIngestBindHost` (loopback when WSL hosts; the `vEthernet (WSL)` IPv4 when
@@ -382,11 +434,15 @@ OS moves the host role:
   consumed request), and exits. The ingest is the single demotion anchor, so a
   handoff works even when the peer's dashboard server has already been `Ctrl-C`'d.
 
-Two server shutdown modes: **plain** (Ctrl-C) leaves the ingest running when a
-peer is configured (so a same-OS restart reuses it and the cross-OS handoff has
-a surviving anchor); **handoff** demotion is driven by the ingest itself when it
-observes a `shutdown-request.json` in its home — it stops the co-located server,
-spawns an uplink toward the new host, frees its listener, and exits. The
+Two server shutdown modes: **plain** (Ctrl-C / SIGINT / SIGTERM / internal HTTP)
+stops the co-located ingest too, except when the shutdown was requested by the
+ingest itself as part of a demotion handoff (`shouldStopIngestForShutdown`);
+**handoff** demotion is driven
+by the ingest itself when it observes a `shutdown-request.json` in its home — it
+stops the co-located server, spawns an uplink toward the new host, frees its
+listener, and exits. The
 **ingest** is the durable control anchor: it owns `ingest.json`
-(`{pid,port,host}`) and survives both a server Ctrl-C and a crash. Every
+(`{pid,port,host}`) and, as a detached singleton, survives a server crash and an
+ingest-driven demotion stop (it is only torn down on a plain server shutdown).
+Every
 consumer reads the bound ingest port from `ingest.json` via `resolveIngestPort`.

@@ -33,10 +33,45 @@ fn copy_required_binaries(
         if !source_path.exists() {
             return Err(InstallError::missing_sibling(&file.source));
         }
-        copy_file(&source_path, &install_dir.join(&file.dest))?;
+        let dest_path = install_dir.join(&file.dest);
+        copy_file(&source_path, &dest_path)?;
+        strip_quarantine(&dest_path);
     }
     Ok(())
 }
+
+/// Removes the macOS `com.apple.quarantine` extended attribute from a freshly
+/// installed binary.
+///
+/// Files extracted from a downloaded `.zip` carry the quarantine attribute, and
+/// `std::fs::copy` (via `copyfile`) propagates it to the installed copy. Because
+/// the macOS binaries are not Developer ID signed + notarized, Gatekeeper then
+/// refuses to launch the quarantined `climon-server` with "is damaged and can't
+/// be opened". Stripping the attribute from the binaries the user just chose to
+/// install lets them run — equivalent to `xattr -d com.apple.quarantine`.
+///
+/// Best effort: a missing attribute (`ENOATTR`) or any other error is ignored.
+/// No-op on non-macOS targets.
+#[cfg(target_os = "macos")]
+fn strip_quarantine(path: &Path) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    const QUARANTINE: &[u8] = b"com.apple.quarantine\0";
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    unsafe {
+        libc::removexattr(
+            c_path.as_ptr(),
+            QUARANTINE.as_ptr() as *const libc::c_char,
+            0,
+        );
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn strip_quarantine(_path: &Path) {}
 
 /// Copies the manifest binaries into `install_dir`, with an opt-in locked-file
 /// kill-and-retry path. Mirrors `installBinaries` in `src/install/files-unix.ts`.
@@ -111,7 +146,6 @@ mod tests {
         fs::create_dir_all(&source_dir).unwrap();
         fs::write(source_dir.join("install"), "client").unwrap();
         fs::write(source_dir.join("climon-server"), "server").unwrap();
-        fs::write(source_dir.join("climon-beta"), "server").unwrap();
 
         install_binaries(&source_dir, &install_dir, InstallBinariesOptions::default()).unwrap();
 
@@ -121,10 +155,6 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(install_dir.join("climon-server")).unwrap(),
-            "server"
-        );
-        assert_eq!(
-            fs::read_to_string(install_dir.join("climon-beta")).unwrap(),
             "server"
         );
         fs::remove_dir_all(&root).ok();
@@ -176,7 +206,6 @@ mod tests {
         fs::create_dir_all(&source_dir).unwrap();
         fs::write(source_dir.join("install"), "client").unwrap();
         fs::write(source_dir.join("climon-server"), "server").unwrap();
-        fs::write(source_dir.join("climon-beta"), "server").unwrap();
 
         let climon_attempts = Cell::new(0);
         let prompted = Cell::new(0);
@@ -217,10 +246,111 @@ mod tests {
             fs::read_to_string(install_dir.join("climon-server")).unwrap(),
             "server"
         );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(target_os = "macos")]
+    const QUARANTINE_XATTR: &[u8] = b"com.apple.quarantine\0";
+
+    #[cfg(target_os = "macos")]
+    fn set_quarantine(path: &Path) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let value = b"0081;00000000;Safari;";
+        let rc = unsafe {
+            libc::setxattr(
+                c_path.as_ptr(),
+                QUARANTINE_XATTR.as_ptr() as *const libc::c_char,
+                value.as_ptr() as *const libc::c_void,
+                value.len(),
+                0,
+                0,
+            )
+        };
         assert_eq!(
-            fs::read_to_string(install_dir.join("climon-beta")).unwrap(),
-            "server"
+            rc,
+            0,
+            "setxattr failed: {}",
+            std::io::Error::last_os_error()
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn has_quarantine(path: &Path) -> bool {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let rc = unsafe {
+            libc::getxattr(
+                c_path.as_ptr(),
+                QUARANTINE_XATTR.as_ptr() as *const libc::c_char,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+            )
+        };
+        rc >= 0
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn strip_quarantine_removes_the_attribute() {
+        let root = temp_root();
+        let path = root.join("binary");
+        fs::write(&path, "bin").unwrap();
+        set_quarantine(&path);
+        assert!(has_quarantine(&path), "precondition: xattr should be set");
+
+        super::strip_quarantine(&path);
+
+        assert!(
+            !has_quarantine(&path),
+            "com.apple.quarantine should be removed"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn strip_quarantine_is_noop_when_attribute_absent() {
+        let root = temp_root();
+        let path = root.join("binary");
+        fs::write(&path, "bin").unwrap();
+
+        // Must not panic or error when there is nothing to remove.
+        super::strip_quarantine(&path);
+
+        assert!(!has_quarantine(&path));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn install_strips_quarantine_from_installed_binaries() {
+        let root = temp_root();
+        let source_dir = root.join("src");
+        let install_dir = root.join(".local").join("bin");
+        fs::create_dir_all(&source_dir).unwrap();
+        for name in ["install", "climon-server"] {
+            let p = source_dir.join(name);
+            fs::write(&p, "bin").unwrap();
+            set_quarantine(&p);
+        }
+
+        install_binaries(&source_dir, &install_dir, InstallBinariesOptions::default()).unwrap();
+
+        for name in ["climon", "climon-server"] {
+            let installed = install_dir.join(name);
+            assert!(installed.exists(), "{name} should be installed");
+            assert!(
+                !has_quarantine(&installed),
+                "{name} should not be quarantined after install"
+            );
+        }
         fs::remove_dir_all(&root).ok();
     }
 }

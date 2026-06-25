@@ -1,5 +1,22 @@
 [
   {
+    "version": "2.2.0",
+    "changes": [
+      "View connected remote hosts live from the new dashboard Remote hosts menu and panel",
+      "List remote hosts and their connection status with the new `climon remotes` command",
+      "Gate remote access and the WSL bridge behind the new feature.remotes and feature.wslBridge config flags",
+      "Replace the --enable-remotes flag with the feature.remotes config setting",
+      "Prompt to enable the WSL bridge when linking same-machine peers with climon link",
+      "Redact sensitive values in 'climon config list' and 'climon config get' output",
+      "Read security-sensitive settings from global config only and warn on local overrides",
+      "Harden the dashboard server against SSRF, DNS-rebinding, and cross-site WebSocket hijacking",
+      "Clean up ghost remote sessions and fix an ingest reconnect deadlock",
+      "Fix configured remote hosts never connecting because the dashboard ingest did not host its dev tunnel",
+      "Stop console windows from flashing for Windows child processes",
+      "Move the mobile Open terminal button above the status and client details"
+    ]
+  },
+  {
     "version": "2.1.0",
     "changes": [
       "Choose a per-session terminal theme with the new --theme flag and the dashboard Edit/New session dialogs",

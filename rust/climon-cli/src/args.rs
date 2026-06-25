@@ -49,7 +49,6 @@ pub enum ParsedCommand {
     },
     Server {
         port: Option<f64>,
-        enable_remotes: bool,
         no_takeover: bool,
     },
     Ls,
@@ -90,6 +89,10 @@ pub enum ParsedCommand {
         id: String,
     },
     Cleanup,
+    Remotes {
+        watch: bool,
+        json: bool,
+    },
     Update {
         argv: Vec<String>,
     },
@@ -121,11 +124,13 @@ Usage:
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white;
                                theme: a dashboard theme name, e.g. \"Dracula\")
-  climon server [--port N] [--enable-remotes] [--no-takeover]
+  climon server [--port N] [--no-takeover]
                                Start the dashboard web server (loopback only)
                                (--no-takeover: never terminate an existing
                                server; start on the next available port)
   climon ls                    List monitored sessions
+  climon remotes [--watch] [--json]
+                               Show connected remote hosts and uplinks
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order
@@ -308,7 +313,6 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
         "__update-check" => Ok(ParsedCommand::UpdateCheck),
         "server" => {
             let mut port: Option<f64> = None;
-            let mut enable_remotes = false;
             let mut no_takeover = false;
             let mut i = 0usize;
             while i < rest.len() {
@@ -318,18 +322,12 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
                     i += 1;
                 } else if let Some(value) = arg.strip_prefix("--port=") {
                     port = Some(js_number(value));
-                } else if arg == "--enable-remotes" {
-                    enable_remotes = true;
                 } else if arg == "--no-takeover" {
                     no_takeover = true;
                 }
                 i += 1;
             }
-            Ok(ParsedCommand::Server {
-                port,
-                enable_remotes,
-                no_takeover,
-            })
+            Ok(ParsedCommand::Server { port, no_takeover })
         }
         "ls" | "list" => Ok(ParsedCommand::Ls),
         "kill" => {
@@ -410,6 +408,18 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
         }
         "config" => Ok(ParsedCommand::Config { argv: rest }),
         "cleanup" => Ok(ParsedCommand::Cleanup),
+        "remotes" => {
+            let mut watch = false;
+            let mut json = false;
+            for arg in &rest {
+                match arg.as_str() {
+                    "--watch" | "-w" => watch = true,
+                    "--json" => json = true,
+                    other => return Err(format!("Unknown flag for remotes: {other}")),
+                }
+            }
+            Ok(ParsedCommand::Remotes { watch, json })
+        }
         "link" => Ok(ParsedCommand::Link { argv: rest }),
         "__uplink" => Ok(ParsedCommand::Uplink),
         "__ingest" => Ok(ParsedCommand::Ingest),
@@ -599,7 +609,6 @@ mod tests {
             parse(&["server", "--port", "9000"]),
             ParsedCommand::Server {
                 port: Some(9000.0),
-                enable_remotes: false,
                 no_takeover: false
             }
         );
@@ -611,19 +620,18 @@ mod tests {
             parse(&["server", "--port=4000"]),
             ParsedCommand::Server {
                 port: Some(4000.0),
-                enable_remotes: false,
                 no_takeover: false
             }
         );
     }
 
     #[test]
-    fn parses_server_with_enable_remotes() {
+    fn server_ignores_removed_remotes_flag() {
+        let removed_remotes_flag = ["--enable", "remotes"].join("-");
         assert_eq!(
-            parse(&["server", "--enable-remotes", "--port", "9000"]),
+            parse_args(&v(&["server", &removed_remotes_flag, "--port", "9000"])).expect("parse ok"),
             ParsedCommand::Server {
                 port: Some(9000.0),
-                enable_remotes: true,
                 no_takeover: false
             }
         );
@@ -635,21 +643,20 @@ mod tests {
             parse(&["server", "--no-takeover"]),
             ParsedCommand::Server {
                 port: None,
-                enable_remotes: false,
                 no_takeover: true
             }
         );
         assert_eq!(
-            parse(&[
+            parse_args(&v(&[
                 "server",
                 "--no-takeover",
                 "--port",
                 "9000",
-                "--enable-remotes"
-            ]),
+                &["--enable", "remotes"].join("-"),
+            ]))
+            .expect("parse ok"),
             ParsedCommand::Server {
                 port: Some(9000.0),
-                enable_remotes: true,
                 no_takeover: true
             }
         );
@@ -666,6 +673,36 @@ mod tests {
             }
         );
         assert_eq!(parse(&["kill", "--all"]), ParsedCommand::KillAll);
+    }
+
+    #[test]
+    fn parses_remotes_command_and_flags() {
+        assert_eq!(
+            parse(&["remotes"]),
+            ParsedCommand::Remotes {
+                watch: false,
+                json: false
+            }
+        );
+        assert_eq!(
+            parse(&["remotes", "--watch"]),
+            ParsedCommand::Remotes {
+                watch: true,
+                json: false
+            }
+        );
+        assert_eq!(
+            parse(&["remotes", "--json"]),
+            ParsedCommand::Remotes {
+                watch: false,
+                json: true
+            }
+        );
+    }
+
+    #[test]
+    fn help_text_documents_remotes() {
+        assert!(help_text().contains("climon remotes"));
     }
 
     #[test]

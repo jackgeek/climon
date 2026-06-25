@@ -46,12 +46,24 @@ result-tracking row.
 | 11 | climon-install — client-side install/setup: install-manifest + on-disk layout parity, PATH setup (macOS/Linux/Windows), `climon setup` onboarding, EULA gate, telemetry/auto-update opt-in, stable install id, running-process detection | [phase11-install.md](phase11-install.md) |
 | 12 | Cutover & cleanup — ship the Rust `climon` client as the `install` binary, native Rust self-install (sentinel `climon-alpha` trigger, PATH + `.version` + changelog, locked-binary kill/retry, licence-declined abort), `scripts/compile.ts` host/assemble modes, `release.yml` cross-compile matrix, retire the Bun client bin | [phase12-cutover.md](phase12-cutover.md) |
 | — | Pin key bar (mobile) — mobile-only hamburger toggle + centralised mobile detection | [pin-key-bar.md](pin-key-bar.md) |
+| — | Mobile active-session layout order — Open terminal button between title and status/client meta | [mobile-open-terminal-order.md](mobile-open-terminal-order.md) |
 | — | Tunnel-link expiry countdown banner | [phase13-tunnel-expiry-banner.md](phase13-tunnel-expiry-banner.md) |
+| — | WSL bridge feature flag — config-driven remotes ingest + explicit bridge opt-in | [phase14-wsl-bridge-feature-flag.md](phase14-wsl-bridge-feature-flag.md) |
+| — | Ingest Rust cutover — production Rust ingest, control-plane parity, ghost GC, gate #3, hardening | [phase15-ingest-rust-cutover.md](phase15-ingest-rust-cutover.md) |
+| — | Remotes visibility — `ingest-status.json`/`uplink-status.json` beacons, `climon remotes` (`--watch`/`--json`), loopback `GET /api/remotes` + SSE, dashboard "Remote hosts" panel, hello identity sanitization | [phase16-remotes-visibility.md](phase16-remotes-visibility.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
+| — | PWA zoom lock & no overscroll (pinch-zoom disabled, page pinned 1:1 on swipe) | [pwa-zoom-lock.md](pwa-zoom-lock.md) |
+| — | Security — Web Push endpoint SSRF guard | [security-push-ssrf.md](security-push-ssrf.md) |
 | — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |
 | — | Per-session theme + default theme (CLI `--theme`, Edit/New dialogs, live inheritance) | [per-session-theme.md](per-session-theme.md) |
 | — | Windows — no console-window popups from remote child processes (`devtunnel`/`tasklist`/`taskkill`/peer discovery) | [windows-no-console-popups.md](windows-no-console-popups.md) |
+| — | Security — WebSocket attach Origin validation | [security-ws-attach-origin.md](security-ws-attach-origin.md) |
+| — | Security DNS-rebinding guard for dashboard reads/delete | [security-dns-rebind.md](security-dns-rebind.md) |
+| — | Security — project-local config global-only settings | [security-config-global-only.md](security-config-global-only.md) |
+| — | Interactive install opt-ins default to Yes (telemetry + auto-update prompts) | [optin-default-yes.md](optin-default-yes.md) |
+| — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
+| — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
 
 ## Recording results
 

@@ -36,7 +36,9 @@
   },
   "feature": {
     "sessionSpawning": "disabled",
-    "remoteSpawn": "disabled"
+    "remoteSpawn": "disabled",
+    "wslBridge": "disabled",
+    "remotes": "disabled"
   },
   "eula": {
     "accepted": false

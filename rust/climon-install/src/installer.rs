@@ -212,12 +212,10 @@ mod unix {
     }
 
     fn make_installed_executable(install_dir: &Path) -> Result<(), String> {
-        for name in ["climon", "climon-beta"] {
-            let path = install_dir.join(name);
-            if path.exists() {
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-                    .map_err(|e| format!("Failed to set permissions on {name}: {e}"))?;
-            }
+        let path = install_dir.join("climon");
+        if path.exists() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Failed to set permissions on climon: {e}"))?;
         }
         Ok(())
     }
@@ -726,7 +724,7 @@ mod tests {
         let source_dir = root.join("src");
         let install_dir = root.join("bin");
         fs::create_dir_all(&source_dir).unwrap();
-        for name in ["install", "climon-server", "climon-beta"] {
+        for name in ["install", "climon-server"] {
             fs::write(source_dir.join(name), name).unwrap();
         }
 

@@ -1,4 +1,4 @@
-climon v2.1.0 — web-based monitor for interactive CLI sessions
+climon v2.2.0 — web-based monitor for interactive CLI sessions
 
 Usage:
   climon [--priority N] [--color C] [--name S] [--theme T]
@@ -8,11 +8,13 @@ Usage:
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white;
                                theme: a dashboard theme name, e.g. "Dracula")
-  climon server [--port N] [--enable-remotes] [--no-takeover]
+  climon server [--port N] [--no-takeover]
                                Start the dashboard web server (loopback only)
                                (--no-takeover: never terminate an existing
                                server; start on the next available port)
   climon ls                    List monitored sessions
+  climon remotes [--watch] [--json]
+                               Show connected remote hosts and uplinks
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order

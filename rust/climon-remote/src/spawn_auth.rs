@@ -118,7 +118,7 @@ impl ReplayGuard {
 
     fn prune(&mut self, now_ms: i64) {
         let window = self.window_ms;
-        self.seen.retain(|_, &mut t| now_ms - t <= window);
+        self.seen.retain(|_, &mut t| (now_ms - t).abs() <= window);
     }
 }
 
@@ -210,6 +210,18 @@ mod tests {
         assert_eq!(a.len(), 32);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn prune_evicts_future_dated_nonces_symmetrically() {
+        // A nonce recorded with a far-future timestamp (sender clock fast).
+        // The old `now - t <= window` test was always true for future `t`,
+        // retaining it indefinitely (~2x effective window). The symmetric
+        // `(now - t).abs() <= window` evicts it once it is out of window.
+        let mut guard = ReplayGuard::new(30_000);
+        guard.seen.insert("future".to_string(), 100_000);
+        guard.prune(1_000);
+        assert!(!guard.seen.contains_key("future"));
     }
 
     #[test]

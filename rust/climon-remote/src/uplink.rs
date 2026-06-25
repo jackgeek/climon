@@ -237,6 +237,10 @@ pub struct UplinkBridgeOptions {
     pub store_env: StoreEnv,
     pub client_id: String,
     pub keep_alive_seconds: Option<f64>,
+    pub peer: bool,
+    pub target: Option<crate::uplink_status::UplinkTarget>,
+    pub connected_at: Option<u64>,
+    pub config_env: ConfigEnv,
 }
 
 /// An attached local session socket: a writer channel feeding the blocking
@@ -286,6 +290,10 @@ struct Bridge {
     attached: AttachedMap,
     advertised: HashSet<String>,
     store_env: Arc<StoreEnv>,
+    spawn_secret: Option<String>,
+    target: Option<crate::uplink_status::UplinkTarget>,
+    connected_at: Option<u64>,
+    config_env: ConfigEnv,
 }
 
 impl Bridge {
@@ -330,7 +338,35 @@ async fn reconcile(bridge: &mut Bridge) {
             }));
         }
     }
+    let ids: Vec<String> = current.iter().cloned().collect();
+    let snapshot = ControlMessage::SessionList { ids };
+    // When a spawn secret is configured, the destructive snapshot must be a
+    // verified Signed envelope so a clientId spoofer cannot delete sessions.
+    let frame = match &bridge.spawn_secret {
+        Some(secret) => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as i64;
+            encode_control(&crate::spawn_auth::sign_now(secret, &snapshot, now_ms))
+        }
+        None => encode_control(&snapshot),
+    };
+    bridge.write(frame);
     bridge.advertised = current;
+
+    // Refresh the status beacon's session count + updatedAt while connected so
+    // `climon remotes` reflects live counts and can detect a stalled uplink.
+    let status = crate::uplink_status::UplinkStatus {
+        pid: std::process::id(),
+        updated_at: crate::time::now_ms(),
+        target: bridge.target.clone(),
+        state: "connected".into(),
+        connected_at: bridge.connected_at,
+        session_count: bridge.advertised.len() as u32,
+        last_error: None,
+    };
+    let _ = crate::uplink_status::write_uplink_status(&status, &bridge.config_env);
 }
 
 async fn attach(bridge: &Bridge, session_id: &str) {
@@ -436,15 +472,36 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
         let _ = write_half.shutdown().await;
     });
 
+    // Resolve the spawn secret + feature gate once. When a secret is present,
+    // every inbound control frame MUST be a verified Signed envelope, a Spawn is
+    // only honored when feature.remoteSpawn is enabled, and the outbound
+    // session-list snapshot is signed (see reconcile).
+    let config_env = options.config_env.clone();
+    let spawn_secret: Option<String> = as_string(resolve_config_setting(
+        "remote.spawnSecret",
+        &config_env,
+        Path::new("."),
+    ));
+    let remote_spawn_enabled = climon_config::config::load_config(&config_env)
+        .map(|cfg| climon_config::features::is_feature_enabled(&cfg, "remoteSpawn"))
+        .unwrap_or(false);
+
     let mut bridge = Bridge {
         send_tx: send_tx.clone(),
         attached: Arc::new(AsyncMutex::new(HashMap::new())),
         advertised: HashSet::new(),
         store_env: Arc::new(options.store_env),
+        spawn_secret: spawn_secret.clone(),
+        target: options.target.clone(),
+        connected_at: options.connected_at,
+        config_env: config_env.clone(),
     };
 
     bridge.write(encode_control(&ControlMessage::Hello {
         client_id: options.client_id.clone(),
+        peer: options.peer,
+        hostname: Some(climon_store::paths::hostname()).filter(|h| !h.is_empty()),
+        os: Some(climon_store::paths::node_platform().to_string()),
     }));
     reconcile(&mut bridge).await;
 
@@ -465,6 +522,34 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
             }
         }));
     }
+
+    // Status heartbeat: refresh uplink-status.json's updatedAt + session count
+    // every 10s while connected, so the reader-derived staleness does not flip a
+    // healthy uplink to stale between the (infrequent) supervisor state
+    // transitions. Mirrors the ingest's status heartbeat.
+    let status_task = {
+        let store_env = bridge.store_env.clone();
+        let cfg = config_env.clone();
+        let target = bridge.target.clone();
+        let connected_at = bridge.connected_at;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(10));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let status = crate::uplink_status::UplinkStatus {
+                    pid: std::process::id(),
+                    updated_at: crate::time::now_ms(),
+                    target: target.clone(),
+                    state: "connected".into(),
+                    connected_at,
+                    session_count: live_session_count(&store_env),
+                    last_error: None,
+                };
+                let _ = crate::uplink_status::write_uplink_status(&status, &cfg);
+            }
+        })
+    };
 
     // Idle teardown: destroy the channel if no inbound frames arrive in time.
     let shutdown = Arc::new(tokio::sync::Notify::new());
@@ -488,18 +573,6 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
 
     let mut decoder = MuxDecoder::new();
     let mut buf = vec![0u8; 64 * 1024];
-    // Resolve the spawn secret + feature gate once. When a secret is present,
-    // every inbound control frame MUST be a verified Signed envelope, and a
-    // Spawn is only honored when feature.remoteSpawn is enabled.
-    let config_env = ConfigEnv::real();
-    let spawn_secret: Option<String> = as_string(resolve_config_setting(
-        "remote.spawnSecret",
-        &config_env,
-        Path::new("."),
-    ));
-    let remote_spawn_enabled = climon_config::config::load_config(&config_env)
-        .map(|cfg| climon_config::features::is_feature_enabled(&cfg, "remoteSpawn"))
-        .unwrap_or(false);
     let mut replay_guard = ReplayGuard::new(DEFAULT_FRESHNESS_WINDOW_MS);
     loop {
         tokio::select! {
@@ -569,6 +642,7 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
     }
 
     // Teardown.
+    status_task.abort();
     if let Some(t) = keepalive_task.take() {
         t.abort();
     }
@@ -758,6 +832,41 @@ fn resolve_peer_uplink_target(config_env: &ConfigEnv, cwd: &Path) -> Option<(Str
 
 /// Devbox uplink supervisor. Singleton. Mirrors `runUplink`. Returns the process
 /// exit code.
+/// Classifies the uplink target for the status beacon. A peer connection is a
+/// same-machine WSL<->Windows bridge; a tunnel has a tunnelId; otherwise direct.
+fn build_uplink_target(
+    is_peer: bool,
+    host: &str,
+    port: u16,
+    tunnel_id: Option<&str>,
+) -> crate::uplink_status::UplinkTarget {
+    let kind = if is_peer {
+        "peer"
+    } else if tunnel_id.is_some() {
+        "tunnel"
+    } else {
+        "direct"
+    };
+    crate::uplink_status::UplinkTarget {
+        kind: kind.to_string(),
+        host: Some(host.to_string()),
+        port: Some(port),
+        tunnel_id: tunnel_id.map(String::from),
+        url: None,
+    }
+}
+
+/// Counts local (non-remote) sessions advertised by this uplink.
+fn live_session_count(store_env: &StoreEnv) -> u32 {
+    list_sessions(store_env)
+        .map(|s| {
+            s.iter()
+                .filter(|m| m.origin != Some(Origin::Remote))
+                .count() as u32
+        })
+        .unwrap_or(0)
+}
+
 pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) -> i32 {
     let peer_home = as_string(resolve_config_setting("remote.peerHome", &config_env, cwd));
     let initial_legacy = resolve_uplink_config(&config_env, cwd);
@@ -774,6 +883,23 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
     let client_id = ensure_client_id(&config_env, cwd);
     let mut backoff_ms: u64 = 1000;
 
+    let write_uplink = |state: &str,
+                        target: Option<crate::uplink_status::UplinkTarget>,
+                        connected_at: Option<u64>,
+                        session_count: u32,
+                        last_error: Option<String>| {
+        let status = crate::uplink_status::UplinkStatus {
+            pid: std::process::id(),
+            updated_at: crate::time::now_ms(),
+            target,
+            state: state.to_string(),
+            connected_at,
+            session_count,
+            last_error,
+        };
+        let _ = crate::uplink_status::write_uplink_status(&status, &config_env);
+    };
+
     loop {
         let started_at = std::time::Instant::now();
 
@@ -782,6 +908,7 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         } else {
             None
         };
+        let is_peer_connection = peer_target.is_some();
         let config = resolve_uplink_config(&config_env, cwd);
 
         let mut host: Option<String> = None;
@@ -817,6 +944,7 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
                     c.kill().await;
                 }
                 if peer_home.is_none() {
+                    write_uplink("disconnected", None, None, 0, None);
                     return 0;
                 }
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
@@ -824,6 +952,10 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
                 continue;
             }
         };
+
+        let target =
+            build_uplink_target(is_peer_connection, &host, port, config.tunnel_id.as_deref());
+        write_uplink("connecting", Some(target.clone()), None, 0, None);
 
         let reachable = wait_for_port(port, &host, 15_000).await;
         if !reachable {
@@ -835,6 +967,13 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
                     if let Some(mut c) = conn {
                         c.kill().await;
                     }
+                    write_uplink(
+                        "disconnected",
+                        None,
+                        None,
+                        0,
+                        Some("dev tunnel auth rejected".to_string()),
+                    );
                     return 1;
                 }
             }
@@ -842,6 +981,7 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
                 c.kill().await;
             }
             // transient: fall through to backoff
+            write_uplink("reconnecting", Some(target.clone()), None, 0, None);
             if started_at.elapsed() > Duration::from_secs(30) {
                 backoff_ms = 1000;
             }
@@ -852,12 +992,24 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
 
         match TcpStream::connect((host.as_str(), port)).await {
             Ok(channel) => {
+                let connected_at = crate::time::now_ms();
+                write_uplink(
+                    "connected",
+                    Some(target.clone()),
+                    Some(connected_at),
+                    live_session_count(&store_env),
+                    None,
+                );
                 run_uplink_bridge(
                     channel,
                     UplinkBridgeOptions {
                         store_env: store_env.clone(),
                         client_id: client_id.clone(),
                         keep_alive_seconds: Some(resolve_keep_alive(&config_env, cwd)),
+                        peer: is_peer_connection,
+                        target: Some(target.clone()),
+                        connected_at: Some(connected_at),
+                        config_env: config_env.clone(),
                     },
                 )
                 .await;
@@ -867,6 +1019,7 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
             }
         }
 
+        write_uplink("reconnecting", Some(target.clone()), None, 0, None);
         let auth_rejected_after = conn.as_ref().map(|c| c.auth_rejected()).unwrap_or(false);
         if let Some(mut c) = conn {
             c.kill().await;
@@ -874,6 +1027,13 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         if auth_rejected_after {
             eprintln!(
                 "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
+            );
+            write_uplink(
+                "disconnected",
+                None,
+                None,
+                0,
+                Some("dev tunnel auth rejected".to_string()),
             );
             return 1;
         }
@@ -898,6 +1058,41 @@ mod tests {
     use climon_store::meta::write_session_meta;
     use std::collections::HashMap as Map;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn builds_target_descriptor_for_each_kind() {
+        use crate::uplink_status::UplinkTarget;
+        assert_eq!(
+            build_uplink_target(true, "172.30.192.1", 3132, None),
+            UplinkTarget {
+                kind: "peer".into(),
+                host: Some("172.30.192.1".into()),
+                port: Some(3132),
+                tunnel_id: None,
+                url: None
+            }
+        );
+        assert_eq!(
+            build_uplink_target(false, "127.0.0.1", 3132, Some("abc")),
+            UplinkTarget {
+                kind: "tunnel".into(),
+                host: Some("127.0.0.1".into()),
+                port: Some(3132),
+                tunnel_id: Some("abc".into()),
+                url: None
+            }
+        );
+        assert_eq!(
+            build_uplink_target(false, "10.0.0.2", 3132, None),
+            UplinkTarget {
+                kind: "direct".into(),
+                host: Some("10.0.0.2".into()),
+                port: Some(3132),
+                tunnel_id: None,
+                url: None
+            }
+        );
+    }
 
     fn temp_home() -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -1034,6 +1229,7 @@ mod tests {
             ControlMessage::SessionAdded { .. } => "session-added",
             ControlMessage::SessionUpdated { .. } => "session-updated",
             ControlMessage::SessionRemoved { .. } => "session-removed",
+            ControlMessage::SessionList { .. } => "session-list",
             ControlMessage::Attach { .. } => "attach",
             ControlMessage::Detach { .. } => "detach",
             ControlMessage::Spawn { .. } => "spawn",
@@ -1063,6 +1259,10 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.0),
+                peer: false,
+                target: None,
+                connected_at: None,
+                config_env: config_env_for(&home),
             },
         ));
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1098,6 +1298,10 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.0),
+                peer: false,
+                target: None,
+                connected_at: None,
+                config_env: config_env_for(&home),
             },
         ));
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1106,7 +1310,7 @@ mod tests {
         let _ = server.await;
 
         let kinds = received.lock().unwrap().clone();
-        assert_eq!(kinds, vec!["hello".to_string()]);
+        assert_eq!(kinds, vec!["hello".to_string(), "session-list".to_string()]);
         std::fs::remove_dir_all(&home).ok();
     }
 
@@ -1141,6 +1345,10 @@ mod tests {
                 store_env,
                 client_id: "dev1".into(),
                 keep_alive_seconds: Some(0.05),
+                peer: false,
+                target: None,
+                connected_at: None,
+                config_env: config_env_for(&home),
             },
         )
         .await;

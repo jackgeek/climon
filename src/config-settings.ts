@@ -16,6 +16,13 @@ export interface ConfigSetting {
   purpose: string;
   scope: ConfigProcessScope[];
   sensitive?: boolean;
+  /**
+   * When true, this setting is resolved ONLY from the global $CLIMON_HOME
+   * config, never from a project-local .climon/config.jsonc. Use for
+   * execution/network/trust-sensitive keys an untrusted cloned repo must not
+   * be able to override (e.g. session.terminalProgram, remote.*, update.*).
+   */
+  globalOnly?: boolean;
   internal?: boolean;
   /**
    * When true, the web dashboard may read AND write this setting through the
@@ -159,49 +166,56 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     type: "boolean",
     purpose: "Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection.",
     scope: ["client"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "remote.host",
     type: "string",
     purpose: "Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set.",
     scope: ["client"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "remote.ingestHost",
     type: "string",
     purpose: "Host address where the dashboard-side ingest daemon should listen for incoming remote session connections.",
     scope: ["client"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "remote.tunnelId",
     type: "string",
     purpose: "Dev tunnel id (e.g. \"happy-tree-abc123\") used by `devtunnel connect` to forward local climon traffic to a remote dashboard.",
     scope: ["client"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "remote.dashboardTunnelId",
     type: "string",
     purpose: "Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions.",
     scope: ["server"],
-    internal: true
+    internal: true,
+    globalOnly: true
   },
   {
     path: "remote.dashboardTunnelCluster",
     type: "string",
     purpose: "Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions.",
     scope: ["server"],
-    internal: true
+    internal: true,
+    globalOnly: true
   },
   {
     path: "remote.dashboardTunnelEnabled",
     type: "boolean",
     purpose: "Server-owned flag recording whether the Tunnel Link is enabled, so the server re-establishes the dashboard tunnel automatically on startup.",
     scope: ["server"],
-    internal: true
+    internal: true,
+    globalOnly: true
   },
   {
     path: "remote.port",
@@ -209,6 +223,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     purpose: "Local port the devbox forwards and the ingest daemon listens on. Defaults to server.port if not explicitly set.",
     scope: ["client"],
     acceptInput: true,
+    globalOnly: true,
     validate: (value: unknown) => {
       if (typeof value !== "number" || !Number.isInteger(value) || value <= 0 || value > 65535) {
         throw new Error("remote.port must be a positive integer between 1 and 65535");
@@ -221,6 +236,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     defaultValue: 100,
     purpose: "How many consecutive ports the ingest daemon will try, starting at its preferred port, before giving up. Raise it if many ports near the default are already in use.",
     scope: ["server"],
+    globalOnly: true,
     validate: (value: unknown) => {
       if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
         throw new Error("remote.ingestPortRetryAttempts must be a positive integer (>= 1)");
@@ -233,6 +249,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     purpose: "Stable, non-secret client namespace identifying this machine's sessions. Defaults to the machine hostname when unset; set it to a value that is unique per host to avoid session ID collisions across machines.",
     scope: ["client"],
     acceptInput: true,
+    globalOnly: true,
     validate: (value: unknown) => {
       if (typeof value !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
         throw new Error("remote.clientId must be 1–64 characters using only letters, digits, dots, hyphens, or underscores.");
@@ -246,7 +263,8 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
       "Shared HMAC secret authenticating dashboard→devbox spawn commands. Generated automatically on the dashboard host when feature.remoteSpawn is enabled, and planted on the devbox by the remotes-screen setup script. Keep it secret.",
     scope: ["client", "server"],
     acceptInput: true,
-    sensitive: true
+    sensitive: true,
+    globalOnly: true
   },
   {
     path: "remote.keepAlive",
@@ -255,6 +273,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     purpose: "Interval in seconds between mux keepalive pings sent over the remote uplink/ingest connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0 to disable.",
     scope: ["client"],
     acceptInput: true,
+    globalOnly: true,
     validate: (value: unknown) => {
       if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
         throw new Error("remote.keepAlive must be a non-negative integer (seconds)");
@@ -264,24 +283,27 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "remote.peerHome",
     type: "string",
-    purpose: "Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\\\wsl.localhost\\<distro>\\home\\<you>\\.climon from Windows). When set, climon reads the peer's server.json to find a dashboard running on the other OS and auto-wires sessions to it. Usually set automatically by `climon link`.",
+    purpose: "Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\\\wsl.localhost\\<distro>\\home\\<you>\\.climon from Windows). When feature.wslBridge is enabled, climon reads the peer's beacons and wires sessions to it. Usually set automatically by `climon link`.",
     scope: ["client", "server"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "remote.peerHost",
     type: "string",
     purpose: "Optional host override used to reach the peer dashboard/ingest. Leave unset to auto-detect (localhost, or the WSL gateway IP under NAT networking).",
     scope: ["client", "server"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "remote.autoLink",
     type: "boolean",
     defaultValue: true,
-    purpose: "When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Set false to disable auto-linking.",
+    purpose: "When true (default), the first `climon` run inside WSL attempts to auto-link to a Windows-side climon by detecting its CLIMON_HOME and setting remote.peerHome on both sides. Auto-link configures discovery only; it never enables feature.wslBridge. Set false to disable auto-linking.",
     scope: ["client"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "session.color",
@@ -319,7 +341,8 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     purpose:
       "Command template used to open a terminal window for a non-headless (visible) session spawned from the dashboard. Use the {cmd} placeholder for the climon command to run. When unset, climon auto-detects a terminal per OS (Terminal.app, Windows Terminal, or x-terminal-emulator/gnome-terminal/konsole/xterm).",
     scope: ["client"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "tunnelLink.keepAlive",
@@ -397,7 +420,8 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     purpose:
       "When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`.",
     scope: ["client"],
-    acceptInput: true
+    acceptInput: true,
+    globalOnly: true
   },
   {
     path: "update.password",
@@ -407,6 +431,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     scope: ["client"],
     sensitive: true,
     acceptInput: true,
+    globalOnly: true,
   },
   {
     path: "update.lastCheck",
@@ -414,7 +439,8 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     purpose:
       "ISO-8601 timestamp of the last background update check. Used to throttle checks.",
     scope: ["client"],
-    internal: true
+    internal: true,
+    globalOnly: true
   },
   {
     path: "update.availableVersion",
@@ -422,7 +448,8 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     purpose:
       "Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update.",
     scope: ["client"],
-    internal: true
+    internal: true,
+    globalOnly: true
   },
   {
     path: "install.id",

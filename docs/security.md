@@ -29,6 +29,17 @@ networks. We assume:
 - Input arriving over the wire (mux frames, session metadata, labels) is
   untrusted.
 
+## Project-local config trust
+
+Project-local `.climon/config.jsonc` files are treated as untrusted when a user
+starts climon inside a cloned repository. They may override only non-security
+settings. Execution, network, and update trust-boundary settings are marked
+`globalOnly`/`global_only` in the TypeScript and Rust registries and are resolved
+solely from the global `$CLIMON_HOME/config.jsonc`: `session.terminalProgram`, all
+`remote.*` settings, and all `update.*` settings.
+An explicit `climon config --local` write for one of these keys warns that the
+local value is not honored and suggests using `--global`.
+
 ## Transport: identity-based dev tunnels
 
 Remote traffic rides a Microsoft **dev tunnel** rather than SSH. The home
@@ -59,6 +70,19 @@ Direct mode has no dev tunnel in front of the ingest port. Treat
 `remote.ingestHost:remote.port` as trusted-local infrastructure: bind to the
 specific same-machine adapter where possible, not a broad LAN address, and rely
 on the OS firewall to keep that port scoped to the local Windows/WSL boundary.
+
+The WSL bridge is gated by the `feature.wslBridge` flag (and the shared ingest by
+`feature.wslBridge || feature.remotes`). The flag flips on **only by explicit user
+action** — the interactive `climon link` prompt, `climon link --wsl-bridge`, or
+`climon config feature.wslBridge enabled`. Auto-link wires read-only discovery
+(`remote.peerHome`) but never enables the bridge, and non-interactive `climon link`
+defaults to leaving it off. Flag changes take effect on the next server **restart**,
+not immediately. **Interim exposure:** the ingest's same-machine-`peer` transport
+guard (gate #3) ships with the Rust ingest cutover; until that lands, enabling
+`feature.remotes` alone on a Windows+WSL host starts an ingest bound to the
+`vEthernet (WSL)` adapter that a same-machine WSL process can reach even with
+`feature.wslBridge` off — so the WSL-bridge feature flag must not be released ahead
+of the ingest cutover.
 
 ### Beacon-based discovery (`remote.peerHome`)
 
@@ -128,7 +152,16 @@ sends an *imperative command* to a client, so it is gated and authenticated:
 - **Loopback-only server→ingest hop.** The dashboard server reaches its own
   ingest over a loopback-only control socket (advertised as `controlSocket` in
   `ingest.json`); the ingest signs the `Spawn` and forwards it over the existing
-  mux, then relays the devbox's signed `SpawnResult` back.
+  mux, then relays the devbox's signed `SpawnResult` back. The control socket is TCP
+  loopback, so it is reachable by any local process; the ingest therefore generates a
+  per-run `controlToken` (published in the `0600` `ingest.json`) and requires it on
+  every request via a constant-time compare before dispatch. Its secrecy rests on the
+  beacon file permissions — **same-uid only** — the same filesystem-permission basis used
+  for the shutdown channel above. The `spawnSecret` signs the outbound devbox frame; the
+  `controlToken` authenticates the caller of the loopback socket. Gate #3 (the ingest
+  refusing a same-machine `peer` connection when `feature.wslBridge` is off) is a
+  **feature/misconfiguration guard, not a security boundary**: `peer` is self-asserted on
+  the wire, so a hostile uplink that omits it is not stopped by gate #3 alone.
 - **Threat model.** Over dev tunnels the tunnel's identity ACL already restricts
   who can connect; the HMAC adds command authenticity on top. On the direct
   same-machine (WSL↔Windows) bridge there is no tunnel ACL, so the HMAC secret is
@@ -179,6 +212,36 @@ local paths. The ingest connection handler enforces this:
   FIFO chain), so the routine duplicate `session-added` frames the devbox emits
   on every file-watch tick cannot race two concurrent binds onto one socket.
 
+### Remote visibility status files + untrusted hello identity
+
+The remote-visibility feature publishes two local status beacons under
+`$CLIMON_HOME` — `ingest-status.json` (written by the ingest) and
+`uplink-status.json` (written by a devbox uplink supervisor). They carry only
+hostnames, LAN addresses, and connection counts — **no secrets** — and are
+never network-exposed: they are plain files written `0600` inside the `0700`
+`$CLIMON_HOME`, readable by the owning user only. `GET /api/remotes` (and its
+SSE `remotes` event), which surfaces this data to the dashboard, is
+**loopback-only** (it returns `403` for non-loopback callers, like the other
+privileged dashboard APIs).
+
+`hello.hostname` and `hello.os` are **attacker-controlled** (a devbox is
+untrusted input). They are sanitized once at the ingest trust boundary, before
+they are stored or rendered anywhere:
+
+- `hostname` is capped to **64 chars** and stripped of C0/C1 control bytes
+  (including `ESC`), so a malicious devbox cannot smuggle ANSI escape sequences
+  into the `climon remotes` terminal output (clear-screen, color, title) or
+  oversize the status file.
+- `os` is **allowlisted** to `darwin`/`win32`/`linux`; anything else folds to
+  `unknown`.
+
+Because sanitization happens at storage time, every downstream sink (the
+`climon remotes` TTY renderer, `--json`, and the dashboard, which additionally
+renders via auto-escaping React text nodes) only ever formats already-safe
+strings. The server payload for `/api/remotes` is also built field-by-field
+(not spread from the file) so an unexpected field in the status file cannot ride
+into the API response.
+
 ### Limitation: shared-identity namespaces are self-asserted
 
 The tunnel ACL authenticates each connection, but there is **no per-client
@@ -212,6 +275,19 @@ addition to a loopback source IP:
 which together defend against browser-mediated CSRF and DNS-rebinding from a page
 running on the same machine (`isAllowedSpawnRequest`).
 
+The WebSocket attach upgrade performs an equivalent `Origin` check: browser
+requests must be same-origin with `Host`, and `Host` must be loopback or the
+dashboard dev-tunnel domain, defending against Cross-Site WebSocket Hijacking and
+DNS-rebinding for terminal attach traffic.
+
+Session read, SSE, and cleanup endpoints (`GET /api/sessions`,
+`GET /api/sessions/:id/scrollback`, `GET /api/events`, and
+`DELETE /api/sessions/:id`) also require an allowed dashboard `Host`: loopback
+for direct local access or `*.devtunnels.ms` for the tunnel relay. These routes
+do not require an `Origin` header, but the Host allowlist blocks DNS-rebinding
+requests such as `Host: evil.com` before session metadata, scrollback, SSE
+payloads, or delete side effects are produced.
+
 ## Web Push endpoints and subscription storage
 
 The push endpoints are reachable over the dev tunnel (the phone is not loopback),
@@ -223,6 +299,15 @@ so they inherit the tunnel's identity ACL as their access boundary:
   `Host` header. This blocks cross-origin/CSRF while still permitting the tunnel
   origin (unlike `isAllowedSpawnRequest`, which is loopback-only and stays in force
   for privileged spawn/patch/tunnel endpoints).
+
+Subscribed Web Push endpoints are additionally validated as `https:` URLs whose
+host is not a loopback, private, or link-local IP literal and is not a known
+internal hostname such as `localhost`, `*.localhost`, `*.local`,
+`local`, `metadata.google.internal`, `*.internal`, `ip6-localhost`, or
+`ip6-loopback`. DNS hostnames are not resolved at subscribe time, so normal
+public browser push service hosts such as FCM, Mozilla Push Service, or Apple
+Push remain accepted while direct internal-host SSRF targets are rejected before
+they can be stored.
 
 The VAPID private key (`$CLIMON_HOME/push/vapid.json`) and subscriptions
 (`$CLIMON_HOME/push/subscriptions.json`) are stored under `$CLIMON_HOME` and are not
@@ -259,6 +344,19 @@ loopback-only:
 - **Mux frames**: every frame is length-prefixed and capped
   (`MAX_MUX_PAYLOAD = 8 MiB`); an oversize or malformed frame tears the
   connection down rather than allocating unbounded memory.
+- **Hello identity** (`hello.hostname` / `hello.os`): attacker-controlled
+  fields surfaced by `climon remotes` and the dashboard. The ingest sanitizes
+  them at the boundary — `hostname` capped to 64 chars with C0/C1 control bytes
+  and ESC stripped, `os` allowlisted to `darwin`/`win32`/`linux` (else
+  `unknown`) — so a malicious devbox cannot inject terminal escape sequences
+  into a TTY or oversize the `ingest-status.json` beacon. The
+  `ingest-status.json` / `uplink-status.json` beacons are local files under
+  `$CLIMON_HOME` (mode `0600`) carrying hostnames/addresses only — no secrets,
+  not network-exposed; `GET /api/remotes` is loopback-only (403 otherwise).
+- **Dashboard HTTP Hosts** (`isAllowedDashboardHost`): session list,
+  scrollback, SSE, and DELETE handlers accept only loopback or
+  `*.devtunnels.ms` Host headers, preventing DNS-rebinding pages from using a
+  local source IP to read or remove sessions.
 
 ## Integrity of managed files
 
@@ -358,6 +456,7 @@ restarted server pick up the new version.
 | Inject arbitrary local paths or server-controlled fields | **No** (`isValidRemoteId` + `toLocalMeta` sanitization) |
 | Read another client's keystrokes or inject into its PTY | **No** (per-connection sockets) |
 | Spoof another client's *dashboard metadata* | Yes, if it has tunnel access (see limitation above) |
+| Delete another client's materialized sessions by spoofing its `clientId` + an empty `session-list` | Only when the ingest has no `remote.spawnSecret`; with a secret set, `session-list` must be a verified `Signed` envelope (deletion stays scoped to the spoofed namespace, never local sessions) |
 | Reach the dashboard HTTP server | **No** (loopback only) |
 | Keep connecting after access is revoked | **No** (auth rejection is terminal) |
 

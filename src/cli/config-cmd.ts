@@ -1,3 +1,14 @@
+/**
+ * ⚠️ LEGACY TypeScript client — frozen. Fix the Rust client instead.
+ *
+ * The shipping `climon` *client* is the Rust workspace under `rust/` (crates
+ * `climon-cli`, `climon-session`, `climon-pty`, `climon-store`, `climon-config`,
+ * `climon-remote`, `climon-install`, `climon-update`, …). This module belongs to
+ * the legacy Bun/TypeScript client, kept only for local development and the Bun
+ * test suite. Do NOT add features or fix client bugs here — make all client
+ * changes in the Rust crates. (The Bun dashboard *server* under `src/server*`
+ * and `src/web/` is NOT legacy and is still maintained.)
+ */
 import { readSync, unlinkSync } from "node:fs";
 import {
   coerceConfigValue,
@@ -6,6 +17,7 @@ import {
   listExistingConfigFiles,
   knownConfigKeys,
   resolveConfigSetting,
+  shouldWarnGlobalOnlyLocalWrite,
   unsetConfigSetting,
   writeConfigSetting,
   type WriteScope
@@ -212,6 +224,11 @@ export function runConfigCommand(
         return 0;
       }
       case "set": {
+        if (shouldWarnGlobalOnlyLocalWrite(action.key, action.scope)) {
+          commandIO.stderr(
+            `climon config: ${action.key} is global-only; the local value will not be read. Use --global to set the effective value.\n`
+          );
+        }
         writeConfigSetting(action.key, action.value, action.scope, env, cwd);
         const flagName = parseFeatureConfigKey(action.key);
         if (flagName) {

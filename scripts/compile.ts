@@ -5,15 +5,14 @@
  * The shipped `climon` client is the **Rust** binary built from
  * `rust/climon-cli` (binary `climon` / `climon.exe`). It is packaged in each zip
  * under the name `install`. The dashboard **server** is still the Bun binary
- * compiled from `src/server.ts` (`climon-server`), and the in-process server JS
- * bundle (`climon-beta`) is still produced from `src/server-bundle-entry.ts`.
- * The former JS installer bundle is replaced by a tiny `climon-alpha` **sentinel
+ * compiled from `src/server.ts` (`climon-server`). The former JS installer
+ * bundle is replaced by a tiny `climon-alpha` **sentinel
  * marker**: its mere presence next to the executable triggers the native Rust
  * self-install (see `climon-cli`'s `try_run_installer`).
  *
  * Output: dist/climon-<platform>.zip, each containing `install` (Rust client),
- * `climon-server` (Bun), `climon-beta` (Bun server JS bundle), and `climon-alpha`
- * (sentinel marker), with `.exe` on Windows binaries. dist/ contains only zips.
+ * `climon-server` (Bun), and `climon-alpha` (sentinel marker), with `.exe` on
+ * Windows binaries. dist/ contains only zips.
  *
  * Two modes:
  *   - **local / default**: build ONLY the host target's Rust client with cargo
@@ -42,7 +41,6 @@ const distDir = resolve(projectRoot, "dist");
 const stageRoot = resolve(distDir, ".stage");
 const rustClientsStageDir = resolve(distDir, ".rust-clients");
 const serverEntrypoint = resolve(projectRoot, "src/server.ts");
-const serverBundleEntrypoint = resolve(projectRoot, "src/server-bundle-entry.ts");
 const embeddedAssetsPath = resolve(projectRoot, "src/server/embedded-assets.ts");
 
 /** Contents of the self-install sentinel marker shipped as `climon-alpha`. */
@@ -54,11 +52,11 @@ const assembleMode = process.env.CLIMON_ASSEMBLE === "1";
 /**
  * `bun build` flags that activate the embedded-asset code path in
  * `src/server/assets.ts` (the `__CLIMON_EMBEDDED__` define). EVERY build that
- * ships a self-contained server — the `climon-beta` JS bundle AND the compiled
- * `climon-server` binary — must pass these, otherwise the server falls back to
- * an on-the-fly source build that does not exist on an end user's machine and
- * the dashboard assets 404. Exported so the server smoke test compiles the
- * binary the same way and can never silently desync from the real pipeline.
+ * ships a self-contained server — the compiled `climon-server` binary — must
+ * pass these, otherwise the server falls back to an on-the-fly source build that
+ * does not exist on an end user's machine and the dashboard assets 404. Exported
+ * so the server smoke test compiles the binary the same way and can never
+ * silently desync from the real pipeline.
  */
 export const EMBEDDED_DEFINE_ARGS: string[] = ["--define", "__CLIMON_EMBEDDED__=true"];
 
@@ -77,7 +75,7 @@ type ZipEntry = {
 export function zipEntryNamesForPlatform(platform: string): string[] {
   const isWindows = platform.startsWith("windows");
   const exe = isWindows ? ".exe" : "";
-  return [`install${exe}`, `climon-server${exe}`, "climon-beta", "climon-alpha"];
+  return [`install${exe}`, `climon-server${exe}`, "climon-alpha"];
 }
 
 const allTargets: BuildTarget[] = [
@@ -215,13 +213,6 @@ async function main() {
   try {
     mkdirSync(stageRoot, { recursive: true });
 
-    // Build the server JS bundle once — it's platform-independent so the same
-    // minified bundle is shared across all platform zips.
-    const serverBundleOut = resolve(stageRoot, "climon-beta");
-    console.log("→ Bundling climon-beta...");
-    await $`bun build ${serverBundleEntrypoint} ${EMBEDDED_DEFINE_ARGS} --target bun --format esm --minify --outfile ${serverBundleOut}`;
-    console.log(`  ✓ climon-beta (${(readFileSync(serverBundleOut).length / 1024).toFixed(0)} KB)`);
-
     // The installer is now native (in the Rust client). Ship a tiny sentinel
     // marker named climon-alpha — its presence triggers the self-install.
     const installerSentinelData = new TextEncoder().encode(INSTALLER_SENTINEL);
@@ -253,7 +244,6 @@ async function main() {
       const zipFiles: ZipEntry[] = [
         { name: `install${exe}`, data: clientData },
         { name: `climon-server${exe}`, path: serverOut },
-        { name: "climon-beta", path: serverBundleOut },
         { name: "climon-alpha", data: installerSentinelData },
       ];
 

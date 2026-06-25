@@ -166,6 +166,7 @@ fn run() -> Result<i32, String> {
             climon_cli::spawn_command::run_spawn_command(req)
         }
         ParsedCommand::Cleanup => Ok(run_cleanup()),
+        ParsedCommand::Remotes { watch, json } => run_remotes_command(watch, json),
         ParsedCommand::Link { argv } => Ok(run_link(&argv)),
         ParsedCommand::Uplink => Ok(run_uplink_entry()),
         ParsedCommand::Ingest => Ok(run_ingest_entry()),
@@ -253,12 +254,63 @@ fn run_cleanup() -> i32 {
     run_cleanup_command(&env, deps, &mut io)
 }
 
+/// `climon remotes [--watch] [--json]`: render both directions of the remote
+/// bridge from the durable status beacons. Thin I/O + watch loop over the pure
+/// `remotes_cmd` core.
+fn run_remotes_command(watch: bool, json: bool) -> Result<i32, String> {
+    use std::io::IsTerminal;
+    let cfg_env = ConfigEnv::real();
+    let remotes_enabled = climon_config::config::load_config(&cfg_env)
+        .map(|cfg| {
+            climon_config::features::is_feature_enabled(&cfg, "remotes")
+                || climon_config::features::is_feature_enabled(&cfg, "wslBridge")
+        })
+        .unwrap_or(false);
+    let is_tty = std::io::stdout().is_terminal();
+
+    let render_once = || {
+        let now = climon_remote::time::now_ms();
+        let view = climon_cli::remotes_cmd::read_view(&cfg_env, now, remotes_enabled);
+        if json {
+            serde_json::to_string_pretty(&view).unwrap_or_else(|_| "{}".to_string())
+        } else {
+            climon_cli::remotes_cmd::render_human(&view, now, is_tty)
+        }
+    };
+
+    if !watch || json {
+        write_stdout(&render_once(), true);
+        return Ok(0);
+    }
+
+    // --watch: clear + redraw on an interval until interrupted.
+    loop {
+        write_stdout("\x1b[2J\x1b[H", false); // clear screen, home cursor
+        write_stdout(&render_once(), true);
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+    }
+}
+
 /// `climon link [--peer-home <path>]`: wire WSL<->Windows dashboard discovery.
 fn run_link(argv: &[String]) -> i32 {
     use climon_cli::link_cmd::run_link_command;
+    use std::io::IsTerminal;
     let env = ConfigEnv::real();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    run_link_command(argv, &env, &cwd, &mut |t: &str| write_stdout(t, true))
+    let is_tty = std::io::stdin().is_terminal();
+    let mut confirm = |question: &str| -> bool {
+        write_stdout(question, true);
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line).is_err() {
+            return true;
+        }
+        let answer = line.trim().to_ascii_lowercase();
+        answer.is_empty() || answer == "y" || answer == "yes"
+    };
+    run_link_command(argv, &env, &cwd, is_tty, &mut confirm, &mut |t: &str| {
+        write_stdout(t, true)
+    })
 }
 
 /// `climon __uplink`: run the devbox uplink supervisor on a tokio runtime.
@@ -334,7 +386,7 @@ fn run_ingest_entry() -> i32 {
         let deps = IngestDaemonDeps {
             spawn_uplink: Box::new(spawn_uplink_detached),
             stop_local_server: Box::new(|| {}),
-            spawn_host: IngestDaemonDeps::default().spawn_host,
+            spawn_host: Box::new(|id: &str| climon_remote::ingest::spawn_devtunnel_host(id)),
         };
         match run_ingest_daemon(config_env, store_env, stop, deps).await {
             Ok(IngestExit::AlreadyRunning) => 0,
@@ -363,6 +415,7 @@ fn command_name(parsed: &ParsedCommand) -> &'static str {
         ParsedCommand::Spawn { .. } => "spawn",
         ParsedCommand::Config { .. } => "config",
         ParsedCommand::Cleanup => "cleanup",
+        ParsedCommand::Remotes { .. } => "remotes",
         ParsedCommand::Link { .. } => "link",
         ParsedCommand::Uplink => "uplink",
         ParsedCommand::Session { .. } => "session",

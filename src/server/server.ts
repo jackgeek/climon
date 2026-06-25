@@ -1,4 +1,5 @@
 import { existsSync, rmSync, watch } from "node:fs";
+import { join } from "node:path";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -47,7 +48,6 @@ import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dash
 import { runPromote } from "./promote.js";
 import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
-import { resolveServerInvocation } from "../cli/server-exec.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
 import { resolveSessionDefaults } from "../launcher.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
@@ -72,7 +72,6 @@ import { isFeatureEnabled, resolveFeatureFlags } from "../features.js";
 
 interface StartServerOptions {
   port?: number;
-  enableRemotes?: boolean;
   /**
    * When true, never terminate or prompt to terminate an existing dashboard
    * server. Skips the existing-server check entirely and binds the next
@@ -95,6 +94,11 @@ interface ServerShutdownOptions {
 export const DASHBOARD_IDLE_TIMEOUT_SECONDS = 255;
 const INGEST_DEMOTION_SHUTDOWN_SOURCE = "ingest-demotion";
 
+/** Whether the shared ingest daemon should run: either remote scenario enabled. */
+export function computeRemotesActive(config: ClimonConfig): boolean {
+  return isFeatureEnabled(config, "wslBridge") || isFeatureEnabled(config, "remotes");
+}
+
 // Bound the health probe so a process that holds the port but never answers
 // HTTP (a stuck previous server or an unrelated listener) cannot hang start-up.
 export const HEALTH_PROBE_TIMEOUT_MS = 2000;
@@ -103,6 +107,66 @@ const ATTACH_PATH = /^\/api\/sessions\/([^/]+)\/attach$/;
 const SCROLLBACK_PATH = /^\/api\/sessions\/([^/]+)\/scrollback$/;
 const SESSION_PATH = /^\/api\/sessions\/([^/]+)$/;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+/** Host suffix of Microsoft dev tunnels; the only non-loopback host the dashboard is served on. */
+const DEV_TUNNEL_HOST_SUFFIX = ".devtunnels.ms";
+
+function isLoopbackBindHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  const unbracketed = normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  return LOOPBACK_HOSTS.has(unbracketed) || unbracketed === "::ffff:127.0.0.1";
+}
+
+export function buildInterimWslExposureWarning(input: {
+  remotesActive: boolean;
+  wslBridgeEnabled: boolean;
+  ingestBindHost: string;
+}): string | undefined {
+  if (!input.remotesActive || input.wslBridgeEnabled || isLoopbackBindHost(input.ingestBindHost)) {
+    return undefined;
+  }
+  return "climon: ingest is listening on the vEthernet (WSL) interface while the WSL bridge is disabled; the transport guard (gate #3) ships with the ingest cutover — same-machine WSL processes can reach this port until then.";
+}
+
+export function shouldWatchPeerShutdown(peerHome: string | undefined, remotesActive: boolean): boolean {
+  return Boolean(peerHome) && !remotesActive;
+}
+
+/**
+ * Whether a request's `Host` header targets a loopback hostname. The source IP
+ * alone cannot distinguish truly-local traffic from dashboard requests arriving
+ * over the dev tunnel: `devtunnel host` forwards tunnelled traffic from the local
+ * connector, so those requests still present a 127.0.0.1 peer address. A browser
+ * loading the dashboard over the tunnel sends its tunnel `Host` (e.g.
+ * `<id>.devtunnels.ms`), so requiring a loopback `Host` keeps internal `/health`
+ * fields off the tunnel-facing surface.
+ */
+export function isLoopbackHostHeader(host: string | null): boolean {
+  return host !== null && LOOPBACK_HOSTS.has(hostHeaderHostname(host));
+}
+
+export interface HealthServerPorts {
+  /** Main dashboard HTTP port this server process binds. */
+  dashboard: number;
+  /** Ingest daemon port, when the remote ingest listener is running. */
+  ingest?: number;
+}
+
+export function buildHealthPayload(input: {
+  config: ClimonConfig;
+  remotesActive: boolean;
+  isLocalRequest: boolean;
+  ports: HealthServerPorts;
+}): Record<string, unknown> {
+  return {
+    ok: true,
+    version: VERSION,
+    remotesEnabled: input.remotesActive,
+    ...(input.isLocalRequest ? { features: resolveFeatureFlags(input.config) } : {}),
+    shortcuts: { focusTopSession: input.config.hotKeys?.focusTopSession ?? "Alt+J" },
+    preferences: collectDashboardPreferences(input.config),
+    ports: input.ports
+  };
+}
 
 function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -481,6 +545,32 @@ export function isSameOriginRequest(
   return originHost === host.trim().toLowerCase();
 }
 
+/**
+ * Allowlists the `Host` the dashboard may legitimately be reached on: loopback
+ * (direct/tunnel-relay) or the dev-tunnel domain. Rejecting everything else
+ * defeats DNS-rebinding, where a page on `evil.com` rebinds to `127.0.0.1` and
+ * sends `Host: evil.com`.
+ */
+export function isAllowedDashboardHost(host: string | null): boolean {
+  if (host === null) return false;
+  const hostname = hostHeaderHostname(host);
+  if (LOOPBACK_HOSTS.has(hostname)) return true;
+  return hostname.endsWith(DEV_TUNNEL_HOST_SUFFIX);
+}
+
+/**
+ * Authorizes a WebSocket attach upgrade. Browsers do NOT apply same-origin
+ * policy when opening a WebSocket, so the server must check the Origin itself.
+ * Requires: an Origin is present, it is same-origin with Host (blocks
+ * cross-site WebSocket hijacking), and Host is an allowed dashboard host
+ * (blocks DNS-rebinding). The handshake carries no JSON content-type, so this
+ * cannot reuse isAllowedSpawnRequest.
+ */
+export function isAllowedAttachUpgrade(origin: string | null, host: string | null): boolean {
+  if (!isAllowedDashboardHost(host)) return false;
+  return isSameOriginRequest("application/json", origin, host);
+}
+
 export function splitCommand(command: string): string[] {
   return command.trim().split(/\s+/).filter((part) => part.length > 0);
 }
@@ -657,25 +747,29 @@ export function resolveParentSpawnCwd(cwd: unknown, parentCwd: string): string {
   return typeof cwd === "string" && cwd.trim().length > 0 ? cwd.trim() : parentCwd;
 }
 
-function resolveDevIngestEntrypoint(): string | undefined {
-  if (!import.meta.url.startsWith("file:")) {
-    return undefined;
-  }
-  try {
-    const candidate = fileURLToPath(new URL("../server.ts", import.meta.url));
-    return existsSync(candidate) ? candidate : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveIngestInvocation(
   env: NodeJS.ProcessEnv,
-  execPath: string,
-  devEntrypoint: string | undefined = resolveDevIngestEntrypoint()
+  execPath: string
 ): { file: string; args: string[] } {
-  const inv = resolveServerInvocation([], env, execPath, devEntrypoint);
-  return { file: inv.file, args: [...inv.args, "__ingest"] };
+  const inv = resolveClientInvocation(["__ingest"], env, execPath);
+  if (inv.file !== "climon") {
+    // CLIMON_CLIENT_BIN override or a sibling binary next to the server exe.
+    return inv;
+  }
+  const devBinary = resolveDevClientBinary();
+  if (devBinary) {
+    return { file: devBinary, args: ["__ingest"] };
+  }
+  if (import.meta.url.startsWith("file:")) {
+    // Dev checkout with no built binary: require it; never fall back to the Bun ingest.
+    throw new Error(
+      "climon: the Rust client binary is not built; the ingest cannot start. " +
+        "Build it with `cargo build` in rust/ (or set CLIMON_CLIENT_BIN)."
+    );
+  }
+  // Production with a bare `climon` on PATH (mirrors resolveSpawnInvocation):
+  // still the Rust client `__ingest`, never the Bun ingest.
+  return inv;
 }
 
 /**
@@ -1043,6 +1137,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   await ensureClimonHome();
   startupLog("loading config");
   const config = await loadConfig();
+  const remotesActive = computeRemotesActive(config);
+  const wslBridgeEnabled = isFeatureEnabled(config, "wslBridge");
   startupLog(`config loaded (requested port ${config.server.port})`);
   if (options.port !== undefined) {
     config.server.port = options.port;
@@ -1075,9 +1171,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   // Cross-OS promote: when a peer OS is configured, displace any peer host
   // before binding. Entirely skipped (zero cost) when remote.peerHome is unset.
-  if (peerHome) {
+  if (peerHome && wslBridgeEnabled) {
     const peerLabel = peerOsLabel(process.env);
-    startupLog("peer configured; running cross-OS promote");
+    startupLog("peer configured and WSL bridge enabled; running cross-OS promote");
     const outcome = await runPromote(
       buildPromoteDeps(peerHome, process.env, peerLabel, (message) => startupLog(`promote: ${message}`))
     );
@@ -1144,9 +1240,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   // Clean up stale sessions whose daemons are no longer responsive.
   startupLog("cleaning up stale sessions");
   await cleanupStaleSessions();
-  if (options.enableRemotes) {
+  if (remotesActive) {
     startupLog("ensuring ingest daemon is running");
     await ensureIngestDaemon();
+    const exposureWarning = buildInterimWslExposureWarning({
+      remotesActive,
+      wslBridgeEnabled,
+      ingestBindHost: await resolveIngestBindAddress(process.env)
+    });
+    if (exposureWarning) {
+      process.stderr.write(`${exposureWarning}\n`);
+    }
     startupLog("ingest daemon ready");
     // Reconcile the tunnel port mapping with the ingest's actual bound port.
     // Read ingest.json directly — we just verified the daemon is alive, so its
@@ -1198,21 +1302,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }
   }
 
-  interface ServerPorts {
-    /** Main dashboard HTTP port this server process binds. */
-    dashboard: number;
-    /** Ingest daemon port, when the remote ingest listener is running. */
-    ingest?: number;
-  }
-
   /**
    * Reports every TCP port opened on behalf of this server so the state is
    * discoverable from `/health`. The dashboard port is always present; the
    * ingest port is included only when the ingest daemon is running. Kept cheap
    * (filesystem reads only) so it never slows or hangs the health probe.
    */
-  async function collectServerPorts(): Promise<ServerPorts> {
-    const ports: ServerPorts = { dashboard: dashboardPort.port };
+  async function collectServerPorts(): Promise<HealthServerPorts> {
+    const ports: HealthServerPorts = { dashboard: dashboardPort.port };
     try {
       if (await isIngestDaemonAlive()) {
         ports.ingest = await resolveIngestPort();
@@ -1245,6 +1342,44 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }, 150);
   });
 
+  async function readRemotesResponse() {
+    const { buildRemotesResponse } = await import("./remotes.js");
+    const path = join(getClimonHome(process.env), "ingest-status.json");
+    let status: import("./remotes.js").IngestStatusFile | undefined;
+    try {
+      status = JSON.parse(await Bun.file(path).text());
+    } catch {
+      status = undefined;
+    }
+    return buildRemotesResponse(
+      status,
+      Date.now(),
+      computeRemotesActive(config),
+      (pid) => isProcessAlive(pid)
+    );
+  }
+
+  // Live-push a `remotes` SSE event whenever the ingest rewrites its status
+  // beacon (connect/disconnect/identity/heartbeat). Staleness is recomputed by
+  // the builder, never trusted from the file.
+  let remotesDebounce: ReturnType<typeof setTimeout> | undefined;
+  const remotesWatcher = watch(getClimonHome(process.env), (_event, filename) => {
+    if (filename !== "ingest-status.json") return;
+    if (remotesDebounce) clearTimeout(remotesDebounce);
+    remotesDebounce = setTimeout(() => {
+      void readRemotesResponse().then((payload) => {
+        const data = `event: remotes\ndata: ${JSON.stringify(payload)}\n\n`;
+        for (const controller of sseClients) {
+          try {
+            controller.enqueue(encoder.encode(data));
+          } catch {
+            sseClients.delete(controller);
+          }
+        }
+      });
+    }, 150);
+  });
+
   function isLocal(request: Request, server: Bun.Server<WsData>): boolean {
     const address = server.requestIP(request)?.address ?? "";
     return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
@@ -1269,15 +1404,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       const url = new URL(request.url);
 
       if (url.pathname === "/health") {
-        return Response.json({
-          ok: true,
-          version: VERSION,
-          remotesEnabled: options.enableRemotes === true,
-          features: resolveFeatureFlags(config),
-          shortcuts: { focusTopSession: config.hotKeys?.focusTopSession ?? "Alt+J" },
-          preferences: collectDashboardPreferences(config),
+        return Response.json(buildHealthPayload({
+          config,
+          remotesActive,
+          isLocalRequest: isLocal(request, srv) && isLoopbackHostHeader(request.headers.get("host")),
           ports: await collectServerPorts()
-        });
+        }));
       }
 
       // Internal graceful shutdown endpoint — loopback only, no auth token
@@ -1492,6 +1624,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         });
       }
 
+      if (url.pathname === "/api/remotes" && request.method === "GET") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        return Response.json(await readRemotesResponse());
+      }
+
       if (url.pathname === "/api/dashboard-tunnel/status" && request.method === "GET") {
         if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
         return Response.json(await dashboardTunnel.status());
@@ -1685,6 +1822,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/sessions") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         return new Response(await sessionsPayload(), { headers: { "content-type": "application/json" } });
       }
 
@@ -1776,6 +1916,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const sessionMatch = SESSION_PATH.exec(url.pathname);
       if (sessionMatch && request.method === "DELETE") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         // The optional `kill` query parameter decides whether to also stop the
         // per-session daemon. Absent/`none` is cleanup only (metadata +
         // scrollback): it deliberately does NOT signal the daemon, so any climon
@@ -1802,6 +1945,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const scrollbackMatch = SCROLLBACK_PATH.exec(url.pathname);
       if (scrollbackMatch) {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         const data = await readScrollback(scrollbackMatch[1]);
         if (!data) {
           return new Response("Not found", { status: 404 });
@@ -1812,6 +1958,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/api/events") {
+        if (!isAllowedDashboardHost(request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -1842,6 +1991,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const attachMatch = ATTACH_PATH.exec(url.pathname);
       if (attachMatch) {
+        if (!isAllowedAttachUpgrade(request.headers.get("origin"), request.headers.get("host"))) {
+          return new Response("Forbidden", { status: 403 });
+        }
         const meta = await readSessionMeta(attachMatch[1]);
         if (!meta) {
           return new Response("Not found", { status: 404 });
@@ -1977,9 +2129,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // Does NOT remove server.json (callers decide) and does NOT touch the ingest.
     const closeListenerAndStreams = async (): Promise<void> => {
       watcher.close();
+      remotesWatcher.close();
       if (debounce) {
         clearTimeout(debounce);
         debounce = undefined;
+      }
+      if (remotesDebounce) {
+        clearTimeout(remotesDebounce);
+        remotesDebounce = undefined;
       }
       for (const controller of sseClients) {
         try {
@@ -2043,7 +2200,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // When a peer is configured but no ingest daemon is running, the server
     // itself must watch for shutdown-request.json. Without this, a peer that
     // wins the dual-promote tie-break writes a request that nobody consumes.
-    if (peerHome && !options.enableRemotes) {
+    if (shouldWatchPeerShutdown(peerHome, remotesActive)) {
       const shutdownWatcher = createShutdownRequestWatcher({
         dir: getClimonHome(),
         onValid: (req) => {
@@ -2062,7 +2219,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // SIGTERMs this server, so plainShutdown must already be installed to remove
     // server.json cleanly. Running it concurrently (not awaited before serving)
     // also keeps the settle window off every peer startup's critical path.
-    if (peerHome) void settleDualPromote(peerHome, localStartedAt);
+    if (peerHome && wslBridgeEnabled) void settleDualPromote(peerHome, localStartedAt);
   });
 }
 

@@ -96,6 +96,46 @@ where
     }
 }
 
+/// Guard returned by [`spawn_poll`]; stops the polling thread on drop.
+pub struct PollGuard {
+    stopped: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Drop for PollGuard {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Spawns a thread that invokes `tick` every `poll_ms`, returning a [`PollGuard`]
+/// that stops (and joins) the thread on drop. A minimal generic poller used by
+/// the ingest's sessions-dir dismiss watcher.
+pub fn spawn_poll<F>(poll_ms: u64, mut tick: F) -> PollGuard
+where
+    F: FnMut() + Send + 'static,
+{
+    let stopped = Arc::new(AtomicBool::new(false));
+    let thread_stopped = stopped.clone();
+    let interval = Duration::from_millis(poll_ms.max(1));
+    let handle = std::thread::spawn(move || {
+        while !thread_stopped.load(Ordering::SeqCst) {
+            std::thread::sleep(interval);
+            if thread_stopped.load(Ordering::SeqCst) {
+                break;
+            }
+            tick();
+        }
+    });
+    PollGuard {
+        stopped,
+        handle: Some(handle),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +225,24 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         watcher.stop();
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn spawn_poll_ticks_until_dropped() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls2 = calls.clone();
+        let guard = spawn_poll(15, move || {
+            calls2.fetch_add(1, Ordering::SeqCst);
+        });
+        std::thread::sleep(Duration::from_millis(120));
+        drop(guard);
+        let after_drop = calls.load(Ordering::SeqCst);
+        assert!(after_drop >= 1, "expected at least one tick");
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            after_drop,
+            "no ticks after the guard is dropped"
+        );
     }
 }
