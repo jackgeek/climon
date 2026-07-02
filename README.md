@@ -74,6 +74,12 @@ you can:
 - **Themable dashboard.** Pick a terminal colour theme from the ☰ menu; the
   choice (and the mobile "Pin key bar" toggle) is saved in your config and shared
   across every browser and device.
+- **Work from your phone (secure, opt-in).** Expose your local dashboard over an
+  authenticated Microsoft dev tunnel with the **Tunnel Link** menu action, open it
+  on your phone, and **Install as PWA**. You get a fully interactive web terminal
+  plus **push notifications when a session needs attention** — even when the app
+  is closed. The tunnel is not anonymous: only identities you grant access can
+  reach it. See [Work from your phone](#work-from-your-phone-tunnel-link--pwa).
 - **Remote & WSL bridging (experimental, opt-in).** Surface sessions from a
   remote devbox over a Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/),
   or bridge Windows and WSL on the same machine without a tunnel. See
@@ -318,8 +324,37 @@ sessions.
 
 ## Remote sessions
 
-climon can surface sessions from another machine in your dashboard. Both paths
-are experimental and opt-in.
+climon can surface sessions from another machine in your dashboard, and let you
+reach your own dashboard from anywhere. These paths are opt-in.
+
+### Work from your phone (Tunnel Link + PWA)
+
+Your dashboard normally binds to loopback only. To reach it from your phone (or
+any other device) without exposing it to the network, use **Tunnel Link**:
+
+1. From the dashboard's ☰ menu, choose **Tunnel Link**. climon starts an
+   authenticated Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/)
+   in front of your local dashboard and gives you an HTTPS `*.devtunnels.ms` URL.
+   The tunnel is **not anonymous** — only identities you've granted access can
+   open it — and it stays up until you choose **Close Tunnel Link**.
+2. Open the link on your phone and tap **Install as PWA** to add climon to your
+   home screen.
+3. Enable notifications from the menu to receive **Web Push alerts when a session
+   needs attention** — even when the app is closed.
+
+From the phone you get the same fully interactive web terminal, so you can check
+on and drive your sessions remotely. If the tunnel sign-in expires, the PWA
+prompts you to sign in again; it never stores tunnel credentials in the browser.
+
+> **Requires the `devtunnel` CLI** on the machine running the dashboard. When the
+> tunnel closes, the installed PWA shows a banner asking you to uninstall it.
+
+- Android (Chrome): **Install as PWA → Install**.
+- iPhone (Safari, iOS 16.4+): **Share → Add to Home Screen**, then open climon
+  from the new icon and enable notifications.
+
+See [docs/usage.md](docs/usage.md) and [docs/security.md](docs/security.md) for
+the tunnel identity model and push-subscription details.
 
 ### Remote devbox over a dev tunnel
 
@@ -332,9 +367,6 @@ port on the home machine — there is no SSH and no network-exposed dashboard.
 > **Requires the `devtunnel` CLI** on both the home machine (to host the tunnel)
 > and the devbox (to connect through it), each logged in with the same identity
 > (`devtunnel user login`).
-
-When opened on a phone, the dashboard offers **Install as PWA** to get push
-notifications when a session needs attention.
 
 See [docs/usage.md](docs/usage.md) and [docs/security.md](docs/security.md) for
 the full setup and threat model.
