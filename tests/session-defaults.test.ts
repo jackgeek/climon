@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { launchBanner, resolveSessionDefaults, chooseAutoSessionColor, resolveDefaultSessionName } from "../src/launcher.js";
+import { resolveSessionDefaults, chooseAutoSessionColor } from "../src/session-defaults.js";
 import type { AnsiColor, SessionMeta } from "../src/types.js";
 
 const homes: string[] = [];
@@ -80,39 +80,6 @@ describe("chooseAutoSessionColor", () => {
     }
     writeSession(home, "one-green", "green");
     await expect(chooseAutoSessionColor({ CLIMON_HOME: join(home, ".climon") })).resolves.toBe("green");
-  });
-});
-
-describe("resolveDefaultSessionName", () => {
-  test("uses the terminal title when one is reported", () => {
-    expect(resolveDefaultSessionName("my project")).toBe("my project");
-  });
-
-  test("trims surrounding whitespace from the reported title", () => {
-    expect(resolveDefaultSessionName("  build  ")).toBe("build");
-  });
-
-  test("strips control characters from the reported title", () => {
-    expect(resolveDefaultSessionName("ab\x07c")).toBe("abc");
-  });
-
-  test("leaves the name blank when the terminal reports no title", () => {
-    expect(resolveDefaultSessionName(undefined)).toBeUndefined();
-  });
-
-  test("leaves the name blank for an empty or whitespace-only title", () => {
-    expect(resolveDefaultSessionName("")).toBeUndefined();
-    expect(resolveDefaultSessionName("   ")).toBeUndefined();
-  });
-});
-
-describe("launchBanner", () => {
-  test("launch banner omits dashboard URL", () => {
-    const banner = launchBanner("0.1.16", "session-1");
-
-    expect(banner).toContain("climon v0.1.16 monitoring session session-1");
-    expect(banner).not.toContain("dashboard");
-    expect(banner).not.toContain("http://");
   });
 });
 

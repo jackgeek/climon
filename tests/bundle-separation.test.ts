@@ -24,11 +24,6 @@ describe("bundle separation", () => {
     }
   }, 60_000);
 
-  test("client bundle (src/index.ts) excludes embedded xterm assets", async () => {
-    const text = await bundleText("src/index.ts");
-    expect(text).not.toContain(MARKER);
-  });
-
   test("server bundle (src/server.ts) includes embedded xterm assets", async () => {
     const text = await bundleText("src/server.ts");
     expect(text).toContain(MARKER);

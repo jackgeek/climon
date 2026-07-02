@@ -51,7 +51,7 @@ afterEach(async () => {
 
 async function startServer(port: number) {
   const server = Bun.spawn(
-    [process.execPath, "src/index.ts", "server", "--no-takeover", "--port", String(port)],
+    [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(port)],
     { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
   );
   const base = `http://127.0.0.1:${port}`;
