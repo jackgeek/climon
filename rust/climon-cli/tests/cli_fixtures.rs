@@ -22,8 +22,22 @@ fn fixture(name: &str) -> String {
 }
 
 fn run_climon(args: &[&str]) -> String {
+    // Isolate config so the fixtures capture the default, no-features output.
+    // `--help` advertises experimental commands (e.g. `climon remotes`) only
+    // when their backing feature flag is on; a developer's global
+    // `~/.climon/config.jsonc` or a local `.climon` up the cwd tree could flip
+    // those flags and change the output. Point CLIMON_HOME/HOME at a fresh temp
+    // dir and run from it so neither source is visible.
+    let temp = tempfile::tempdir().expect("temp dir");
     let bin = env!("CARGO_BIN_EXE_climon");
-    let output = Command::new(bin).args(args).output().expect("run climon");
+    let output = Command::new(bin)
+        .args(args)
+        .current_dir(temp.path())
+        .env("CLIMON_HOME", temp.path())
+        .env("HOME", temp.path())
+        .env("USERPROFILE", temp.path())
+        .output()
+        .expect("run climon");
     assert!(output.status.success(), "climon {args:?} failed");
     String::from_utf8(output.stdout).expect("utf-8 stdout")
 }
