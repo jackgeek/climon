@@ -51,9 +51,10 @@ default set from the dashboard **Default theme** menu (`dashboard.theme`).
 ### Nested invocations
 
 If you run `climon <cmd>` from a shell that is itself running inside a climon
-session, climon does **not** start a second nested session. It detects the
-existing session (via the `CLIMON_SESSION_ID` environment variable), prints an
-error, and exits without running the nested command.
+session, climon **still starts the session** and runs your command. It detects
+the nesting via the `CLIMON_NEST_LEVEL` environment variable (incremented for
+each level) and prints a yellow `climon: nested session (depth N)` warning to
+stderr so you're aware you're stacking sessions, but it does not block or exit.
 
 ### Detach and reattach
 
