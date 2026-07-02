@@ -48,6 +48,9 @@ On first run, climon writes `~/.climon/config.jsonc`:
   "version": 1,
   "server": {
     // IP address the dashboard server binds to. Defaults to loopback for local-only access.
+    // WARNING: changing this (e.g. to 0.0.0.0) exposes the dashboard on your network and
+    // lets anyone who can reach the port take over your sessions. Keep it on loopback and
+    // use Tunnel Link to reach the dashboard from another device.
     "host": "127.0.0.1",
     // TCP port the dashboard server listens on. Change if 3131 conflicts with another service.
     "port": 3131
