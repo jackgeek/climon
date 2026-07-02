@@ -189,19 +189,6 @@
     Connect sessions from a remote devbox to this dashboard over the ingest/uplink
     bridge. Set to "enabled" or "disabled". [status: experimental]
 
-  eula.accepted
-    Type: boolean; Default: false; Scope: client; internal
-    Whether the current EULA version has been accepted. Set by the installer/setup flow;
-    not intended for manual editing.
-
-  eula.version
-    Type: string; Default: unset; Scope: client; internal
-    The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance.
-
-  eula.acceptedAt
-    Type: string; Default: unset; Scope: client; internal
-    ISO-8601 timestamp recording when the EULA was accepted.
-
   telemetry.enabled
     Type: boolean; Default: false; Scope: client, server
     When true, climon sends anonymous, opt-in usage telemetry keyed only by a random
@@ -213,12 +200,6 @@
     background. When false (default), it only prints a one-line banner suggesting
     `climon --update`.
 
-  update.password
-    Type: string; Default: unset; Scope: client; sensitive
-    Shared password used to decrypt encrypted release artifacts when auto-updating from
-    the gated public release repo. Provided out-of-band by the maintainer. Stored
-    locally; treat as a secret.
-
   update.lastCheck
     Type: string; Default: unset; Scope: client; internal
     ISO-8601 timestamp of the last background update check. Used to throttle checks.
@@ -227,6 +208,12 @@
     Type: string; Default: unset; Scope: client; internal
     Latest version discovered by the background update check, if newer than the
     installed version. Cleared after a successful update.
+
+  license.noticeShown
+    Type: boolean; Default: unset; Scope: client; internal
+    Whether the one-time MIT license-change notice has been shown. Set automatically the
+    first time an install that upgraded from a pre-open-source (EULA-gated) build
+    launches; never shown on fresh installs.
 
   install.id
     Type: string; Default: unset; Scope: client, server; internal

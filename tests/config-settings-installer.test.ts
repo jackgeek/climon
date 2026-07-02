@@ -10,13 +10,6 @@ function setting(path: string) {
 }
 
 describe("installer/update config settings", () => {
-  test("eula keys are registered and internal", () => {
-    expect(setting("eula.accepted")?.type).toBe("boolean");
-    expect(setting("eula.accepted")?.internal).toBe(true);
-    expect(setting("eula.version")?.internal).toBe(true);
-    expect(setting("eula.acceptedAt")?.internal).toBe(true);
-  });
-
   test("telemetry.enabled defaults off and is user-settable", () => {
     expect(setting("telemetry.enabled")?.defaultValue).toBe(false);
     expect(acceptedConfigKeys()).toContain("telemetry.enabled");
@@ -37,6 +30,5 @@ describe("installer/update config settings", () => {
     const cfg = buildDefaultConfigFromSettings() as Record<string, any>;
     expect(cfg.telemetry.enabled).toBe(false);
     expect(cfg.update.auto).toBe(false);
-    expect(cfg.eula.accepted).toBe(false);
   });
 });

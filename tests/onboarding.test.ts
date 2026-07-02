@@ -18,10 +18,10 @@ afterEach(() => {
 });
 
 describe("runOnboarding", () => {
-  test("non-interactive applies telemetry=on, auto-update=on, accepts eula", async () => {
+  test("non-interactive applies telemetry=on, auto-update=on, and completes", async () => {
     const result = await runOnboarding({
       env,
-      options: { apply: true, acceptEula: true, telemetry: true, autoUpdate: true },
+      options: { apply: true, telemetry: true, autoUpdate: true },
       print: () => {},
       prompt: async () => "",
     });
@@ -31,18 +31,18 @@ describe("runOnboarding", () => {
     expect(typeof readGlobalConfigSetting("install.id", env)).toBe("string");
   });
 
-  test("non-interactive without acceptEula returns not accepted", async () => {
+  test("non-interactive without opt-in flags still completes and assigns install id", async () => {
     const result = await runOnboarding({
       env,
-      options: { apply: true, acceptEula: false },
+      options: { apply: true },
       print: () => {},
       prompt: async () => "",
     });
-    expect(result.accepted).toBe(false);
-    // No telemetry/update writes when the EULA was not accepted.
+    expect(result.accepted).toBe(true);
+    // No telemetry/update writes when non-interactive flags are omitted.
     expect(readGlobalConfigSetting("telemetry.enabled", env)).toBeUndefined();
     expect(readGlobalConfigSetting("update.auto", env)).toBeUndefined();
-    expect(readGlobalConfigSetting("install.id", env)).toBeUndefined();
+    expect(typeof readGlobalConfigSetting("install.id", env)).toBe("string");
   });
 
   test("non-interactive re-run without flags preserves a prior opt-in", async () => {
@@ -51,7 +51,7 @@ describe("runOnboarding", () => {
     writeConfigSetting("update.auto", "true", "global", env);
     const result = await runOnboarding({
       env,
-      options: { apply: true, acceptEula: true },
+      options: { apply: true },
       print: () => {},
       prompt: async () => "",
     });
@@ -60,12 +60,12 @@ describe("runOnboarding", () => {
     expect(readGlobalConfigSetting("update.auto", env)).toBe(true);
   });
 
-  test("interactive: I AGREE then y/y enables both opt-ins", async () => {
-    const answers = ["i agree", "y", "y"];
+  test("interactive: y/y enables both opt-ins", async () => {
+    const answers = ["y", "y"];
     let i = 0;
     const result = await runOnboarding({
       env,
-      options: { apply: false, acceptEula: false },
+      options: { apply: false },
       print: () => {},
       prompt: async () => answers[i++] ?? "",
     });
@@ -75,11 +75,11 @@ describe("runOnboarding", () => {
   });
 
   test("interactive: blank answers leave opt-ins OFF (default no)", async () => {
-    const answers = ["i agree", "", ""];
+    const answers = ["", ""];
     let i = 0;
     await runOnboarding({
       env,
-      options: { apply: false, acceptEula: false },
+      options: { apply: false },
       print: () => {},
       prompt: async () => answers[i++] ?? "",
     });

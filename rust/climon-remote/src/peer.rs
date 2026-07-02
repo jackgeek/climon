@@ -155,19 +155,19 @@ mod tests {
     fn wsl_home_unc_path_builds_a_windows_unc_path() {
         let env: Env = [
             ("WSL_DISTRO_NAME".to_string(), "Ubuntu".to_string()),
-            ("HOME".to_string(), "/home/jack".to_string()),
+            ("HOME".to_string(), "/home/ada".to_string()),
         ]
         .into_iter()
         .collect();
         assert_eq!(
             wsl_home_unc_path(&env).as_deref(),
-            Some("\\\\wsl.localhost\\Ubuntu\\home\\jack\\.climon")
+            Some("\\\\wsl.localhost\\Ubuntu\\home\\ada\\.climon")
         );
     }
 
     #[test]
     fn wsl_home_unc_path_returns_none_without_a_distro_name() {
-        let env: Env = [("HOME".to_string(), "/home/jack".to_string())]
+        let env: Env = [("HOME".to_string(), "/home/ada".to_string())]
             .into_iter()
             .collect();
         assert_eq!(wsl_home_unc_path(&env), None);
@@ -195,7 +195,7 @@ mod tests {
         let win_home_str = win_home.to_string_lossy().into_owned();
         let run = |file: &str, _args: &[&str]| -> Option<String> {
             match file {
-                "cmd.exe" => Some("C:\\Users\\jack\r\n".to_string()),
+                "cmd.exe" => Some("C:\\Users\\ada\r\n".to_string()),
                 "wslpath" => Some(win_home_str.clone()),
                 _ => None,
             }
@@ -210,9 +210,9 @@ mod tests {
     fn detect_windows_climon_home_returns_none_when_the_home_does_not_exist() {
         let run = |file: &str, _args: &[&str]| -> Option<String> {
             if file == "cmd.exe" {
-                Some("C:\\Users\\jack".to_string())
+                Some("C:\\Users\\ada".to_string())
             } else {
-                Some("/mnt/c/Users/jack".to_string())
+                Some("/mnt/c/Users/ada".to_string())
             }
         };
         assert_eq!(detect_windows_climon_home(run, |_| false), None);

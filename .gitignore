@@ -13,9 +13,11 @@ src/server/embedded-assets.ts
 # Local Netlify folder
 .netlify
 
-
-CUsersjackallan.superpowers/
-
 # Stray Windows-path / tunnel artifacts (never part of the repo)
 C:Usersjackallan/
 DevTunnels/
+
+# Local diagnostic/session artifacts (never part of the repo)
+diagnostics/
+.superpowers/
+docs/superpowers/

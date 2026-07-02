@@ -2,6 +2,12 @@
   "name": "climon",
   "version": "2.2.0",
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
+  "license": "MIT",
+  "author": "Brodie Jack Allan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jackgeek/climon.git"
+  },
   "type": "module",
   "bin": {
     "climon-server": "./src/server.ts"
@@ -14,7 +20,6 @@
     "build:all": "bun run build && bun run build:web && bun run build:server",
     "compile": "bun scripts/compile.ts",
     "sign-release": "bun scripts/sign-release.ts",
-    "encrypt-release": "bun scripts/encrypt-release.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",

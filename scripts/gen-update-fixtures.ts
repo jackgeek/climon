@@ -1,4 +1,3 @@
-import { encryptEnvelope } from "../src/update/crypto-envelope.ts";
 import { writeFileSync } from "node:fs";
 
 const enc = new TextEncoder();
@@ -25,27 +24,7 @@ writeFileSync(
   ) + "\n"
 );
 
-// 2) Bun-produced encryption envelope (fixed-input decrypt vector for Rust).
-const password = "fixture-shared-pw";
-const plaintext = enc.encode("the quick brown climon");
-const envelope = encryptEnvelope(plaintext, password);
-writeFileSync(
-  "fixtures/update/bun-envelope.json",
-  JSON.stringify(
-    {
-      description:
-        "Bun-produced aes-256-gcm-scrypt-v1 envelope; Rust must decrypt to plaintext.",
-      scheme: "aes-256-gcm-scrypt-v1",
-      password,
-      plaintextB64: Buffer.from(plaintext).toString("base64"),
-      envelopeHex: Buffer.from(envelope).toString("hex"),
-    },
-    null,
-    2
-  ) + "\n"
-);
-
-// 3) Sample manifest parsed identically by both implementations.
+// 2) Sample manifest parsed identically by both implementations.
 writeFileSync(
   "fixtures/update/manifest.json",
   JSON.stringify(
@@ -68,4 +47,4 @@ writeFileSync(
   ) + "\n"
 );
 
-console.log("wrote fixtures/update/{signed-payload,bun-envelope,manifest}.json");
+console.log("wrote fixtures/update/{signed-payload,manifest}.json");

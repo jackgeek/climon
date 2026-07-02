@@ -16,7 +16,7 @@ use climon_cli::launcher::{
 };
 use climon_cli::server_exec::delegate_to_server;
 use climon_cli::version::VERSION;
-use climon_cli::THIRD_PARTY_LICENSES;
+use climon_cli::{CLIMON_LICENSE, THIRD_PARTY_LICENSES};
 use climon_config::config::Env as ConfigEnv;
 use climon_logging::cli_io::{log_cli_command, write_stderr, write_stdout};
 use climon_logging::logger::{init_logger, LoggerInitOptions};
@@ -26,7 +26,9 @@ use climon_session::host::{run_session_host, SessionHostOptions};
 use climon_store::meta::read_session_meta;
 use climon_store::Env as StoreEnv;
 use climon_update::check::run_background_check_default;
-use climon_update::launch_hooks::{maybe_show_update_banner, maybe_spawn_background_check};
+use climon_update::launch_hooks::{
+    maybe_show_license_notice, maybe_show_update_banner, maybe_spawn_background_check,
+};
 use climon_update::update_cli::run_update_cli;
 
 fn main() {
@@ -60,6 +62,7 @@ fn run() -> Result<i32, String> {
         ParsedCommand::Shell { .. } | ParsedCommand::Run { .. }
     ) {
         let cfg_env = ConfigEnv::real();
+        maybe_show_license_notice(&cfg_env);
         maybe_show_update_banner(&cfg_env);
         let exec_path = std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
@@ -178,7 +181,9 @@ fn run() -> Result<i32, String> {
             run_session_host(&id, meta, SessionHostOptions { headless: true })
                 .map_err(|e| e.to_string())
         }
-        ParsedCommand::Licenses => {
+        ParsedCommand::License => {
+            write_stdout(CLIMON_LICENSE, false);
+            write_stdout("\n\n=== Third-party attributions ===\n\n", false);
             write_stdout(THIRD_PARTY_LICENSES, false);
             Ok(0)
         }
@@ -233,7 +238,7 @@ fn run_config(argv: &[String]) -> i32 {
     run_config_command(argv, &env, &cwd, &mut io)
 }
 
-/// Runs `climon setup`, re-running onboarding (EULA gate, telemetry/auto-update
+/// Runs `climon setup`, re-running onboarding (telemetry/auto-update
 /// opt-ins, install id) against the real config environment. Mirrors the TS
 /// `index.ts` `setup` case delegating to `runSetupCommand`.
 fn run_setup(argv: &[String]) -> Result<i32, String> {
@@ -423,7 +428,7 @@ fn command_name(parsed: &ParsedCommand) -> &'static str {
         ParsedCommand::Setup { .. } => "setup",
         ParsedCommand::UpdateCheck => "update-check",
         ParsedCommand::Ingest => "ingest",
-        ParsedCommand::Licenses => "licenses",
+        ParsedCommand::License => "license",
     }
 }
 

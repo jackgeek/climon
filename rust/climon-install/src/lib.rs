@@ -1,9 +1,9 @@
 //! climon client install/setup subsystem.
 //!
 //! A 1:1 Rust port of the TypeScript client's install/setup surface
-//! (`src/install/`, `src/setup/`, `src/eula/`, `src/release/version-bump.ts`).
+//! (`src/install/`, `src/setup/`, `src/release/version-bump.ts`).
 //! The controlling invariant is **install-manifest + on-disk layout + PATH
-//! setup + EULA/onboarding parity** with the unchanged Bun installer, so a
+//! setup + onboarding parity** with the unchanged Bun installer, so a
 //! Rust-built installer produces the same installed result and the
 //! non-destructive updater keeps swapping the same files.
 //!
@@ -20,7 +20,6 @@
 //! - [`linux`]        <- `src/install/linux.ts`
 //! - [`orchestrate`]  <- `src/install/index.ts` (pure orchestration + run_setup_cli)
 //! - [`installer`]    <- `src/install/{index,macos-main,linux-main}.ts` + `installer-bundle-entry.ts` (native self-install mains)
-//! - [`eula`]         <- `src/eula/text.ts` + `src/eula/accept.ts`
 //! - [`install_id`]   <- `src/setup/install-id.ts`
 //! - [`onboarding`]   <- `src/setup/onboarding.ts`
 //! - [`setup_cmd`]    <- `src/setup/setup-cmd.ts`
@@ -32,7 +31,6 @@
 //! pass platform/env in.
 
 pub mod changelog;
-pub mod eula;
 pub mod files;
 pub mod files_unix;
 pub mod install_id;
@@ -45,6 +43,8 @@ pub mod orchestrate;
 pub mod path;
 pub mod processes;
 pub mod setup_cmd;
+#[cfg(test)]
+pub(crate) mod testutil;
 pub mod version_bump;
 pub mod windows;
 

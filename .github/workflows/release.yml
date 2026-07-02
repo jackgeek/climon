@@ -8,7 +8,7 @@ name: Release
 # The shipped client is the Rust `climon` binary. It is cross-compiled for every
 # target on a native runner in the `build-client` matrix, then the `release` job
 # assembles the five zips (with the Bun server + climon-alpha sentinel), signs,
-# encrypts, verifies, and publishes them.
+# verifies, and publishes them.
 on:
   push:
     branches: [main]
@@ -145,21 +145,11 @@ jobs:
       - name: Build climon client (native)
         if: ${{ !matrix.cross }}
         working-directory: rust
-        # Baked into gated builds by climon-update/build.rs (XOR-obfuscated).
-        # Empty when the secret is absent (forks) -> no embedded password.
-        # Scoped to the build step only, matching the signing-key pattern below.
-        env:
-          CLIMON_DISTRIBUTION_PASSWORD: ${{ secrets.CLIMON_DISTRIBUTION_PASSWORD }}
         run: cargo build --release -p climon-cli --target ${{ matrix.target }}
 
       - name: Build climon client (cross via zigbuild)
         if: ${{ matrix.cross }}
         working-directory: rust
-        # Baked into gated builds by climon-update/build.rs (XOR-obfuscated).
-        # Empty when the secret is absent (forks) -> no embedded password.
-        # Scoped to the build step only, matching the signing-key pattern below.
-        env:
-          CLIMON_DISTRIBUTION_PASSWORD: ${{ secrets.CLIMON_DISTRIBUTION_PASSWORD }}
         run: cargo zigbuild --release -p climon-cli --target ${{ matrix.target }}
 
       # Stage the binary under the bare `install` name the packager expects.
@@ -199,9 +189,6 @@ jobs:
       # until the signing key secret is provisioned, which keeps releases working
       # meanwhile.
       HAS_SIGNING_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY != '' && 'yes' || '' }}
-      # Set only when the signing key, encryption password, and public-repo
-      # publish token all exist, so encrypted publishing is all-or-nothing.
-      HAS_DISTRIBUTION_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY != '' && secrets.CLIMON_DISTRIBUTION_PASSWORD != '' && secrets.RELEASES_PUBLISH_TOKEN != '' && 'yes' || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -285,14 +272,8 @@ jobs:
         env:
           CLIMON_UPDATE_PRIVATE_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY }}
           RELEASE_VERSION: ${{ steps.release-tag.outputs.tag }}
-          RELEASE_BASE_URL: https://github.com/jackgeek/climon-releases/releases/download/${{ steps.release-tag.outputs.tag }}
+          RELEASE_BASE_URL: https://github.com/jackgeek/climon/releases/download/${{ steps.release-tag.outputs.tag }}
         run: bun run sign-release
-
-      - name: Encrypt release artifacts
-        if: ${{ env.HAS_DISTRIBUTION_KEY != '' }}
-        env:
-          CLIMON_DISTRIBUTION_PASSWORD: ${{ secrets.CLIMON_DISTRIBUTION_PASSWORD }}
-        run: bun run encrypt-release
 
       - name: Verify release artifacts
         run: |
@@ -319,12 +300,6 @@ jobs:
           test -f dist/manifest.json
           for z in dist/climon-*.zip; do test -f "$z.sig"; done
 
-      - name: Verify encrypted artifacts present
-        if: ${{ env.HAS_DISTRIBUTION_KEY != '' }}
-        run: |
-          set -euo pipefail
-          for z in dist/climon-*.zip; do test -f "$z.enc"; done
-
       - name: Push bump commit and tag
         if: ${{ needs.version.outputs.existing == '' }}
         env:
@@ -343,25 +318,14 @@ jobs:
           TAG: ${{ steps.release-tag.outputs.tag }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
+          # Ship the signed manifest + detached signatures alongside the zips so
+          # `climon --update` can fetch them from this repo's latest release. The
+          # sig/manifest globs are empty on forks without the signing key.
+          assets=(dist/climon-*.zip dist/climon-*.zip.sig)
+          [ -f dist/manifest.json ] && assets+=(dist/manifest.json)
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.zip --clobber
+            gh release upload "$TAG" "${assets[@]}" --clobber
           else
-            gh release create "$TAG" dist/*.zip --title "$TAG" --notes "Release $TAG"
-          fi
-
-      - name: Publish encrypted update artifacts to public repo
-        if: ${{ env.HAS_DISTRIBUTION_KEY != '' }}
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_PUBLISH_TOKEN }}
-          TAG: ${{ steps.release-tag.outputs.tag }}
-          REPO: jackgeek/climon-releases
-        run: |
-          set -euo pipefail
-          shopt -s failglob
-          assets=(dist/climon-*.zip.enc dist/climon-*.zip.sig dist/manifest.json)
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${assets[@]}" --repo "$REPO" --clobber
-          else
-            gh release create "$TAG" "${assets[@]}" --repo "$REPO" \
-              --title "$TAG" --notes "Release $TAG"
+            gh release create "$TAG" "${assets[@]}" --title "$TAG" --notes "Release $TAG"
           fi

@@ -10,7 +10,10 @@ use std::process::{Command, Stdio};
 use climon_config::config::Env;
 
 use crate::manifest::compare_semver;
-use crate::state::{get_available_version, is_auto_update, should_check, DEFAULT_INTERVAL_MS};
+use crate::state::{
+    get_available_version, get_license_notice_shown, is_auto_update, mark_license_notice_shown,
+    should_check, DEFAULT_INTERVAL_MS,
+};
 use crate::version::VERSION;
 
 /// What the launcher should do about a cached available version.
@@ -56,6 +59,26 @@ pub fn maybe_show_update_banner(env: &Env) {
         BannerDecision::Show(banner) => {
             eprint!("{banner}");
         }
+    }
+}
+
+/// True when a pre-open-source install has not yet seen the license-change
+/// notice. Legacy installs are detected by a leftover `eula.*` key in the global
+/// config; fresh installs never carry one, so they never see the notice.
+pub fn license_notice_decision(env: &Env) -> bool {
+    let legacy = climon_config::config::read_global_config_setting("eula.version", env).is_some()
+        || climon_config::config::read_global_config_setting("eula.accepted", env).is_some();
+    legacy && !get_license_notice_shown(env)
+}
+
+/// Prints the one-time MIT license-change notice to stderr for upgrading installs
+/// and records that it has been shown so it never repeats.
+pub fn maybe_show_license_notice(env: &Env) {
+    if license_notice_decision(env) {
+        eprintln!(
+            "climon is now open source under the MIT License \u{2014} run 'climon license' for details."
+        );
+        mark_license_notice_shown(env);
     }
 }
 
@@ -147,5 +170,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(banner_decision(&env, VERSION), BannerDecision::SpawnUpdate);
+    }
+
+    #[test]
+    fn shows_license_notice_once_for_legacy_installs() {
+        let (_d, env) = temp_env();
+        // Simulate a pre-open-source install by writing a raw legacy `eula.*`
+        // key. It is no longer in the config registry, so it must be written
+        // directly rather than via `write_config_setting`, which rejects
+        // unknown keys.
+        std::fs::write(
+            climon_config::config::get_config_path(&env),
+            r#"{"eula":{"version":"1"}}"#,
+        )
+        .unwrap();
+        assert!(license_notice_decision(&env));
+        maybe_show_license_notice(&env);
+        assert!(!license_notice_decision(&env));
+    }
+
+    #[test]
+    fn no_license_notice_for_fresh_installs() {
+        let (_d, env) = temp_env();
+        assert!(!license_notice_decision(&env));
     }
 }

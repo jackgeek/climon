@@ -106,12 +106,7 @@ export async function main(): Promise<void> {
   const previousVersion = readInstalledVersion(installDir);
 
   const setupOptions = parseSetupOptions(process.argv.slice(2));
-  const onboarding = await runOnboarding({ options: setupOptions });
-  if (!onboarding.accepted) {
-    console.error("Licence not accepted; aborting installation.");
-    await pauseForExit();
-    process.exit(1);
-  }
+  await runOnboarding({ options: setupOptions });
 
   await installBinaries(installerSourceDir(), installDir, {
     confirmKillAndRetry,

@@ -1,7 +1,0 @@
-{
-  "description": "Bun-produced aes-256-gcm-scrypt-v1 envelope; Rust must decrypt to plaintext.",
-  "scheme": "aes-256-gcm-scrypt-v1",
-  "password": "fixture-shared-pw",
-  "plaintextB64": "dGhlIHF1aWNrIGJyb3duIGNsaW1vbg==",
-  "envelopeHex": "434c4d454e56318ad611d87830a14feb85f219df162097629ee7cd49ae0a5cd8f5c538f2d392a98e285b34945a4d023a5ec410ad77d5d14cd321b7b180b50ee939cb8f32f7fd767121"
-}

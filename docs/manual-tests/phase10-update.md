@@ -1,27 +1,22 @@
 # Phase 10 — `climon-update` (self-update)
 
 These cases prove that the ported `climon update` flow (`rust/climon-update`,
-wired into `rust/climon-cli`) verifies, decrypts, and applies update artifacts
-produced by the **unchanged** Bun release pipeline, and that the binary swap is
-atomic and never kills a running session or process.
+wired into `rust/climon-cli`) verifies and applies signed plaintext update
+artifacts, and that the binary swap is atomic and never kills a running session
+or process.
 
-Background: Phase 10 ports `src/update/verify.ts`, `pubkey.ts`,
-`crypto-envelope.ts`, `manifest.ts`, `download.ts`, `state.ts`, `swap.ts`,
-`check.ts`, `launch-hooks.ts`, `update-cli.ts`, and `update-cmd.ts` into the
-`climon-update` crate, plus `src/install/install-manifest.ts`. The crypto is
-**byte-for-byte interop**: detached Ed25519 over the raw artifact bytes
-(`ed25519-dalek`), and the `aes-256-gcm-scrypt-v1` envelope
-(`[MAGIC "CLMENV1"(7)][salt(16)][iv(12)][tag(16)][ciphertext]`, scrypt N=32768
-r=8 p=1). The embedded public key is read from `src/update/pubkey.ts` at build
-time (`build.rs`) so it can never drift from the Bun client. The HTTP client is
-`ureq` + `native-tls` (OS trust store) to keep the license allowlist clean. See
-the [master plan](../superpowers/specs/2026-06-17-rust-client-rewrite-master-plan.md)
+Background: Phase 10 ports the manifest/download/signature/state/swap/update
+logic into the `climon-update` crate, plus `src/install/install-manifest.ts`.
+The integrity check is detached Ed25519 over the raw artifact bytes
+(`ed25519-dalek`). The embedded public key is read from `src/update/pubkey.ts` at
+build time (`build.rs`) so it can never drift from the Bun client. The HTTP
+client is `ureq` with Rustls. See the [master plan](../superpowers/specs/2026-06-17-rust-client-rewrite-master-plan.md)
 and the [Phase 10 plan](../superpowers/plans/2026-06-18-phase10-climon-update.md).
 
 All cases isolate state with a temp `CLIMON_HOME` so they never touch a real
 `~/.climon`, and use a temporary install directory so a real install is never
 modified. Where a release server is needed, a local HTTP server serving a
-hand-built manifest + signed artifact stands in for `climon-releases`.
+hand-built manifest + signed artifact stands in for `jackgeek/climon`.
 
 ---
 
@@ -105,28 +100,24 @@ printed; every install file still has its **old** bytes. Reference test:
 
 ---
 
-## MT-P10-04 — encrypted artifact decrypts then verifies then installs
+## MT-P10-04 — legacy encryption metadata is tolerated for plaintext artifacts
 
 - **ID:** MT-P10-04
-- **Preconditions:** Manifest has `"encryption": "aes-256-gcm-scrypt-v1"`; the
-  artifact is the signed zip wrapped in a `CLMENV1` envelope with a known
-  password; `update.password` is set in the global config (or passed to the
-  harness).
-- **Config-matrix cell:** encrypted releases
+- **Preconditions:** Manifest has a legacy `"encryption"` field, but the
+  artifact URL points at the signed plaintext zip and the `.sig` verifies that
+  zip.
+- **Config-matrix cell:** signed plaintext releases
 - **Platforms:** macOS (arm64), Linux (x64)
 
 **Steps:**
-1. Set `climon config set update.password <pw> --global` (per-machine).
-2. Run the update against the encrypted manifest.
-3. Inspect the install dir and status.
-4. Repeat with a **wrong** password.
+1. Run the update against the manifest that still contains a legacy
+   `"encryption"` field.
+2. Inspect the install dir and status.
 
-**Expected:** With the right password: status `updated`, files replaced. With
-the wrong password: status `decrypt-failed`, message "Update aborted: could not
-decrypt the release (wrong or rotated password). No changes were made.", and the
-install files are unchanged. Reference tests:
-`update_cmd::tests::decrypts_verifies_and_installs_an_encrypted_artifact` and
-`wrong_password_yields_decrypt_failed_and_leaves_files_unchanged`.
+**Expected:** Status `updated`; files are replaced after Ed25519 verification.
+No password is required and no decrypt step runs. Reference coverage:
+`manifest::tests::parses_encryption_field_tolerantly` and
+`update_cmd::tests::verified_update_replaces_install_files_on_unix`.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|

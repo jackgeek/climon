@@ -3,7 +3,7 @@
 These cases prove that the ported `climon` client binary (`rust/climon-cli`)
 behaves like the TypeScript client for the day-to-day commands: starting a
 monitored shell/command session, listing/killing sessions, `--version`/`--help`
-byte-checks, `config` get/set/help, the new `licenses` notice dump, dashboard
+byte-checks, `config` get/set/help, the `license` notice dump, dashboard
 `server` delegation, headless background sessions, and the Ctrl-\ detach flow.
 
 Background: Phase 8 ports `src/cli/args.ts`, `src/client/detach-key.ts`,
@@ -77,7 +77,7 @@ All cases isolate state with a temp `CLIMON_HOME` so they never touch a real
 4. `diff` against `fixtures/cli/help.txt`.
 
 **Expected:** Both outputs are byte-identical to the fixtures (which are
-generated from the TS client). `licenses` does **not** appear in `--help`.
+generated from the TS client). `climon license` appears in `--help`.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
@@ -193,20 +193,24 @@ runtime error → 2). Sensitive values are redacted in user-facing `get` and
 
 ---
 
-## MT-P8-07 — `climon licenses`
+## MT-P8-07 — `climon license` / `climon licenses`
 
 - **ID:** MT-P8-07
 - **Preconditions:** Built `climon` binary.
 - **Platforms:** all
 
 **Steps:**
-1. `climon licenses` → confirm it prints the embedded third-party license
-   notices (starts with `# Third-Party Licenses`).
-2. Confirm `climon --help` does **not** list a `licenses` line.
+1. `climon license` → confirm it prints the embedded MIT licence text first
+   (starts with `MIT License`).
+2. Confirm the output then includes `=== Third-party attributions ===`,
+   followed by the embedded third-party license notices (including
+   `# Third-Party Licenses`).
+3. `climon licenses` → confirm it produces the same output as `climon license`.
+4. Confirm `climon --help` lists `climon license`.
 
-**Expected:** The notices embedded from `rust/THIRD-PARTY-LICENSES.md` are
-printed verbatim; the command is intentionally hidden from help to keep the
-help bytes identical to the TS client.
+**Expected:** The repo-root MIT licence is printed before the notices embedded
+from `rust/THIRD-PARTY-LICENSES.md`; `licenses` remains an alias, and the
+user-facing `license` command is documented in help.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|

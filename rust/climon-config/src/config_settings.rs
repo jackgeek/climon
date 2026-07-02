@@ -536,28 +536,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
     s.extend(feature_config_settings());
     s.extend(vec![
         ConfigSetting::new(
-            "eula.accepted",
-            Boolean,
-            "Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.",
-            vec![Client],
-        )
-        .default(Value::from(false))
-        .internal(),
-        ConfigSetting::new(
-            "eula.version",
-            String,
-            "The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance.",
-            vec![Client],
-        )
-        .internal(),
-        ConfigSetting::new(
-            "eula.acceptedAt",
-            String,
-            "ISO-8601 timestamp recording when the EULA was accepted.",
-            vec![Client],
-        )
-        .internal(),
-        ConfigSetting::new(
             "telemetry.enabled",
             Boolean,
             "When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default.",
@@ -575,15 +553,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .accept_input()
         .global_only(),
         ConfigSetting::new(
-            "update.password",
-            String,
-            "Shared password used to decrypt encrypted release artifacts when auto-updating from the gated public release repo. Provided out-of-band by the maintainer. Stored locally; treat as a secret.",
-            vec![Client],
-        )
-        .sensitive()
-        .accept_input()
-        .global_only(),
-        ConfigSetting::new(
             "update.lastCheck",
             String,
             "ISO-8601 timestamp of the last background update check. Used to throttle checks.",
@@ -595,6 +564,14 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "update.availableVersion",
             String,
             "Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update.",
+            vec![Client],
+        )
+        .internal()
+        .global_only(),
+        ConfigSetting::new(
+            "license.noticeShown",
+            Boolean,
+            "Whether the one-time MIT license-change notice has been shown. Set automatically the first time an install that upgraded from a pre-open-source (EULA-gated) build launches; never shown on fresh installs.",
             vec![Client],
         )
         .internal()
@@ -881,14 +858,11 @@ mod tests {
                 "feature.remoteSpawn",
                 "feature.wslBridge",
                 "feature.remotes",
-                "eula.accepted",
-                "eula.version",
-                "eula.acceptedAt",
                 "telemetry.enabled",
                 "update.auto",
-                "update.password",
                 "update.lastCheck",
                 "update.availableVersion",
+                "license.noticeShown",
                 "install.id",
             ]
         );
@@ -896,7 +870,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 44);
+        assert_eq!(all_config_keys().len(), 41);
     }
 
     #[test]
@@ -933,7 +907,6 @@ mod tests {
                     "wslBridge": "disabled",
                     "remotes": "disabled"
                 },
-                "eula": { "accepted": false },
                 "telemetry": { "enabled": false },
                 "update": { "auto": false }
             })
@@ -993,7 +966,6 @@ mod tests {
                 "feature.remotes",
                 "telemetry.enabled",
                 "update.auto",
-                "update.password",
             ]
         );
     }
@@ -1111,18 +1083,6 @@ mod tests {
     }
 
     #[test]
-    fn update_password_is_sensitive() {
-        let s = find_config_setting("update.password").unwrap();
-        assert!(s.sensitive);
-        assert!(s.scope.contains(&ConfigProcessScope::Client));
-        assert!(accepted_config_keys().contains(&"update.password".to_string()));
-        assert_eq!(
-            coerce_config_value_from_settings("update.password", "hunter2").unwrap(),
-            json!("hunter2")
-        );
-    }
-
-    #[test]
     fn ingest_retries_defaults_and_scope() {
         let s = find_config_setting("remote.ingestPortRetryAttempts").unwrap();
         assert_eq!(s.kind, ConfigType::Number);
@@ -1152,13 +1112,6 @@ mod tests {
 
     #[test]
     fn installer_settings() {
-        assert_eq!(
-            find_config_setting("eula.accepted").unwrap().kind,
-            ConfigType::Boolean
-        );
-        assert!(find_config_setting("eula.accepted").unwrap().internal);
-        assert!(find_config_setting("eula.version").unwrap().internal);
-        assert!(find_config_setting("eula.acceptedAt").unwrap().internal);
         assert_eq!(
             find_config_setting("telemetry.enabled")
                 .unwrap()
