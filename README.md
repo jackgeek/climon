@@ -446,7 +446,9 @@ Day-to-day work goes through the `dev` branch:
   the [Release](.github/workflows/release.yml) workflow, which bumps the version,
   tags, and publishes artifacts.
 - **`dev` is merged into `main` only when you deliberately want to ship a
-  release.**
+  release.** Docs-only pushes to `main` skip the release automatically. To land a
+  non-docs `main` update without releasing, include `[skip release]` in the head
+  (merge) commit message.
 
 Build and test the client with `cargo build` / `cargo test` / `cargo clippy` in
 `rust/`; test the server with `bun test tests`. New features
