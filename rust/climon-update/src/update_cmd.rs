@@ -1,4 +1,4 @@
-//! `climon update` core: download, verify, decrypt, and apply. Port of
+//! `climon update` core: download, verify, and apply. Port of
 //! `src/update/update-cmd.ts`.
 //!
 //! Never kills a process for the expected outcomes; returns a structured status.
@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
-use crate::crypto_envelope::decrypt_envelope;
 use crate::download::{download_text, download_to_file, MAX_ARTIFACT_BYTES, MAX_TEXT_BYTES};
 use crate::install_manifest::install_files_for_platform;
 use crate::manifest::{artifact_key, is_newer, Manifest};
@@ -20,7 +19,6 @@ pub enum UpdateStatus {
     Updated,
     UpToDate,
     VerifyFailed,
-    DecryptFailed,
     Deferred,
     NoArtifact,
 }
@@ -38,15 +36,11 @@ pub struct UpdateCommandOptions<'a> {
     pub current_version: &'a str,
     pub manifest: &'a Manifest,
     pub public_key_b64: &'a str,
-    /// Shared password to decrypt artifacts when the manifest is encrypted.
-    pub decrypt_password: Option<&'a str>,
     pub platform: &'a str,
     pub arch: &'a str,
 }
 
 const MSG_UP_TO_DATE: &str = "climon is already up to date";
-const MSG_DECRYPT_FAILED: &str =
-    "Update aborted: could not decrypt the release (wrong or rotated password). No changes were made.";
 const MSG_VERIFY_FAILED: &str =
     "Update aborted: signature verification failed. No changes were made.";
 const MSG_DEFERRED: &str =
@@ -85,21 +79,7 @@ pub fn run_update_command(
     let zip_path = work.path().join("artifact.zip");
     let downloaded = download_to_file(&artifact.url, &zip_path, MAX_ARTIFACT_BYTES)?;
     let sig_b64 = download_text(&artifact.sig, MAX_TEXT_BYTES)?;
-
-    let zip_bytes: Vec<u8> = if opts.manifest.encryption.is_some() {
-        match decrypt_envelope(&downloaded, opts.decrypt_password.unwrap_or("")) {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                print(&format!("{MSG_DECRYPT_FAILED}\n"));
-                return Ok(UpdateResult {
-                    status: UpdateStatus::DecryptFailed,
-                    version: None,
-                });
-            }
-        }
-    } else {
-        downloaded
-    };
+    let zip_bytes = downloaded;
 
     if !verify_signature(&zip_bytes, &sig_b64, opts.public_key_b64) {
         print(&format!("{MSG_VERIFY_FAILED}\n"));
@@ -167,7 +147,6 @@ fn unzip(bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto_envelope::encrypt_envelope;
     use crate::manifest::ManifestArtifact;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use ed25519_dalek::{Signer, SigningKey};
@@ -195,7 +174,7 @@ mod tests {
         buf
     }
 
-    /// Serves the zip at /artifact.zip(.enc) and the sig at /artifact.zip.sig
+    /// Serves the zip at /artifact.zip and the sig at /artifact.zip.sig
     /// until both have been fetched once. Returns the bound port.
     fn serve(zip_path: &'static str, zip_body: Vec<u8>, sig_body: String) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -274,7 +253,6 @@ mod tests {
             current_version: "0.12.1",
             manifest: &m,
             public_key_b64: &pub_b64,
-            decrypt_password: None,
             platform: "linux",
             arch: node_arch(),
         };
@@ -307,7 +285,6 @@ mod tests {
             current_version: "0.12.1",
             manifest: &m,
             public_key_b64: "AAAA", // wrong key -> verification fails
-            decrypt_password: None,
             platform: "linux",
             arch: node_arch(),
         };
@@ -332,63 +309,10 @@ mod tests {
             current_version: "0.99.0",
             manifest: &m,
             public_key_b64: "",
-            decrypt_password: None,
             platform: "linux",
             arch: node_arch(),
         };
         let res = run_update_command(&opts, &mut |_| {}).unwrap();
         assert_eq!(res.status, UpdateStatus::UpToDate);
-    }
-
-    #[test]
-    fn decrypts_verifies_and_installs_an_encrypted_artifact() {
-        let (signing, pub_b64) = keypair();
-        let zip = make_zip();
-        let sig = sign(&signing, &zip);
-        let enc = encrypt_envelope(&zip, "shared-pw");
-        let port = serve("/artifact.zip.enc", enc, sig);
-        let dir = install_dir();
-        let m = manifest(port, "/artifact.zip.enc", Some("aes-256-gcm-scrypt-v1"));
-        let opts = UpdateCommandOptions {
-            install_dir: dir.path(),
-            current_version: "0.12.1",
-            manifest: &m,
-            public_key_b64: &pub_b64,
-            decrypt_password: Some("shared-pw"),
-            platform: "linux",
-            arch: node_arch(),
-        };
-        let res = run_update_command(&opts, &mut |_| {}).unwrap();
-        assert_eq!(res.status, UpdateStatus::Updated);
-        assert_eq!(
-            std::fs::read(dir.path().join("climon")).unwrap(),
-            b"new-binary"
-        );
-    }
-
-    #[test]
-    fn wrong_password_yields_decrypt_failed_and_leaves_files_unchanged() {
-        let (signing, pub_b64) = keypair();
-        let zip = make_zip();
-        let sig = sign(&signing, &zip);
-        let enc = encrypt_envelope(&zip, "right-pw");
-        let port = serve("/artifact.zip.enc", enc, sig);
-        let dir = install_dir();
-        let m = manifest(port, "/artifact.zip.enc", Some("aes-256-gcm-scrypt-v1"));
-        let opts = UpdateCommandOptions {
-            install_dir: dir.path(),
-            current_version: "0.12.1",
-            manifest: &m,
-            public_key_b64: &pub_b64,
-            decrypt_password: Some("wrong-pw"),
-            platform: "linux",
-            arch: node_arch(),
-        };
-        let res = run_update_command(&opts, &mut |_| {}).unwrap();
-        assert_eq!(res.status, UpdateStatus::DecryptFailed);
-        assert_eq!(
-            std::fs::read(dir.path().join("climon")).unwrap(),
-            b"old-binary"
-        );
     }
 }
