@@ -70,6 +70,7 @@ result-tracking row.
 | — | Text staging area — icon-only keybar chooser + full-viewport compose overlay (Insert / Cancel) | [text-staging-area.md](text-staging-area.md) |
 | — | Telemetry privacy — no PII / no user command / no rendered text in App Insights egress (sanitizer + field allowlist + `subcommand`-only) | [telemetry-privacy.md](telemetry-privacy.md) |
 | — | Touch keybar availability + responsive chooser labels — touch-primary keybar, inline docking on wide touch, width-responsive button labels | [keybar-touch-responsive.md](keybar-touch-responsive.md) |
+| — | App Insights connection string source — env var / embedded constant only, never climon config | [appinsights-connection-source.md](appinsights-connection-source.md) |
 
 ## Recording results
 

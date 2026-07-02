@@ -371,14 +371,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
       }
     }
   },
-  {
-    path: "logging.appInsights.connectionString",
-    type: "string",
-    purpose: "Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable.",
-    scope: ["server"],
-    sensitive: true,
-    acceptInput: true
-  },
   ...featureConfigSettings(),
   {
     path: "telemetry.enabled",

@@ -91,13 +91,24 @@ are redacted to `[REDACTED]` in all log output.
 
 ## Application Insights (optional)
 
-The dashboard server can forward logs to Azure Application Insights. Set a
-connection string and it is enabled automatically (off by default):
+The dashboard server can forward logs to Azure Application Insights. Forwarding
+is **off by default** and only happens when you opt in with:
 
-- `climon config logging.appInsights.connectionString "<connection-string>"`
-- or the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable
+```sh
+climon config telemetry.enabled true
+```
 
-This sends log data over the network and is opt-in only. See the
+The connection string is a secret and is **never stored in climon config**. Supply
+it in one of two ways:
+
+- the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable on the machine
+  that runs the dashboard server, or
+- the build-time `EMBEDDED_TELEMETRY_CONNECTION` constant baked into release
+  binaries by the release pipeline (`src/telemetry/connection.ts`).
+
+When `telemetry.enabled` is `true` and a connection string is available from one
+of those sources, the server forwards logs; otherwise it stays local-only. This
+sends log data over the network and is opt-in only. See the
 [Privacy Policy](privacy.md) for what is and is not collected and how it is
 handled.
 
@@ -106,9 +117,7 @@ Every record forwarded to Application Insights carries an anonymous
 first server start. It contains no personal information and exists only so logs
 from one installation can be distinguished from another.
 
-Forwarding can be turned off without removing the connection string by setting
-`telemetry.enabled` to `false`. Any other value (including absent) leaves the
-"connection string present ⇒ enabled" behavior unchanged.
+Turn forwarding off at any time with `climon config telemetry.enabled false`.
 
 ### Compact emission
 
