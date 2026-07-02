@@ -12,6 +12,15 @@ name: Release
 on:
   push:
     branches: [main]
+    # Docs-only pushes never ship a binary, so don't cut a release for them.
+    # (Mixed code+docs pushes still trigger normally.) For a non-docs push that
+    # should still skip the release, put `[skip release]` in the head commit
+    # message — see the `version` job guard below.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".github/**/*.md"
 
 # Never run two releases against `main` at once.
 concurrency:
@@ -26,8 +35,10 @@ jobs:
   # version (the bump commit itself only lands in the `release` job).
   version:
     runs-on: ubuntu-latest
-    # Skip the bump commit the release itself pushes, otherwise it would loop.
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    # Skip the bump commit the release itself pushes (`chore(release):`), otherwise
+    # it would loop. Also honor an explicit `[skip release]` marker in the head
+    # commit message so a `main` update (e.g. a docs-only dev merge) can opt out.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') && !contains(github.event.head_commit.message, '[skip release]') }}
     outputs:
       version: ${{ steps.compute.outputs.version }}
       tag: ${{ steps.compute.outputs.tag }}
