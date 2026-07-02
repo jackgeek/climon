@@ -49,7 +49,7 @@ import { runPromote } from "./promote.js";
 import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
 import { resolveClientInvocation } from "../cli/client-exec.js";
-import { resolveSessionDefaults } from "../launcher.js";
+import { resolveSessionDefaults } from "../session-defaults.js";
 import { parseColor, parseColorMode, parsePriority } from "../session-meta.js";
 import { isProcessAlive, killProcess } from "../process-kill.js";
 import { canBindTcpPort, chooseAvailablePort, isAddressInUse, PORT_RETRY_ATTEMPTS } from "../port-choice.js";

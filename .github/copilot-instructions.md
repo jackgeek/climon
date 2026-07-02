@@ -3,9 +3,9 @@
 ## Client = Rust, server = Bun (read this first)
 
 - The shipping `climon` **client** is the **Rust** workspace under `rust/` (crates `climon-cli`, `climon-session`, `climon-pty`, `climon-store`, `climon-config`, `climon-logging`, `climon-proto`, `climon-remote`, `climon-install`, `climon-update`). **All client work — new features and bug fixes — goes in `rust/`.**
-- The TypeScript client under `src/` (`src/index.ts`, `src/launcher.ts`, `src/session-host.ts`, `src/pty.ts`, `src/cli/`, `src/client/`, `src/daemon/`, `src/install/`, `src/remote/`, …) is **legacy and frozen**. It is kept only for local development reference and the Bun test suite. Do **not** add features or fix client bugs there; port the behavior to the Rust crates instead. Touch it only to keep the existing test suite green.
+- The Bun/TypeScript client that used to live under `src/` (`src/index.ts`, `src/launcher.ts`, `src/session-host.ts`, `src/pty.ts`, `src/cli/`, `src/client/`, `src/daemon/`, `src/install/`, most of `src/remote/`, …) has been **removed** — it was rewritten in Rust. Do **not** try to run or restore it; all client work goes in the `rust/` crates. The TypeScript that remains under `src/` is the maintained dashboard server/web plus shared support modules (configuration, logging, i18n, session defaults, the remote-ingest helpers the server imports, and `src/update/pubkey.ts`, the Ed25519 key read by `rust/climon-update` at build time).
 - The dashboard **server** (`climon-server`, built from `src/server.ts` with `src/server/` and `src/web/`) is **NOT legacy**. It is still Bun, still maintained, and is never rewritten. The Rust client interoperates with it byte-for-byte over the shared metadata/socket/config surfaces.
-- See `docs/architecture.md` for the component breakdown shared by both implementations.
+- See `docs/architecture.md` for the component breakdown.
 
 ## Workflow
 
@@ -25,30 +25,30 @@
 - License/attribution gates use `cargo deny` and `cargo about` (`rust/deny.toml`, `rust/about.toml`).
 - The shipped `climon` binary is built from `rust/climon-cli` and packaged by `scripts/compile.ts`.
 
-### Bun server + legacy TS client/tests
+### Bun server + tests
 
 - Install dependencies with `bun install`. The project uses Bun (`packageManager: bun@1.3.10`) and TypeScript ESM.
-- Build all runtime artifacts with `bun run build:all` (`build` legacy client, `build:web` dashboard bundle, `build:server` server entrypoint).
+- Build all runtime artifacts with `bun run build:all` (`build:web` dashboard bundle, `build:server` server entrypoint). There is no longer a client build.
 - Compile release binaries with `bun run compile`; bump the version and create the matching git tag with `bun run release`.
 - Type-check/lint with `bun run lint` or `bun run typecheck` (`tsc -p tsconfig.json --noEmit`).
 - Run the full suite with `bun test tests`.
 - Run a single test file with `bun test tests/config.test.ts`.
 - Run one test by name with `bun test tests/config.test.ts -t "default config binds to localhost"`.
-- Useful local entrypoints: `bun src/server.ts server` (canonical server) or `bun src/index.ts <args>` (legacy client, for reference/tests only).
+- Useful local entrypoints: `bun src/server.ts server` (canonical dashboard server) or `cargo run -p climon-cli -- <args>` from `rust/` (the client).
 
 ## High-level architecture
 
-> The file paths below (`src/…`) name the **legacy TS** implementation that documents the shared design. The canonical **client** implementation of these roles is the Rust workspace in `rust/`; the **server** role is the Bun code under `src/server/` + `src/web/`. Make client changes in the Rust crates.
+> The file paths below name the roles in the shared design. The **client** role (launcher, daemon, PTY, local attach client, remote bridge) is implemented in the Rust workspace under `rust/`; the **server** role is the Bun code under `src/server/` + `src/web/`. Make client changes in the Rust crates.
 
-climon is a cross-platform PTY session manager with three main roles: the launcher/client, one detached daemon per session, and a dashboard server. The launcher (`src/index.ts`, `src/launcher.ts`) writes session metadata, starts a detached daemon, waits for its socket, prints the dashboard URL, and attaches the local terminal. The daemon (`src/daemon/daemon.ts`) owns the PTY (`src/pty.ts`), scrollback ring buffer, client IPC, status transitions, and final persisted output.
+climon is a cross-platform PTY session manager with three main roles: the launcher/client, one detached daemon per session, and a dashboard server. The launcher (`rust/climon-cli`) writes session metadata, starts a detached daemon, waits for its socket, prints the dashboard URL, and attaches the local terminal. The daemon (`rust/climon-session`) owns the PTY (`rust/climon-pty`), scrollback ring buffer, client IPC, status transitions, and final persisted output.
 
 The dashboard server (`src/server.ts`, `src/server/server.ts`) is stateless with respect to PTYs: it scans `~/.climon/sessions/*.json`, watches for metadata updates, serves REST/SSE/WebSocket APIs, and bridges browser WebSocket traffic to daemon sockets. The React 19 + Fluent UI dashboard lives under `src/web/` and is served from `src/server/assets.ts`; compiled builds embed the web bundle into the server binary.
 
-The client and server are intentionally separate binaries. `src/index.ts` builds the lean `climon` client and delegates the `server` subcommand through `src/cli/server-exec.ts`; `src/server.ts` builds `climon-server`. Keep server-only code, embedded assets, React, Fluent UI, and xterm dependencies out of the client entrypoint unless the binary-size separation is intentionally changing.
+The client and server are intentionally separate binaries. The Rust `climon` client is lean and delegates the `server` subcommand to the compiled `climon-server` binary (built from `src/server.ts`). Keep server-only code, embedded assets, React, Fluent UI, and xterm dependencies in the server entrypoint; the Rust client never embeds them.
 
 Session state is filesystem-backed under `$CLIMON_HOME` (default `~/.climon`): `config.jsonc`, legacy `config.json` backups, session metadata JSON, final scrollback, daemon logs, and sockets/pipes. Metadata is the cross-process coordination boundary; `src/store.ts` writes metadata atomically and serializes per-process patch bursts.
 
-Remote clients use an ingest/uplink bridge over Microsoft dev tunnels or a direct Windows/WSL same-machine connection. Remote code lives mainly in `src/remote/`; remote session metadata is materialized locally with namespaced IDs so the existing dashboard/session-list plumbing can treat local and remote sessions uniformly.
+Remote clients use an ingest/uplink bridge over Microsoft dev tunnels or a direct Windows/WSL same-machine connection. The remote client code lives in the Rust `climon-remote` crate; the Bun server keeps a small set of ingest helpers in `src/remote/ingest.ts` that it imports directly. Remote session metadata is materialized locally with namespaced IDs so the existing dashboard/session-list plumbing can treat local and remote sessions uniformly.
 
 ## Key conventions
 
@@ -61,6 +61,6 @@ Remote clients use an ingest/uplink bridge over Microsoft dev tunnels or a direc
 - Treat remote input as untrusted. Keep remote ID validation, metadata namespacing, patch allowlists, bounded mux frames, and loopback-only privileged dashboard APIs aligned with `docs/security.md`.
 - Configuration is hierarchical for `climon config`: local `.climon/config.jsonc` files are checked from the cwd upward before global `$CLIMON_HOME/config.jsonc`; legacy `config.json` files are read for backward compatibility and migrated on first write. Writes use explicit `--local`/`--global` or the nearest existing config.
 - Config settings are declared in `src/config-settings.ts`. Whenever a config setting is added, removed, renamed, re-scoped, retyped, or has its purpose or default changed, update that registry, regenerate config docs/comments with `bun run docs:config`, and keep the change backward compatible with existing config files.
-- When changing install or release behavior, check `scripts/`, `src/install/`, and `src/release/` together because version bumping, binary compilation, PATH setup, and installer packaging are coupled.
+- When changing install or release behavior, check `scripts/`, `rust/climon-install`, and `src/release/` together because version bumping, binary compilation, PATH setup, and installer packaging are coupled.
 - Keep docs in sync with behavior that users rely on: `README.md` for user-facing workflow, `docs/architecture.md` for component/data-flow changes, `docs/security.md` for remote or network-facing changes, and `docs/setup.md`/`docs/usage.md` for setup and command changes.
 - Every new feature MUST ship with manual checks in `docs/manual-tests/`. Add or update a `phaseNN-<feature>.md` (or feature-named) file using the test-case shape from `docs/manual-tests/README.md` (ID, feature, preconditions, config-matrix cell, numbered steps, expected result, platforms, result-tracking row), and link it from the README index. A feature is not complete until its manual checks exist.

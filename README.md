@@ -365,8 +365,10 @@ climon ships as two binaries built from two toolchains:
 - **Dashboard server (`climon-server`) — Bun.** The React + Fluent UI dashboard
   and its REST/SSE/WebSocket APIs are built from `src/server.ts`.
 
-> The rest of the TypeScript under `src/` is the **legacy client**, frozen and
-> kept only for the Bun test suite. See [docs/architecture.md](docs/architecture.md).
+> The rest of the TypeScript under `src/` is the maintained dashboard server/web
+> plus shared support modules (configuration, logging, i18n, session defaults,
+> select remote helpers, and the update public key). See
+> [docs/architecture.md](docs/architecture.md).
 
 Requirements:
 
@@ -414,7 +416,7 @@ Day-to-day work goes through the `dev` branch:
   release.**
 
 Build and test the client with `cargo build` / `cargo test` / `cargo clippy` in
-`rust/`; test the server and legacy suite with `bun test tests`. New features
+`rust/`; test the server with `bun test tests`. New features
 ship with manual checks under [docs/manual-tests/](docs/manual-tests/).
 
 ## License

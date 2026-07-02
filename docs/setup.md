@@ -2,10 +2,9 @@
 
 ## Prerequisites
 
-The shipped `climon` client is a self-contained native Rust binary — it has no
-runtime dependency on Bun or Node. **Bun >= 1.3.0** (>= 1.3.14 on Windows) is only
-needed to build or run the `climon-server` dashboard, or to run the legacy
-TypeScript test suite. Check with `bun --version`.
+- **Rust stable** to build the native `climon` client from `rust/`.
+- **Bun >= 1.3.0** to build and run the maintained dashboard server/web and the
+  Bun test suite. Check with `bun --version`.
 
 ### Installing Bun (for building/running the server)
 
@@ -14,8 +13,15 @@ TypeScript test suite. Check with `bun --version`.
   curl -fsSL https://bun.sh/install | bash
   ```
   Ensure `~/.bun/bin` is on your `PATH`.
-- **Windows:** install Bun >= 1.3.14 (native ConPTY support). The Rust `climon`
-  client runs natively on Windows; WSL is not required.
+- **Windows:** use Bun >= 1.3.14 for dashboard development on Windows.
+
+## Install dependencies
+
+```bash
+bun install
+```
+
+This fetches `@xterm/xterm` and `@xterm/addon-fit` (vendored for the dashboard).
 
 ## Making `climon` available on your PATH
 
@@ -33,10 +39,8 @@ bun dev -- <args>     # e.g. bun dev -- --help
 ```
 
 This wraps `cargo run -p climon-cli --bin climon -- <args>`; you can also invoke
-that directly from `rust/` if you prefer.
-
-The frozen legacy Bun client entrypoint (`bun src/index.ts <args>`) exists only
-for the test suite and reference — it is not the shipped client.
+that directly from `rust/` if you prefer. To run the dashboard server from
+source, use `bun run server` (or `bun src/server.ts server`).
 
 ## Configuration
 
@@ -121,8 +125,8 @@ bun test tests      # unit tests
 Then start the server and a session:
 
 ```bash
-bun src/index.ts server      # terminal 1
-bun src/index.ts echo hello  # terminal 2
+bun src/server.ts server                 # terminal 1: dashboard
+cargo run -p climon-cli -- echo hello    # terminal 2, from rust/
 ```
 
 Open http://127.0.0.1:3131 — you should see the session and its output.

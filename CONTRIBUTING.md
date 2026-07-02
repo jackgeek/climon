@@ -15,14 +15,15 @@ climon has two shipping components that live in one repo:
 - **Dashboard server — Bun (maintained).** The dashboard server (`climon-server`,
   built from `src/server.ts` with `src/server/` and `src/web/`) is still Bun and
   is actively maintained.
-- **Legacy TypeScript client — frozen.** The TypeScript client under `src/`
-  (`src/index.ts`, `src/launcher.ts`, `src/cli/`, `src/client/`, `src/daemon/`,
-  …) is legacy and frozen. Do **not** add features or fix client bugs there;
-  port the behavior to the Rust crates instead. Touch it only to keep the
-  existing Bun test suite green.
+- **Client rewritten in Rust — old Bun client removed.** The Bun/TypeScript
+  client that used to live under `src/` (`src/index.ts`, `src/launcher.ts`,
+  `src/cli/`, `src/client/`, `src/daemon/`, …) has been removed. Do **not** try
+  to restore it; all client work goes in the `rust/` crates. The TypeScript that
+  remains under `src/` is the maintained dashboard server/web plus shared support
+  modules.
 
 See [docs/architecture.md](docs/architecture.md) for the full component
-breakdown shared by both implementations.
+breakdown.
 
 ## Build, test, and lint
 
@@ -40,13 +41,13 @@ cargo fmt
 The shipped `climon` binary is built from `rust/climon-cli` and packaged by
 `scripts/compile.ts`.
 
-### Bun server + legacy TS client/tests
+### Bun server + tests
 
 From the repo root (the project uses Bun and TypeScript ESM):
 
 ```bash
 bun install            # install dependencies
-bun run build:all      # build client, dashboard bundle, and server entrypoint
+bun run build:all      # build the dashboard bundle and server entrypoint
 bun test tests         # run the full Bun suite
 bun run lint           # typecheck + message-catalog check
 bun run typecheck      # tsc --noEmit only
