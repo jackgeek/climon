@@ -56,39 +56,34 @@ list** of your sessions that bumps the ones needing attention to the top and
 
 ## Features
 
-- **Self-contained binaries.** The `climon` client is a native Rust binary using
-  a portable PTY layer (openpty on Linux/macOS, ConPTY on Windows); the
-  `climon-server` dashboard is a Bun binary using Bun's built-in HTTP/WebSocket
-  server. No `node_modules` or separate runtime install is needed to run them.
-  (The optional dev-tunnel remote feature is the one exception — it needs the
-  Microsoft [`devtunnel`](https://learn.microsoft.com/azure/developer/dev-tunnels/)
-  CLI.)
-- **Sessions survive server restarts.** Each command runs under its own detached
-  per-session daemon that owns the PTY. Restarting `climon server` never kills a
-  running session.
-- **Live web terminal.** The dashboard is a React + Fluent UI app embedding an
-  `xterm.js` terminal wired to the session over a WebSocket — fully interactive,
-  no iframe.
-- **Attention queue.** While a session is attached, climon mirrors its output
-  into a headless terminal and watches the rendered screen. If the visible
-  content stops changing for `attention.idleSeconds` (default 10) — a blinking
-  cursor counts as static — the session is flagged and bumped to the top of the
-  dashboard.
-- **Completion pops.** Finished sessions move up the queue and keep their final
-  scrollback so you can review the output.
-- **Themable dashboard.** Pick a terminal colour theme from the ☰ menu; the
-  choice (and the mobile "Pin key bar" toggle) is saved in your config and shared
-  across every browser and device.
-- **Work from your phone (secure, opt-in).** Expose your local dashboard over an
-  authenticated Microsoft dev tunnel with the **Tunnel Link** menu action, open it
-  on your phone, and **Install as PWA**. You get a fully interactive web terminal
-  plus **push notifications when a session needs attention** — even when the app
-  is closed. The tunnel is not anonymous: only identities you grant access can
-  reach it. See [Work from your phone](#work-from-your-phone-tunnel-link--pwa).
-- **Remote & WSL bridging (experimental, opt-in).** Surface sessions from a
-  remote devbox over a Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/),
-  or bridge Windows and WSL on the same machine without a tunnel. See
+- **Every session in one place.** Launch a command with `climon` and it shows up
+  in a single browser dashboard alongside all your others — no more hunting
+  through terminal tabs and VS Code windows.
+- **Know instantly which one needs you.** Sessions that stall waiting for input
+  are automatically bumped to the top of the list, so the one blocking on your
+  decision is always front and centre — not buried three tabs deep.
+- **Get notified, don't babysit.** Kick off a long build or a coding agent, walk
+  away, and let climon ping you when a session needs attention or finishes.
+- **Drive sessions from the browser.** Each session is a fully interactive
+  terminal in the dashboard — type, run commands, and answer prompts without
+  switching back to the original window.
+- **Work from your phone.** Securely reach your dashboard from anywhere over an
+  authenticated tunnel, install it as an app on your home screen, and get **push
+  notifications when a session needs you** — even with the app closed. Only
+  people you grant access can connect. See
+  [Work from your phone](#work-from-your-phone-tunnel-link--pwa).
+- **Nothing gets lost.** Sessions keep running even if the dashboard restarts,
+  and finished commands keep their full output so you can scroll back and review
+  what happened.
+- **Make it yours.** Pick a terminal theme and tweak your preferences once — they
+  follow you across every browser and device.
+- **Reach across machines (experimental).** Surface sessions from a remote devbox
+  over a secure tunnel, or bridge Windows and WSL on the same machine. See
   [Remote sessions](#remote-sessions).
+- **Single, self-contained install.** One command installs climon — no runtime,
+  package manager, or `node_modules` to manage. (Remote tunnels are the one
+  add-on: they use the Microsoft
+  [`devtunnel`](https://learn.microsoft.com/azure/developer/dev-tunnels/) CLI.)
 
 ## Install
 
