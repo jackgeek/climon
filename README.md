@@ -175,14 +175,7 @@ Running `climon server` locates and runs the `climon-server` binary — via
 ### `climon ls`
 
 List all monitored sessions with their IDs, status, and command. Use it to find
-the session ID for `attach` or `kill`. (`climon list` is an alias.)
-
-### `climon attach <id>`
-
-Reattach your terminal to a running session — for example to type into a REPL or
-respond to a prompt from the CLI instead of the browser.
-
-Detach again without stopping the command with `Ctrl-\` then `d`.
+the session ID for `kill`. (`climon list` is an alias.)
 
 ### `climon kill <id>`
 

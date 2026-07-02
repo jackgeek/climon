@@ -66,7 +66,6 @@ climon client to restore Clamp to remote terminal size mode.
 
 ```bash
 climon ls                 # list sessions (attention-flagged first)
-climon attach <id>        # reattach a running session
 climon kill <id>          # terminate a session and remove its metadata
 ```
 
