@@ -1306,6 +1306,15 @@ export function App() {
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
   const sidebarCompact = effectiveSidebarCollapsed(sidebarCollapsed, isMobile);
+  // The keybar and its compose overlay only render for a live session that is
+  // either maximized (narrow flow) or docked inline (wide touch).
+  const keyBarAvailable =
+    (maximized || keyBarDockedInline) && activeSession !== null && isLiveStatus(activeSession.status);
+  // The compose overlay covers the whole viewport (including the fixed exit
+  // button), so the exit button is hidden only while the overlay is actually
+  // showing. Tying it to the overlay's own render condition avoids trapping the
+  // user in fullscreen if the session stops being live mid-compose.
+  const composeOverlayVisible = keyBarAvailable && panelView === "compose";
   const serverConnected = serverConnectionState === "connected";
   const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(
     serverConnectionState,
@@ -1440,7 +1449,7 @@ export function App() {
           serverReconnectToken={serverReconnectToken}
           onLiveInteraction={handleLiveInteraction}
         />
-        {panelView !== "closed" && (maximized || keyBarDockedInline) && activeSession && isLiveStatus(activeSession.status) && (
+        {panelView !== "closed" && keyBarAvailable && (
           <>
             {maximized && !(keyBarPinned && panelView === "chooser") && (
               <div
@@ -1474,7 +1483,7 @@ export function App() {
           </>
         )}
       </div>
-      {maximized && panelView !== "compose" && (
+      {maximized && !composeOverlayVisible && (
         <Button
           className={styles.exitBtn}
           appearance="outline"

@@ -225,10 +225,15 @@ describe("scheduleTerminalRefit", () => {
       expect(cancelBody).not.toContain('setComposeText("")');
     });
 
-    test("hides the exit-fullscreen button while composing so the overlay fills the viewport", () => {
+    test("hides the exit-fullscreen button only while the compose overlay is visible", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
-      expect(source).toContain('{maximized && panelView !== "compose" && (');
+      // Tied to the overlay's own render condition so the user is never trapped
+      // in fullscreen if the session stops being live mid-compose.
+      expect(source).toContain(
+        "const composeOverlayVisible = keyBarAvailable && panelView === \"compose\";"
+      );
+      expect(source).toContain("{maximized && !composeOverlayVisible && (");
     });
   });
 
@@ -240,12 +245,13 @@ describe("scheduleTerminalRefit", () => {
       expect(source).toContain("const keyBarDockedInline = isTouchPrimary && !isMobile;");
     });
 
-    test("keybar renders when maximized OR docked inline on wide touch", () => {
+    test("keybar availability requires maximized OR docked inline for a live session", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
       expect(source).toContain(
-        'panelView !== "closed" && (maximized || keyBarDockedInline) && activeSession && isLiveStatus(activeSession.status)'
+        "(maximized || keyBarDockedInline) && activeSession !== null && isLiveStatus(activeSession.status)"
       );
+      expect(source).toContain('{panelView !== "closed" && keyBarAvailable && (');
     });
 
     test("the tap-catching backdrop is only rendered in fullscreen", () => {
