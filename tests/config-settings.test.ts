@@ -54,6 +54,7 @@ describe("config settings registry", () => {
       "update.auto",
       "update.lastCheck",
       "update.availableVersion",
+      "license.noticeShown",
       "install.id"
     ]);
 
@@ -169,7 +170,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(40);
+    expect(allConfigKeys().length).toBe(41);
   });
 
   test("coerces values through registry validators", () => {

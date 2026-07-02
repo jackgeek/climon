@@ -569,6 +569,14 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .internal()
         .global_only(),
         ConfigSetting::new(
+            "license.noticeShown",
+            Boolean,
+            "Whether the one-time MIT license-change notice has been shown. Set automatically the first time an install that upgraded from a pre-open-source (EULA-gated) build launches; never shown on fresh installs.",
+            vec![Client],
+        )
+        .internal()
+        .global_only(),
+        ConfigSetting::new(
             "install.id",
             String,
             "Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information.",
@@ -854,6 +862,7 @@ mod tests {
                 "update.auto",
                 "update.lastCheck",
                 "update.availableVersion",
+                "license.noticeShown",
                 "install.id",
             ]
         );
@@ -861,7 +870,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 40);
+        assert_eq!(all_config_keys().len(), 41);
     }
 
     #[test]

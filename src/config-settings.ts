@@ -418,6 +418,15 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     globalOnly: true
   },
   {
+    path: "license.noticeShown",
+    type: "boolean",
+    purpose:
+      "Whether the one-time MIT license-change notice has been shown. Set automatically the first time an install that upgraded from a pre-open-source (EULA-gated) build launches; never shown on fresh installs.",
+    scope: ["client"],
+    internal: true,
+    globalOnly: true
+  },
+  {
     path: "install.id",
     type: "string",
     purpose:

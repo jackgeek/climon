@@ -39,4 +39,5 @@
 | `update.auto` | boolean | `false` | client | When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`. |
 | `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |
 | `update.availableVersion` | string | unset | client | Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update. (**internal**) |
+| `license.noticeShown` | boolean | unset | client | Whether the one-time MIT license-change notice has been shown. Set automatically the first time an install that upgraded from a pre-open-source (EULA-gated) build launches; never shown on fresh installs. (**internal**) |
 | `install.id` | string | unset | client, server | Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information. (**internal**) |

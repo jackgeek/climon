@@ -55,7 +55,8 @@ describe("globalOnly settings", () => {
       "session.terminalProgram",
       "update.auto",
       "update.lastCheck",
-      "update.availableVersion"
+      "update.availableVersion",
+      "license.noticeShown"
     ]);
   });
 

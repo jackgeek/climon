@@ -209,6 +209,12 @@
     Latest version discovered by the background update check, if newer than the
     installed version. Cleared after a successful update.
 
+  license.noticeShown
+    Type: boolean; Default: unset; Scope: client; internal
+    Whether the one-time MIT license-change notice has been shown. Set automatically the
+    first time an install that upgraded from a pre-open-source (EULA-gated) build
+    launches; never shown on fresh installs.
+
   install.id
     Type: string; Default: unset; Scope: client, server; internal
     Anonymous, randomly generated install identifier used only when telemetry is

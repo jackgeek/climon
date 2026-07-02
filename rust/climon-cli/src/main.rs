@@ -26,7 +26,9 @@ use climon_session::host::{run_session_host, SessionHostOptions};
 use climon_store::meta::read_session_meta;
 use climon_store::Env as StoreEnv;
 use climon_update::check::run_background_check_default;
-use climon_update::launch_hooks::{maybe_show_update_banner, maybe_spawn_background_check};
+use climon_update::launch_hooks::{
+    maybe_show_license_notice, maybe_show_update_banner, maybe_spawn_background_check,
+};
 use climon_update::update_cli::run_update_cli;
 
 fn main() {
@@ -60,6 +62,7 @@ fn run() -> Result<i32, String> {
         ParsedCommand::Shell { .. } | ParsedCommand::Run { .. }
     ) {
         let cfg_env = ConfigEnv::real();
+        maybe_show_license_notice(&cfg_env);
         maybe_show_update_banner(&cfg_env);
         let exec_path = std::env::current_exe()
             .map(|p| p.to_string_lossy().into_owned())
