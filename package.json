@@ -27,6 +27,7 @@
     "server": "bun src/server.ts server",
     "server:loop": "bun scripts/server-loop.ts",
     "logs": "bun scripts/logs.ts",
+    "stats:downloads": "bash scripts/download-stats.sh",
     "log-level": "bun scripts/log-level.ts",
     "docs:config": "bun scripts/generate-config-docs.ts",
     "messages:extract": "bun scripts/extract-messages.ts extract",
