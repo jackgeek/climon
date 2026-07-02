@@ -514,6 +514,7 @@ export function App() {
   const [maximized, setMaximized] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
+  const [composeText, setComposeText] = useState("");
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) === true
   );
@@ -1446,8 +1447,23 @@ export function App() {
               <TerminalPanel
                 view={panelView}
                 fontSize={fontSize}
+                composeText={composeText}
                 onSelect={setPanelView}
                 onAdjustFont={adjustFontSize}
+                onComposeTextChange={setComposeText}
+                onComposeInsert={(text) => {
+                  terminalRef.current?.sendInput(text);
+                  setComposeText("");
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
+                onComposeInsertRun={(text) => {
+                  terminalRef.current?.sendInput(`${text}\r`);
+                  setComposeText("");
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
+                onComposeCancel={() => {
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
                 onSend={(d) => terminalRef.current?.sendInput(d)}
               />
             </div>
