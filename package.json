@@ -2,6 +2,12 @@
   "name": "climon",
   "version": "2.2.0",
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
+  "license": "MIT",
+  "author": "Brodie Jack Allan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jackgeek/climon.git"
+  },
   "type": "module",
   "bin": {
     "climon-server": "./src/server.ts"
