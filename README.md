@@ -87,18 +87,6 @@ list** of your sessions that bumps the ones needing attention to the top and
 
 ## Install
 
-The install scripts download the latest release for your platform, extract it,
-and run climon's bundled self-installer (which places `climon` and
-`climon-server` on your `PATH`).
-
-> climon's release binaries are **not** code-signed or notarized yet. The install
-> scripts fetch them with `curl`/`Invoke-WebRequest` and clear the OS
-> "downloaded from the internet" mark (macOS quarantine / Windows Zone.Identifier)
-> so they launch without a Gatekeeper or SmartScreen prompt. You can read the
-> scripts before running them: [`install.sh`](install.sh) / [`install.ps1`](install.ps1).
-> Later `climon update` downloads are still verified against climon's embedded
-> Ed25519 signing key.
-
 **Linux / macOS**
 
 ```sh
@@ -117,9 +105,13 @@ Prefer to install by hand? Download the archive for your platform from the
 on Windows). See [Build from source](#build-from-source) to build the binaries
 yourself.
 
-On first run, climon walks you through a short onboarding flow: opt in to
-anonymous telemetry (**off** by default) and background auto-update (**off** by
-default). Re-run it any time with `climon setup`.
+> climon's release binaries aren't code-signed or notarized yet. The install
+> scripts clear the OS "downloaded from the internet" mark (macOS quarantine /
+> Windows Zone.Identifier) so climon launches without a Gatekeeper or SmartScreen
+> prompt — if you install by hand you may need to clear it yourself. You can read
+> the scripts before running them: [`install.sh`](install.sh) /
+> [`install.ps1`](install.ps1). Later `climon update` downloads are still verified
+> against climon's embedded Ed25519 signing key.
 
 ## Quick start
 
@@ -138,9 +130,7 @@ Open <http://127.0.0.1:3131> and click a session.
 ### `climon <command> [args...]`
 
 Run any command inside a monitored PTY session — a build, a REPL, a coding agent,
-a dev server. Detach with `Ctrl-\` then `d` and the command keeps running under
-its own daemon, so you can keep tabs on it from the dashboard or reattach later
-from the CLI.
+a dev server.
 
 ```sh
 climon bash                  # monitor an interactive shell
@@ -179,13 +169,6 @@ to all running session daemons over WebSocket.
   dashboard; instead start a second server on the next free port. Useful for
   throwaway dashboards.
 
-By default the dashboard binds to loopback (`127.0.0.1`). To expose it to other
-machines on your network, set the bind address in config:
-
-```sh
-climon config server.host 0.0.0.0
-```
-
 Running `climon server` locates and runs the `climon-server` binary — via
 `CLIMON_SERVER_BIN`, then a sibling binary next to `climon`, then your `PATH`.
 
@@ -205,13 +188,6 @@ Detach again without stopping the command with `Ctrl-\` then `d`.
 
 Terminate a monitored session and its underlying process. Use `climon kill --all`
 to stop every session.
-
-### `climon remotes`
-
-Show which remote hosts are currently connected (and, on a devbox, the dashboard
-this machine's uplink is connected to). Healthy entries are marked `●` and stale
-ones `○`. Use `--watch` for a live view or `--json` for a machine-readable
-snapshot.
 
 ### `climon link`
 
@@ -415,8 +391,7 @@ climon ships as two binaries built from two toolchains:
   and its REST/SSE/WebSocket APIs are built from `src/server.ts`.
 
 > The rest of the TypeScript under `src/` is the **legacy client**, frozen and
-> kept only for the Bun test suite. Fix client bugs in the Rust crates, not
-> there. See [docs/architecture.md](docs/architecture.md).
+> kept only for the Bun test suite. See [docs/architecture.md](docs/architecture.md).
 
 Requirements:
 
