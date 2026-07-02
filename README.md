@@ -20,24 +20,6 @@ dashboard — locally, or securely from your phone over an authenticated dev tun
 
 ---
 
-## Table of contents
-
-- [Why climon?](#why-climon)
-- [Features](#features)
-- [Install](#install)
-- [Quick start](#quick-start)
-- [Commands](#commands)
-- [Configuration](#configuration)
-- [Feature flags](#feature-flags)
-- [Work from your phone](#work-from-your-phone-tunnel-link--pwa)
-- [Remote sessions](#remote-sessions)
-- [Updating](#updating)
-- [Logging](#logging)
-- [Build from source](#build-from-source)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [License](#license)
-
 ## Why climon?
 
 You run long builds, dev servers, REPLs, and coding agent CLIs across a sprawl of
