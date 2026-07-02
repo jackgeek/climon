@@ -227,24 +227,6 @@
       }
     }
   },
-  "eula.acceptPrompt": {
-    "id": "3336d792",
-    "t": "Type 'I AGREE' to accept the licence and continue: ",
-    "hint": "Interactive prompt shown during onboarding asking the user to type the exact phrase 'I AGREE' to accept the licence before installation continues. Keep the required phrase 'I AGREE' verbatim and untranslated since it is matched literally.",
-    "params": {}
-  },
-  "eula.declined": {
-    "id": "e6e0c5db",
-    "t": "Licence not accepted. Installation aborted.",
-    "hint": "Message printed when the user declines the licence during onboarding; installation stops as a result.",
-    "params": {}
-  },
-  "eula.needAcceptFlag": {
-    "id": "de99ba5d",
-    "t": "Non-interactive run requires --accept-eula to accept the licence.",
-    "hint": "Error guidance printed when onboarding runs non-interactively without licence acceptance; instructs the user to pass the --accept-eula flag. Keep the flag name --accept-eula verbatim.",
-    "params": {}
-  },
   "ingest.client_disconnected_cleanup": {
     "id": "fd14537a",
     "t": "client {clientId} disconnected, cleaning up {sessionCount} session(s)",
@@ -478,6 +460,21 @@
       "patch": {
         "redact": true,
         "category": "config"
+      }
+    }
+  },
+  "ingest.signed_control_rejected": {
+    "id": "c1a7a3d4",
+    "t": "signed control message rejected for clientId={clientId}: {reason}",
+    "hint": "Warning logged when a signed remote-control frame fails verification and is rejected; {clientId} identifies the remote client when known, and {reason} describes the verification failure.",
+    "params": {
+      "clientId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reason": {
+        "redact": false,
+        "category": "generic"
       }
     }
   },

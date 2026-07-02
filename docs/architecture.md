@@ -182,11 +182,9 @@ non-destructive self-updates:
 
 - **`src/i18n/`** — message catalog (`messages.ts`) and `t(key, params)`
   interpolation used by onboarding, banners, and update output.
-- **`src/eula/`** — embedded licence text, `EULA_VERSION`, and the acceptance
-  gate; a newer embedded version re-triggers acceptance.
-- **`src/setup/`** — `onboarding.ts` (EULA gate → telemetry opt-in → auto-update
+- **`src/setup/`** — `onboarding.ts` (telemetry opt-in → auto-update
   opt-in, writing config state) and `setup-cmd.ts` (the `climon setup` entry,
-  with `--apply/--accept-eula/--telemetry=/--auto-update=` flags for
+  with `--apply/--telemetry=/--auto-update=` flags for
   non-interactive use).
 - **`src/telemetry/`** — opt-in, anonymous telemetry keyed only by a random
   `install.id`; gated on `telemetry.enabled` and attached before the AI client
@@ -207,8 +205,8 @@ non-destructive self-updates:
   check), `update-cli.ts` (the `climon update` entry), and `launch-hooks.ts`
   (the launch-time banner and detached background check/apply spawns).
 
-**Data flow.** Installer/onboarding writes config state (`eula.*`,
-`telemetry.enabled`, `update.auto`, `install.id`). On `shell`/`run` launches,
+**Data flow.** Installer/onboarding writes config state (`telemetry.enabled`,
+`update.auto`, `install.id`). On `shell`/`run` launches,
 launch hooks show a banner from the cached `update.availableVersion` and spawn a
 throttled background check that refreshes that cache (and, when `update.auto` is
 on, applies the update). `climon update` resolves the manifest, downloads the

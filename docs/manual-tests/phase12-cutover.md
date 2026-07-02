@@ -5,8 +5,8 @@ that the self-install flow is now native Rust — no JavaScript installer bundle
 They cover: building and packaging the host platform's release zip with the Rust
 client as the `install` binary; the native self-install on each OS (PATH edit,
 `.version` write, changelog tail); upgrading over a previous version;
-the licence-declined abort path; the locked-binary kill/retry path; and the
-release-pipeline cross-compile matrix (one cell per target).
+the locked-binary kill/retry path; and the release-pipeline cross-compile matrix
+(one cell per target).
 
 Background: Phase 12 makes `scripts/compile.ts` ship the Rust `climon` client
 (built with `cargo build --release -p climon-cli`) as the `install` binary inside
@@ -86,8 +86,8 @@ Unix the `install`, `climon-server`, and `climon-beta` entries have mode `0755`.
    `LOCALAPPDATA` (Windows) and `CLIMON_HOME` to temp dirs. Pre-create an empty
    shell profile (Unix) so the PATH edit has a target.
 3. Run the self-installer non-interactively from `stage/`:
-   `./install --apply --accept-eula` (`install.exe` on Windows). The presence of
-   the `climon-alpha` sentinel beside `install` triggers `run_installer`.
+   `./install --apply` (`install.exe` on Windows). The presence of the
+   `climon-alpha` sentinel beside `install` triggers `run_installer`.
 4. Inspect the install dir (`~/.local/bin` on Unix /
    `%LOCALAPPDATA%\Programs\climon` on Windows).
 5. Inspect the shell profile (Unix) / user `PATH` (Windows).
@@ -121,7 +121,7 @@ the version is printed. Exit code is 0.
 **Steps:**
 1. With the install dir from MT-P12-02 already populated, note the existing
    `.version` and the shell profile contents.
-2. Extract the second zip and run `./install --apply --accept-eula` again against
+2. Extract the second zip and run `./install --apply` again against
    the **same** throwaway `HOME`/install dir.
 3. Re-inspect the install dir, `.version`, and shell profile.
 
@@ -131,34 +131,6 @@ gain a second PATH line (console prints the "already on PATH" message instead of
 "added"). The previous-version read is reported (the installer detects the prior
 install). Exit code 0; no running sessions are required to be killed for a normal
 upgrade.
-
-| Date | Tester | OS | Result | Notes |
-|---|---|---|---|---|
-| | | | | |
-
----
-
-## MT-P12-04 — licence-declined abort
-
-- **ID:** MT-P12-04
-- **Feature / phase:** Phase 12 — EULA gate in the native self-installer
-- **Preconditions:** A host release zip; a throwaway `HOME`/`CLIMON_HOME` with no
-  previously accepted EULA; empty install dir.
-- **Config-matrix cell:** CUT-<host>
-- **Platforms:** macOS (arm64), Linux (x64), Windows (x64)
-
-**Steps:**
-1. Extract the zip into `stage/` with the `climon-alpha` sentinel present.
-2. Run the installer in a way that declines the licence: either run interactively
-   and answer "no" at the EULA prompt, or run `./install --apply` **without**
-   `--accept-eula` (apply requires acceptance to proceed).
-3. Observe the console output and exit code.
-4. Inspect the install dir and config.
-
-**Expected:** The installer prints the licence-declined / "must accept" message,
-pauses for exit (no-op when not a TTY), and exits with a **non-zero** status (1).
-No binaries are copied into the install dir, no `.version` is written, and the
-shell profile / user PATH is left unchanged. `eula.accepted` is not set to true.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
@@ -180,7 +152,7 @@ shell profile / user PATH is left unchanged. `eula.accepted` is not set to true.
 1. Install once (MT-P12-02) so `climon-server` exists in the install dir.
 2. Start a long-running process holding the installed `climon-server` (e.g.
    `climon server` from the install dir), so the file is busy/locked.
-3. Run `./install --apply --accept-eula` again to upgrade.
+3. Run `./install --apply` again to upgrade.
 4. When prompted that a climon process is holding a target file, confirm the
    kill-and-retry.
 5. Re-inspect the install dir.

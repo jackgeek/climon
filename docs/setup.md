@@ -95,19 +95,15 @@ The first time you run climon it walks you through a short onboarding flow and
 records your choices in the global config under `$CLIMON_HOME` (default
 `~/.climon/config.jsonc`):
 
-1. **Licence acceptance** — climon is proprietary freeware governed by Irish
-   law; the full text is in [`EULA.md`](../EULA.md). Acceptance is recorded as
-   `eula.accepted`, `eula.version`, and `eula.acceptedAt`. A newer embedded
-   licence version re-triggers acceptance on the next run.
-2. **Telemetry opt-in** (`telemetry.enabled`, **off by default**) — anonymous
+1. **Telemetry opt-in** (`telemetry.enabled`, **off by default**) — anonymous
    usage telemetry keyed only by a random `install.id`. See
    [docs/security.md](./security.md) for exactly what is and is not collected.
-3. **Auto-update opt-in** (`update.auto`, **off by default**) — background
+2. **Auto-update opt-in** (`update.auto`, **off by default**) — background
    download/apply of signed updates. When off, climon only prints a banner when
    an update is available.
 
 Re-run onboarding at any time with `climon setup` (add
-`--apply --accept-eula --telemetry=on|off --auto-update=on|off` for
+`--apply --telemetry=on|off --auto-update=on|off` for
 non-interactive use), or change individual choices directly:
 
 ```bash
@@ -118,8 +114,8 @@ climon setup                             # re-run the full onboarding flow
 
 Background update checks are throttled using `update.lastCheck`, and the latest
 discovered newer version is cached in `update.availableVersion` (cleared after a
-successful update). These, along with the `eula.*` and `install.id` keys, are
-internal state managed by climon rather than settings you normally edit.
+successful update). These, along with `install.id`, are internal state managed
+by climon rather than settings you normally edit.
 
 ## Verify the install
 

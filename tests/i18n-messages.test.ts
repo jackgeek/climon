@@ -4,7 +4,7 @@ import { loadCatalog } from "../src/i18n/catalog.js";
 
 describe("i18n user-facing messages (t)", () => {
   test("returns the catalogued English string for a known key", () => {
-    expect(t("eula.acceptPrompt")).toBe(loadCatalog()["eula.acceptPrompt"].t);
+    expect(t("telemetry.prompt")).toBe(loadCatalog()["telemetry.prompt"].t);
   });
 
   test("interpolates named params", () => {

@@ -32,13 +32,13 @@ describe("findMessageKeys", () => {
   });
 
   test("extracts the key from t() user-facing calls", () => {
-    const src = `print(t("eula.declined")); const s = t("update.banner", { current, next });`;
-    expect(findMessageKeys(src).sort()).toEqual(["eula.declined", "update.banner"]);
+    const src = `print(t("telemetry.prompt")); const s = t("update.banner", { current, next });`;
+    expect(findMessageKeys(src).sort()).toEqual(["telemetry.prompt", "update.banner"]);
   });
 
   test("extracts keys from both logMsg and t in the same source", () => {
-    const src = `logMsg(l, "info", "srv.started"); print(t("eula.acceptPrompt"));`;
-    expect(findMessageKeys(src).sort()).toEqual(["eula.acceptPrompt", "srv.started"]);
+    const src = `logMsg(l, "info", "srv.started"); print(t("autoUpdate.prompt"));`;
+    expect(findMessageKeys(src).sort()).toEqual(["autoUpdate.prompt", "srv.started"]);
   });
 
   test("does not match identifiers that merely end in t", () => {

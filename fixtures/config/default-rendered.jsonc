@@ -61,10 +61,6 @@
     // Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge. Set to "enabled" or "disabled". [status: experimental]
     "remotes": "disabled"
   },
-  "eula": {
-    // Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.
-    "accepted": false
-  },
   "telemetry": {
     // When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default.
     "enabled": false

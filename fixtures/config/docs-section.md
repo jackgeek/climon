@@ -49,9 +49,6 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `feature.remoteSpawn` | string | `disabled` | client, daemon, server, browser | Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel. Set to "enabled" or "disabled". [status: experimental] |
 | `feature.wslBridge` | string | `disabled` | client, daemon, server, browser | Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard. Set to "enabled" or "disabled". [status: experimental] |
 | `feature.remotes` | string | `disabled` | client, daemon, server, browser | Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge. Set to "enabled" or "disabled". [status: experimental] |
-| `eula.accepted` | boolean | `false` | client | Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing. (**internal**) |
-| `eula.version` | string | unset | client | The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance. (**internal**) |
-| `eula.acceptedAt` | string | unset | client | ISO-8601 timestamp recording when the EULA was accepted. (**internal**) |
 | `telemetry.enabled` | boolean | `false` | client, server | When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default. |
 | `update.auto` | boolean | `false` | client | When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`. |
 | `update.password` | string | unset | client | Shared password used to decrypt encrypted release artifacts when auto-updating from the gated public release repo. Provided out-of-band by the maintainer. Stored locally; treat as a secret. (**sensitive**) |

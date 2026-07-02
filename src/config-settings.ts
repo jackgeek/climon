@@ -381,30 +381,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   },
   ...featureConfigSettings(),
   {
-    path: "eula.accepted",
-    type: "boolean",
-    defaultValue: false,
-    purpose:
-      "Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.",
-    scope: ["client"],
-    internal: true
-  },
-  {
-    path: "eula.version",
-    type: "string",
-    purpose:
-      "The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance.",
-    scope: ["client"],
-    internal: true
-  },
-  {
-    path: "eula.acceptedAt",
-    type: "string",
-    purpose: "ISO-8601 timestamp recording when the EULA was accepted.",
-    scope: ["client"],
-    internal: true
-  },
-  {
     path: "telemetry.enabled",
     type: "boolean",
     defaultValue: false,

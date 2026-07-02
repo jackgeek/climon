@@ -40,9 +40,6 @@
     "wslBridge": "disabled",
     "remotes": "disabled"
   },
-  "eula": {
-    "accepted": false
-  },
   "telemetry": {
     "enabled": false
   },

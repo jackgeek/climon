@@ -59,7 +59,7 @@ Usage:
   climon kill --all            Kill or remove all active sessions
   climon update                Download, verify, and apply the latest version
                                (never interrupts running sessions)
-  climon setup                 Re-run onboarding (licence, telemetry, updates)
+  climon setup                 Re-run onboarding (telemetry, updates)
   climon --version             Show the climon version
   climon --help                Show this help
 `;
