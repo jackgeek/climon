@@ -2,20 +2,18 @@
 
 ## Prerequisites
 
-- **Bun >= 1.3.0.** climon relies on Bun's native PTY (`Bun.Terminal`), which is
-  only available in recent Bun releases. Check with `bun --version`.
+- **Rust stable** to build the native `climon` client from `rust/`.
+- **Bun >= 1.3.0** to build and run the maintained dashboard server/web and the
+  Bun test suite. Check with `bun --version`.
 
-No other runtime dependencies are required.
-
-### Installing Bun
+### Installing Bun (for building/running the server)
 
 - **macOS / Linux / WSL:**
   ```bash
   curl -fsSL https://bun.sh/install | bash
   ```
   Ensure `~/.bun/bin` is on your `PATH`.
-- **Windows:** PTY mode is POSIX-only at the Bun layer for the terminal feature;
-  on Windows, run climon under **WSL** for the interactive PTY experience.
+- **Windows:** use Bun >= 1.3.14 for dashboard development on Windows.
 
 ## Install dependencies
 
@@ -27,25 +25,22 @@ This fetches `@xterm/xterm` and `@xterm/addon-fit` (vendored for the dashboard).
 
 ## Making `climon` available on your PATH
 
-The shipped `climon` client is the native **Rust** binary built from the `rust/`
-workspace; install it by unzipping a release archive and running its `install`
-binary, which self-installs `climon` (and `climon-server`) and sets up your PATH.
+The easiest path is the install one-liner from the
+[README](../README.md#install), which downloads the release for your platform and
+runs the bundled self-installer (it places `climon` and `climon-server` and sets
+up your `PATH`). To install by hand, unzip a release archive and run its `install`
+binary.
 
-For local development, the legacy Bun client entrypoint is `src/index.ts`. You can
-run it directly:
-
-```bash
-bun src/index.ts <args>
-```
-
-or build the Rust client and run it from the workspace:
+For local development from a source checkout, run the Rust client straight from
+source via the `dev` script (from the repo root):
 
 ```bash
-cargo run -p climon-cli -- <args>     # from rust/
+bun dev -- <args>     # e.g. bun dev -- --help
 ```
 
-`bun link` still exposes the `climon-server` dashboard binary globally for local
-development.
+This wraps `cargo run -p climon-cli --bin climon -- <args>`; you can also invoke
+that directly from `rust/` if you prefer. To run the dashboard server from
+source, use `bun run server` (or `bun src/server.ts server`).
 
 ## Configuration
 
@@ -53,10 +48,13 @@ On first run, climon writes `~/.climon/config.jsonc`:
 
 ```jsonc
 {
-  // Schema version for the persisted config.json format. Always 1 for the current release.
+  // Schema version for the persisted config file format. Always 1 for the current release.
   "version": 1,
   "server": {
     // IP address the dashboard server binds to. Defaults to loopback for local-only access.
+    // WARNING: changing this (e.g. to 0.0.0.0) exposes the dashboard on your network and
+    // lets anyone who can reach the port take over your sessions. Keep it on loopback and
+    // use Tunnel Link to reach the dashboard from another device.
     "host": "127.0.0.1",
     // TCP port the dashboard server listens on. Change if 3131 conflicts with another service.
     "port": 3131
@@ -127,8 +125,8 @@ bun test tests      # unit tests
 Then start the server and a session:
 
 ```bash
-bun src/index.ts server      # terminal 1
-bun src/index.ts echo hello  # terminal 2
+bun src/server.ts server                 # terminal 1: dashboard
+cargo run -p climon-cli -- echo hello    # terminal 2, from rust/
 ```
 
 Open http://127.0.0.1:3131 — you should see the session and its output.

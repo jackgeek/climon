@@ -84,7 +84,15 @@ fn run() -> Result<i32, String> {
 
     match parsed {
         ParsedCommand::Help => {
-            write_stdout(&help_text(), false);
+            let cfg_env = ConfigEnv::real();
+            let experimental = climon_config::config::load_config(&cfg_env)
+                .map(|cfg| climon_cli::args::ExperimentalHelp {
+                    remotes: climon_config::features::is_feature_enabled(&cfg, "remotes")
+                        || climon_config::features::is_feature_enabled(&cfg, "wslBridge"),
+                    wsl_bridge: climon_config::features::is_feature_enabled(&cfg, "wslBridge"),
+                })
+                .unwrap_or_default();
+            write_stdout(&help_text(experimental), false);
             Ok(0)
         }
         ParsedCommand::Version => {

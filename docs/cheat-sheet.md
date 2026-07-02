@@ -5,9 +5,23 @@ Quick reference for installing and running climon. For full details see
 
 ## Install
 
-Download the release zip for your platform, unzip it, and run the bundled
-`install` binary (`install.exe` on Windows). It self-installs (copies itself to
-`climon`, places `climon-server`, updates your PATH) and prints the changelog.
+Fastest path — the install one-liner downloads the release, clears the OS
+quarantine mark, and runs the self-installer:
+
+```sh
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/jackgeek/climon/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/jackgeek/climon/main/install.ps1 | iex
+```
+
+Or download the release zip for your platform manually, unzip it, and run the
+bundled `install` binary (`install.exe` on Windows). It self-installs (copies
+itself to `climon`, places `climon-server`, updates your PATH) and prints the
+changelog.
 
 | Platform | Artifact |
 | --- | --- |

@@ -269,7 +269,7 @@ describe("config jsonc paths and migration", () => {
     expect(existsSync(configPath)).toBe(true);
     
     const raw = await readFile(configPath, "utf8");
-    expect(raw).toContain("// Schema version for the persisted config.json format");
+    expect(raw).toContain("// Schema version for the persisted config file format");
     expect(raw).toContain('"version": 1');
     expect(raw).toContain('"color": "auto"');
     

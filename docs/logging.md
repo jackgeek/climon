@@ -1,8 +1,11 @@
 # Logging
 
-climon uses [pino](https://getpino.io) for structured logging across the client,
-per-session daemon, dashboard server, and remote ingest/uplink processes, plus a
-browser logger for the dashboard.
+climon emits structured NDJSON logs across the client, per-session daemon,
+dashboard server, and remote ingest/uplink processes, plus a browser logger for
+the dashboard. The Rust processes (client, daemons, ingest/uplink) use an
+in-house [pino](https://getpino.io)-compatible logger, while the Bun dashboard
+server and browser dashboard use pino itself — so the log format (levels, field
+names, NDJSON layout) is consistent across all of them.
 
 ## Turning logging on and off
 
@@ -18,12 +21,12 @@ The effective level is resolved with this precedence:
 
 ### Disable logging
 
-- Permanently: `climon config set logging.level silent`
+- Permanently: `climon config logging.level silent`
 - For one command: `CLIMON_LOG_LEVEL=silent climon ...`
 
 ### Re-enable / change verbosity
 
-- `climon config set logging.level info`
+- `climon config logging.level info`
 - One-off deep debugging: `CLIMON_LOG_LEVEL=debug climon ...`
 
 ### Setting CLIMON_LOG_LEVEL persistently
@@ -91,7 +94,7 @@ are redacted to `[REDACTED]` in all log output.
 The dashboard server can forward logs to Azure Application Insights. Set a
 connection string and it is enabled automatically (off by default):
 
-- `climon config set logging.appInsights.connectionString "<connection-string>"`
+- `climon config logging.appInsights.connectionString "<connection-string>"`
 - or the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable
 
 This sends log data over the network and is opt-in only.

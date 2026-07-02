@@ -28,7 +28,7 @@ describe("config JSONC helpers", () => {
       remote: { tunnelId: "abc123" }
     });
 
-    expect(rendered).toContain("// Schema version for the persisted config.json format. Always 1 for the current release.");
+    expect(rendered).toContain("// Schema version for the persisted config file format. Always 1 for the current release.");
     expect(rendered).toContain('"version": 1');
     expect(rendered).toContain("// Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment.");
     expect(rendered).toContain('"color": "auto"');
