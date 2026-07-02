@@ -5,4 +5,3 @@
  * (that's src/server.ts).
  */
 export { startServer } from "./server/server.js";
-export { runIngestDaemon } from "./remote/ingest.js";
