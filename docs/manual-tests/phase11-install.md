@@ -1,17 +1,16 @@
-# Phase 11 — `climon-install` (install / setup / onboarding / EULA)
+# Phase 11 — `climon-install` (install / setup / onboarding)
 
 These cases prove that the ported `climon-install` crate reproduces the
 TypeScript client-side install and onboarding behavior: the install manifest
 and on-disk layout match the Bun installer (so the non-destructive updater keeps
 swapping the same files), the install directory is added to the user's `PATH`
-on macOS/Linux/Windows, `climon setup` re-runs onboarding, the EULA gate is
-enforced and recorded, telemetry/auto-update opt-ins persist to config, and the
-install id is stable across runs.
+on macOS/Linux/Windows, `climon setup` re-runs onboarding, telemetry/auto-update
+opt-ins persist to config, and the install id is stable across runs.
 
 Background: Phase 11 ports `src/install/*` (`install-manifest.ts`, `files.ts`,
 `files-unix.ts`, `path.ts`, `processes.ts`, `windows.ts`, `changelog.ts`, and
 the macOS/Linux/Windows shell-profile helpers), `src/setup/*`
-(`setup-cmd.ts`, `onboarding.ts`, `install-id.ts`), `src/eula/*`, and the pure
+(`setup-cmd.ts`, `onboarding.ts`, `install-id.ts`), and the pure
 `src/release/version-bump.ts` helper into the new `climon-install` library
 crate. The deferred Phase-8 `climon setup` stub in `climon-cli` is wired to
 `climon_install::run_setup_command`. OS-specific code is gated with
@@ -139,46 +138,17 @@ profile for the detected shell; Windows edits the user (not machine) PATH.
 - **Platforms:** all
 
 **Steps:**
-1. `climon setup` → answer the EULA accept prompt, then the telemetry opt-in and
-   auto-update opt-in prompts.
-2. Inspect `$CLIMON_HOME/config.jsonc` → confirm `eula.accepted`/`eula.version`,
-   `telemetry.enabled`, and `update.*` reflect your answers.
+1. `climon setup` → answer the telemetry opt-in and auto-update opt-in prompts.
+2. Inspect `$CLIMON_HOME/config.jsonc` → confirm `telemetry.enabled` and
+   `update.*` reflect your answers.
 3. `climon setup` again → confirm onboarding re-runs (prompts appear again) and
    updates the persisted values.
-4. `climon setup --help` (and any documented flags such as non-interactive
-   accept) → confirm the option surface matches the TS `setup` command.
+4. `climon setup --help` → confirm the option surface matches the TS `setup`
+   command.
 
 **Expected:** `climon setup` re-runs the full onboarding flow each time and
-persists the EULA acceptance, telemetry, and auto-update choices to the global
-config under `CLIMON_HOME`. Arg parsing matches the TS `setup` command.
-
-| Date | Tester | OS | Result | Notes |
-|---|---|---|---|---|
-| | | | | |
-
----
-
-## MT-P11-05 — EULA acceptance gate
-
-- **ID:** MT-P11-05
-- **Preconditions:** temp `CLIMON_HOME` with no recorded EULA acceptance.
-- **Config-matrix cell:** all
-- **Platforms:** all
-
-**Steps:**
-1. Trigger the EULA gate with no prior acceptance → the embedded EULA text
-   (version `1`) is presented and acceptance is required.
-2. Decline → confirm the gate reports the decline and does not record acceptance.
-3. Accept → confirm `eula.accepted=true` and `eula.version=1` are written to the
-   global config.
-4. Re-run the gate → confirm it passes silently (already accepted for the current
-   version).
-5. (Version bump simulation) Change the recorded `eula.version` to an older value
-   → confirm the gate re-prompts (acceptance is per EULA version).
-
-**Expected:** The gate enforces acceptance of the embedded EULA version, records
-acceptance under `CLIMON_HOME`, passes once accepted for that version, and
-re-prompts if the accepted version no longer matches the embedded one.
+persists telemetry and auto-update choices to the global config under
+`CLIMON_HOME`. Arg parsing matches the TS `setup` command.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|

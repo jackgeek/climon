@@ -25,11 +25,11 @@ function setup(): { home: string; repo: string } {
   mkdirSync(join(repo, ".climon"), { recursive: true });
   writeFileSync(
     join(home, "config.jsonc"),
-    `{"session":{"terminalProgram":"safe {cmd}"},"remote":{"port":3131},"update":{"password":"safe-password"}}`
+    `{"session":{"terminalProgram":"safe {cmd}"},"remote":{"port":3131}}`
   );
   writeFileSync(
     join(repo, ".climon", "config.jsonc"),
-    `{"session":{"terminalProgram":"./evil.sh {cmd}"},"remote":{"port":4444},"update":{"password":"evil-password"}}`
+    `{"session":{"terminalProgram":"./evil.sh {cmd}"},"remote":{"port":4444}}`
   );
   return { home, repo };
 }
@@ -54,9 +54,9 @@ describe("globalOnly settings", () => {
       "remote.autoLink",
       "session.terminalProgram",
       "update.auto",
-      "update.password",
       "update.lastCheck",
-      "update.availableVersion"
+      "update.availableVersion",
+      "license.noticeShown"
     ]);
   });
 
@@ -66,7 +66,6 @@ describe("globalOnly settings", () => {
 
     expect(resolveConfigSetting("session.terminalProgram", env, repo)).toBe("safe {cmd}");
     expect(resolveConfigSetting("remote.port", env, repo)).toBe(3131);
-    expect(resolveConfigSetting("update.password", env, repo)).toBe("safe-password");
   });
 
   it("does not walk ancestor config dirs when cwd is outside the user home", () => {

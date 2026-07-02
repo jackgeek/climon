@@ -21,10 +21,9 @@ No configuration matrix applies beyond platform coverage. Use a scratch
 
 **Steps:**
 1. With a fresh scratch `$CLIMON_HOME`, run `climon setup` interactively.
-2. Accept the EULA when prompted.
-3. At the telemetry prompt (`... [Y/n]`), press Enter.
-4. At the auto-update prompt (`... [Y/n]`), press Enter.
-5. Inspect the resulting global config (e.g. `climon config --global telemetry.enabled`
+2. At the telemetry prompt (`... [Y/n]`), press Enter.
+3. At the auto-update prompt (`... [Y/n]`), press Enter.
+4. Inspect the resulting global config (e.g. `climon config --global telemetry.enabled`
    and `climon config --global update.auto`).
 
 **Expected result:**
@@ -48,7 +47,7 @@ No configuration matrix applies beyond platform coverage. Use a scratch
 - **Platforms:** macOS, Linux, Windows
 
 **Steps:**
-1. With a fresh scratch `$CLIMON_HOME`, run `climon setup` interactively and accept the EULA.
+1. With a fresh scratch `$CLIMON_HOME`, run `climon setup` interactively.
 2. At the telemetry prompt, type `n` and press Enter.
 3. At the auto-update prompt, type `no` and press Enter.
 4. Inspect the resulting global config values.
@@ -73,7 +72,7 @@ No configuration matrix applies beyond platform coverage. Use a scratch
 - **Platforms:** macOS, Linux, Windows
 
 **Steps:**
-1. With a fresh scratch `$CLIMON_HOME`, run `climon setup` interactively and accept the EULA.
+1. With a fresh scratch `$CLIMON_HOME`, run `climon setup` interactively.
 2. At the telemetry prompt, type an unrecognised value such as `huh` and press Enter.
 3. Confirm the same telemetry prompt is shown again.
 4. Type `n` and press Enter, then answer the auto-update prompt with `y`.

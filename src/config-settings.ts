@@ -381,30 +381,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   },
   ...featureConfigSettings(),
   {
-    path: "eula.accepted",
-    type: "boolean",
-    defaultValue: false,
-    purpose:
-      "Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.",
-    scope: ["client"],
-    internal: true
-  },
-  {
-    path: "eula.version",
-    type: "string",
-    purpose:
-      "The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance.",
-    scope: ["client"],
-    internal: true
-  },
-  {
-    path: "eula.acceptedAt",
-    type: "string",
-    purpose: "ISO-8601 timestamp recording when the EULA was accepted.",
-    scope: ["client"],
-    internal: true
-  },
-  {
     path: "telemetry.enabled",
     type: "boolean",
     defaultValue: false,
@@ -424,16 +400,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     globalOnly: true
   },
   {
-    path: "update.password",
-    type: "string",
-    purpose:
-      "Shared password used to decrypt encrypted release artifacts when auto-updating from the gated public release repo. Provided out-of-band by the maintainer. Stored locally; treat as a secret.",
-    scope: ["client"],
-    sensitive: true,
-    acceptInput: true,
-    globalOnly: true,
-  },
-  {
     path: "update.lastCheck",
     type: "string",
     purpose:
@@ -447,6 +413,15 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     type: "string",
     purpose:
       "Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update.",
+    scope: ["client"],
+    internal: true,
+    globalOnly: true
+  },
+  {
+    path: "license.noticeShown",
+    type: "boolean",
+    purpose:
+      "Whether the one-time MIT license-change notice has been shown. Set automatically the first time an install that upgraded from a pre-open-source (EULA-gated) build launches; never shown on fresh installs.",
     scope: ["client"],
     internal: true,
     globalOnly: true

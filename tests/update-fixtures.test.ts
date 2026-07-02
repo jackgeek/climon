@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  decryptEnvelope,
-  encryptEnvelope,
-} from "../src/update/crypto-envelope.js";
 import { verifySignature } from "../src/update/verify.js";
 import { fetchManifest } from "../src/update/manifest.js";
 
@@ -16,10 +12,6 @@ function load(name: string): any {
 
 function fromB64(s: string): Uint8Array {
   return new Uint8Array(Buffer.from(s, "base64"));
-}
-
-function fromHex(s: string): Uint8Array {
-  return new Uint8Array(Buffer.from(s, "hex"));
 }
 
 describe("cross-language signature parity", () => {
@@ -44,36 +36,6 @@ describe("cross-language signature parity", () => {
       fixture.publicKeyB64
     );
     expect(ok).toBe(false);
-  });
-});
-
-describe("cross-language envelope parity", () => {
-  test("Bun decrypts the Rust-produced envelope (Rust -> Bun)", () => {
-    const f = load("rust-envelope.json");
-    const res = decryptEnvelope(fromHex(f.envelopeHex), f.password);
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(Buffer.from(res.bytes).toString("base64")).toBe(f.plaintextB64);
-    }
-  });
-
-  test("Bun decrypts its own committed envelope vector", () => {
-    const f = load("bun-envelope.json");
-    const res = decryptEnvelope(fromHex(f.envelopeHex), f.password);
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(Buffer.from(res.bytes).toString("base64")).toBe(f.plaintextB64);
-    }
-  });
-
-  test("Bun round-trips its own envelope (sanity)", () => {
-    const data = new TextEncoder().encode("round-trip climon");
-    const env = encryptEnvelope(data, "pw");
-    const res = decryptEnvelope(env, "pw");
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(new TextDecoder().decode(res.bytes)).toBe("round-trip climon");
-    }
   });
 });
 

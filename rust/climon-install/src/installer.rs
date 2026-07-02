@@ -42,7 +42,7 @@ pub struct InstallerIo<'a> {
     pub setup_options: SetupOptions,
     /// Reads the previously-installed version from the install dir.
     pub read_installed_version: &'a mut dyn FnMut(&Path) -> Option<String>,
-    /// Runs onboarding; returns whether the EULA was accepted.
+    /// Runs onboarding; returns whether it completed.
     pub run_onboarding: &'a mut dyn FnMut(&SetupOptions) -> Result<bool, String>,
     /// Copies the manifest binaries into the install dir (locked-file retry inside).
     pub install_binaries: &'a mut dyn FnMut(&Path) -> Result<(), String>,
@@ -65,11 +65,11 @@ pub struct InstallerIo<'a> {
 }
 
 /// Drives a single native self-install. 1:1 port of the platform `main()`
-/// ordering: read previous version → onboarding gate → install binaries →
+/// ordering: read previous version → onboarding → install binaries →
 /// finalize → write `.version` → PATH setup → console output → changelog tail.
 ///
-/// On a declined licence it prints the abort message, pauses, and exits(1)
-/// (matching `process.exit(1)` in the TS mains, which skips the outer
+/// If onboarding does not complete it prints the abort message, pauses, and
+/// exits(1) (matching `process.exit(1)` in the TS mains, which skips the outer
 /// `runSetupCli` pause).
 pub fn run_installer_main(io: InstallerIo<'_>) -> Result<(), String> {
     let InstallerIo {
@@ -93,7 +93,7 @@ pub fn run_installer_main(io: InstallerIo<'_>) -> Result<(), String> {
 
     let accepted = run_onboarding(&setup_options)?;
     if !accepted {
-        eprint("Licence not accepted; aborting installation.");
+        eprint("Onboarding did not complete; aborting installation.");
         pause_for_exit();
         exit(1);
         return Ok(());
@@ -486,7 +486,6 @@ mod tests {
     fn base_options() -> SetupOptions {
         SetupOptions {
             apply: true,
-            accept_eula: true,
             telemetry: None,
             auto_update: None,
         }
@@ -567,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn licence_declined_aborts_before_install() {
+    fn onboarding_incomplete_aborts_before_install() {
         let rec = Recorder::new();
         let mut read = |_d: &Path| None;
         let mut onboard = |_o: &SetupOptions| Ok(false);
@@ -605,7 +604,7 @@ mod tests {
         assert_eq!(
             rec.events(),
             vec![
-                "eprint:Licence not accepted; aborting installation.".to_string(),
+                "eprint:Onboarding did not complete; aborting installation.".to_string(),
                 "pause".to_string(),
                 "exit:1".to_string(),
             ]

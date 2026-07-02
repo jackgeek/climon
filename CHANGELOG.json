@@ -1,5 +1,14 @@
 [
   {
+    "version": "2.3.0",
+    "changes": [
+      "Relicense climon under the MIT License",
+      "Add the `climon license` command to print the MIT License and bundled third-party notices",
+      "Distribute releases from the jackgeek/climon repository; auto-update keeps working for existing installs",
+      "Show a one-time notice on the first launch after upgrading from a pre-open-source build"
+    ]
+  },
+  {
     "version": "2.2.1",
     "changes": [
       "Hide the dashboard Remote hosts menu item when feature.remotes is disabled"

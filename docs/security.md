@@ -399,39 +399,25 @@ The private signing key is never logged or written to disk in CI, and is kept
 out of the environment of `curl | bash` and `bun install` steps so a compromised
 dependency cannot exfiltrate it.
 
-### Encrypted gated distribution
+### Signed plaintext distribution
 
-On top of the Ed25519 signing layer, climon adds a **casual gating** mechanism
-to restrict update downloads to authorized users. This uses a single shared
-password to encrypt release artifacts; the password is:
+Release artifacts are distributed as plaintext `.zip` files plus detached
+Ed25519 `.sig` files from the `jackgeek/climon` GitHub release. The security
+boundary is integrity, not confidentiality:
 
-- stored in client config (`update.password`, marked `sensitive: true` and
-  redacted to `[REDACTED]` in `climon config list` output and logs),
-- (in a future out-of-band installer, not yet implemented) embedded in installers,
-  so an authorized holder *can* extract it.
+1. fetch the manifest from
+   `https://github.com/jackgeek/climon/releases/latest/download/manifest.json`,
+2. download the `.zip` artifact and its detached `.zip.sig`,
+3. **verify the Ed25519 signature** over the downloaded zip,
+4. unzip and atomically swap the binary.
 
-**This is NOT cryptographic per-user access control.** The shared password is
-extractable by any authorized user, and there is no per-user revocation —
-rotating the password (`CLIMON_DISTRIBUTION_PASSWORD` in CI) revokes everyone
-at once. Clients with the old password freeze at their current version until
-they receive and configure the new password.
-
-**Encryption is a convenience layer on top of Ed25519 integrity**, not a
-replacement. The client flow is:
-
-1. fetch the manifest from the public releases repository
-   (`jackgeek/climon-releases`),
-2. download the encrypted `.enc` artifact,
-3. **decrypt** using the password from `update.password`,
-4. **verify the Ed25519 signature** over the decrypted plaintext zip (the
-   signature is still computed over plaintext, not ciphertext),
-5. unzip and atomically swap the binary.
-
-If decryption or signature verification fails, the client rejects the download
-and makes no changes. The encryption scheme is `aes-256-gcm-scrypt-v1`
-(AES-256-GCM with an scrypt-derived key); see
-[deployment.md](./deployment.md#encrypted-gated-distribution) for the full
-operator runbook and rotation procedure.
+If signature verification fails, the client rejects the download and makes no
+changes. Legacy manifests that still contain an `encryption` field are parsed
+tolerantly, but current clients do not decrypt artifacts and current releases do
+not publish encrypted update assets. A one-time bridge release can be published
+to `jackgeek/climon-releases` so old clients that still poll that repository
+receive a final signed plaintext manifest whose artifact URLs point at
+`jackgeek/climon`; see [deployment.md](./deployment.md#legacy-update-bridge).
 
 ## Non-destructive update guarantee
 

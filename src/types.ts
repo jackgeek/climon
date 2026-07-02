@@ -125,15 +125,6 @@ export interface LoggingConfig {
   appInsights?: LoggingAppInsightsConfig;
 }
 
-export interface EulaConfig {
-  /** Whether the current EULA version has been accepted. */
-  accepted?: boolean;
-  /** The EULA_VERSION the user accepted. */
-  version?: string;
-  /** ISO-8601 timestamp recording when the EULA was accepted. */
-  acceptedAt?: string;
-}
-
 export interface TelemetryConfig {
   /** Whether anonymous, opt-in usage telemetry is enabled. */
   enabled?: boolean;
@@ -176,7 +167,6 @@ export interface ClimonConfig {
   logging?: LoggingConfig;
   /** Feature flag values keyed by flag name; values are "enabled"/"disabled" (lenient on read). */
   feature?: Record<string, string>;
-  eula?: EulaConfig;
   telemetry?: TelemetryConfig;
   update?: UpdateConfig;
   install?: InstallConfig;

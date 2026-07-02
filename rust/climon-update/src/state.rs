@@ -59,6 +59,16 @@ pub fn is_auto_update(env: &Env) -> bool {
     read_global_config_setting("update.auto", env) == Some(Value::Bool(true))
 }
 
+/// True once the one-time MIT license-change notice has been shown.
+pub fn get_license_notice_shown(env: &Env) -> bool {
+    read_global_config_setting("license.noticeShown", env) == Some(Value::Bool(true))
+}
+
+/// Records that the one-time license-change notice has been shown.
+pub fn mark_license_notice_shown(env: &Env) {
+    write_global(env, "license.noticeShown", "true");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +119,13 @@ mod tests {
         let cwd = Path::new(".");
         write_config_setting("update.auto", "true", WriteScope::Global, &env, cwd).unwrap();
         assert!(is_auto_update(&env));
+    }
+
+    #[test]
+    fn license_notice_shown_round_trips() {
+        let (_d, env) = temp_env();
+        assert!(!get_license_notice_shown(&env));
+        mark_license_notice_shown(&env);
+        assert!(get_license_notice_shown(&env));
     }
 }

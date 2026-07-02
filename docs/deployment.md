@@ -91,132 +91,45 @@ bun run sign-release
 # reads dist/climon-*.zip, writes dist/*.zip.sig and dist/manifest.json
 ```
 
-## Encrypted gated distribution
+## Signed plaintext distribution
 
-On top of the Ed25519 signing layer, climon adds a **casual gating** mechanism
-via symmetric encryption. This restricts update downloads to authorized users
-without replacing the integrity guarantee that signing already provides.
+Auto-update artifacts are distributed from the `jackgeek/climon` GitHub release
+as plaintext `.zip` files plus detached Ed25519 `.zip.sig` files. There is no
+release-encryption password, encrypted `.enc` artifact, or separate encrypted
+publish step.
 
-### Trust model for gating
+The release workflow:
 
-The gating layer uses a single **shared password** (`CLIMON_DISTRIBUTION_PASSWORD`
-in CI, `update.password` in client config) to encrypt release artifacts. This is
-**casual access control**, not cryptographic per-user gating:
-
-- The password is stored in client config (`climon config update.password`) and
-  (in a separate out-of-band installer, not yet implemented) will be embedded
-  in installers, so an authorized holder *can* extract it.
-- **Encryption is a convenience layer on top of Ed25519 integrity** — it does
-  not replace the signature verification. The signature is computed over the
-  **plaintext** zip, and the client decrypts before verifying.
-- **Rotation = revocation for everyone:** change `CLIMON_DISTRIBUTION_PASSWORD`,
-  cut a new release, and re-distribute the new password to authorized users.
-  Clients with the old password freeze at their current version until
-  re-authorized.
-
-For the security rationale and threat model, see [security.md](./security.md).
-
-### The public releases repository
-
-Encrypted artifacts are published to a **separate public repository**
-(`jackgeek/climon-releases`) rather than the private source repo
-(`jackgeek/climon`). This keeps:
-
-- **Public** (in `jackgeek/climon-releases`): encrypted `.enc` files, detached
-  `.sig` files (unchanged from the plaintext workflow), and the `manifest.json`.
-- **Private** (in `jackgeek/climon`): the plaintext `.zip` artifacts, the
-  source code, and the build/release workflows.
+1. builds the five platform zips,
+2. runs `bun run sign-release` when `CLIMON_UPDATE_PRIVATE_KEY` is configured,
+3. writes `dist/manifest.json` whose artifact `url` and `sig` fields point at
+   `https://github.com/jackgeek/climon/releases/download/<tag>/...`, and
+4. uploads the zips, detached signatures, and manifest to the same GitHub
+   release.
 
 The updater fetches
-`https://github.com/jackgeek/climon-releases/releases/latest/download/manifest.json`,
-so clients always point at the public repo for updates.
+`https://github.com/jackgeek/climon/releases/latest/download/manifest.json`, so
+publishing the manifest to the latest `jackgeek/climon` release makes the update
+available to current clients.
 
-### CI secrets for encrypted publishing
+### Legacy update bridge
 
-The release workflow needs three secrets to publish encrypted updates (the
-workflow guards encrypted publishing with an all-or-nothing `HAS_DISTRIBUTION_KEY`
-flag that requires all three):
-
-1. **`CLIMON_UPDATE_PRIVATE_KEY`** — the Ed25519 signing key (described above).
-2. **`CLIMON_DISTRIBUTION_PASSWORD`** — the shared encryption password. Used by
-   `bun run encrypt-release` to derive the per-artifact AES-256-GCM encryption
-   key via scrypt.
-3. **`RELEASES_PUBLISH_TOKEN`** — a fine-grained GitHub personal access token
-   scoped to the `jackgeek/climon-releases` repository with **Contents: read/write**
-   permissions. The workflow uses this to upload the encrypted artifacts and
-   manifest to the public repo.
-
-Set these secrets via the GitHub repository or environment settings:
+Pre-open-source clients polled
+`https://github.com/jackgeek/climon-releases/releases/latest/download/manifest.json`.
+After cutting the first signed plaintext release in `jackgeek/climon`, publish a
+one-time bridge manifest to the latest `jackgeek/climon-releases` release:
 
 ```bash
-gh secret set CLIMON_DISTRIBUTION_PASSWORD    # paste the shared password
-gh secret set RELEASES_PUBLISH_TOKEN          # paste the fine-grained PAT
+bun scripts/bridge-release.ts <tag> --dry-run
+bun scripts/bridge-release.ts <tag>
 ```
 
-Without all three secrets, the workflow skips encryption and does **not** publish
-to the public repo — the release still builds and publishes plaintext zips to
-the private repo, but auto-update is unavailable.
-
-### Encryption envelope and manifest changes
-
-The encryption scheme is **`aes-256-gcm-scrypt-v1`**, implemented in
-`src/update/crypto-envelope.ts`:
-
-- **Envelope**: AES-256-GCM with a key derived from the shared password via
-  scrypt (N=2^15, r=8, p=1, salt is random per artifact). The envelope prepends
-  a header with the scheme id, salt, and nonce; the ciphertext and auth tag
-  follow.
-- **Signature semantics are unchanged**: the Ed25519 `.sig` is computed over
-  the **plaintext** zip. The client flow is: download `.enc` → decrypt →
-  verify signature → unzip → atomic swap.
-- **Manifest changes**: the manifest gains an `"encryption": "aes-256-gcm-scrypt-v1"`
-  field, and artifact `url` fields point to `.enc` files instead of `.zip`
-  files. Signature URLs remain `.zip.sig` (unchanged). Manifests without an
-  `encryption` field are treated as plaintext (backward compatible).
-
-After signing (`bun run sign-release`), the release workflow runs
-`bun run encrypt-release`, which:
-
-1. reads every `dist/climon-*.zip`,
-2. encrypts each into `dist/<zip>.enc`,
-3. rewrites `dist/manifest.json` to set `encryption` and repoint artifact URLs
-   to the `.enc` files.
-
-### Client-side setup
-
-Operators distribute the shared password to authorized users out-of-band (email,
-secure chat, onboarding docs). Users set it globally with:
-
-```bash
-climon config update.password '<password>'
-```
-
-The `update.password` setting:
-
-- is **global only** (per-machine, stored in `$CLIMON_HOME/config.jsonc`),
-- is marked `sensitive: true` in the config schema, so `climon config list`
-  redacts it to `[REDACTED]` in output and logs,
-- is passed to the updater as the decryption password when an encrypted manifest
-  is fetched.
-
-Clients without the password set (or with the wrong password) will fail to
-decrypt and refuse the update, reporting a decryption error.
-
-### Password rotation and revocation
-
-To rotate the password (revoking access for all current clients):
-
-1. Generate a new password and update the `CLIMON_DISTRIBUTION_PASSWORD` secret
-   in CI.
-2. Cut a new release. The release workflow encrypts artifacts with the new
-   password.
-3. Re-distribute the new password to authorized users (same out-of-band
-   channels). Users run `climon config update.password '<new-password>'` to
-   update.
-
-Clients with the old password will freeze at their current version until they
-receive and configure the new password. There is no per-user revocation —
-rotation is all-or-nothing.
+The bridge script rewrites `dist/manifest.json` so every artifact URL and
+signature URL points at the `jackgeek/climon` release assets, strips any legacy
+`encryption` field, and uploads `manifest.json`, `climon-*.zip`, and
+`climon-*.zip.sig` to the latest release in `jackgeek/climon-releases`. Existing
+installs upgrade once through that legacy polling URL; the upgraded binary then
+polls `jackgeek/climon` directly.
 
 ## Manifest layout
 

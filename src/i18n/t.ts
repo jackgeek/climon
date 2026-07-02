@@ -3,9 +3,9 @@ import type { MessageParams } from "./types.js";
 
 /**
  * Supported locales. English is the authoritative source; others are future.
- * Kept here so EULA text and other locale-keyed records have a stable type now
- * that the legacy `src/i18n/messages.ts` catalog has been retired in favour of
- * the single `messages.en.json` source of truth.
+ * Kept here so locale-keyed records have a stable type now that the legacy
+ * `src/i18n/messages.ts` catalog has been retired in favour of the single
+ * `messages.en.json` source of truth.
  */
 export type Locale = "en";
 

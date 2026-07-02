@@ -342,7 +342,7 @@ export function resolveConfigSetting(
 /**
  * Reads a dotted config key from ONLY the global `$CLIMON_HOME/config.jsonc`,
  * bypassing the cwd-upward cascade used by `resolveConfigSetting`. Use this for
- * installer/EULA/update state, which is per-machine and must not be shadowed by
+ * installer/update state, which is per-machine and must not be shadowed by
  * a project-local `.climon/config.jsonc`. Returns undefined when unset.
  */
 export function readGlobalConfigSetting(

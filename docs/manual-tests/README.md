@@ -40,11 +40,11 @@ result-tracking row.
 | 5 | `climon-store` crate — atomic metadata IO, patch serialization, session ids, server state | [phase05-store.md](phase05-store.md) |
 | 6 | climon-pty crate — cross-platform PTY spawn/resize, raw-mode termios/ConPTY, scrollback, terminal size | [phase06-pty.md](phase06-pty.md) |
 | 7 | climon-session crate — session host: PTY ownership, per-session IPC socket, scrollback shadow, idle/attention, frame relay, title broadcast, local relay, lifecycle | [phase07-session.md](phase07-session.md) |
-| 8 | climon-cli core — daily-driver `climon` client: arg parser, launcher (run/shell/ls/kill), attach client + detach, config/server delegation, licenses, version-from-package.json | [phase08-cli.md](phase08-cli.md) |
+| 8 | climon-cli core — daily-driver `climon` client: arg parser, launcher (run/shell/ls/kill), attach client + detach, config/server delegation, license notices, version-from-package.json | [phase08-cli.md](phase08-cli.md) |
 | 9 | climon-remote crate — uplink/ingest mux bridge (byte-exact wire), devtunnel detection, WSL↔Windows link/discovery, keepalive, singleton recycle, demotion, cleanup; wired `__uplink`/`__ingest`/`link`/`cleanup` + launcher auto-uplink/auto-link | [phase09-remote.md](phase09-remote.md) |
 | 10 | climon-update — self-update: byte-for-byte Ed25519 verify + AES-256-GCM/scrypt envelope decrypt, release manifest, atomic no-kill binary swap, background check + launch banner, `climon update` | [phase10-update.md](phase10-update.md) |
-| 11 | climon-install — client-side install/setup: install-manifest + on-disk layout parity, PATH setup (macOS/Linux/Windows), `climon setup` onboarding, EULA gate, telemetry/auto-update opt-in, stable install id, running-process detection | [phase11-install.md](phase11-install.md) |
-| 12 | Cutover & cleanup — ship the Rust `climon` client as the `install` binary, native Rust self-install (sentinel `climon-alpha` trigger, PATH + `.version` + changelog, locked-binary kill/retry, licence-declined abort), `scripts/compile.ts` host/assemble modes, `release.yml` cross-compile matrix, retire the Bun client bin | [phase12-cutover.md](phase12-cutover.md) |
+| 11 | climon-install — client-side install/setup: install-manifest + on-disk layout parity, PATH setup (macOS/Linux/Windows), `climon setup` onboarding, telemetry/auto-update opt-in, stable install id, running-process detection | [phase11-install.md](phase11-install.md) |
+| 12 | Cutover & cleanup — ship the Rust `climon` client as the `install` binary, native Rust self-install (sentinel `climon-alpha` trigger, PATH + `.version` + changelog, locked-binary kill/retry), `scripts/compile.ts` host/assemble modes, `release.yml` cross-compile matrix, retire the Bun client bin | [phase12-cutover.md](phase12-cutover.md) |
 | — | Pin key bar (mobile) — mobile-only hamburger toggle + centralised mobile detection | [pin-key-bar.md](pin-key-bar.md) |
 | — | Mobile active-session layout order — Open terminal button between title and status/client meta | [mobile-open-terminal-order.md](mobile-open-terminal-order.md) |
 | — | Tunnel-link expiry countdown banner | [phase13-tunnel-expiry-banner.md](phase13-tunnel-expiry-banner.md) |
@@ -64,6 +64,7 @@ result-tracking row.
 | — | Interactive install opt-ins default to Yes (telemetry + auto-update prompts) | [optin-default-yes.md](optin-default-yes.md) |
 | — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
 | — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
+| — | MIT license transition — `climon license`, one-time upgrade notice, no notice on fresh installs | [mit-license-transition.md](mit-license-transition.md) |
 
 ## Recording results
 

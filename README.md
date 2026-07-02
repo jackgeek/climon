@@ -206,16 +206,15 @@ you want to stop.
 
 ### `climon setup`
 
-Re-run the first-run onboarding flow at any time: licence acceptance, telemetry
-opt-in, and auto-update opt-in. Interactive by default; for non-interactive or
+Re-run the first-run onboarding flow at any time: telemetry opt-in and
+auto-update opt-in. Interactive by default; for non-interactive or
 scripted setup, pass flags:
 
 ```bash
-climon setup --apply --accept-eula --telemetry=off --auto-update=off
+climon setup --apply --telemetry=off --auto-update=off
 ```
 
 - `--apply` — run non-interactively (no prompts); apply the provided flags.
-- `--accept-eula` — accept the licence (required for `--apply` to complete).
 - `--telemetry=on|off` — set anonymous usage telemetry (default **off**).
 - `--auto-update=on|off` — set background auto-update (default **off**).
 
@@ -242,12 +241,10 @@ newer version is available, suggesting you run `climon update`.
 
 On first run, climon walks you through a short onboarding flow:
 
-1. **Licence acceptance** — climon is proprietary freeware governed by Irish
-   law; the full text is in [`EULA.md`](EULA.md). You must accept to continue.
-2. **Telemetry opt-in** — anonymous usage telemetry, **off by default**. When
+1. **Telemetry opt-in** — anonymous usage telemetry, **off by default**. When
    enabled, it is keyed only by a random install id and never includes session
    output, command contents, file paths, or hostnames.
-3. **Auto-update opt-in** — background download/apply of signed updates, **off
+2. **Auto-update opt-in** — background download/apply of signed updates, **off
    by default**. When off, climon only suggests updates via a banner.
 
 Re-run onboarding anytime with `climon setup`. See [docs/setup.md](docs/setup.md)
@@ -593,3 +590,8 @@ See [`docs/cheat-sheet.md`](docs/cheat-sheet.md),
 [`docs/deployment.md`](docs/deployment.md),
 [`docs/logging.md`](docs/logging.md), and
 [`docs/troubleshooting.md`](docs/troubleshooting.md) for details.
+
+## License
+
+climon is open source under the MIT License. See [`LICENSE`](LICENSE). Run
+`climon license` to print the licence and third-party attributions.
