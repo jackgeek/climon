@@ -1,5 +1,11 @@
 [
   {
+    "version": "2.4.1",
+    "changes": [
+      "Fix dev tunnel re-authentication in the installed PWA opening an empty file instead of the sign-in page"
+    ]
+  },
+  {
     "version": "2.4.0",
     "changes": [
       "Hide experimental commands from the CLI help output until they are enabled"

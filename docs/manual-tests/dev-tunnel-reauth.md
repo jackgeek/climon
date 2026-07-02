@@ -25,14 +25,17 @@ Manual checks for the in-app dev-tunnel sign-in recovery flow.
 3. Return to the PWA (foreground it) and wait for the live connection to drop.
 4. Observe the overlay that appears.
 5. Tap **Sign in again**.
-6. Complete the Microsoft sign-in in the sheet that appears.
+6. Complete the Microsoft sign-in in the system browser tab that opens, then
+   foreground the PWA again.
 
 **Expected:** After steps 3-4 the PWA shows the **"Session expired"** overlay
 with a **"Sign in again"** button (it appears promptly, without waiting out the
-~60s reconnect timer). Tapping the button performs a top-level navigation; iOS
-presents the Microsoft sign-in. After signing in, the PWA returns to a freshly
-loaded dashboard, the overlay is gone, and the sessions list/terminal reconnect
-— without ever leaving the PWA to open the tunnel URL manually.
+~60s reconnect timer). Tapping the button opens the tunnel URL in the **system
+browser** (a real Safari/Chrome tab), not inside the standalone PWA window — so
+the Microsoft sign-in loads normally instead of downloading an empty file.
+Complete the sign-in there, then return to the PWA: its live connection
+reconnects, the overlay is gone, and the sessions list/terminal come back — no
+need to manually copy the tunnel URL into a browser.
 
 **Result-tracking row:**
 
