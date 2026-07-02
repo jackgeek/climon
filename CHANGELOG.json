@@ -1,5 +1,11 @@
 [
   {
+    "version": "2.4.0",
+    "changes": [
+      "Hide experimental commands from the CLI help output until they are enabled"
+    ]
+  },
+  {
     "version": "2.3.0",
     "changes": [
       "Relicense climon under the MIT License",
