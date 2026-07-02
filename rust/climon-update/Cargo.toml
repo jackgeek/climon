@@ -17,7 +17,7 @@ climon-config = { path = "../climon-config", version = "0.1.0" }
 ed25519-dalek = "2"
 base64 = "0.22"
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
