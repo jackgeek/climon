@@ -109,9 +109,39 @@ pub enum ParsedCommand {
 /// Canonical ANSI color names in `ANSI_COLORS` order (matches `session-meta.ts`).
 const ANSI_COLOR_NAMES: &str = "black, red, green, yellow, blue, magenta, cyan, white";
 
-/// Returns the help text, embedding the version on line 1. Byte-identical to the
-/// TS `helpText` template literal.
-pub fn help_text() -> String {
+/// Which experimental commands to advertise in the help text. Their backing
+/// feature flags (`remotes`, `wslBridge`) default off, so the commands stay
+/// hidden from `climon --help` until the user opts in — although they still run
+/// if typed. See [`help_text`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExperimentalHelp {
+    /// Show the `climon remotes` line (enabled by `feature.remotes` or
+    /// `feature.wslBridge`).
+    pub remotes: bool,
+    /// Show the `climon link` line (enabled by `feature.wslBridge`).
+    pub wsl_bridge: bool,
+}
+
+/// Returns the help text, embedding the version on line 1. Experimental
+/// commands are only advertised when their backing feature flag is enabled (see
+/// [`ExperimentalHelp`]); when any is shown, a use-at-your-own-risk note is
+/// appended.
+pub fn help_text(experimental: ExperimentalHelp) -> String {
+    let remotes_line = if experimental.remotes {
+        "  climon remotes [--watch] [--json]\n                               Show connected remote hosts and uplinks\n"
+    } else {
+        ""
+    };
+    let link_line = if experimental.wsl_bridge {
+        "  climon link [--peer-home P]   Link WSL<->Windows dashboard discovery\n"
+    } else {
+        ""
+    };
+    let experimental_note = if experimental.remotes || experimental.wsl_bridge {
+        "\nExperimental features are opt-in and provided as-is — use them at your own risk.\n"
+    } else {
+        ""
+    };
     format!(
         "climon v{VERSION} — web-based monitor for interactive CLI sessions
 
@@ -128,15 +158,12 @@ Usage:
                                (--no-takeover: never terminate an existing
                                server; start on the next available port)
   climon ls                    List monitored sessions
-  climon remotes [--watch] [--json]
-                               Show connected remote hosts and uplinks
-  climon config <key> [value]   Get/set configuration (git-style)
+{remotes_line}  climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order
   climon config --purge         Prompt to delete config files in resolution order
   climon cleanup                Stop this machine's dashboard, ingest, and uplink
-  climon link [--peer-home P]   Link WSL<->Windows dashboard discovery
-  climon kill <id>             Terminate a session
+{link_line}  climon kill <id>             Terminate a session
   climon kill --all            Kill or remove all active sessions
   climon update                Download, verify, and apply the latest version
                                (never interrupts running sessions)
@@ -144,7 +171,7 @@ Usage:
   climon license               Print the licence and third-party attributions
   climon --version             Show the climon version
   climon --help                Show this help
-"
+{experimental_note}"
     )
 }
 
@@ -504,7 +531,7 @@ mod tests {
 
     #[test]
     fn help_text_includes_version() {
-        assert!(help_text().contains(&format!("v{VERSION}")));
+        assert!(help_text(ExperimentalHelp::default()).contains(&format!("v{VERSION}")));
     }
 
     #[test]
@@ -565,14 +592,14 @@ mod tests {
 
     #[test]
     fn help_text_documents_bulk_kill() {
-        let h = help_text();
+        let h = help_text(ExperimentalHelp::default());
         assert!(h.contains("climon kill --all"));
         assert!(h.contains("Kill or remove all active sessions"));
     }
 
     #[test]
     fn help_text_points_at_config_help() {
-        assert!(help_text().contains("climon config --help"));
+        assert!(help_text(ExperimentalHelp::default()).contains("climon config --help"));
     }
 
     // ---- parseArgs ----
@@ -713,8 +740,33 @@ mod tests {
     }
 
     #[test]
-    fn help_text_documents_remotes() {
-        assert!(help_text().contains("climon remotes"));
+    fn help_text_hides_experimental_commands_by_default() {
+        let h = help_text(ExperimentalHelp::default());
+        assert!(!h.contains("climon remotes"));
+        assert!(!h.contains("climon link"));
+        assert!(!h.contains("use them at your own risk"));
+    }
+
+    #[test]
+    fn help_text_shows_remotes_when_enabled() {
+        let h = help_text(ExperimentalHelp {
+            remotes: true,
+            wsl_bridge: false,
+        });
+        assert!(h.contains("climon remotes"));
+        assert!(!h.contains("climon link"));
+        assert!(h.contains("use them at your own risk"));
+    }
+
+    #[test]
+    fn help_text_shows_link_when_wsl_bridge_enabled() {
+        let h = help_text(ExperimentalHelp {
+            remotes: true,
+            wsl_bridge: true,
+        });
+        assert!(h.contains("climon remotes"));
+        assert!(h.contains("climon link"));
+        assert!(h.contains("use them at your own risk"));
     }
 
     #[test]
