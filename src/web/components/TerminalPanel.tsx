@@ -105,15 +105,24 @@ export function TerminalPanel({
   const composeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // When the composer opens with pre-existing text, select it so the user can
-  // immediately replace, delete, or reuse it.
+  // immediately replace, delete, or reuse it. Deferred to the next frame so it
+  // runs after autoFocus settles (otherwise the browser drops the selection and
+  // parks the caret at the end).
   useEffect(() => {
     if (view !== "compose") {
       return;
     }
     const el = composeTextareaRef.current;
-    if (el && el.value.length > 0) {
-      el.select();
+    if (!el) {
+      return;
     }
+    const id = requestAnimationFrame(() => {
+      if (el.value.length > 0) {
+        el.focus();
+        el.setSelectionRange(0, el.value.length);
+      }
+    });
+    return () => cancelAnimationFrame(id);
   }, [view]);
 
   if (view === "keyboard") {

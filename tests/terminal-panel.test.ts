@@ -91,7 +91,7 @@ describe("TerminalPanel", () => {
 
     expect(source).toContain("const composeTextareaRef = useRef<HTMLTextAreaElement | null>(null);");
     expect(source).toContain("textarea={{ ref: composeTextareaRef, style: { height: \"100%\" } }}");
-    expect(source).toContain("el.select();");
+    expect(source).toContain("el.setSelectionRange(0, el.value.length);");
   });
 
   test("compose action buttons wire to insert and cancel handlers", () => {
