@@ -42,7 +42,7 @@ fn random_uuid_v4() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eula::tempdir::TempHome;
+    use crate::testutil::tempdir::TempHome;
 
     fn temp_env() -> (TempHome, Env) {
         let home = TempHome::new();

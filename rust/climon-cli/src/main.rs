@@ -233,7 +233,7 @@ fn run_config(argv: &[String]) -> i32 {
     run_config_command(argv, &env, &cwd, &mut io)
 }
 
-/// Runs `climon setup`, re-running onboarding (EULA gate, telemetry/auto-update
+/// Runs `climon setup`, re-running onboarding (telemetry/auto-update
 /// opt-ins, install id) against the real config environment. Mirrors the TS
 /// `index.ts` `setup` case delegating to `runSetupCommand`.
 fn run_setup(argv: &[String]) -> Result<i32, String> {

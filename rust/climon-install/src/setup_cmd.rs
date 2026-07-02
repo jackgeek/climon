@@ -20,8 +20,8 @@ fn stdin_prompt(question: &str) -> String {
     line.trim_end_matches(['\n', '\r']).to_string()
 }
 
-/// `climon setup` entrypoint: re-runs onboarding, returning 0 when the EULA was
-/// accepted and 1 otherwise.
+/// `climon setup` entrypoint: re-runs onboarding, returning 0 when it completes
+/// and 1 otherwise.
 pub fn run_setup_command(argv: &[String], env: &Env) -> Result<i32, String> {
     let options = parse_setup_options(argv)?;
     let mut print = |s: &str| {
@@ -41,17 +41,16 @@ pub fn run_setup_command(argv: &[String], env: &Env) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eula::tempdir::TempHome;
+    use crate::testutil::tempdir::TempHome;
     use climon_config::config::read_global_config_setting;
     use serde_json::Value;
 
     #[test]
-    fn non_interactive_accept_returns_zero_and_persists_opt_ins() {
+    fn non_interactive_returns_zero_and_persists_opt_ins() {
         let home = TempHome::new();
         let env = Env::new(Some(home.path_str()), home.path());
         let argv = vec![
             "--apply".to_string(),
-            "--accept-eula".to_string(),
             "--telemetry=on".to_string(),
             "--auto-update=off".to_string(),
         ];
@@ -68,12 +67,16 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_without_accept_returns_one() {
+    fn non_interactive_without_flags_returns_zero() {
         let home = TempHome::new();
         let env = Env::new(Some(home.path_str()), home.path());
         let argv = vec!["--apply".to_string()];
         let code = run_setup_command(&argv, &env).unwrap();
-        assert_eq!(code, 1);
+        assert_eq!(code, 0);
+        assert!(matches!(
+            read_global_config_setting("install.id", &env),
+            Some(Value::String(_))
+        ));
     }
 
     #[test]

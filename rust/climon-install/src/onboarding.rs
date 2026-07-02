@@ -1,4 +1,4 @@
-//! Onboarding flow: EULA gate + telemetry/auto-update opt-ins + install id.
+//! Onboarding flow: telemetry/auto-update opt-ins + install id.
 //! The interactive opt-in prompts default to YES (Enter opts in) and re-prompt
 //! on unrecognised input; the underlying config-setting defaults are unchanged
 //! (still false). A non-interactive re-run without flags never silently revokes
@@ -7,7 +7,6 @@
 use climon_config::config::{write_config_setting, Env, WriteScope};
 use std::path::Path;
 
-use crate::eula::{ensure_eula_accepted, EulaGateOptions};
 use crate::install_id::ensure_install_id;
 
 // i18n strings (English) mirrored from `src/i18n/messages.en.json`.
@@ -21,8 +20,6 @@ const MSG_AUTO_UPDATE_PROMPT: &str =
 pub struct SetupOptions {
     /// Run non-interactively (no prompts).
     pub apply: bool,
-    /// Accept the EULA without prompting.
-    pub accept_eula: bool,
     /// Telemetry opt-in; `None` means "leave at current/default".
     pub telemetry: Option<bool>,
     /// Auto-update opt-in; `None` means "leave at current/default".
@@ -45,8 +42,6 @@ pub fn parse_setup_options(args: &[String]) -> Result<SetupOptions, String> {
     for arg in args {
         if arg == "--apply" {
             options.apply = true;
-        } else if arg == "--accept-eula" {
-            options.accept_eula = true;
         } else if let Some(value) = arg.strip_prefix("--telemetry=") {
             options.telemetry = Some(parse_on_off("--telemetry", value)?);
         } else if let Some(value) = arg.strip_prefix("--auto-update=") {
@@ -96,29 +91,18 @@ fn prompt_yes_no(prompt: &mut dyn FnMut(&str) -> String, question: &str, default
     }
 }
 
-/// Runs the full onboarding flow: EULA gate, telemetry opt-in, auto-update
-/// opt-in, and install-id assignment. Both opt-ins default OFF. When the EULA is
-/// not accepted, no telemetry/update state is written and `accepted=false`.
+/// Runs the full onboarding flow: telemetry opt-in, auto-update opt-in, and
+/// install-id assignment. Both opt-ins default OFF. The result is always
+/// `accepted=true` because there is no acceptance gate.
 pub fn run_onboarding(io: OnboardingIo<'_>) -> Result<OnboardingResult, String> {
     let OnboardingIo {
         env,
         options,
-        print,
+        print: _print,
         prompt,
     } = io;
 
     let interactive = !options.apply;
-
-    let accepted = ensure_eula_accepted(EulaGateOptions {
-        env,
-        interactive,
-        accept_eula: options.accept_eula,
-        print: &mut *print,
-        prompt: &mut *prompt,
-    })?;
-    if !accepted {
-        return Ok(OnboardingResult { accepted: false });
-    }
 
     // Telemetry opt-in. An explicit option or interactive answer is persisted;
     // the interactive prompt defaults to YES (Enter opts in). A non-interactive
@@ -167,7 +151,7 @@ pub fn run_onboarding(io: OnboardingIo<'_>) -> Result<OnboardingResult, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eula::tempdir::TempHome;
+    use crate::testutil::tempdir::TempHome;
     use climon_config::config::read_global_config_setting;
     use serde_json::Value;
     use std::cell::Cell;
@@ -186,22 +170,15 @@ mod tests {
     fn defaults_interactive_no_flags() {
         let o = parse_setup_options(&[]).unwrap();
         assert!(!o.apply);
-        assert!(!o.accept_eula);
         assert_eq!(o.telemetry, None);
         assert_eq!(o.auto_update, None);
     }
 
     #[test]
     fn parses_all_flags() {
-        let o = parse_setup_options(&opts(&[
-            "--apply",
-            "--accept-eula",
-            "--telemetry=on",
-            "--auto-update=off",
-        ]))
-        .unwrap();
+        let o = parse_setup_options(&opts(&["--apply", "--telemetry=on", "--auto-update=off"]))
+            .unwrap();
         assert!(o.apply);
-        assert!(o.accept_eula);
         assert_eq!(o.telemetry, Some(true));
         assert_eq!(o.auto_update, Some(false));
     }
@@ -240,7 +217,6 @@ mod tests {
             &env,
             SetupOptions {
                 apply: true,
-                accept_eula: true,
                 telemetry: Some(true),
                 auto_update: Some(true),
             },
@@ -262,22 +238,24 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_without_accept_returns_not_accepted() {
+    fn onboarding_completes_without_any_licence_acceptance() {
         let (_h, env) = temp_env();
         let result = run_with(
             &env,
             SetupOptions {
                 apply: true,
-                accept_eula: false,
                 telemetry: None,
                 auto_update: None,
             },
             &[],
         );
-        assert!(!result.accepted);
+        assert!(result.accepted);
         assert_eq!(read_global_config_setting("telemetry.enabled", &env), None);
         assert_eq!(read_global_config_setting("update.auto", &env), None);
-        assert_eq!(read_global_config_setting("install.id", &env), None);
+        assert!(matches!(
+            read_global_config_setting("install.id", &env),
+            Some(Value::String(_))
+        ));
     }
 
     #[test]
@@ -303,7 +281,6 @@ mod tests {
             &env,
             SetupOptions {
                 apply: true,
-                accept_eula: true,
                 telemetry: None,
                 auto_update: None,
             },
@@ -321,9 +298,9 @@ mod tests {
     }
 
     #[test]
-    fn interactive_i_agree_then_yes_enables_both() {
+    fn interactive_yes_enables_both() {
         let (_h, env) = temp_env();
-        let result = run_with(&env, SetupOptions::default(), &["i agree", "y", "y"]);
+        let result = run_with(&env, SetupOptions::default(), &["y", "y"]);
         assert!(result.accepted);
         assert_eq!(
             read_global_config_setting("telemetry.enabled", &env),
@@ -338,7 +315,7 @@ mod tests {
     #[test]
     fn interactive_blank_answers_enable_opt_ins() {
         let (_h, env) = temp_env();
-        run_with(&env, SetupOptions::default(), &["i agree", "", ""]);
+        run_with(&env, SetupOptions::default(), &["", ""]);
         assert_eq!(
             read_global_config_setting("telemetry.enabled", &env),
             Some(Value::Bool(true))
@@ -352,7 +329,7 @@ mod tests {
     #[test]
     fn interactive_explicit_no_disables_opt_ins() {
         let (_h, env) = temp_env();
-        run_with(&env, SetupOptions::default(), &["i agree", "n", "no"]);
+        run_with(&env, SetupOptions::default(), &["n", "no"]);
         assert_eq!(
             read_global_config_setting("telemetry.enabled", &env),
             Some(Value::Bool(false))
@@ -366,8 +343,8 @@ mod tests {
     #[test]
     fn interactive_typo_reprompts_then_honours_next_answer() {
         let (_h, env) = temp_env();
-        // EULA accept, then telemetry: typo then "n"; auto-update: "y".
-        run_with(&env, SetupOptions::default(), &["i agree", "huh", "n", "y"]);
+        // Telemetry: typo then "n"; auto-update: "y".
+        run_with(&env, SetupOptions::default(), &["huh", "n", "y"]);
         assert_eq!(
             read_global_config_setting("telemetry.enabled", &env),
             Some(Value::Bool(false))

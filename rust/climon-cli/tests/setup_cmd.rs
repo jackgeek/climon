@@ -31,24 +31,12 @@ fn run_setup(home: &PathBuf, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn setup_non_interactive_accept_persists_opt_ins_and_exits_zero() {
+fn setup_non_interactive_persists_opt_ins_and_exits_zero() {
     let home = temp_home();
-    let output = run_setup(
-        &home,
-        &[
-            "--apply",
-            "--accept-eula",
-            "--telemetry=on",
-            "--auto-update=off",
-        ],
-    );
+    let output = run_setup(&home, &["--apply", "--telemetry=on", "--auto-update=off"]);
     assert!(output.status.success(), "setup should exit 0: {output:?}");
 
     let env = Env::new(Some(home.to_str().unwrap()), &home);
-    assert_eq!(
-        read_global_config_setting("eula.accepted", &env),
-        Some(Value::Bool(true))
-    );
     assert_eq!(
         read_global_config_setting("telemetry.enabled", &env),
         Some(Value::Bool(true))
@@ -66,9 +54,14 @@ fn setup_non_interactive_accept_persists_opt_ins_and_exits_zero() {
 }
 
 #[test]
-fn setup_non_interactive_without_accept_exits_one() {
+fn setup_non_interactive_without_flags_exits_zero() {
     let home = temp_home();
     let output = run_setup(&home, &["--apply"]);
-    assert_eq!(output.status.code(), Some(1));
+    assert!(output.status.success(), "setup should exit 0: {output:?}");
+    let env = Env::new(Some(home.to_str().unwrap()), &home);
+    assert!(matches!(
+        read_global_config_setting("install.id", &env),
+        Some(Value::String(_))
+    ));
     std::fs::remove_dir_all(&home).ok();
 }
