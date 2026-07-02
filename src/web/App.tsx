@@ -71,7 +71,7 @@ import type { TerminalResizeMode } from "../ipc/frame.js";
 import { toggleViewMode } from "./view-mode.js";
 import { InstallPwaDialog } from "./components/InstallPwaDialog.js";
 import { TunnelExpiryBanner } from "./components/TunnelExpiryBanner.js";
-import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa } from "./pwa/pwaContext.js";
+import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa, reauthenticateTunnel } from "./pwa/pwaContext.js";
 import {
   registerServiceWorker,
   subscribeToPush,
@@ -1501,7 +1501,16 @@ export function App() {
         onClose={() => setTunnelLinkOpen(false)}
       />
       {connectionOverlay === "auth" && (
-        <TunnelReauthOverlay onReauth={() => window.location.assign(window.location.href)} />
+        <TunnelReauthOverlay
+          onReauth={() =>
+            reauthenticateTunnel({
+              isStandalone,
+              href: window.location.href,
+              openBrowser: (url) => window.open(url, "_blank", "noopener"),
+              navigate: (url) => window.location.assign(url),
+            })
+          }
+        />
       )}
       {connectionOverlay === "reconnect" && <ServerReconnectOverlay />}
     </div>

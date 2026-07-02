@@ -38,3 +38,31 @@ export function readIsStandalone(): boolean {
   const iosStandalone = (window.navigator as Navigator & { standalone?: boolean }).standalone;
   return computeIsStandalone(displayMode, iosStandalone);
 }
+
+export interface TunnelReauthEnv {
+  /** True when running as an installed PWA (home-screen / display-mode standalone). */
+  isStandalone: boolean;
+  /** The current dashboard URL to re-open for the dev-tunnel sign-in. */
+  href: string;
+  /** Opens `url` in the system browser (a real tab), escaping the PWA window. */
+  openBrowser: (url: string) => void;
+  /** Navigates the current window to `url` in place. */
+  navigate: (url: string) => void;
+}
+
+/**
+ * Recovers an expired dev-tunnel sign-in. A standalone PWA cannot complete the
+ * dev tunnels multi-step, cross-origin auth flow inside its own window: the
+ * redirect chain ends in an empty-file download instead of the Microsoft
+ * sign-in page. So it re-opens the tunnel URL in the system browser (a real
+ * tab), where the auth flow works and the resulting `*.devtunnels.ms` cookie is
+ * shared back with the PWA, letting its live connection reconnect on return.
+ * In a normal browser tab, a same-URL reload performs the reauth in place.
+ */
+export function reauthenticateTunnel(env: TunnelReauthEnv): void {
+  if (env.isStandalone) {
+    env.openBrowser(env.href);
+    return;
+  }
+  env.navigate(env.href);
+}
