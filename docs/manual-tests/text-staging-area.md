@@ -27,13 +27,17 @@ when cancelled.
 - **Config-matrix cell:** Browser = mobile Safari/Chrome; viewport ≤ 768px.
 - **Steps:**
   1. Tap the compose (pencil) button in the keybar chooser.
-  2. Confirm the overlay fills the whole viewport with a large text box.
-  3. Type multiple lines of text, e.g. `echo one` then a newline then `echo two`.
+  2. Confirm the overlay fills the whole viewport with a large text box, and
+     that the "Exit fullscreen" button is hidden while composing.
+  3. Type a single line of text, e.g. `echo one`.
   4. Tap **Insert**.
-- **Expected result:** The overlay covers the viewport while composing. After
-  Insert, the overlay closes, the typed text appears at the terminal cursor
-  (multiline preserved), no extra Enter is sent (the last line is not executed),
-  and the staging box is empty next time it is opened.
+- **Expected result:** The overlay covers the entire viewport while composing
+  (no Exit button showing through). After Insert, the overlay closes, the typed
+  text appears at the terminal cursor with no trailing Enter appended (the line
+  is left un-submitted at the prompt), and the staging box is empty next time it
+  is opened. Note: Insert sends the textarea contents verbatim as a paste, so if
+  the text contains embedded newlines the shell will submit each completed line
+  exactly as a normal paste would; only the trailing Enter is withheld.
 - **Platforms:** iOS Safari, Android Chrome.
 - **Result:** _date / tester / platform / pass-fail / notes_
 

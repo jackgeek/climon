@@ -204,6 +204,35 @@ describe("scheduleTerminalRefit", () => {
     expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "disconnected" }))).toBe(true);
     expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "running" }))).toBe(false);
   });
+
+  describe("compose staging area handlers", () => {
+    test("Insert sends raw text, Insert & Run appends a carriage return, and both clear the staging text", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      // Insert: raw text, then clear.
+      expect(source).toContain("onComposeInsert={(text) => {\n                  terminalRef.current?.sendInput(text);\n                  setComposeText(\"\");");
+      // Insert & Run: text + carriage return (\r, not \n), then clear.
+      expect(source).toContain("onComposeInsertRun={(text) => {\n                  terminalRef.current?.sendInput(`${text}\\r`);\n                  setComposeText(\"\");");
+      expect(source).not.toContain("sendInput(`${text}\\n`)");
+    });
+
+    test("Cancel closes the panel without clearing the staging text", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      const cancelStart = source.indexOf("onComposeCancel={() => {");
+      expect(cancelStart).toBeGreaterThan(-1);
+      const cancelEnd = source.indexOf("}}", cancelStart);
+      const cancelBody = source.slice(cancelStart, cancelEnd);
+      // Cancel must not reset the staged text (retention lets the user peek at the terminal).
+      expect(cancelBody).not.toContain('setComposeText("")');
+    });
+
+    test("hides the exit-fullscreen button while composing so the overlay fills the viewport", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain('{maximized && panelView !== "compose" && (');
+    });
+  });
 });
 
 describe("tab refocus terminal refresh", () => {

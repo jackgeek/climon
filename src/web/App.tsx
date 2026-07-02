@@ -1470,7 +1470,7 @@ export function App() {
           </>
         )}
       </div>
-      {maximized && (
+      {maximized && panelView !== "compose" && (
         <Button
           className={styles.exitBtn}
           appearance="outline"
