@@ -11,6 +11,7 @@ import {
 import { KeyBar } from "./KeyBar.js";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "../fontSize.js";
 import { encodeSpecial, type Mods } from "../keys.js";
+import { MOBILE_MEDIA_QUERY_RULE } from "../mobile.js";
 
 export type TerminalPanelView = "chooser" | "keyboard" | "font" | "compose";
 export type TerminalPanelArrowDirection = "up" | "down";
@@ -46,6 +47,11 @@ const useStyles = makeStyles({
     borderTop: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground2,
     flex: "0 0 auto"
+  },
+  chooserLabel: {
+    [MOBILE_MEDIA_QUERY_RULE]: {
+      display: "none"
+    }
   },
   fontRow: {
     display: "flex",
@@ -177,19 +183,25 @@ export function TerminalPanel({
         aria-label="Keyboard"
         icon={<Keyboard24Regular />}
         onClick={() => onSelect("keyboard")}
-      />
+      >
+        <span className={styles.chooserLabel}>Keyboard</span>
+      </Button>
       <Button
         appearance="outline"
         aria-label="Font size"
         icon={<TextFont24Regular />}
         onClick={() => onSelect("font")}
-      />
+      >
+        <span className={styles.chooserLabel}>Font size</span>
+      </Button>
       <Button
         appearance="outline"
         aria-label="Compose text"
         icon={<Compose24Regular />}
         onClick={() => onSelect("compose")}
-      />
+      >
+        <span className={styles.chooserLabel}>Composer</span>
+      </Button>
       <Button
         appearance="outline"
         aria-label="Send PageUp"

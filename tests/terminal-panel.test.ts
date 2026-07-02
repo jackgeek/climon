@@ -35,15 +35,35 @@ describe("TerminalPanel", () => {
     expect(source).toContain('onClick={() => onSend(terminalPanelArrowData("up"))}');
   });
 
-  test("chooser buttons are icon-only with accessible labels", () => {
+  test("chooser buttons keep accessible labels for the icon-only breakpoint", () => {
     const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
 
-    expect(source).not.toContain(">Keyboard<");
-    expect(source).not.toContain(">Font size<");
     expect(source).toContain('aria-label="Keyboard"');
     expect(source).toContain('aria-label="Font size"');
     expect(source).toContain('aria-label="Compose text"');
     expect(source).toContain('onClick={() => onSelect("compose")}');
+    // Visible labels live in a span so CSS can collapse them to icon-only.
+    expect(source).toContain('<span className={styles.chooserLabel}>Keyboard</span>');
+    expect(source).toContain('<span className={styles.chooserLabel}>Font size</span>');
+    expect(source).toContain('<span className={styles.chooserLabel}>Composer</span>');
+  });
+
+  test("chooser buttons render responsive text labels", () => {
+    const markup = renderPanel({ view: "chooser" });
+
+    expect(markup).toContain("Keyboard");
+    expect(markup).toContain("Font size");
+    expect(markup).toContain("Composer");
+    // Labels are wrapped so CSS can hide them (icon-only) on narrow viewports.
+    expect(markup).toContain(">Composer</span>");
+  });
+
+  test("chooser labels are hidden at the mobile breakpoint via CSS", () => {
+    const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
+
+    expect(source).toContain("chooserLabel:");
+    expect(source).toContain("[MOBILE_MEDIA_QUERY_RULE]: {");
+    expect(source).toContain('display: "none"');
   });
 
   test("compose view renders textarea, staged text, and actions", () => {
