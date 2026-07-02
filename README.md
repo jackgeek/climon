@@ -1,597 +1,439 @@
+<div align="center">
+
+<img src="docs/assets/logo.jpg" alt="climon logo" width="160" />
+
 # climon
 
-A web-based monitor for interactive CLI sessions. Prefix any command with
-`climon` to run it inside a managed pseudo-terminal; a local dashboard lists all
-monitored sessions, surfaces the ones that need your attention, and lets you
-interact with each one from the browser.
+**A web dashboard for your interactive CLI sessions.**
 
-## Highlights
+Prefix any command with `climon` to run it inside a managed pseudo-terminal, then
+watch, interact with, and get notified about all of your sessions from one local
+dashboard.
 
-- **No runtime dependencies.** The Rust client uses a native PTY layer
-  (`portable-pty`: openpty on Linux/macOS, ConPTY on Windows); the Bun dashboard
-  server uses Bun's built-in HTTP/WebSocket server. Runs natively on Linux,
-  macOS, and Windows.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/jackgeek/climon)](https://github.com/jackgeek/climon/releases/latest)
+![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-informational)
+![Client: Rust](https://img.shields.io/badge/client-Rust-orange)
+![Server: Bun](https://img.shields.io/badge/server-Bun-black)
+
+</div>
+
+---
+
+## Table of contents
+
+- [Why climon?](#why-climon)
+- [Features](#features)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Commands](#commands)
+- [Configuration](#configuration)
+- [Feature flags](#feature-flags)
+- [Remote sessions](#remote-sessions)
+- [Updating](#updating)
+- [Logging](#logging)
+- [Build from source](#build-from-source)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Why climon?
+
+You start a long build, a coding agent, a dev server, or a REPL, and then you
+lose track of it behind a wall of terminal tabs. climon runs each command inside
+its own detached pseudo-terminal and surfaces them all in a browser dashboard, so
+you can:
+
+- close the terminal window and the command keeps running,
+- reattach from the CLI **or** drive it live from the browser,
+- see at a glance which session is waiting on you, and
+- review the final output after a command finishes.
+
+## Features
+
+- **Self-contained binaries.** The `climon` client is a native Rust binary using
+  a portable PTY layer (openpty on Linux/macOS, ConPTY on Windows); the
+  `climon-server` dashboard is a Bun binary using Bun's built-in HTTP/WebSocket
+  server. No `node_modules` or separate runtime install is needed to run them.
+  (The optional dev-tunnel remote feature is the one exception — it needs the
+  Microsoft [`devtunnel`](https://learn.microsoft.com/azure/developer/dev-tunnels/)
+  CLI.)
 - **Sessions survive server restarts.** Each command runs under its own detached
   per-session daemon that owns the PTY. Restarting `climon server` never kills a
-  session.
-- **Live web terminal.** The dashboard is a React + Fluent UI app that embeds an
+  running session.
+- **Live web terminal.** The dashboard is a React + Fluent UI app embedding an
   `xterm.js` terminal wired to the session over a WebSocket — fully interactive,
   no iframe.
-- **Themable dashboard.** Pick a terminal colour theme from the ☰ menu (Default
-  plus curated themes); light themes also switch the dashboard chrome to a light
-  base. The theme and the mobile "Pin key bar" toggle are saved in `config.jsonc`
-  (`dashboard.theme` / `dashboard.keyBarPinned`), so they persist and are shared
-  across every browser and device.
-- **Attention queue.** While a session is attached locally, climon mirrors its
-  output into a headless terminal and watches the rendered screen. If the visible
+- **Attention queue.** While a session is attached, climon mirrors its output
+  into a headless terminal and watches the rendered screen. If the visible
   content stops changing for `attention.idleSeconds` (default 10) — a blinking
   cursor counts as static — the session is flagged and bumped to the top of the
   dashboard.
 - **Completion pops.** Finished sessions move up the queue and keep their final
   scrollback so you can review the output.
-- **Remote clients.** Monitor sessions running on another machine over Microsoft
-  [dev tunnels](https://learn.microsoft.com/azure/developer/dev-tunnels/), or
-  bridge Windows and WSL directly on the same machine without a dev tunnel. See
-  [Windows/WSL same-machine bridge](#windowswsl-same-machine-bridge-no-dev-tunnel),
-  [Remote clients (dev tunnels)](#remote-clients-dev-tunnels), and
-  [docs/security.md](docs/security.md).
+- **Themable dashboard.** Pick a terminal colour theme from the ☰ menu; the
+  choice (and the mobile "Pin key bar" toggle) is saved in your config and shared
+  across every browser and device.
+- **Remote & WSL bridging (experimental, opt-in).** Surface sessions from a
+  remote devbox over a Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/),
+  or bridge Windows and WSL on the same machine without a tunnel. See
+  [Remote sessions](#remote-sessions).
 
-## Architecture at a glance
+## Install
 
-climon ships as two binaries:
+The install scripts download the latest release for your platform, extract it,
+and run climon's bundled self-installer (which places `climon` and
+`climon-server` on your `PATH`).
 
-- **Client (`climon`) — Rust.** The launcher/attach client, session host, PTY,
-  `run`/`ls`/`kill`, `config`, `setup`, `update`, the remote
-  `uplink`/`ingest`/`link` bridge, and the native installer are built from the
-  Rust workspace under [`rust/`](rust/). **All client development happens here.**
-- **Dashboard server (`climon-server`) — Bun.** The React + Fluent UI dashboard
-  and its REST/SSE/WebSocket APIs are built from `src/server.ts` (`src/server/`,
-  `src/web/`). This is still Bun and is actively maintained.
+> climon's release binaries are **not** code-signed or notarized yet. The install
+> scripts fetch them with `curl`/`Invoke-WebRequest` and clear the OS
+> "downloaded from the internet" mark (macOS quarantine / Windows Zone.Identifier)
+> so they launch without a Gatekeeper or SmartScreen prompt. You can read the
+> scripts before running them: [`install.sh`](install.sh) / [`install.ps1`](install.ps1).
+> Later `climon update` downloads are still verified against climon's embedded
+> Ed25519 signing key.
 
-> The rest of the TypeScript under `src/` (the old client: `src/index.ts`,
-> `src/launcher.ts`, `src/cli/`, `src/remote/`, `src/install/`, …) is the
-> **legacy client**, frozen and kept only for the Bun test suite. Don't fix
-> client bugs there — change the Rust crates instead. See
-> [docs/architecture.md](docs/architecture.md).
+**Linux / macOS**
 
-## Requirements
+```sh
+curl -fsSL https://raw.githubusercontent.com/jackgeek/climon/main/install.sh | sh
+```
 
-- **Rust** toolchain (stable, edition 2021) to build the `climon` client from
-  [`rust/`](rust/) — `cargo build --release`.
-- [Bun](https://bun.sh) >= 1.3.0 on Linux/macOS, or >= 1.3.14 on Windows
-  (native ConPTY support is required) to build/run the dashboard **server** and
-  the legacy TypeScript test suite.
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/jackgeek/climon/main/install.ps1 | iex
+```
+
+Prefer to install by hand? Download the archive for your platform from the
+[latest release](https://github.com/jackgeek/climon/releases/latest)
+(`climon-<platform>.zip`), unzip it, and run the bundled `install` (`install.exe`
+on Windows). See [Build from source](#build-from-source) to build the binaries
+yourself.
+
+On first run, climon walks you through a short onboarding flow: opt in to
+anonymous telemetry (**off** by default) and background auto-update (**off** by
+default). Re-run it any time with `climon setup`.
 
 ## Quick start
 
-```bash
-cargo build --release --manifest-path rust/Cargo.toml   # build the Rust `climon` client
-bun run build:server         # build the Bun dashboard server (`climon-server`)
-climon server                # terminal 1: start the dashboard
+```sh
+climon server        # terminal 1: start the dashboard (http://127.0.0.1:3131)
 ```
 
-> `bun run build:all` / `bun link` still build and link the **legacy** TS client
-> for the test suite, but the shipped `climon` client is the Rust binary above.
-
-Then in a new terminal:
-
-```bash
-climon bash                  # run any command in a monitored session
+```sh
+climon bash          # terminal 2: run any command in a monitored session
 ```
 
-Open http://127.0.0.1:3131 and click a session.
+Open <http://127.0.0.1:3131> and click a session.
 
 ## Commands
 
 ### `climon <command> [args...]`
 
-Run any command inside a monitored PTY session. Use this whenever you want to
-launch a long-running or interactive process (a build, a REPL, a coding agent)
-and be able to check on it later from the web dashboard without keeping the
+Run any command inside a monitored PTY session — a build, a REPL, a coding agent,
+a dev server. You can check on it later from the dashboard without keeping the
 terminal window open.
 
-```bash
+```sh
 climon bash                  # monitor an interactive shell
 climon copilot               # monitor a coding agent session
 climon npm run dev           # monitor a dev server
 ```
 
-You can also tag a session at launch with organizing metadata, placed **before**
-the command:
+Tag a session at launch with organizing metadata, placed **before** the command:
 
-```bash
+```sh
 climon --priority 100 --color red --name "dev server" npm run dev
 ```
 
 - `--priority N` — an integer `0–1000` (default `500`) controlling sort order in
   the dashboard and `climon ls`; lower sorts to the top.
 - `--color C` — one of `black`, `red`, `green`, `yellow`, `blue`, `magenta`,
-  `cyan`, `white` (or `none`); shown as a colored accent on the session.
+  `cyan`, `white`, `none`, or `auto`; shown as a coloured accent on the session.
 - `--name S` — a friendly label shown instead of the command. It is also used as
-  the local terminal's title, and updates live if you rename the session from the
-  dashboard. When omitted, climon adopts the terminal's current title if the
-  terminal reports one; otherwise the name is left blank (the dashboard and
-  `climon ls` then show the command). Disable all title behavior by setting
-  `terminal.setTitle` to `false` in `~/.climon/config.json`.
+  the terminal window title and updates live if you rename the session from the
+  dashboard. When omitted, climon adopts the terminal's current title if
+  available; otherwise the command is shown. Disable all title behaviour with
+  `climon config terminal.setTitle false`.
+- `--theme T` — a dashboard terminal theme for this session by display name (e.g.
+  `"Dracula"`); an unrecognised name falls back to the dashboard default.
 
-All three can also be set or changed from the dashboard by clicking the **cog**
-button on a session. Sessions spawned from another session (the **[+]** button)
-inherit its priority and color.
+All three can also be changed from the dashboard by clicking the **cog** button
+on a session.
 
-### `climon server [--lan] [--port N]`
+### `climon server [--port N] [--no-takeover]`
 
-Start the web dashboard. This serves the UI at http://127.0.0.1:3131 and
-connects to all running session daemons via WebSocket. Use this when you want to
-view, interact with, or manage your monitored sessions from a browser.
+Start the web dashboard. It serves the UI at <http://127.0.0.1:3131> and connects
+to all running session daemons over WebSocket.
 
-- `--lan` — bind to `0.0.0.0` so other machines on the network can access the
-  dashboard.
 - `--port N` — use a custom port instead of the default `3131`.
 - `--no-takeover` — never terminate (or prompt to terminate) an already-running
-  dashboard server. Instead, start a second server on the next available port.
-  Useful for tests and for running a throwaway dashboard without disrupting your
-  main one.
+  dashboard; instead start a second server on the next free port. Useful for
+  throwaway dashboards.
 
-Once the server is running you can also start new sessions directly from the
-dashboard. Session creation is **per-session**: hover any live session
-(`running`, `acknowledged`, `needs-attention`, `paused`, or `disconnected`) and
-click its **[+]** button to launch a new session from it. The server spawns the
-new session on the **machine that session lives on**, inheriting the selected
-session's working directory, so you are prompted only for the command. Because
-this no longer depends on an attached terminal, you can launch a session from any
-live session — including ones that were themselves spawned this way (arbitrary
-nesting). Hover a session row to pause or resume its dashboard status; pausing
-does not suspend the underlying process or terminal input.
+By default the dashboard binds to loopback (`127.0.0.1`). To expose it to other
+machines on your network, set the bind address in config:
 
-The New Session dialog has a **Headless** checkbox (unchecked by default). When
-left unchecked (visible), the spawn opens a GUI terminal window on that machine's
-desktop, attached to the new session (Terminal.app, Windows Terminal, or a Linux
-terminal emulator — override with the `session.terminalProgram` config setting).
-When checked (headless), the session runs in the background with no window.
+```sh
+climon config server.host 0.0.0.0
+```
 
-When the selected session lives on a **remote devbox**, the spawn happens on the
-devbox (a visible terminal opens on the devbox desktop, or a headless session
-appears under that devbox's namespace). This requires enabling the opt-in
-`feature.remoteSpawn` flag on the dashboard host — `climon config
-feature.remoteSpawn enabled` — and then pasting the remotes-screen setup script
-on the devbox, which now also enables the flag there and plants the shared
-`remote.spawnSecret` used to sign the command. While the flag is off, the
-per-session **[+]** on a remote session does nothing privileged. See
-[`docs/security.md`](docs/security.md) for the signed command channel.
-
-When there are **no** sessions at all, a global **[+]** appears in the
-sidebar header instead. It asks the dashboard server to spawn a session for you
-(prompting for a command and optional working directory); the server does this by
-invoking the `climon` client binary — looked up via `CLIMON_CLIENT_BIN`, then a
-sibling binary next to `climon-server`, then your `PATH`. For security, all
-creation only works from the machine running the server (loopback); remote/LAN
-clients cannot create sessions.
-
-The client and dashboard server ship as two binaries: a lean `climon` (client) and
-`climon-server` (dashboard). The shipped `climon` client is a native **Rust** binary
-(built from the `rust/` workspace); the `climon-server` dashboard is the **Bun** binary
-built from `src/server.ts`. Running `climon server` locates and runs `climon-server`
-— looked up via `CLIMON_SERVER_BIN`, then a sibling binary next to `climon`, then your
-`PATH`. The dashboard is a React + Fluent UI single-page app (`src/web/`) bundled and
-embedded into `climon-server`; keeping it out of `climon` means client-only usage stays
-small as the server grows.
+Running `climon server` locates and runs the `climon-server` binary — via
+`CLIMON_SERVER_BIN`, then a sibling binary next to `climon`, then your `PATH`.
 
 ### `climon ls`
 
-List all monitored sessions with their IDs, status, and the command that was
-run. Use this to find the session ID you need for `attach` or `kill`, or to
-quickly check which sessions are still running.
+List all monitored sessions with their IDs, status, and command. Use it to find
+the session ID for `attach` or `kill`. (`climon list` is an alias.)
 
 ### `climon attach <id>`
 
-Reattach your terminal to a running session. Use this when you want to interact
-directly with a monitored process from the command line (instead of the web UI),
-for example to type into a REPL or respond to a prompt.
+Reattach your terminal to a running session — for example to type into a REPL or
+respond to a prompt from the CLI instead of the browser.
 
-Detach without stopping the command using: `Ctrl-\` then `d`.
+Detach again without stopping the command with `Ctrl-\` then `d`.
+
+### `climon kill <id>`
+
+Terminate a monitored session and its underlying process. Use `climon kill --all`
+to stop every session.
 
 ### `climon remotes`
 
 Show which remote hosts are currently connected (and, on a devbox, the dashboard
 this machine's uplink is connected to). Healthy entries are marked `●` and stale
-ones `○`. Use `--watch` for a live-refreshing view or `--json` for a
-machine-readable snapshot. The same live data drives the dashboard's **Remote
-hosts** menu (updated over SSE).
+ones `○`. Use `--watch` for a live view or `--json` for a machine-readable
+snapshot.
 
-### `climon kill <id>`
+### `climon link`
 
-Terminate a monitored session and its underlying process. Use this to clean up
-sessions you no longer need — finished builds, abandoned REPLs, or any process
-you want to stop.
+Link a same-machine Windows/WSL pair so their sessions share one dashboard. See
+[Remote sessions](#remote-sessions).
+
+- `--wsl-bridge` — non-interactively opt in to the WSL bridge.
+- `--peer-home <path>` — point at the peer's climon home explicitly.
 
 ### `climon setup`
 
-Re-run the first-run onboarding flow at any time: telemetry opt-in and
-auto-update opt-in. Interactive by default; for non-interactive or
-scripted setup, pass flags:
+Re-run the first-run onboarding flow (telemetry and auto-update opt-in).
+Interactive by default; for scripted setup:
 
-```bash
+```sh
 climon setup --apply --telemetry=off --auto-update=off
 ```
 
-- `--apply` — run non-interactively (no prompts); apply the provided flags.
-- `--telemetry=on|off` — set anonymous usage telemetry (default **off**).
-- `--auto-update=on|off` — set background auto-update (default **off**).
+- `--apply` — run non-interactively; apply the provided flags.
+- `--telemetry=on|off` — anonymous usage telemetry (default **off**).
+- `--auto-update=on|off` — background auto-update (default **off**).
 
-Choices are stored in your global config and can also be changed directly, e.g.
-`climon config telemetry.enabled false` or `climon config update.auto true`.
+These map to the `telemetry.enabled` and `update.auto` config settings.
 
 ### `climon update`
 
 Download, verify, and apply the latest released version. The downloaded
 artifact's Ed25519 signature is verified against the embedded public key before
-anything is replaced; tampered or unverifiable downloads are rejected with no
-changes made.
+anything is replaced; tampered or unverifiable downloads are rejected. Updates
+are **non-destructive** — they never kill running sessions or a running
+dashboard, and already-running processes keep using the old code until they
+restart. See [Updating](#updating).
 
-Updates are **non-destructive**: `climon update` never kills running sessions or
-a running dashboard server. It swaps binaries atomically (rename-over on Unix,
-displace-to-`.old` on Windows) and defers when a file is locked. Already-running
-processes keep using the old code; newly started sessions and a restarted server
-pick up the new version.
+### `climon cleanup`
 
-When auto-update is off (the default), climon prints a one-line banner when a
-newer version is available, suggesting you run `climon update`.
+Tear down this machine's dashboard, ingest, and uplink. Useful when a WSL/Windows
+takeover cannot be confirmed and climon asks you to clean up a side.
 
-## Install & onboarding
+### `climon config <key> [value] [--local|--global] [--debug]`
 
-On first run, climon walks you through a short onboarding flow:
+Read or write configuration. With no value it prints the current value; with a
+value it writes it. Use `--debug` to print every config file climon considered,
+in resolution order. See [Configuration](#configuration).
 
-1. **Telemetry opt-in** — anonymous usage telemetry, **off by default**. When
-   enabled, it is keyed only by a random install id and never includes session
-   output, command contents, file paths, or hostnames.
-2. **Auto-update opt-in** — background download/apply of signed updates, **off
-   by default**. When off, climon only suggests updates via a banner.
+### `climon license`
 
-Re-run onboarding anytime with `climon setup`. See [docs/setup.md](docs/setup.md)
-for where state is stored and how to change choices later.
+Print climon's licence and third-party attributions.
 
-## Windows/WSL same-machine bridge (no dev tunnel)
+## Configuration
 
-The safest setup is explicit: install climon on **Windows**, run `climon
-server`, then run `climon link` in **WSL** and opt in to the WSL bridge when
-prompted. The first WSL run still detects the Windows climon and auto-links
-discovery in both directions (it prints how to disable this first), but it does
-**not** enable the bridge. Sessions only stream across OS boundaries after
-`feature.wslBridge` is enabled on both sides.
+Configuration is filesystem-backed under `$CLIMON_HOME` (default `~/.climon`).
+The canonical file is `config.jsonc` (JSON with comments). Settings are resolved
+**hierarchically**: climon looks for `.climon/config.jsonc` in the current
+directory, walks up each parent directory, then falls back to the global
+`$CLIMON_HOME/config.jsonc`. This lets you set per-repo defaults (e.g. always
+green, priority 20) and a different global default. Legacy `config.json` files
+are still read for backward compatibility and migrated on first write.
 
-```bash
-climon link                                           # auto-detect and prompt
-climon link --wsl-bridge                              # non-interactive opt-in
-climon link --peer-home /mnt/c/Users/<you>/.climon    # or specify the peer
+Writes go to the nearest existing config, or use `--local` / `--global` to choose
+explicitly:
+
+```sh
+climon config server.port 8080 --global
+climon config session.color green --local
+climon config --debug              # show all config files in resolution order
 ```
 
-`climon link` writes `remote.peerHome` on both sides and, when you answer yes
-(or pass `--wsl-bridge`), writes `feature.wslBridge enabled` on both sides. The
-setting takes effect for the next `climon server`/session start.
+Common settings:
 
-Discovery reads beacons (local `server.json` first, then the peer at
-`remote.peerHome`), validates the peer by TCP-probing its published `ingest.json`
-host (not the dashboard `/health`, which is unreachable from WSL under default
-NAT), and reads the live dashboard/ingest ports from the beacons — so a port bump
-on collision just works. Switching which OS hosts is automatic: run `climon server`
-on the other OS and, when `feature.wslBridge` is enabled, it displaces the
-current host over the filesystem, migrating the previous host's sessions via an
-uplink. Disable auto-linking with `climon config remote.autoLink false`, and
-override the peer host (if auto-detection picks the wrong one) with `climon
-config remote.peerHost <host>`. See
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `server.host` | `127.0.0.1` | Dashboard bind address (`0.0.0.0` to expose on LAN). |
+| `server.port` | `3131` | Dashboard port. |
+| `attention.idleSeconds` | `10` | Idle seconds before a session is flagged for attention. |
+| `terminal.setTitle` | `true` | Whether climon sets the terminal window title. |
+| `terminal.clampBrowserToHost` | `false` | Clamp browser viewer resizes to the host terminal size. |
+| `dashboard.theme` | `Default` | Terminal colour theme (also settable from the ☰ menu). |
+| `session.color` | `auto` | Default accent colour for new sessions. |
+| `session.priority` | `500` | Default sort priority for new sessions. |
+| `telemetry.enabled` | `false` | Anonymous usage telemetry. |
+| `update.auto` | `false` | Background auto-update. |
+| `logging.level` | `trace` | Log verbosity (`trace`…`fatal`, or `silent`). |
+
+Run `climon config` without arguments, or see [docs/usage.md](docs/usage.md) for
+the full list.
+
+## Feature flags
+
+Several capabilities are **experimental and disabled by default**, gated behind
+flags under the `feature.` prefix. Each accepts `"enabled"` or `"disabled"`:
+
+| Flag | Enables |
+| --- | --- |
+| `feature.sessionSpawning` | Spawning new sessions from the dashboard (the per-session and global **[+]** buttons). |
+| `feature.remotes` | Connecting a remote devbox's sessions to this dashboard over the ingest/uplink bridge. |
+| `feature.remoteSpawn` | Spawning sessions on a remote devbox over a signed command channel. |
+| `feature.wslBridge` | Streaming sessions between a same-machine WSL distro and Windows. |
+
+Enable one with, for example:
+
+```sh
+climon config feature.sessionSpawning enabled
+```
+
+Once `feature.sessionSpawning` is on, hover any live session and click its
+**[+]** to launch a new session from it (inheriting its working directory and
+metadata); when there are no sessions, a global **[+]** appears in the sidebar.
+For security, all dashboard-initiated session creation only works from the
+machine running the server (loopback) — remote/LAN clients cannot create
+sessions.
+
+## Remote sessions
+
+climon can surface sessions from another machine in your dashboard. Both paths
+are experimental and opt-in.
+
+### Remote devbox over a dev tunnel
+
+Enable `feature.remotes`, start a local server, then open **Remotes…** from the
+dashboard menu to create (or paste) a Microsoft
+[dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/) and copy a
+config script to run on the devbox. The transport exposes a loopback-only ingest
+port on the home machine — there is no SSH and no network-exposed dashboard.
+
+> **Requires the `devtunnel` CLI** on both the home machine (to host the tunnel)
+> and the devbox (to connect through it), each logged in with the same identity
+> (`devtunnel user login`).
+
+When opened on a phone, the dashboard offers **Install as PWA** to get push
+notifications when a session needs attention.
+
+See [docs/usage.md](docs/usage.md) and [docs/security.md](docs/security.md) for
+the full setup and threat model.
+
+### Windows ↔ WSL on the same machine (no tunnel)
+
+Install climon on Windows, run `climon server`, then run `climon link` in WSL and
+opt in to the bridge when prompted:
+
+```sh
+climon link                 # auto-detect the peer and prompt
+climon link --wsl-bridge    # non-interactive opt-in
+```
+
+Sessions only stream across the OS boundary once `feature.wslBridge` is enabled
+on both sides. You can host the dashboard from either OS and switch at will. See
 [docs/usage.md](docs/usage.md#connecting-windows-and-wsl-on-the-same-machine).
 
-### Manual bridge
-
-You can still wire the ingest/uplink bridge by hand — the dashboard side runs
-the ingest daemon; the client side runs an uplink that sends its local sessions
-to that ingest port.
-
-Use the same port on both sides. `3132` is the default ingest port, but setting
-it explicitly makes the setup easier to inspect with `climon config --debug`.
-
-### Server on Windows, client in WSL
-
-Use this when `climon server` runs in PowerShell or another Windows terminal,
-and WSL sessions should appear in that Windows dashboard.
-
-> Note: with `remote.peerHome` linked, the ingest now **auto-binds** the
-> `vEthernet (WSL)` address and publishes it in `ingest.json`, so the manual
-> `remote.ingestHost` steps below are only needed to *override* the auto-resolved
-> address.
-
-1. In PowerShell, find the Windows address that WSL can reach:
-
-   ```powershell
-   Get-NetIPAddress -AddressFamily IPv4 |
-     Where-Object InterfaceAlias -like 'vEthernet (WSL*' |
-     Select-Object InterfaceAlias,IPAddress
-   ```
-
-2. On Windows, bind the ingest daemon to that WSL adapter address, then start the
-   dashboard:
-
-   ```powershell
-   climon config feature.wslBridge enabled
-   climon config remote.ingestHost <windows-wsl-adapter-ip>
-   climon config remote.port 3132
-   climon server
-   ```
-
-3. In WSL, point the uplink at the same Windows adapter address:
-
-   ```bash
-   climon config feature.wslBridge enabled
-   climon config remote.enabled true
-   climon config remote.host <windows-wsl-adapter-ip>
-   climon config remote.port 3132
-   climon bash
-   ```
-
-The WSL `climon bash` session should appear in the Windows dashboard. Prefer the
-specific `vEthernet (WSL...)` address over `0.0.0.0`; direct mode trusts clients
-that can reach `remote.ingestHost:remote.port`.
-
-### Server in WSL, client on Windows
-
-Use this when `climon server` runs inside WSL, and Windows sessions should appear
-in that WSL dashboard.
-
-1. In WSL, bind the ingest daemon to loopback and start the dashboard:
-
-   ```bash
-   climon config feature.wslBridge enabled
-   climon config remote.ingestHost 127.0.0.1
-   climon config remote.port 3132
-   climon server
-   ```
-
-2. On Windows, point the uplink at WSL through Windows localhost forwarding:
-
-   ```powershell
-   climon config feature.wslBridge enabled
-   climon config remote.enabled true
-   climon config remote.host 127.0.0.1
-   climon config remote.port 3132
-   climon powershell
-   ```
-
-The Windows `climon powershell` session should appear in the WSL dashboard. If
-localhost forwarding is disabled or another Windows process owns port `3132`,
-use the WSL VM IP instead: bind `remote.ingestHost` to that WSL address and set
-the Windows `remote.host` to the same address.
-
-### Debugging Windows/WSL config
-
-Run this on either side to see every config file climon considered, in resolution
-order, and the keys found in each file:
-
-```bash
-climon config --debug
-```
-
-For direct Windows/WSL bridging, the client side must show
-`remote.enabled`, `remote.host`, and `remote.port`. The server side should show
-`remote.ingestHost` and `remote.port` when you use an explicit bind address.
-
-### Switching which OS hosts the dashboard
-
-You can run the dashboard from **either** WSL or Windows — one at a time — and
-switch at will. With `remote.peerHome` and `feature.wslBridge enabled`
-configured on both sides (usually by `climon link --wsl-bridge`), starting the
-dashboard on the other OS automatically takes over:
-
-```bash
-# On the OS that should now host the dashboard:
-climon server
-```
-
-It cleanly shuts down the dashboard still running on the other OS (its server,
-ingest, and uplink), then **migrates** that OS's sessions over so they appear on
-the new dashboard. The previous host's sessions reconnect automatically as long
-as its ingest was still alive (the common case, including after a plain `Ctrl-C`
-or a crash).
-
-If a takeover cannot be confirmed, climon aborts and tells you which OS to run
-`climon cleanup` on:
-
-```bash
-# Full local teardown of this machine's dashboard, ingest, and uplink:
-climon cleanup
-```
-
-## Remote clients (dev tunnels)
-
-Surface sessions running on a remote **devbox** in your local dashboard. The
-transport is a Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/)
-that exposes a loopback-only ingest port on the home machine; there is no SSH and
-no network-exposed dashboard.
-
-Setup:
-
-1. Enable the ingest/uplink bridge and start a climon server locally:
-   `climon config feature.remotes enabled`, then `climon server --port 8080`.
-2. Open **Remotes…** from the dashboard's hamburger menu.
-   - If the `devtunnel` CLI is installed on the home machine, climon can
-     **auto-create** the tunnel for you (it also opens a keep-alive TCP port so
-     the tunnel stays up and never shows a browser confirmation page).
-   - Otherwise, create the tunnel manually and paste its id/URL into the dialog.
-3. Optionally pick a default accent **color** and sort **priority** for that
-   devbox's sessions, then **copy the config script**.
-4. Run the copied script in a terminal on the **devbox**. It writes the server
-   address/port (and optional color/priority) into the devbox's climon config.
-5. Start sessions on the devbox as usual — they appear on the home dashboard.
-
-Notes:
-
-- The `devtunnel` CLI is required on **both** the home machine (to host the
-  tunnel) and the devbox (to connect through it). Both sides must be logged in
-  (`devtunnel user login`) with the same identity.
-- **Restarting the webserver preserves sessions.** Local sessions are
-  reconstructed from `~/.climon/sessions`, and the ingest daemon re-materializes
-  remote sessions as devboxes reconnect, so a restart does not lose state.
-- Configuration is read hierarchically: climon looks for the setting in
-  `.climon/config.json` in the current directory, then walks up each parent
-  directory, then falls back to `~/.climon/config.json`. This lets you set a
-  per-repo default (e.g. always green, priority 20) and a different global
-  default (e.g. red, priority 500). Writing a setting when no `.climon` directory
-  exists creates one in `~/`.
-
-See [docs/security.md](docs/security.md) for the full threat model.
-
-### Install on mobile (PWA) + push notifications
-
-When you open a Tunnel Link on a phone, the dashboard menu shows **Install as PWA**.
-Installing adds climon to your home screen so it can deliver **push notifications when
-a session needs attention** — even when the app is closed.
-
-- Android (Chrome): tap **Install as PWA**, then **Install**.
-- iPhone (Safari, iOS 16.4+): tap **Install as PWA** for instructions, then use
-  **Share → Add to Home Screen**. Open climon from the new icon, then enable
-  notifications from the menu.
-
-The install is **temporary**: it only works while that Tunnel Link is up. When the
-tunnel closes, the app shows a banner asking you to long-press the icon and choose
-**Uninstall**.
-
-### Manual dev tunnel creation
-
-The dashboard's **Auto-create tunnel** button is the easiest path. If you want
-to create the tunnel yourself (for example to choose the id or expiry), run these
-commands on the **home** machine where `climon server` is listening:
-
-```bash
-devtunnel user login
-
-# Choose a stable lowercase id; or omit the id argument and copy the generated id.
-devtunnel create climon-tunnel
-devtunnel port create climon-tunnel -p 8080
-```
-
-Paste `climon-tunnel` (or a devtunnels.ms URL for that tunnel) into
-**Remotes…**. If the `devtunnel` CLI is available on the home machine,
-climon will host the recorded tunnel for you; otherwise keep
-`devtunnel host climon-tunnel` running yourself. After that, copy the generated
-climon config script from the dialog and run it on the devbox. Ensure the devbox
-is also logged in (`devtunnel user login`).
-
-Official reference:
-[Create and host a tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/get-started) and
-[Dev tunnels CLI commands](https://learn.microsoft.com/azure/developer/dev-tunnels/cli-commands).
-
-## Building standalone binaries
-
-To produce self-contained executables that run without Bun or this repository:
-
-```bash
-bun install                  # ensure dependencies are present
-bun run compile              # packages the host platform's zip
-```
-
-The shipped `climon` client is a native **Rust** binary. `bun run compile` builds
-the host target's Rust client (`cargo build --release -p climon-cli`) and packages
-`dist/climon-<host>.zip`. Building all five platform zips at once requires the
-prebuilt Rust clients for each target staged under `dist/.rust-clients/<platform>/`
-and `CLIMON_ASSEMBLE=1`; the release pipeline cross-compiles those clients on native
-runners (`.github/workflows/release.yml`). The Bun `climon-server` dashboard is built
-unchanged.
-
-This outputs per-platform zip archives to `dist/`:
-
-| File | Platform | Contents |
-| --- | --- | --- |
-| `climon-linux-x64.zip` | Linux x86_64 | `install` (Rust client), `climon-server`, `climon-alpha` |
-| `climon-linux-arm64.zip` | Linux aarch64 | `install` (Rust client), `climon-server`, `climon-alpha` |
-| `climon-darwin-x64.zip` | macOS Intel | `install` (Rust client), `climon-server`, `climon-alpha` |
-| `climon-darwin-arm64.zip` | macOS Apple Silicon | `install` (Rust client), `climon-server`, `climon-alpha` |
-| `climon-windows-x64.zip` | Windows x86_64 | `install.exe` (Rust client), `climon-server.exe`, `climon-alpha` |
-
-Inside each zip the `install` binary is the Rust `climon` client. The `climon-alpha`
-entry is a small **sentinel marker**: when `install` runs and finds `climon-alpha`
-beside it, it runs the native Rust self-installer (copies itself to `climon`, places
-`climon-server`, sets up PATH, writes `.version`, prints the changelog).
-
-Each binary is fully standalone — no Bun installation or `node_modules` needed.
-Unzip the archive for your platform and run `install` (it self-installs `climon`
-and `climon-server` side by side; the `climon` client locates `climon-server` as a
-sibling). On Linux and macOS the extracted binaries keep their executable bit; on
-Windows use `install.exe`.
-
-## Releasing
-
-The version lives in `package.json` and is the single source of truth: both
-binaries and the dashboard read it via `src/version.ts`, so a bump flows
-everywhere on the next build.
-
-Bump it with the release script, which rewrites `package.json`, commits the
-change, and creates a matching `vX.Y.Z` git tag:
-
-```bash
-bun run release            # patch bump (default): 0.1.0 -> 0.1.1
-bun run release minor      # 0.1.0 -> 0.2.0
-bun run release major      # 0.1.0 -> 1.0.0
-```
-
-The script refuses to run with a dirty working tree (so the release commit only
-contains the bump) and does **not** push — finish with `git push --follow-tags`.
-
-### Branch workflow: PRs target `dev`, releases come from `main`
-
-Because the [`Release`](.github/workflows/release.yml) workflow triggers on every
-push to `main`, all day-to-day work must go through the `dev` branch:
-
-- **Open pull requests against `dev`, never `main`.** Merging a PR into `main`
-  would immediately cut a release, so feature and fix branches base off and merge
-  into `dev`.
-- **Merge `dev` into `main` only when you actually want to release.** That merge
-  is the deliberate "ship it" action; it runs the patch bump, tags, and publishes
-  the artifacts described below.
-
-### Automatic bump on merge to `main`
-
-The patch bump runs automatically in CI whenever `main` is updated — i.e. when a
-pull request is merged. The [`Release`](.github/workflows/release.yml) workflow
-checks out `main`, runs `bun run release`, and pushes the bump commit and tag
-back to `main`.
-
-Notes:
-
-- Works for **every** merge style — merge commit, squash, or rebase — because it
-  triggers on any push to `main`, not on a local Git hook.
-- The release commit message starts with `chore(release):`, and the workflow
-  skips those, so the bump it pushes never triggers another bump.
-- The workflow pushes with `GITHUB_TOKEN`, which works because `main` is not a
-  protected branch. If you later protect `main` against direct pushes, the bot
-  token can only bypass it on **organization** repositories; on a user-owned
-  repo you must supply an **admin-owned** PAT with `contents: write` as the
-  `RELEASE_TOKEN` secret (the workflow prefers it when present).
-- To cut a `minor`/`major` release instead, run `bun run release minor|major`
-  locally and push with `git push --follow-tags`.
-
-For signed, auto-updatable releases — generating the signing keypair, embedding
-the public key, configuring the CI secret, and how the update trust chain works —
-see [`docs/deployment.md`](docs/deployment.md).
+## Updating
+
+`climon update` fetches the release manifest from
+`https://github.com/jackgeek/climon/releases/latest/download/manifest.json`,
+verifies each artifact's Ed25519 signature against the embedded public key, and
+only then swaps binaries — atomically and without killing running sessions or the
+dashboard. When auto-update is off (the default), climon prints a one-line banner
+suggesting `climon update` when a newer version is available.
 
 ## Logging
 
-climon logs to `$CLIMON_HOME/logs/` using structured pino. Control verbosity with
-`logging.level` in config or the `CLIMON_LOG_LEVEL` environment variable
-(`trace`…`fatal`, or `silent` to disable). See **[docs/logging.md](docs/logging.md)**
-for details, including how to turn logging on and off and the optional App
-Insights sink. (This replaces the old `CLIMON_DEBUG` / `CLIMON_STATUS_DEBUG`
-flags.)
+climon logs to `$CLIMON_HOME/logs/` using structured logging. Control verbosity
+with `logging.level` in config or the `CLIMON_LOG_LEVEL` environment variable
+(`trace`…`fatal`, or `silent` to disable). See
+[docs/logging.md](docs/logging.md) for details.
 
-## Further reading
+## Build from source
 
-See [`docs/cheat-sheet.md`](docs/cheat-sheet.md),
-[`docs/setup.md`](docs/setup.md), [`docs/usage.md`](docs/usage.md),
-[`docs/architecture.md`](docs/architecture.md),
-[`docs/security.md`](docs/security.md),
-[`docs/deployment.md`](docs/deployment.md),
-[`docs/logging.md`](docs/logging.md), and
-[`docs/troubleshooting.md`](docs/troubleshooting.md) for details.
+climon ships as two binaries built from two toolchains:
+
+- **Client (`climon`) — Rust.** The launcher/attach client, session host, PTY,
+  `run`/`ls`/`kill`, `config`, `setup`, `update`, the remote bridge, and the
+  installer are built from the Rust workspace under [`rust/`](rust/). **All
+  client development happens here.**
+- **Dashboard server (`climon-server`) — Bun.** The React + Fluent UI dashboard
+  and its REST/SSE/WebSocket APIs are built from `src/server.ts`.
+
+> The rest of the TypeScript under `src/` is the **legacy client**, frozen and
+> kept only for the Bun test suite. Fix client bugs in the Rust crates, not
+> there. See [docs/architecture.md](docs/architecture.md).
+
+Requirements:
+
+- A stable **Rust** toolchain (edition 2021) to build the client.
+- [Bun](https://bun.sh) ≥ 1.3.0 (≥ 1.3.14 on Windows) to build/run the dashboard
+  server.
+
+```sh
+cargo build --release --manifest-path rust/Cargo.toml   # build the Rust client
+bun install                                             # server dependencies
+bun run build:server                                    # build climon-server
+```
+
+To produce self-contained release archives (the same ones the installer
+downloads):
+
+```sh
+bun run compile        # packages the host platform's dist/climon-<host>.zip
+```
+
+Each archive contains the Rust `install` binary, `climon-server`, and a
+`climon-alpha` sentinel; running `install` self-installs `climon` and
+`climon-server` side by side. See [docs/deployment.md](docs/deployment.md) for
+the full release and signing pipeline.
+
+## Documentation
+
+- [docs/cheat-sheet.md](docs/cheat-sheet.md) — one-page command reference
+- [docs/setup.md](docs/setup.md) — install locations and onboarding state
+- [docs/usage.md](docs/usage.md) — detailed usage, config, and remote/WSL setup
+- [docs/architecture.md](docs/architecture.md) — components and data flow
+- [docs/security.md](docs/security.md) — threat model for remote features
+- [docs/deployment.md](docs/deployment.md) — release, signing, and update trust
+- [docs/logging.md](docs/logging.md) — logging and diagnostics
+- [docs/troubleshooting.md](docs/troubleshooting.md) — common problems
+
+## Contributing
+
+Day-to-day work goes through the `dev` branch:
+
+- **Open pull requests against `dev`, never `main`.** Pushing to `main` triggers
+  the [Release](.github/workflows/release.yml) workflow, which bumps the version,
+  tags, and publishes artifacts.
+- **`dev` is merged into `main` only when you deliberately want to ship a
+  release.**
+
+Build and test the client with `cargo build` / `cargo test` / `cargo clippy` in
+`rust/`; test the server and legacy suite with `bun test tests`. New features
+ship with manual checks under [docs/manual-tests/](docs/manual-tests/).
 
 ## License
 
-climon is open source under the MIT License. See [`LICENSE`](LICENSE). Run
-`climon license` to print the licence and third-party attributions.
+climon is open source under the [MIT License](LICENSE). Run `climon license` to
+print the licence and third-party attributions.

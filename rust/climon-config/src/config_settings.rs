@@ -280,7 +280,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         ConfigSetting::new(
             "version",
             Number,
-            "Schema version for the persisted config.json format. Always 1 for the current release.",
+            "Schema version for the persisted config file format. Always 1 for the current release.",
             vec![Client, Daemon, Server],
         )
         .default(Value::from(CONFIG_VERSION))

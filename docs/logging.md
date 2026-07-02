@@ -18,12 +18,12 @@ The effective level is resolved with this precedence:
 
 ### Disable logging
 
-- Permanently: `climon config set logging.level silent`
+- Permanently: `climon config logging.level silent`
 - For one command: `CLIMON_LOG_LEVEL=silent climon ...`
 
 ### Re-enable / change verbosity
 
-- `climon config set logging.level info`
+- `climon config logging.level info`
 - One-off deep debugging: `CLIMON_LOG_LEVEL=debug climon ...`
 
 ### Setting CLIMON_LOG_LEVEL persistently
@@ -91,7 +91,7 @@ are redacted to `[REDACTED]` in all log output.
 The dashboard server can forward logs to Azure Application Insights. Set a
 connection string and it is enabled automatically (off by default):
 
-- `climon config set logging.appInsights.connectionString "<connection-string>"`
+- `climon config logging.appInsights.connectionString "<connection-string>"`
 - or the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable
 
 This sends log data over the network and is opt-in only.

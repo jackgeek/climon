@@ -2,9 +2,10 @@
 
 ## `climon: command not found`
 
-You haven't linked the CLI. Either run it directly with `bun src/index.ts ...`
-or run `bun link` in the project root to get a global `climon` command. Ensure
-`~/.bun/bin` is on your `PATH`.
+climon isn't on your `PATH`. Install it with the one-liner from the
+[README](../README.md#install) (which runs the bundled self-installer and sets up
+your `PATH`), then open a new shell. For local development from a source checkout,
+run the Rust client with `cargo run -p climon-cli -- <args>` from `rust/`.
 
 ## The web terminal is blank / black
 
@@ -12,9 +13,9 @@ If the web terminal renders as a blank or black box:
 
 1. Confirm the session is **running** (live sessions stream over WebSocket;
    completed sessions show saved scrollback).
-2. Check the browser console for asset errors — `/assets/xterm.js`,
-   `/assets/xterm.css`, `/assets/addon-fit.js` must load. If they 404, run
-   `bun install` so the `@xterm/*` packages are present.
+2. Check the browser console for asset errors — `/assets/app.js` and
+   `/assets/xterm.css` must load. These are embedded in `climon-server`; if they
+   404, the server build is incomplete (rebuild with `bun run build:server`).
 3. Make sure you can reach the server (correct host/port).
 
 ## A session is stuck on `running` and shows no output
@@ -27,10 +28,10 @@ cat "$CLIMON_HOME/sessions/<id>.log"   # CLIMON_HOME defaults to ~/.climon
 
 Common causes:
 
-- **Bun too old.** Native PTY requires Bun >= 1.3. Run `bun --version`. On older
-  Bun, PTY output is lost almost immediately. Upgrade Bun.
 - **Command not found.** If the launched executable doesn't exist, the daemon
   exits quickly; the log shows the error and the session becomes `failed`.
+- **Server too old (dashboard).** The Bun `climon-server` requires Bun >= 1.3 to
+  build/run; the native Rust client uses its own portable PTY layer.
 
 ## Sessions disappear after a reboot
 
@@ -40,9 +41,11 @@ machine restarts.
 
 ## Can't connect from another machine
 
-The dashboard server binds to loopback (`127.0.0.1`/`::1`) only. For remote
-monitoring, use the dev tunnels integration (`climon tunnel`) or the direct
-Windows/WSL bridge. See `docs/usage.md` for details on remote session access.
+The dashboard server binds to loopback (`127.0.0.1`/`::1`) by default. To expose
+it on your LAN, set `climon config server.host 0.0.0.0`. For monitoring sessions
+on another machine, use the dev tunnels integration (the **Remotes…** menu, with
+`feature.remotes` enabled) or the direct Windows/WSL bridge (`climon link`). See
+`docs/usage.md` for details on remote session access.
 
 ## Remote dev tunnel sessions do not appear
 
@@ -65,8 +68,10 @@ Add `-Json` to either command if you want structured output to share or diff.
 
 ## Windows: interactive sessions don't work
 
-Bun's PTY (`Bun.Terminal`) is POSIX-only. On Windows, run climon inside **WSL**
-for the interactive PTY experience.
+The shipped `climon` client is a native Rust binary with Windows PTY support via
+ConPTY, so interactive sessions work directly in PowerShell or Windows Terminal —
+WSL is not required. If sessions still misbehave, confirm you're running the
+installed `climon.exe` (not an old Bun build) with `climon --version`.
 
 ## Cleaning up stale state
 

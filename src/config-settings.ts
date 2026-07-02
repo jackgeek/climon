@@ -62,7 +62,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "version",
     type: "number",
     defaultValue: CONFIG_VERSION,
-    purpose: "Schema version for the persisted config.json format. Always 1 for the current release.",
+    purpose: "Schema version for the persisted config file format. Always 1 for the current release.",
     scope: ["client", "daemon", "server"],
     internal: true
   },

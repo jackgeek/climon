@@ -1,5 +1,5 @@
 {
-  // Schema version for the persisted config.json format. Always 1 for the current release.
+  // Schema version for the persisted config file format. Always 1 for the current release.
   "version": 1,
   "server": {
     // IP address the dashboard server binds to. Defaults to loopback for local-only access.

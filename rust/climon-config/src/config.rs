@@ -1189,7 +1189,7 @@ mod tests {
         assert_eq!(cfg["session"]["color"], json!("auto"));
         assert_eq!(cfg["session"]["priority"], json!(500));
         let raw = fs::read_to_string(t.path().join("ch").join("config.jsonc")).unwrap();
-        assert!(raw.contains("// Schema version for the persisted config.json format"));
+        assert!(raw.contains("// Schema version for the persisted config file format"));
         assert!(raw.contains("\"version\": 1"));
         assert!(raw.contains("\"color\": \"auto\""));
     }

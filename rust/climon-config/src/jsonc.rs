@@ -324,7 +324,7 @@ mod tests {
             "session": { "color": "auto" },
             "remote": { "tunnelId": "abc123" }
         }));
-        assert!(rendered.contains("// Schema version for the persisted config.json format. Always 1 for the current release."));
+        assert!(rendered.contains("// Schema version for the persisted config file format. Always 1 for the current release."));
         assert!(rendered.contains("\"version\": 1"));
         assert!(rendered.contains("// Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment."));
         assert!(rendered.contains("\"color\": \"auto\""));

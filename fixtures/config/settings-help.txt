@@ -1,6 +1,6 @@
   version
     Type: number; Default: 1; Scope: client, daemon, server; internal
-    Schema version for the persisted config.json format. Always 1 for the current
+    Schema version for the persisted config file format. Always 1 for the current
     release.
 
   server.host

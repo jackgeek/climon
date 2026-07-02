@@ -105,8 +105,9 @@ A `Bun.serve` server, stateless with respect to PTYs:
   (only while the remote ingest daemon is running). Ingest startup is driven by
   config: the server starts it when either `feature.remotes` or
   `feature.wslBridge` is enabled, never by a server CLI flag.
-- `GET /` — dashboard HTML shell that loads the React app bundle (localhost
-  allowed; LAN requires a token).
+- `GET /` — dashboard HTML shell that loads the React app bundle (served to any
+  client that can reach the bound address; session creation and other privileged
+  APIs are loopback-only).
 - `GET /api/sessions` — current sessions, priority-sorted.
 - `POST /api/sessions` — create a session (loopback only). With a `parentId`, the
   server spawns the new session on the machine that session lives on, inheriting
@@ -219,7 +220,7 @@ processes. Signing tooling lives in `scripts/gen-update-keys.ts` and
 
 | Path | Purpose |
 |------|---------|
-| `config.json` | server host/port/lan/token, terminal clamp option |
+| `config.jsonc` | server host/port, terminal/theme/attention settings, feature flags (legacy `config.json` is read and migrated) |
 | `server.json` | running dashboard server state: `{ pid, port, ingest? }` (discovery/stop; read by a peer OS for WSL<->Windows discovery) |
 | `sessions/<id>.json` | session metadata |
 | `sessions/<id>.scrollback` | final captured output |
