@@ -14,7 +14,7 @@ describe("collectDashboardPreferences", () => {
   test("returns defaults when nothing is set", () => {
     const prefs = collectDashboardPreferences(freshConfig());
     expect(prefs["dashboard.theme"]).toBe("Default");
-    expect(prefs["dashboard.keyBarPinned"]).toBe(false);
+    expect(prefs["dashboard.keyBarPinned"]).toBe(true);
   });
 
   test("reflects values set on the config", () => {

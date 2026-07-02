@@ -143,7 +143,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "dashboard.keyBarPinned",
     type: "boolean",
-    defaultValue: false,
+    defaultValue: true,
     purpose: "Whether the web dashboard key bar is pinned open.",
     scope: ["server", "browser"],
     acceptInput: true,

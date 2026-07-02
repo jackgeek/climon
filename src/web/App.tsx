@@ -515,7 +515,7 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
-    () => readCachedPreference(PREF_KEY_BAR_PINNED) === true
+    () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
   );
   const [themeId, setThemeId] = useState<string>(
     () => (readCachedPreference(PREF_THEME) as string) ?? DEFAULT_THEME_NAME
