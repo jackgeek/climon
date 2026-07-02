@@ -3,6 +3,7 @@ import {
   canInstallPwa,
   computeIsStandalone,
   computeIsTunnelOrigin,
+  reauthenticateTunnel,
 } from "../src/web/pwa/pwaContext.js";
 
 describe("pwa context", () => {
@@ -24,5 +25,27 @@ describe("pwa context", () => {
     expect(canInstallPwa({ isTunnelOrigin: true, isStandalone: false })).toBe(true);
     expect(canInstallPwa({ isTunnelOrigin: true, isStandalone: true })).toBe(false);
     expect(canInstallPwa({ isTunnelOrigin: false, isStandalone: false })).toBe(false);
+  });
+
+  test("reauthenticateTunnel opens the tunnel URL in the system browser when standalone", () => {
+    const calls: Array<[string, string]> = [];
+    reauthenticateTunnel({
+      isStandalone: true,
+      href: "https://abc-3131.usw2.devtunnels.ms/",
+      openBrowser: (url) => calls.push(["open", url]),
+      navigate: (url) => calls.push(["navigate", url]),
+    });
+    expect(calls).toEqual([["open", "https://abc-3131.usw2.devtunnels.ms/"]]);
+  });
+
+  test("reauthenticateTunnel reloads in place in a normal browser tab", () => {
+    const calls: Array<[string, string]> = [];
+    reauthenticateTunnel({
+      isStandalone: false,
+      href: "https://abc-3131.usw2.devtunnels.ms/",
+      openBrowser: (url) => calls.push(["open", url]),
+      navigate: (url) => calls.push(["navigate", url]),
+    });
+    expect(calls).toEqual([["navigate", "https://abc-3131.usw2.devtunnels.ms/"]]);
   });
 });
