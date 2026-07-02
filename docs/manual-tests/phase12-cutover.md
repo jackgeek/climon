@@ -221,10 +221,11 @@ coverage: `rust/climon-cli/src/installer.rs` marker-present/absent tests.)
 4. Confirm the five `dist/climon-<platform>.zip` archives are produced, each with
    the Rust `install` binary, the Bun `climon-server`/`climon-beta` bundles, and
    the `climon-alpha` sentinel.
-5. Confirm the existing sign/encrypt/verify/publish steps run unchanged: the
-   `HAS_SIGNING_KEY`/`HAS_DISTRIBUTION_KEY` gates, `manifest.json`, `.sig`/`.enc`
-   verification, GitHub release publish to both repos, and the bump-commit/tag
-   push.
+5. Confirm the signing/verification/publish steps run: the `HAS_SIGNING_KEY`
+   gate, `manifest.json`, detached `.sig` files, GitHub release publish to
+   `jackgeek/climon`, and the bump-commit/tag push. The release no longer
+   encrypts artifacts or publishes update assets to `jackgeek/climon-releases`
+   during the normal release workflow.
 
 **Expected:** Each matrix cell produces a per-target `install` artifact on its
 native runner; the assemble job packages all five zips from the prebuilt clients

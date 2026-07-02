@@ -27,13 +27,15 @@ scratch `$CLIMON_HOME` config, so the test never touches your real `~/.climon`.
 2. Start an interactive session (`climon` with no subcommand, or `climon run --`
    a short command) and watch stderr as it launches.
 3. Exit the session, then start another interactive session the same way.
-4. Inspect the global config (`climon config --global license.noticeShown`).
+4. Inspect the scratch `$CLIMON_HOME/config.jsonc` file directly.
 
 **Expected result:**
 - The first launch prints, once, to stderr: `climon is now open source under the
   MIT License — run 'climon license' for details.`
 - The second launch prints no such notice.
-- `license.noticeShown` is `true` after the first launch.
+- The config file contains `"license":{"noticeShown":true}` after the first
+  launch. (`license.noticeShown` is internal state, so it is not queryable
+  through `climon config`.)
 
 **Result-tracking row:**
 
@@ -81,11 +83,11 @@ scratch `$CLIMON_HOME` config, so the test never touches your real `~/.climon`.
 **Steps:**
 1. Create a fresh scratch `$CLIMON_HOME` (empty or without any `eula.*` key).
 2. Start an interactive session and watch stderr as it launches.
-3. Inspect the global config (`climon config --global license.noticeShown`).
+3. Inspect the scratch `$CLIMON_HOME/config.jsonc` file directly.
 
 **Expected result:**
 - No license-change notice is printed.
-- `license.noticeShown` remains unset (fresh installs are never flagged).
+- `license.noticeShown` remains absent (fresh installs are never flagged).
 
 **Result-tracking row:**
 
