@@ -20,7 +20,6 @@
     "build:all": "bun run build && bun run build:web && bun run build:server",
     "compile": "bun scripts/compile.ts",
     "sign-release": "bun scripts/sign-release.ts",
-    "encrypt-release": "bun scripts/encrypt-release.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",

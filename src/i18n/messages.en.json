@@ -1395,12 +1395,6 @@
       }
     }
   },
-  "update.decryptFailed": {
-    "id": "c8bc534f",
-    "t": "Update aborted: could not decrypt the release (wrong or rotated password). No changes were made.",
-    "hint": "Error printed when an encrypted update cannot be decrypted because the configured update.password is wrong or has been rotated; nothing was installed.",
-    "params": {}
-  },
   "update.deferredLocked": {
     "id": "9ba6f0a8",
     "t": "Update could not be applied right now (files in use). Will retry later.",

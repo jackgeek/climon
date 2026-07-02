@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { zipSync } from "fflate";
 import { runUpdateCommand } from "../src/update/update-cmd.js";
 import type { Manifest } from "../src/update/manifest.js";
-import { encryptEnvelope } from "../src/update/crypto-envelope.js";
 
 let dir: string;
 let installDir: string;
@@ -124,90 +123,5 @@ describe("runUpdateCommand", () => {
       print: () => {},
     });
     expect(result.status).toBe("up-to-date");
-  });
-});
-
-describe("runUpdateCommand with encryption", () => {
-  test("decrypts, verifies, and installs an encrypted artifact", async () => {
-    if (process.platform === "win32") return;
-    const pw = "shared-pw";
-    const encZip = encryptEnvelope(zipBytesFixture, pw);
-    const sig = await sign(zipBytesFixture);
-    const s = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        const path = new URL(req.url).pathname;
-        if (path === "/artifact.zip.enc") return new Response(encZip as BodyInit);
-        if (path === "/artifact.zip.sig") return new Response(sig);
-        return new Response("nope", { status: 404 });
-      },
-    });
-    try {
-      const base = `http://localhost:${s.port}`;
-      const manifest: Manifest = {
-        version: "0.99.0",
-        encryption: "aes-256-gcm-scrypt-v1",
-        artifacts: {
-          [`linux-${arch()}`]: {
-            url: `${base}/artifact.zip.enc`,
-            sig: `${base}/artifact.zip.sig`,
-          },
-        },
-      };
-      const result = await runUpdateCommand({
-        installDir,
-        currentVersion: "0.12.1",
-        manifest,
-        publicKeyB64: pubB64,
-        decryptPassword: pw,
-        platform: "linux",
-        print: () => {},
-      });
-      expect(result.status).toBe("updated");
-      expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("new-binary");
-    } finally {
-      s.stop(true);
-    }
-  });
-
-  test("wrong password yields decrypt-failed and leaves files unchanged", async () => {
-    if (process.platform === "win32") return;
-    const encZip = encryptEnvelope(zipBytesFixture, "right-pw");
-    const sig = await sign(zipBytesFixture);
-    const s = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        const path = new URL(req.url).pathname;
-        if (path === "/artifact.zip.enc") return new Response(encZip as BodyInit);
-        if (path === "/artifact.zip.sig") return new Response(sig);
-        return new Response("nope", { status: 404 });
-      },
-    });
-    try {
-      const base = `http://localhost:${s.port}`;
-      const manifest: Manifest = {
-        version: "0.99.0",
-        encryption: "aes-256-gcm-scrypt-v1",
-        artifacts: {
-          [`linux-${arch()}`]: {
-            url: `${base}/artifact.zip.enc`,
-            sig: `${base}/artifact.zip.sig`,
-          },
-        },
-      };
-      const result = await runUpdateCommand({
-        installDir,
-        currentVersion: "0.12.1",
-        manifest,
-        publicKeyB64: pubB64,
-        decryptPassword: "wrong-pw",
-        platform: "linux",
-        print: () => {},
-      });
-      expect(result.status).toBe("decrypt-failed");
-      expect(readFileSync(join(installDir, "climon"), "utf8")).toBe("old-binary");
-    } finally {
-      s.stop(true);
-    }
   });
 });

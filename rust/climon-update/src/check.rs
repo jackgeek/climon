@@ -7,7 +7,7 @@ use crate::state::{clear_available_version, record_check, set_available_version}
 
 /// The manifest URL the background check polls.
 pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/jackgeek/climon-releases/releases/latest/download/manifest.json";
+    "https://github.com/jackgeek/climon/releases/latest/download/manifest.json";
 
 /// Fetches the manifest and caches the available version if newer. Records the
 /// check time and never errors (offline-safe), so it is safe to fire-and-forget.
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn default_manifest_url_points_at_the_releases_repo() {
-        assert!(DEFAULT_MANIFEST_URL.contains("jackgeek/climon-releases"));
+        assert!(DEFAULT_MANIFEST_URL.contains("jackgeek/climon/"));
         assert!(DEFAULT_MANIFEST_URL.ends_with("manifest.json"));
     }
 }
