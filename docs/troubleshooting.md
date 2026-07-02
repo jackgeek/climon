@@ -55,8 +55,9 @@ session needs attention.
 
 To surface sessions running on a *remote* machine, use the dev tunnels
 integration (the **Remotes…** menu, with `feature.remotes` enabled) or the
-direct Windows/WSL bridge (`climon link`). See `docs/usage.md` for details on
-remote session access.
+direct Windows/WSL bridge (`climon link`). These remote features are
+**experimental and still under development** — enable them at your own risk. See
+`docs/usage.md` for details on remote session access.
 
 ## Remote dev tunnel sessions do not appear
 
