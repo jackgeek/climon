@@ -200,12 +200,6 @@
     background. When false (default), it only prints a one-line banner suggesting
     `climon --update`.
 
-  update.password
-    Type: string; Default: unset; Scope: client; sensitive
-    Shared password used to decrypt encrypted release artifacts when auto-updating from
-    the gated public release repo. Provided out-of-band by the maintainer. Stored
-    locally; treat as a secret.
-
   update.lastCheck
     Type: string; Default: unset; Scope: client; internal
     ISO-8601 timestamp of the last background update check. Used to throttle checks.

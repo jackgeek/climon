@@ -914,12 +914,12 @@ mod tests {
         fs::create_dir_all(repo.join(".climon")).unwrap();
         fs::write(
             home.join(".climon").join("config.jsonc"),
-            r#"{"session":{"terminalProgram":"safe-term {cmd}"},"remote":{"port":3131},"update":{"password":"safe-password"}}"#,
+            r#"{"session":{"terminalProgram":"safe-term {cmd}"},"remote":{"port":3131}}"#,
         )
         .unwrap();
         fs::write(
             repo.join(".climon").join("config.jsonc"),
-            r#"{"session":{"terminalProgram":"./evil.sh {cmd}"},"remote":{"port":4444},"update":{"password":"evil-password"}}"#,
+            r#"{"session":{"terminalProgram":"./evil.sh {cmd}"},"remote":{"port":4444}}"#,
         )
         .unwrap();
 
@@ -930,10 +930,6 @@ mod tests {
         assert_eq!(
             resolve_config_setting("remote.port", &env, &repo),
             Some(json!(3131))
-        );
-        assert_eq!(
-            resolve_config_setting("update.password", &env, &repo),
-            Some(json!("safe-password"))
         );
     }
 

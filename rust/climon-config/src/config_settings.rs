@@ -553,15 +553,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .accept_input()
         .global_only(),
         ConfigSetting::new(
-            "update.password",
-            String,
-            "Shared password used to decrypt encrypted release artifacts when auto-updating from the gated public release repo. Provided out-of-band by the maintainer. Stored locally; treat as a secret.",
-            vec![Client],
-        )
-        .sensitive()
-        .accept_input()
-        .global_only(),
-        ConfigSetting::new(
             "update.lastCheck",
             String,
             "ISO-8601 timestamp of the last background update check. Used to throttle checks.",
@@ -861,7 +852,6 @@ mod tests {
                 "feature.remotes",
                 "telemetry.enabled",
                 "update.auto",
-                "update.password",
                 "update.lastCheck",
                 "update.availableVersion",
                 "install.id",
@@ -871,7 +861,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 41);
+        assert_eq!(all_config_keys().len(), 40);
     }
 
     #[test]
@@ -967,7 +957,6 @@ mod tests {
                 "feature.remotes",
                 "telemetry.enabled",
                 "update.auto",
-                "update.password",
             ]
         );
     }
@@ -1082,18 +1071,6 @@ mod tests {
             json!("silent")
         );
         assert!(coerce_config_value_from_settings("logging.level", "loud").is_err());
-    }
-
-    #[test]
-    fn update_password_is_sensitive() {
-        let s = find_config_setting("update.password").unwrap();
-        assert!(s.sensitive);
-        assert!(s.scope.contains(&ConfigProcessScope::Client));
-        assert!(accepted_config_keys().contains(&"update.password".to_string()));
-        assert_eq!(
-            coerce_config_value_from_settings("update.password", "hunter2").unwrap(),
-            json!("hunter2")
-        );
     }
 
     #[test]

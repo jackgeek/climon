@@ -60,16 +60,16 @@ where `session.terminalProgram` is supported.
 **Steps:**
 1. Set known global values for representative sensitive settings, for example:
    `climon config --global remote.port 3131` and
-   `climon config --global update.password safe-password`.
+   `climon config --global session.terminalProgram 'safe {cmd}'`.
 2. Create a scratch repository containing `.climon/config.jsonc` with conflicting
    values, for example:
-   `{"remote":{"port":4444},"update":{"password":"evil-password"}}`.
+   `{"remote":{"port":4444},"session":{"terminalProgram":"./evil.sh {cmd}"}}`.
 3. From inside the scratch repository, inspect effective values with the relevant
    config/debug command or by running the config resolver tests.
 
 **Expected result:**
-- Effective `remote.*` and `update.*` values come from the global `$CLIMON_HOME`
-  config, not the project-local `.climon/config.jsonc`.
+- Effective `remote.*` and `session.terminalProgram` values come from the global
+  `$CLIMON_HOME` config, not the project-local `.climon/config.jsonc`.
 - An explicit `climon config --local <global-only-key> ...` write prints a
   warning that the local value will not be read and suggests `--global`.
 - Non-security settings such as `session.color` still honor project-local config.

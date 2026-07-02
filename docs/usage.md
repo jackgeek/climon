@@ -464,7 +464,6 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `feature.remotes` | string | `disabled` | client, daemon, server, browser | Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge. Set to "enabled" or "disabled". [status: experimental] |
 | `telemetry.enabled` | boolean | `false` | client, server | When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default. |
 | `update.auto` | boolean | `false` | client | When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`. |
-| `update.password` | string | unset | client | Shared password used to decrypt encrypted release artifacts when auto-updating from the gated public release repo. Provided out-of-band by the maintainer. Stored locally; treat as a secret. (**sensitive**) |
 | `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |
 | `update.availableVersion` | string | unset | client | Latest version discovered by the background update check, if newer than the installed version. Cleared after a successful update. (**internal**) |
 | `install.id` | string | unset | client, server | Anonymous, randomly generated install identifier used only when telemetry is enabled. Contains no personal information. (**internal**) |

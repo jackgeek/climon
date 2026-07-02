@@ -52,7 +52,6 @@ describe("config settings registry", () => {
       "feature.remotes",
       "telemetry.enabled",
       "update.auto",
-      "update.password",
       "update.lastCheck",
       "update.availableVersion",
       "install.id"
@@ -164,14 +163,13 @@ describe("config settings registry", () => {
       "feature.wslBridge",
       "feature.remotes",
       "telemetry.enabled",
-      "update.auto",
-      "update.password"
+      "update.auto"
     ]);
   });
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(41);
+    expect(allConfigKeys().length).toBe(40);
   });
 
   test("coerces values through registry validators", () => {
@@ -239,23 +237,6 @@ describe("config settings registry", () => {
     expect(() => coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "-5")).toThrow();
     expect(() => coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "1.5")).toThrow();
     expect(coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "100")).toBe(100);
-  });
-});
-
-describe("update.password setting", () => {
-  test("is registered, sensitive, and user-settable", () => {
-    const s = findConfigSetting("update.password");
-    expect(s).toBeDefined();
-    expect(s?.type).toBe("string");
-    expect(s?.sensitive).toBe(true);
-    expect(s?.scope).toContain("client");
-    expect(acceptedConfigKeys()).toContain("update.password");
-  });
-
-  test("coerces a string value unchanged", () => {
-    expect(coerceConfigValueFromSettings("update.password", "hunter2")).toBe(
-      "hunter2"
-    );
   });
 });
 
