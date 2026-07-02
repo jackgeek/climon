@@ -274,6 +274,39 @@ For security, all dashboard-initiated session creation only works from the
 machine running the server (loopback) — remote/LAN clients cannot create
 sessions.
 
+## Installing the `devtunnel` CLI (optional)
+
+The dev tunnel features below — **Tunnel Link** and **Remote sessions over a dev
+tunnel** — need Microsoft's [`devtunnel`](https://learn.microsoft.com/azure/developer/dev-tunnels/)
+CLI on the machine hosting the tunnel (and on the devbox for remote sessions).
+It's optional: skip this if you only use climon locally. After installing, sign
+in once with `devtunnel user login` (Microsoft Entra ID, Microsoft, or GitHub
+account).
+
+- **Windows** (winget):
+
+  ```powershell
+  winget install Microsoft.devtunnel
+  ```
+
+- **macOS** (Homebrew):
+
+  ```bash
+  brew install --cask devtunnel
+  ```
+
+- **Linux** (install script):
+
+  ```bash
+  curl -sL https://aka.ms/DevTunnelCliInstall | bash
+  ```
+
+macOS also supports the install script (`curl -sL https://aka.ms/DevTunnelCliInstall | bash`),
+and Windows offers a PowerShell download
+(`Invoke-WebRequest -Uri https://aka.ms/TunnelsCliDownload/win-x64 -OutFile devtunnel.exe`).
+See the official [dev tunnels install guide](https://learn.microsoft.com/azure/developer/dev-tunnels/get-started)
+for direct downloads and upgrade commands.
+
 ## Work from your phone (Tunnel Link + PWA)
 
 Your dashboard normally binds to loopback only. To reach it from your phone (or
