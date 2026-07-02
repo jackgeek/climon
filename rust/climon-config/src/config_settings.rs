@@ -536,28 +536,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
     s.extend(feature_config_settings());
     s.extend(vec![
         ConfigSetting::new(
-            "eula.accepted",
-            Boolean,
-            "Whether the current EULA version has been accepted. Set by the installer/setup flow; not intended for manual editing.",
-            vec![Client],
-        )
-        .default(Value::from(false))
-        .internal(),
-        ConfigSetting::new(
-            "eula.version",
-            String,
-            "The EULA_VERSION the user accepted. A newer embedded version re-triggers acceptance.",
-            vec![Client],
-        )
-        .internal(),
-        ConfigSetting::new(
-            "eula.acceptedAt",
-            String,
-            "ISO-8601 timestamp recording when the EULA was accepted.",
-            vec![Client],
-        )
-        .internal(),
-        ConfigSetting::new(
             "telemetry.enabled",
             Boolean,
             "When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default.",
@@ -881,9 +859,6 @@ mod tests {
                 "feature.remoteSpawn",
                 "feature.wslBridge",
                 "feature.remotes",
-                "eula.accepted",
-                "eula.version",
-                "eula.acceptedAt",
                 "telemetry.enabled",
                 "update.auto",
                 "update.password",
@@ -896,7 +871,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 44);
+        assert_eq!(all_config_keys().len(), 41);
     }
 
     #[test]
@@ -933,7 +908,6 @@ mod tests {
                     "wslBridge": "disabled",
                     "remotes": "disabled"
                 },
-                "eula": { "accepted": false },
                 "telemetry": { "enabled": false },
                 "update": { "auto": false }
             })
@@ -1152,13 +1126,6 @@ mod tests {
 
     #[test]
     fn installer_settings() {
-        assert_eq!(
-            find_config_setting("eula.accepted").unwrap().kind,
-            ConfigType::Boolean
-        );
-        assert!(find_config_setting("eula.accepted").unwrap().internal);
-        assert!(find_config_setting("eula.version").unwrap().internal);
-        assert!(find_config_setting("eula.acceptedAt").unwrap().internal);
         assert_eq!(
             find_config_setting("telemetry.enabled")
                 .unwrap()
