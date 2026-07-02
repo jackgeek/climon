@@ -95,6 +95,39 @@ yourself.
 > [`install.ps1`](install.ps1). Later `climon update` downloads are still verified
 > against climon's embedded Ed25519 signing key.
 
+### Optional: the `devtunnel` CLI
+
+The dev tunnel features — **Tunnel Link** and **Remote sessions over a dev
+tunnel** — need Microsoft's [`devtunnel`](https://learn.microsoft.com/azure/developer/dev-tunnels/)
+CLI on the machine hosting the tunnel (and on the devbox for remote sessions).
+It's optional: skip this if you only use climon locally. After installing, sign
+in once with `devtunnel user login` (Microsoft Entra ID, Microsoft, or GitHub
+account).
+
+- **Windows** (winget):
+
+  ```powershell
+  winget install Microsoft.devtunnel
+  ```
+
+- **macOS** (Homebrew):
+
+  ```bash
+  brew install --cask devtunnel
+  ```
+
+- **Linux** (install script):
+
+  ```bash
+  curl -sL https://aka.ms/DevTunnelCliInstall | bash
+  ```
+
+macOS also supports the install script (`curl -sL https://aka.ms/DevTunnelCliInstall | bash`),
+and Windows offers a PowerShell download
+(`Invoke-WebRequest -Uri https://aka.ms/TunnelsCliDownload/win-x64 -OutFile devtunnel.exe`).
+See the official [dev tunnels install guide](https://learn.microsoft.com/azure/developer/dev-tunnels/get-started)
+for direct downloads and upgrade commands.
+
 ## Quick start
 
 ```sh
@@ -413,7 +446,9 @@ Day-to-day work goes through the `dev` branch:
   the [Release](.github/workflows/release.yml) workflow, which bumps the version,
   tags, and publishes artifacts.
 - **`dev` is merged into `main` only when you deliberately want to ship a
-  release.**
+  release.** Docs-only pushes to `main` skip the release automatically. To land a
+  non-docs `main` update without releasing, include `[skip release]` in the head
+  (merge) commit message.
 
 Build and test the client with `cargo build` / `cargo test` / `cargo clippy` in
 `rust/`; test the server with `bun test tests`. New features
