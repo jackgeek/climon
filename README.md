@@ -69,8 +69,8 @@ list** of your sessions that bumps the ones needing attention to the top and
   switching back to the original window.
 - **Work from your phone.** Securely reach your dashboard from anywhere over an
   authenticated tunnel, install it as an app on your home screen, and get **push
-  notifications when a session needs you** — even with the app closed. Only
-  people you grant access can connect. See
+  notifications when a session needs you** — even with the app closed. The tunnel
+  is private to your account and can't be shared. See
   [Work from your phone](#work-from-your-phone-tunnel-link--pwa).
 - **Nothing gets lost.** Sessions keep running even if the dashboard restarts,
   and finished commands keep their full output so you can scroll back and review
@@ -331,8 +331,9 @@ any other device) without exposing it to the network, use **Tunnel Link**:
 1. From the dashboard's ☰ menu, choose **Tunnel Link**. climon starts an
    authenticated Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/)
    in front of your local dashboard and gives you an HTTPS `*.devtunnels.ms` URL.
-   The tunnel is **not anonymous** — only identities you've granted access can
-   open it — and it stays up until you choose **Close Tunnel Link**.
+   The tunnel is **private to your account** — it's tied to your dev tunnel
+   identity and can't be shared with anyone else — and it stays up until you
+   choose **Close Tunnel Link**.
 2. Open the link on your phone and tap **Install as PWA** to add climon to your
    home screen.
 3. Enable notifications from the menu to receive **Web Push alerts when a session
