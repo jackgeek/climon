@@ -41,11 +41,22 @@ machine restarts.
 
 ## Can't connect from another machine
 
-The dashboard server binds to loopback (`127.0.0.1`/`::1`) by default. To expose
-it on your LAN, set `climon config server.host 0.0.0.0`. For monitoring sessions
-on another machine, use the dev tunnels integration (the **Remotes…** menu, with
-`feature.remotes` enabled) or the direct Windows/WSL bridge (`climon link`). See
-`docs/usage.md` for details on remote session access.
+The dashboard server binds to loopback (`127.0.0.1`/`::1`) by design, and you
+should keep it that way. climon's security model assumes the dashboard is only
+reachable from the local machine — anyone who can reach the port can take over
+your sessions, so **do not** bind it to a public interface (e.g.
+`server.host 0.0.0.0`).
+
+To use the dashboard from another computer or your phone, use **Tunnel Link**
+(the ☰ menu → **Tunnel Link**): it exposes your local dashboard over an
+authenticated Microsoft dev tunnel that is private to your account and can't be
+shared. Install it as a PWA and you can even receive push notifications when a
+session needs attention.
+
+To surface sessions running on a *remote* machine, use the dev tunnels
+integration (the **Remotes…** menu, with `feature.remotes` enabled) or the
+direct Windows/WSL bridge (`climon link`). See `docs/usage.md` for details on
+remote session access.
 
 ## Remote dev tunnel sessions do not appear
 
