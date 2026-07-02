@@ -54,8 +54,9 @@ import {
   setDashboardPreference,
   migrateLegacyKeyBarPinned
 } from "./preferences.js";
-import { MOBILE_MEDIA_QUERY_RULE } from "./mobile.js";
+import { MOBILE_MEDIA_QUERY_RULE, TOUCH_PRIMARY_QUERY_RULE } from "./mobile.js";
 import { useIsMobile } from "./hooks/useIsMobile.js";
+import { useIsTouchPrimary } from "./hooks/useIsTouchPrimary.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import {
   browserNotificationPermissionMessage,
@@ -217,6 +218,9 @@ const useStyles = makeStyles({
     zIndex: 15,
     display: "none",
     [MOBILE_MEDIA_QUERY_RULE]: {
+      display: "flex"
+    },
+    [TOUCH_PRIMARY_QUERY_RULE]: {
       display: "flex"
     }
   },
@@ -523,6 +527,11 @@ export function App() {
   );
   const [fontSize, setFontSize] = useState(() => readFontSize());
   const isMobile = useIsMobile();
+  const isTouchPrimary = useIsTouchPrimary();
+  // Wide touch devices (tablets, landscape phones) show the keybar docked
+  // inline beneath the already-visible side-by-side terminal. Narrow phones
+  // (isMobile) keep the maximized-only fullscreen keybar flow.
+  const keyBarDockedInline = isTouchPrimary && !isMobile;
   const [pageVisible, setPageVisible] = useState(() =>
     typeof document === "undefined" || document.visibilityState !== "hidden"
   );
@@ -902,23 +911,23 @@ export function App() {
     }
   }, [sessions, activeId]);
 
-  // Leaving fullscreen always closes the terminal panel so re-entering
-  // fullscreen starts with it hidden.
+  // Leaving fullscreen closes the terminal panel so re-entering fullscreen
+  // starts with it hidden. On a wide touch device the keybar is docked inline
+  // (not tied to fullscreen), so it must survive leaving fullscreen.
   useEffect(() => {
-    if (!maximized) {
+    if (!maximized && !keyBarDockedInline) {
       setPanelView("closed");
     }
-  }, [maximized]);
+  }, [maximized, keyBarDockedInline]);
 
-  // When the key bar is pinned on mobile, entering fullscreen (or toggling pin
-  // on while already maximized) reveals the chooser bar automatically so it is
-  // always available without the edge-swipe gesture. Gated on isMobile so the
-  // pin behaviour stays consistent with the mobile-only unpin control.
+  // When the key bar is pinned, reveal the chooser bar automatically so it is
+  // always available without the edge-swipe gesture: on narrow viewports when
+  // entering fullscreen, and on wide touch devices where it docks inline.
   useEffect(() => {
-    if (isMobile && maximized && keyBarPinned) {
+    if (keyBarPinned && ((isMobile && maximized) || keyBarDockedInline)) {
       setPanelView((prev) => (prev === "closed" ? "chooser" : prev));
     }
-  }, [isMobile, maximized, keyBarPinned]);
+  }, [isMobile, maximized, keyBarPinned, keyBarDockedInline]);
 
   // Reveal the special-key bar with a right-to-left edge swipe while maximized.
   // Native window listeners in the capture phase are used (rather than React
@@ -931,7 +940,7 @@ export function App() {
   // gesture and fires touchcancel instead of touchend, so waiting for touchend
   // misses it. Opening the moment the threshold is crossed wins that race.
   useEffect(() => {
-    if (!maximized) {
+    if (!maximized && !keyBarDockedInline) {
       return;
     }
     const onStart = (e: TouchEvent): void => {
@@ -976,7 +985,7 @@ export function App() {
       window.removeEventListener("touchend", onEnd, { capture: true });
       window.removeEventListener("touchcancel", onCancel, { capture: true });
     };
-  }, [maximized]);
+  }, [maximized, keyBarDockedInline]);
 
   // Track page visibility so the terminal is only "displayed" while the tab is
   // actually on screen. When the tab is hidden (switched away, minimized, or
@@ -1431,9 +1440,9 @@ export function App() {
           serverReconnectToken={serverReconnectToken}
           onLiveInteraction={handleLiveInteraction}
         />
-        {panelView !== "closed" && maximized && activeSession && isLiveStatus(activeSession.status) && (
+        {panelView !== "closed" && (maximized || keyBarDockedInline) && activeSession && isLiveStatus(activeSession.status) && (
           <>
-            {!(keyBarPinned && panelView === "chooser") && (
+            {maximized && !(keyBarPinned && panelView === "chooser") && (
               <div
                 className={styles.keyBarBackdrop}
                 onClick={() => setPanelView(keyBarPinned ? "chooser" : "closed")}

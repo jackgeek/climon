@@ -231,6 +231,41 @@ describe("scheduleTerminalRefit", () => {
       expect(source).toContain('{maximized && panelView !== "compose" && (');
     });
   });
+
+  describe("touch-based keybar availability", () => {
+    test("derives keyBarDockedInline from touch-primary on wide (non-stacked) viewports", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("const isTouchPrimary = useIsTouchPrimary();");
+      expect(source).toContain("const keyBarDockedInline = isTouchPrimary && !isMobile;");
+    });
+
+    test("keybar renders when maximized OR docked inline on wide touch", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain(
+        'panelView !== "closed" && (maximized || keyBarDockedInline) && activeSession && isLiveStatus(activeSession.status)'
+      );
+    });
+
+    test("the tap-catching backdrop is only rendered in fullscreen", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("maximized && !(keyBarPinned && panelView === \"chooser\") && (");
+    });
+
+    test("leaving fullscreen keeps the inline-docked keybar open on wide touch", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("if (!maximized && !keyBarDockedInline) {");
+    });
+
+    test("the reveal swipe is active while maximized or docked inline", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("if (!maximized && !keyBarDockedInline) {\n      return;\n    }");
+    });
+  });
 });
 
 describe("tab refocus terminal refresh", () => {
