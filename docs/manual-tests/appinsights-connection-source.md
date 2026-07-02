@@ -68,3 +68,39 @@ Use a scratch `$CLIMON_HOME` so the test does not touch your real `~/.climon`.
 |  |  |  |  |  |  |
 
 ---
+
+## MT-AICS-03 — Release build embeds the connection string from the CI secret
+
+- **ID:** MT-AICS-03
+- **Feature / phase:** App Insights connection string source
+- **Preconditions:** A checkout with Bun installed; a test connection string
+  (any non-empty value is fine for the embed check).
+- **Config-matrix cell:** n/a
+- **Platforms:** macOS, Linux, Windows
+
+**Steps:**
+1. Confirm no embedding without the secret: run
+   `APPLICATIONINSIGHTS_CONNECTION_STRING= bun -e 'import {telemetryDefineArgs} from "./scripts/compile.ts"; console.log(telemetryDefineArgs(process.env))'`.
+2. Confirm embedding with the secret: run
+   `APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=probe" bun -e 'import {telemetryDefineArgs} from "./scripts/compile.ts"; console.log(telemetryDefineArgs(process.env))'`.
+3. (Optional, full build) Set the env var and run `bun run compile`; then run the
+   compiled `climon-server`, opt in with `telemetry.enabled true`, and verify
+   forwarding works with no runtime env var set.
+4. In CI, confirm `.github/workflows/release.yml` passes
+   `secrets.APPLICATIONINSIGHTS_CONNECTION_STRING` into the "Assemble release
+   binaries" step env, and that the secret value never appears in build logs.
+
+**Expected result:**
+- Step 1 prints `[]` (empty embedded constant ⇒ no telemetry endpoint shipped).
+- Step 2 prints `[ "--define", '__CLIMON_TELEMETRY_CONNECTION__="InstrumentationKey=probe"' ]`.
+- Step 3 forwards traces using only the embedded string (no runtime env var).
+- Step 4: the secret is injected via `bun build --define`, never committed to
+  source, and redacted in logs.
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---

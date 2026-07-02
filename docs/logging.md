@@ -104,7 +104,12 @@ it in one of two ways:
 - the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable on the machine
   that runs the dashboard server, or
 - the build-time `EMBEDDED_TELEMETRY_CONNECTION` constant baked into release
-  binaries by the release pipeline (`src/telemetry/connection.ts`).
+  binaries by the release pipeline (`src/telemetry/connection.ts`). The release
+  workflow injects it at compile time from the
+  `APPLICATIONINSIGHTS_CONNECTION_STRING` GitHub Actions secret via
+  `bun build --define` (see `telemetryDefineArgs` in `scripts/compile.ts`), so the
+  string never lives in source. Builds without the secret (local builds, forks)
+  ship an empty constant and send nothing.
 
 When `telemetry.enabled` is `true` and a connection string is available from one
 of those sources, the server forwards logs; otherwise it stays local-only. This

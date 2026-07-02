@@ -60,6 +60,22 @@ const assembleMode = process.env.CLIMON_ASSEMBLE === "1";
  */
 export const EMBEDDED_DEFINE_ARGS: string[] = ["--define", "__CLIMON_EMBEDDED__=true"];
 
+/**
+ * `bun build` flags that bake the Application Insights connection string into the
+ * compiled `climon-server` binary via the `__CLIMON_TELEMETRY_CONNECTION__` define
+ * (consumed by `src/telemetry/connection.ts`). The string is read from the build
+ * environment — the release workflow supplies it from the
+ * `APPLICATIONINSIGHTS_CONNECTION_STRING` GitHub Actions secret — so it never lives
+ * in source. Absent (local builds, forks without the secret) it returns no args and
+ * the embedded constant stays `""`, so no telemetry endpoint is shipped. Telemetry
+ * still only flows when an operator opts in via `telemetry.enabled`.
+ */
+export function telemetryDefineArgs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const conn = env.APPLICATIONINSIGHTS_CONNECTION_STRING?.trim();
+  if (!conn) return [];
+  return ["--define", `__CLIMON_TELEMETRY_CONNECTION__=${JSON.stringify(conn)}`];
+}
+
 type BuildTarget = {
   platform: string;
   /** Bun cross-compile target used for the climon-server binary. */
@@ -233,7 +249,7 @@ async function main() {
       const execPathArgs = crossBin
         ? ["--compile-executable-path", crossBin]
         : [];
-      await $`bun build ${serverEntrypoint} --compile --target ${target} ${EMBEDDED_DEFINE_ARGS} ${execPathArgs} --outfile ${serverOut}`;
+      await $`bun build ${serverEntrypoint} --compile --target ${target} ${EMBEDDED_DEFINE_ARGS} ${telemetryDefineArgs()} ${execPathArgs} --outfile ${serverOut}`;
 
       // Read the produced binaries back and zip them under bare names. On Unix,
       // set os=3 + 0o755 perms so extracted binaries keep their executable bit.

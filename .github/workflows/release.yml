@@ -299,6 +299,11 @@ jobs:
       - name: Assemble release binaries
         env:
           CLIMON_ASSEMBLE: "1"
+          # Baked into the compiled climon-server via bun --define so it never
+          # lives in source. Absent (forks / no secret) => empty embedded string
+          # => no telemetry endpoint shipped. Servers still must opt in via
+          # `telemetry.enabled` for anything to be sent.
+          APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}
         run: bun run compile
 
       - name: Sign release artifacts + emit manifest
