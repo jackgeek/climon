@@ -1,5 +1,13 @@
 [
   {
+    "version": "2.5.0",
+    "changes": [
+      "Stage and edit terminal input in a new dashboard Composer before sending it",
+      "Send staged text with a touch-friendly key bar on mobile",
+      "Give the dashboard icons transparent backgrounds"
+    ]
+  },
+  {
     "version": "2.4.1",
     "changes": [
       "Fix dev tunnel re-authentication in the installed PWA opening an empty file instead of the sign-in page"
