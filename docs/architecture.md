@@ -5,25 +5,24 @@ climon is a built-in, cross-platform session manager. There are three roles: the
 They are decoupled through the filesystem (session metadata) and per-session
 sockets.
 
-> **Client = Rust, server = Bun (Phase-12 cutover complete).** The shipped
+> **Client = Rust, server = Bun.** The shipped
 > `climon` *client* (launcher, attach client, `run`/`shell`/`ls`/`kill`,
 > `config`, `setup`, `update`, remote `uplink`/`ingest`/`link`/`cleanup`, and the
 > native self-installer) is the Rust binary built from the `rust/` workspace
 > (crates `climon-cli`, `climon-session`, `climon-store`, `climon-config`,
 > `climon-logging`, `climon-pty`, `climon-proto`, `climon-remote`,
 > `climon-install`, `climon-update`). The **dashboard server** (`climon-server`)
-> is still the Bun binary built from `src/server.ts` and is never rewritten; the
-> Rust client interoperates with it byte-for-byte over the shared
-> metadata/socket/config surfaces. The TypeScript modules under `src/` (client
-> `src/index.ts`, `src/cli/`, `src/install/`, `src/remote/`, …) are retained as
-> the **legacy, frozen** client — kept only as a development reference and the
-> source of the Bun test suite. **All client work (features and bug fixes)
-> happens in the Rust crates; do not fix client bugs in `src/`.** The
-> component descriptions below describe the architecture both implementations
-> share.
+> is the Bun binary built from `src/server.ts` with `src/server/` and `src/web/`;
+> it is maintained alongside the Rust client. The old Bun/TypeScript client
+> source tree has been removed. The remaining TypeScript under `src/` is the
+> dashboard server/web plus shared support modules such as configuration,
+> logging, i18n, selected remote ingest helpers, session defaults, and
+> `src/update/pubkey.ts` (the Ed25519 public-key source read by the Rust update
+> crate at build time). **All client work (features and bug fixes) happens in
+> the Rust crates.**
 
 ```
-climon <cmd>  ──spawn(detached)──►  session daemon  ──Bun.Terminal──►  user command
+climon <cmd>  ──spawn(detached)──►  session daemon  ──portable-pty──►  user command
      │  (local attach client)            │  owns PTY + scrollback ring buffer
      │  raw-mode stdin/stdout            │  listens on per-session socket
      │  static-screen attention det.     │  (single writer of session metadata)
@@ -38,20 +37,18 @@ climon server (Bun.serve)                 │  persists final buffer + status on
 
 ## Components
 
-### PTY (`src/pty.ts`)
+### PTY (`rust/climon-pty/`)
 
-Wraps Bun's native pseudo-terminal API (`new Bun.Terminal(...)` +
-`Bun.spawn(cmd, { terminal })`). Exposes a small `PtyHandle`:
-`onData`, `onExit`, `write`, `resize`, `kill`, `pid`.
+Wraps the cross-platform native pseudo-terminal layer used by the Rust client
+and session host (`portable-pty`: openpty on Linux/macOS, ConPTY on Windows).
+It exposes the small handle the rest of the client needs: data, exit, input,
+resize, kill, and process id.
 
-Early output and a fast exit are buffered inside `spawnPty` so a listener that
-attaches a moment after spawn never misses data. (This was the root cause of an
-early bug: node-pty under Bun closed the master fd prematurely and lost output —
-replacing it with `Bun.Terminal` fixed it.) On Windows, the same
-`Bun.Terminal`/`Bun.spawn({ terminal })` path uses ConPTY (`CreatePseudoConsole`,
-available in Bun >= 1.3.14); `setsid` wrapping is skipped.
+Early output and a fast exit are buffered so a listener that attaches a moment
+after spawn never misses data. On Windows, the PTY backend uses ConPTY and skips
+Unix-only session-group handling.
 
-### Session daemon (`src/daemon/daemon.ts`)
+### Session daemon (`rust/climon-session/`)
 
 Launched as `climon __session <id>`, detached from the launcher. It:
 
@@ -60,7 +57,7 @@ Launched as `climon __session <id>`, detached from the launcher. It:
 3. Patches metadata to `running` with its PID.
 4. Listens on the per-session socket (`createServer`), replaying the scrollback
    buffer to each new client.
-5. Appends PTY output to a ring buffer (`src/daemon/buffer.ts`, ~256 KB),
+5. Appends PTY output to a ring buffer (~256 KB),
    broadcasts it to connected clients, and applies attention transitions
    reported by the attached client (it is the single writer of session
    metadata).
@@ -69,7 +66,7 @@ Launched as `climon __session <id>`, detached from the launcher. It:
 
 Because the daemon owns the PTY, the dashboard server can come and go freely.
 
-### IPC framing (`src/ipc/frame.ts`)
+### IPC framing (`rust/climon-proto/`)
 
 A length-prefixed binary protocol over the socket:
 `[4-byte BE length][1-byte type][payload]`. Types: `Output`, `Input`, `Resize`,
@@ -83,13 +80,13 @@ browser viewer disconnects, the daemon reverts the PTY to the host terminal's
 size so a still-attached host terminal is not left rendering into a shrunken
 grid.
 
-### Local client (`src/client/connect.ts`)
+### Local client (`rust/climon-cli/src/client.rs`)
 
 Connects to the daemon socket, puts stdin in raw mode, forwards keystrokes as
 `Input` frames, renders `Output`/`Replay` to stdout, sends `Resize` on terminal
 resize, and detaches on **Ctrl-\ then d** without stopping the command.
 
-### Launcher (`src/launcher.ts`)
+### Launcher (`rust/climon-cli` launcher module)
 
 `startMonitoredCommand` writes metadata, spawns the daemon (logging its output to
 `~/.climon/sessions/<id>.log`), waits for the socket, prints the dashboard URL,
@@ -144,19 +141,20 @@ A `Bun.serve` server, stateless with respect to PTYs:
 - `GET /assets/xterm.css` — xterm's stylesheet, embedded in the binary or resolved
   from `node_modules` via `Bun.resolveSync`.
 
-The client entrypoint (`src/index.ts`) never imports server code, so the React/
-Fluent/`@xterm/*` dependencies and the embedded dashboard bundle
-(`src/server/embedded-assets.ts`) stay out of the client binary and server-side
-growth never inflates the client. The server ships as a single compiled binary, and a
-release zip contains it:
+There is no Bun client bundle anymore. Bundle separation is now enforced by the
+Rust/Bun binary split: the Rust `climon` client never embeds React, Fluent UI,
+`@xterm/*`, or the dashboard asset bundle, while the Bun `climon-server` binary
+owns and embeds the web UI (`src/server/embedded-assets.ts`). Server-side growth
+therefore never inflates the client. The server ships as a single compiled
+binary, and a release zip contains it:
 
 - **Compiled `climon-server` binary** — `src/server.ts` compiled with
   `bun build --compile` (per target in `scripts/compile.ts`) and installed alongside
   `climon`. This is the **canonical and only** server path: the shipped Rust client
   always spawns this binary (it cannot load a JS bundle in-process). The client's
-  `server` subcommand resolves and spawns it via `src/cli/server-exec.ts`
-  (`resolveServerInvocation`: `CLIMON_SERVER_BIN` → sibling `climon-server[.exe]` → dev
-  source entrypoint → `PATH`).
+  `server` subcommand resolves and spawns it via
+  `rust/climon-cli/src/server_exec.rs` (`CLIMON_SERVER_BIN` → sibling
+  `climon-server[.exe]` → dev source entrypoint → `PATH`).
 
 ### Dashboard UI (`src/web/`)
 
@@ -177,33 +175,20 @@ and asset serving live in `src/server/assets.ts`.
 
 ## Onboarding, telemetry, and updates
 
-Several client-side module groups implement first-run onboarding and secure,
-non-destructive self-updates:
+Rust client crates implement first-run onboarding and secure, non-destructive
+self-updates:
 
-- **`src/i18n/`** — message catalog (`messages.ts`) and `t(key, params)`
-  interpolation used by onboarding, banners, and update output.
-- **`src/setup/`** — `onboarding.ts` (telemetry opt-in → auto-update
-  opt-in, writing config state) and `setup-cmd.ts` (the `climon setup` entry,
-  with `--apply/--telemetry=/--auto-update=` flags for
-  non-interactive use).
-- **`src/telemetry/`** — opt-in, anonymous telemetry keyed only by a random
-  `install.id`; gated on `telemetry.enabled` and attached before the AI client
-  starts.
-- **`src/install/install-manifest.ts`** — the data-driven mapping from release
-  zip entries to installed filenames, shared by the installer and the updater so
-  both agree on artifact layout. The shipped installer is now native Rust
-  (`rust/climon-install`, mirroring this manifest); a release zip's
-  `install`/`install.exe` is the Rust client, and a tiny `climon-alpha` **sentinel
-  marker** (replacing the former JS installer bundle) is what triggers the native
-  self-install when the client runs and finds it next to the executable.
-- **`src/update/`** — `manifest.ts` (semver compare + manifest fetch,
-  `currentArtifactKey()`), `state.ts` (check throttle via `update.lastCheck` and
-  cached `update.availableVersion`), `download.ts` (size-capped artifact/text
-  downloads), `pubkey.ts` (embedded Ed25519 public key), `verify.ts` (detached
-  signature verification), `swap.ts` (atomic non-destructive binary swap),
-  `update-cmd.ts` (download → verify → swap via `fflate`), `check.ts` (background
-  check), `update-cli.ts` (the `climon update` entry), and `launch-hooks.ts`
-  (the launch-time banner and detached background check/apply spawns).
+- **`rust/climon-cli`** — `climon setup`, telemetry/auto-update onboarding,
+  server delegation, launch hooks, and CLI entrypoints.
+- **`rust/climon-install`** — native self-install from release archives. A
+  release zip's `install`/`install.exe` is the Rust client, and the tiny
+  `climon-alpha` sentinel marker triggers the native self-install when the
+  client runs beside it.
+- **`rust/climon-update`** — manifest fetch, update-state throttling,
+  downloads, detached-signature verification, atomic non-destructive binary
+  swap, background checks, and the `climon update` command. Its build script
+  reads `src/update/pubkey.ts`, which remains the shared Ed25519 public-key
+  source of truth for the Bun release tooling and Rust updater.
 
 **Data flow.** Installer/onboarding writes config state (`telemetry.enabled`,
 `update.auto`, `install.id`). On `shell`/`run` launches,
@@ -230,17 +215,14 @@ processes. Signing tooling lives in `scripts/gen-update-keys.ts` and
 | `push/vapid.json` | server VAPID keypair for Web Push (auto-created) |
 | `push/subscriptions.json` | browser push subscriptions (deduped by endpoint) |
 
-## Logging (`src/logging/`)
+## Logging (`rust/climon-logging/` and `src/logging/`)
 
-All processes log through a shared pino factory (`src/logging/logger.ts`):
-`initLogger(role)` configures a process-wide root logger and `child(component)`
-tags records by area. Each role writes structured NDJSON to its own sink under
-`$CLIMON_HOME/logs/<role>/` (`src/logging/sinks.ts`); the client and server also
-pretty-print to the terminal (`info`/`warn` to stdout, `error`/`fatal` to stderr),
-and the client suspends that terminal output while attached to a PTY so it never
-corrupts the shell. Streams are built in-process with no worker thread or sidecar
-files, preserving the single-binary compile model. The optional App Insights sink
-is server-only (`src/logging/appinsights.ts`). The per-session daemon additionally
+The Rust client/session processes and the Bun dashboard server both write
+structured NDJSON logs under `$CLIMON_HOME/logs/<role>/`, using equivalent
+redaction and level semantics. The Rust side uses `rust/climon-logging`; the Bun
+server keeps its maintained logging helpers in `src/logging/`, including the
+server-only optional App Insights sink. Client terminal output is suspended while
+attached to a PTY so logs never corrupt the shell. The per-session daemon also
 keeps a separate raw `sessions/<id>.log` for uncaught crash traces. At level
 `silent` no streams, directories, or files are created.
 
@@ -249,7 +231,7 @@ keeps a separate raw `sessions/<id>.log` for uncaught crash traces. At level
 `needs-attention` < `running` < `completed`/`failed` < `disconnected`, ties
 broken by most-recent update. This drives both the dashboard and `climon ls`.
 
-## Attention detection (`src/client/idle-detector.ts`)
+## Attention detection (`rust/climon-session/`)
 
 Detection is client-side and based on a static screen, not text patterns. While a
 local client is attached it feeds every PTY output byte into a headless

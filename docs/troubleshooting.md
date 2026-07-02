@@ -2,9 +2,10 @@
 
 ## `climon: command not found`
 
-You haven't linked the CLI. Either run it directly with `bun src/index.ts ...`
-or run `bun link` in the project root to get a global `climon` command. Ensure
-`~/.bun/bin` is on your `PATH`.
+You haven't installed or built the Rust client. Install from a release archive,
+or for local development run it from the Rust workspace with
+`cargo run -p climon-cli -- ...` (from `rust/`). You can also build a release
+binary with `cargo build --release --manifest-path rust/Cargo.toml`.
 
 ## The web terminal is blank / black
 

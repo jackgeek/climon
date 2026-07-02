@@ -48,10 +48,10 @@ climon ships as two binaries:
   and its REST/SSE/WebSocket APIs are built from `src/server.ts` (`src/server/`,
   `src/web/`). This is still Bun and is actively maintained.
 
-> The rest of the TypeScript under `src/` (the old client: `src/index.ts`,
-> `src/launcher.ts`, `src/cli/`, `src/remote/`, `src/install/`, …) is the
-> **legacy client**, frozen and kept only for the Bun test suite. Don't fix
-> client bugs there — change the Rust crates instead. See
+> The client was rewritten in Rust and the old Bun/TypeScript client has been
+> removed. The remaining TypeScript under `src/` is the maintained dashboard
+> server/web plus shared support modules (configuration, logging, i18n, session
+> defaults, selected remote helpers, and the update public key). See
 > [docs/architecture.md](docs/architecture.md).
 
 ## Requirements
@@ -59,24 +59,24 @@ climon ships as two binaries:
 - **Rust** toolchain (stable, edition 2021) to build the `climon` client from
   [`rust/`](rust/) — `cargo build --release`.
 - [Bun](https://bun.sh) >= 1.3.0 on Linux/macOS, or >= 1.3.14 on Windows
-  (native ConPTY support is required) to build/run the dashboard **server** and
-  the legacy TypeScript test suite.
+  to build/run the dashboard **server**, build the web bundle, and run the Bun
+  test suite.
 
 ## Quick start
 
 ```bash
 cargo build --release --manifest-path rust/Cargo.toml   # build the Rust `climon` client
 bun run build:server         # build the Bun dashboard server (`climon-server`)
-climon server                # terminal 1: start the dashboard
+./rust/target/release/climon server   # terminal 1: start the dashboard
 ```
 
-> `bun run build:all` / `bun link` still build and link the **legacy** TS client
-> for the test suite, but the shipped `climon` client is the Rust binary above.
+`bun run build:all` builds the maintained dashboard web/server artifacts; it no
+longer builds a client.
 
 Then in a new terminal:
 
 ```bash
-climon bash                  # run any command in a monitored session
+./rust/target/release/climon bash      # run any command in a monitored session
 ```
 
 Open http://127.0.0.1:3131 and click a session.

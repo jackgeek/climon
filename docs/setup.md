@@ -2,8 +2,9 @@
 
 ## Prerequisites
 
-- **Bun >= 1.3.0.** climon relies on Bun's native PTY (`Bun.Terminal`), which is
-  only available in recent Bun releases. Check with `bun --version`.
+- **Rust stable** to build the native `climon` client from `rust/`.
+- **Bun >= 1.3.0** to build and run the maintained dashboard server/web and the
+  Bun test suite. Check with `bun --version`.
 
 No other runtime dependencies are required.
 
@@ -14,8 +15,7 @@ No other runtime dependencies are required.
   curl -fsSL https://bun.sh/install | bash
   ```
   Ensure `~/.bun/bin` is on your `PATH`.
-- **Windows:** PTY mode is POSIX-only at the Bun layer for the terminal feature;
-  on Windows, run climon under **WSL** for the interactive PTY experience.
+- **Windows:** use Bun >= 1.3.14 for dashboard development on Windows.
 
 ## Install dependencies
 
@@ -31,21 +31,22 @@ The shipped `climon` client is the native **Rust** binary built from the `rust/`
 workspace; install it by unzipping a release archive and running its `install`
 binary, which self-installs `climon` (and `climon-server`) and sets up your PATH.
 
-For local development, the legacy Bun client entrypoint is `src/index.ts`. You can
-run it directly:
+For local development, run the Rust client from the workspace:
 
 ```bash
-bun src/index.ts <args>
+cargo run -p climon-cli -- <args>      # from rust/
 ```
 
-or build the Rust client and run it from the workspace:
+or build a release binary from the repository root:
 
 ```bash
-cargo run -p climon-cli -- <args>     # from rust/
+cargo build --release --manifest-path rust/Cargo.toml
+./rust/target/release/climon <args>
 ```
 
 `bun link` still exposes the `climon-server` dashboard binary globally for local
-development.
+development; the Bun server can also be run directly with `bun src/server.ts
+server` or via `bun run server`.
 
 ## Configuration
 
@@ -127,8 +128,8 @@ bun test tests      # unit tests
 Then start the server and a session:
 
 ```bash
-bun src/index.ts server      # terminal 1
-bun src/index.ts echo hello  # terminal 2
+bun src/server.ts server                 # terminal 1: dashboard
+cargo run -p climon-cli -- echo hello    # terminal 2, from rust/
 ```
 
 Open http://127.0.0.1:3131 — you should see the session and its output.

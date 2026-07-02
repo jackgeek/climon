@@ -10,9 +10,10 @@ audit the design.
 > loopback-only privileged dashboard APIs) — is the native **Rust** binary built
 > from the `rust/` workspace (the `climon-remote` crate owns the remote
 > ingest/uplink trust boundary). The dashboard **server** (`climon-server`) remains
-> the Bun binary. The two implementations enforce the same boundaries over the same
-> wire/metadata formats; the controls below apply to the shipped Rust client and
-> the legacy Bun client alike. The native Rust self-installer (`climon-install`)
+> the maintained Bun binary. The old Bun client has been removed; the controls
+> below apply to the shipped Rust client and the Bun dashboard server over their
+> shared wire/metadata/config surfaces. The native Rust self-installer
+> (`climon-install`)
 > performs the same atomic, non-destructive file placement described under
 > *Integrity of managed files* and *Non-destructive update guarantee*.
 
