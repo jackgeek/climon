@@ -56,18 +56,7 @@ the nesting via the `CLIMON_NEST_LEVEL` environment variable (incremented for
 each level) and prints a yellow `climon: nested session (depth N)` warning to
 stderr so you're aware you're stacking sessions, but it does not block or exit.
 
-### Detach and reattach
-
-While attached, press **Ctrl-\\** then **d** to detach. The command keeps running
-in its daemon. Reattach later:
-
-```bash
-climon ls                 # find the session id
-climon attach <id>        # reconnect your terminal
-```
-
-Detaching does **not** stop the command, and restarting `climon server` does not
-affect running sessions.
+### Terminal size while attached
 
 If the dashboard is in Fill window mode and the browser grows the shared PTY
 beyond your attached local terminal, press **Ctrl-\\** then **c** in the local
