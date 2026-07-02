@@ -25,12 +25,15 @@ runs the bundled self-installer (it places `climon` and `climon-server` and sets
 up your `PATH`). To install by hand, unzip a release archive and run its `install`
 binary.
 
-For local development from a source checkout, build and run the Rust client
-directly:
+For local development from a source checkout, run the Rust client straight from
+source via the `dev` script (from the repo root):
 
 ```bash
-cargo run -p climon-cli -- <args>     # from rust/
+bun dev -- <args>     # e.g. bun dev -- --help
 ```
+
+This wraps `cargo run -p climon-cli --bin climon -- <args>`; you can also invoke
+that directly from `rust/` if you prefer.
 
 The frozen legacy Bun client entrypoint (`bun src/index.ts <args>`) exists only
 for the test suite and reference — it is not the shipped client.
