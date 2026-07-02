@@ -111,6 +111,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "windows-sys 0.59.0",
 ]

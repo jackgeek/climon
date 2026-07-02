@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Bun (JavaScript/TypeScript) dependencies from the root package.json/bun.lock
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "daily"
+
+  # Rust (Cargo) dependencies for the client workspace under rust/
+  - package-ecosystem: "cargo"
+    directory: "/rust"
+    schedule:
+      interval: "daily"

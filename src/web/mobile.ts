@@ -15,3 +15,19 @@ export const MOBILE_MEDIA_QUERY = `(max-width: ${MOBILE_MAX_WIDTH_PX}px)`;
  * which takes the bare query), so this is the form to use for style slots.
  */
 export const MOBILE_MEDIA_QUERY_RULE = `@media ${MOBILE_MEDIA_QUERY}`;
+
+/**
+ * Single source of truth for the "touch-primary" device query. Matches devices
+ * whose primary pointer is coarse and cannot hover — phones and tablets,
+ * including wide-viewport tablets and landscape phones, but NOT touch-capable
+ * laptops (which retain a fine mouse/trackpad pointer). The terminal keybar is
+ * offered on these devices regardless of viewport width, decoupled from the
+ * width-based stacked-layout breakpoint (`MOBILE_MEDIA_QUERY`).
+ */
+export const TOUCH_PRIMARY_QUERY = "(pointer: coarse) and (hover: none)";
+
+/**
+ * The same query as a Griffel/`makeStyles` at-rule key (with the `@media `
+ * prefix that `makeStyles` requires and `window.matchMedia` must not have).
+ */
+export const TOUCH_PRIMARY_QUERY_RULE = `@media ${TOUCH_PRIMARY_QUERY}`;

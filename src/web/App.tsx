@@ -54,8 +54,9 @@ import {
   setDashboardPreference,
   migrateLegacyKeyBarPinned
 } from "./preferences.js";
-import { MOBILE_MEDIA_QUERY_RULE } from "./mobile.js";
+import { MOBILE_MEDIA_QUERY_RULE, TOUCH_PRIMARY_QUERY_RULE } from "./mobile.js";
 import { useIsMobile } from "./hooks/useIsMobile.js";
+import { useIsTouchPrimary } from "./hooks/useIsTouchPrimary.js";
 import { SplashScreen } from "./components/SplashScreen.js";
 import {
   browserNotificationPermissionMessage,
@@ -217,6 +218,9 @@ const useStyles = makeStyles({
     zIndex: 15,
     display: "none",
     [MOBILE_MEDIA_QUERY_RULE]: {
+      display: "flex"
+    },
+    [TOUCH_PRIMARY_QUERY_RULE]: {
       display: "flex"
     }
   },
@@ -514,6 +518,7 @@ export function App() {
   const [maximized, setMaximized] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
+  const [composeText, setComposeText] = useState("");
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) === true
   );
@@ -522,6 +527,11 @@ export function App() {
   );
   const [fontSize, setFontSize] = useState(() => readFontSize());
   const isMobile = useIsMobile();
+  const isTouchPrimary = useIsTouchPrimary();
+  // Wide touch devices (tablets, landscape phones) show the keybar docked
+  // inline beneath the already-visible side-by-side terminal. Narrow phones
+  // (isMobile) keep the maximized-only fullscreen keybar flow.
+  const keyBarDockedInline = isTouchPrimary && !isMobile;
   const [pageVisible, setPageVisible] = useState(() =>
     typeof document === "undefined" || document.visibilityState !== "hidden"
   );
@@ -901,23 +911,23 @@ export function App() {
     }
   }, [sessions, activeId]);
 
-  // Leaving fullscreen always closes the terminal panel so re-entering
-  // fullscreen starts with it hidden.
+  // Leaving fullscreen closes the terminal panel so re-entering fullscreen
+  // starts with it hidden. On a wide touch device the keybar is docked inline
+  // (not tied to fullscreen), so it must survive leaving fullscreen.
   useEffect(() => {
-    if (!maximized) {
+    if (!maximized && !keyBarDockedInline) {
       setPanelView("closed");
     }
-  }, [maximized]);
+  }, [maximized, keyBarDockedInline]);
 
-  // When the key bar is pinned on mobile, entering fullscreen (or toggling pin
-  // on while already maximized) reveals the chooser bar automatically so it is
-  // always available without the edge-swipe gesture. Gated on isMobile so the
-  // pin behaviour stays consistent with the mobile-only unpin control.
+  // When the key bar is pinned, reveal the chooser bar automatically so it is
+  // always available without the edge-swipe gesture: on narrow viewports when
+  // entering fullscreen, and on wide touch devices where it docks inline.
   useEffect(() => {
-    if (isMobile && maximized && keyBarPinned) {
+    if (keyBarPinned && ((isMobile && maximized) || keyBarDockedInline)) {
       setPanelView((prev) => (prev === "closed" ? "chooser" : prev));
     }
-  }, [isMobile, maximized, keyBarPinned]);
+  }, [isMobile, maximized, keyBarPinned, keyBarDockedInline]);
 
   // Reveal the special-key bar with a right-to-left edge swipe while maximized.
   // Native window listeners in the capture phase are used (rather than React
@@ -930,7 +940,7 @@ export function App() {
   // gesture and fires touchcancel instead of touchend, so waiting for touchend
   // misses it. Opening the moment the threshold is crossed wins that race.
   useEffect(() => {
-    if (!maximized) {
+    if (!maximized && !keyBarDockedInline) {
       return;
     }
     const onStart = (e: TouchEvent): void => {
@@ -975,7 +985,7 @@ export function App() {
       window.removeEventListener("touchend", onEnd, { capture: true });
       window.removeEventListener("touchcancel", onCancel, { capture: true });
     };
-  }, [maximized]);
+  }, [maximized, keyBarDockedInline]);
 
   // Track page visibility so the terminal is only "displayed" while the tab is
   // actually on screen. When the tab is hidden (switched away, minimized, or
@@ -1296,6 +1306,15 @@ export function App() {
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
   const terminalVisible = activeSession !== null && pageVisible && (!isMobile || maximized);
   const sidebarCompact = effectiveSidebarCollapsed(sidebarCollapsed, isMobile);
+  // The keybar and its compose overlay only render for a live session that is
+  // either maximized (narrow flow) or docked inline (wide touch).
+  const keyBarAvailable =
+    (maximized || keyBarDockedInline) && activeSession !== null && isLiveStatus(activeSession.status);
+  // The compose overlay covers the whole viewport (including the fixed exit
+  // button), so the exit button is hidden only while the overlay is actually
+  // showing. Tying it to the overlay's own render condition avoids trapping the
+  // user in fullscreen if the session stops being live mid-compose.
+  const composeOverlayVisible = keyBarAvailable && panelView === "compose";
   const serverConnected = serverConnectionState === "connected";
   const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(
     serverConnectionState,
@@ -1430,9 +1449,9 @@ export function App() {
           serverReconnectToken={serverReconnectToken}
           onLiveInteraction={handleLiveInteraction}
         />
-        {panelView !== "closed" && maximized && activeSession && isLiveStatus(activeSession.status) && (
+        {panelView !== "closed" && keyBarAvailable && (
           <>
-            {!(keyBarPinned && panelView === "chooser") && (
+            {maximized && !(keyBarPinned && panelView === "chooser") && (
               <div
                 className={styles.keyBarBackdrop}
                 onClick={() => setPanelView(keyBarPinned ? "chooser" : "closed")}
@@ -1446,15 +1465,26 @@ export function App() {
               <TerminalPanel
                 view={panelView}
                 fontSize={fontSize}
+                composeText={composeText}
+                showLabels={!isMobile}
                 onSelect={setPanelView}
                 onAdjustFont={adjustFontSize}
+                onComposeTextChange={setComposeText}
+                onComposeInsert={(text) => {
+                  terminalRef.current?.sendInput(text);
+                  setComposeText("");
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
+                onComposeCancel={() => {
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
                 onSend={(d) => terminalRef.current?.sendInput(d)}
               />
             </div>
           </>
         )}
       </div>
-      {maximized && (
+      {maximized && !composeOverlayVisible && (
         <Button
           className={styles.exitBtn}
           appearance="outline"

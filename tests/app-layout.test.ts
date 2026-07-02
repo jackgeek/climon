@@ -204,6 +204,80 @@ describe("scheduleTerminalRefit", () => {
     expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "disconnected" }))).toBe(true);
     expect(shouldDeleteSessionWithoutDialog(makeSession({ status: "running" }))).toBe(false);
   });
+
+  describe("compose staging area handlers", () => {
+    test("Insert sends raw text and clears the staging text", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      // Insert: raw text, then clear.
+      expect(source).toContain("onComposeInsert={(text) => {\n                  terminalRef.current?.sendInput(text);\n                  setComposeText(\"\");");
+      expect(source).not.toContain("onComposeInsertRun");
+    });
+
+    test("Cancel closes the panel without clearing the staging text", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      const cancelStart = source.indexOf("onComposeCancel={() => {");
+      expect(cancelStart).toBeGreaterThan(-1);
+      const cancelEnd = source.indexOf("}}", cancelStart);
+      const cancelBody = source.slice(cancelStart, cancelEnd);
+      // Cancel must not reset the staged text (retention lets the user peek at the terminal).
+      expect(cancelBody).not.toContain('setComposeText("")');
+    });
+
+    test("hides the exit-fullscreen button only while the compose overlay is visible", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      // Tied to the overlay's own render condition so the user is never trapped
+      // in fullscreen if the session stops being live mid-compose.
+      expect(source).toContain(
+        "const composeOverlayVisible = keyBarAvailable && panelView === \"compose\";"
+      );
+      expect(source).toContain("{maximized && !composeOverlayVisible && (");
+    });
+  });
+
+  describe("touch-based keybar availability", () => {
+    test("derives keyBarDockedInline from touch-primary on wide (non-stacked) viewports", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("const isTouchPrimary = useIsTouchPrimary();");
+      expect(source).toContain("const keyBarDockedInline = isTouchPrimary && !isMobile;");
+    });
+
+    test("passes showLabels to the keybar based on viewport width", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("showLabels={!isMobile}");
+    });
+
+    test("keybar availability requires maximized OR docked inline for a live session", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain(
+        "(maximized || keyBarDockedInline) && activeSession !== null && isLiveStatus(activeSession.status)"
+      );
+      expect(source).toContain('{panelView !== "closed" && keyBarAvailable && (');
+    });
+
+    test("the tap-catching backdrop is only rendered in fullscreen", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("maximized && !(keyBarPinned && panelView === \"chooser\") && (");
+    });
+
+    test("leaving fullscreen keeps the inline-docked keybar open on wide touch", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("if (!maximized && !keyBarDockedInline) {");
+    });
+
+    test("the reveal swipe is active while maximized or docked inline", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("if (!maximized && !keyBarDockedInline) {\n      return;\n    }");
+    });
+  });
 });
 
 describe("tab refocus terminal refresh", () => {
