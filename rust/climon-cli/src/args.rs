@@ -101,10 +101,9 @@ pub enum ParsedCommand {
     },
     UpdateCheck,
     Ingest,
-    /// `climon licenses` — print embedded third-party license notices. This is a
-    /// Phase-8 addition with no TS counterpart; it is intentionally absent from
-    /// the help text to preserve byte-exact `--help` output.
-    Licenses,
+    /// `climon license` / `climon licenses` — print the climon MIT licence plus
+    /// embedded third-party license notices.
+    License,
 }
 
 /// Canonical ANSI color names in `ANSI_COLORS` order (matches `session-meta.ts`).
@@ -142,6 +141,7 @@ Usage:
   climon update                Download, verify, and apply the latest version
                                (never interrupts running sessions)
   climon setup                 Re-run onboarding (telemetry, updates)
+  climon license               Print the licence and third-party attributions
   climon --version             Show the climon version
   climon --help                Show this help
 "
@@ -423,7 +423,7 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
         "link" => Ok(ParsedCommand::Link { argv: rest }),
         "__uplink" => Ok(ParsedCommand::Uplink),
         "__ingest" => Ok(ParsedCommand::Ingest),
-        "licenses" => Ok(ParsedCommand::Licenses),
+        "license" | "licenses" => Ok(ParsedCommand::License),
         "__session" => {
             if rest.len() != 1 {
                 return Err("Provide a session id, e.g. `climon __session <id>`.".to_string());
@@ -697,6 +697,18 @@ mod tests {
                 watch: false,
                 json: true
             }
+        );
+    }
+
+    #[test]
+    fn parses_license_command_and_licenses_alias() {
+        assert_eq!(
+            parse_args(&["license".into()]).unwrap(),
+            ParsedCommand::License
+        );
+        assert_eq!(
+            parse_args(&["licenses".into()]).unwrap(),
+            ParsedCommand::License
         );
     }
 

@@ -41,7 +41,9 @@ pub mod title;
 pub mod uplink_spawn;
 pub mod version;
 
-/// The embedded third-party license notices, printed by `climon licenses`. The
-/// TS help text does not advertise this subcommand, so to keep the help bytes
-/// identical it is intentionally absent from [`args::help_text`].
+/// The embedded MIT licence, printed first by `climon license`.
+pub const CLIMON_LICENSE: &str = include_str!("../../../LICENSE");
+
+/// The embedded third-party license notices, printed by `climon license` after
+/// the climon MIT licence.
 pub const THIRD_PARTY_LICENSES: &str = include_str!("../../THIRD-PARTY-LICENSES.md");

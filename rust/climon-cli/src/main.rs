@@ -16,7 +16,7 @@ use climon_cli::launcher::{
 };
 use climon_cli::server_exec::delegate_to_server;
 use climon_cli::version::VERSION;
-use climon_cli::THIRD_PARTY_LICENSES;
+use climon_cli::{CLIMON_LICENSE, THIRD_PARTY_LICENSES};
 use climon_config::config::Env as ConfigEnv;
 use climon_logging::cli_io::{log_cli_command, write_stderr, write_stdout};
 use climon_logging::logger::{init_logger, LoggerInitOptions};
@@ -178,7 +178,9 @@ fn run() -> Result<i32, String> {
             run_session_host(&id, meta, SessionHostOptions { headless: true })
                 .map_err(|e| e.to_string())
         }
-        ParsedCommand::Licenses => {
+        ParsedCommand::License => {
+            write_stdout(CLIMON_LICENSE, false);
+            write_stdout("\n\n=== Third-party attributions ===\n\n", false);
             write_stdout(THIRD_PARTY_LICENSES, false);
             Ok(0)
         }
@@ -423,7 +425,7 @@ fn command_name(parsed: &ParsedCommand) -> &'static str {
         ParsedCommand::Setup { .. } => "setup",
         ParsedCommand::UpdateCheck => "update-check",
         ParsedCommand::Ingest => "ingest",
-        ParsedCommand::Licenses => "licenses",
+        ParsedCommand::License => "license",
     }
 }
 
