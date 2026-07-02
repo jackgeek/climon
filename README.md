@@ -4,11 +4,11 @@
 
 # climon
 
-**A web dashboard for your interactive CLI sessions.**
+**A web dashboard for your interactive CLI sessions — reachable from your phone.**
 
 Prefix any command with `climon` to run it inside a managed pseudo-terminal, then
-watch, interact with, and get notified about all of your sessions from one local
-dashboard.
+watch, interact with, and get notified about all of your sessions from one
+dashboard — locally, or securely from your phone over an authenticated dev tunnel.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/jackgeek/climon)](https://github.com/jackgeek/climon/releases/latest)
@@ -29,6 +29,7 @@ dashboard.
 - [Commands](#commands)
 - [Configuration](#configuration)
 - [Feature flags](#feature-flags)
+- [Work from your phone](#work-from-your-phone-tunnel-link--pwa)
 - [Remote sessions](#remote-sessions)
 - [Updating](#updating)
 - [Logging](#logging)
@@ -46,8 +47,10 @@ you can:
 
 - close the terminal window and the command keeps running,
 - reattach from the CLI **or** drive it live from the browser,
-- see at a glance which session is waiting on you, and
-- review the final output after a command finishes.
+- see at a glance which session is waiting on you,
+- review the final output after a command finishes, and
+- **check on and drive your sessions from your phone**, with push notifications
+  when one needs attention — see [Work from your phone](#work-from-your-phone-tunnel-link--pwa).
 
 ## Features
 
@@ -322,12 +325,7 @@ For security, all dashboard-initiated session creation only works from the
 machine running the server (loopback) — remote/LAN clients cannot create
 sessions.
 
-## Remote sessions
-
-climon can surface sessions from another machine in your dashboard, and let you
-reach your own dashboard from anywhere. These paths are opt-in.
-
-### Work from your phone (Tunnel Link + PWA)
+## Work from your phone (Tunnel Link + PWA)
 
 Your dashboard normally binds to loopback only. To reach it from your phone (or
 any other device) without exposing it to the network, use **Tunnel Link**:
@@ -355,6 +353,11 @@ prompts you to sign in again; it never stores tunnel credentials in the browser.
 
 See [docs/usage.md](docs/usage.md) and [docs/security.md](docs/security.md) for
 the tunnel identity model and push-subscription details.
+
+## Remote sessions
+
+climon can also surface sessions from another machine in your dashboard. These
+paths are opt-in.
 
 ### Remote devbox over a dev tunnel
 
