@@ -45,7 +45,8 @@ lose track of it behind a wall of terminal tabs. climon runs each command inside
 its own detached pseudo-terminal and surfaces them all in a browser dashboard, so
 you can:
 
-- close the terminal window and the command keeps running,
+- detach from a session (`Ctrl-\` then `d`) and the command keeps running under
+  its own daemon,
 - reattach from the CLI **or** drive it live from the browser,
 - see at a glance which session is waiting on you,
 - review the final output after a command finishes, and
@@ -141,8 +142,9 @@ Open <http://127.0.0.1:3131> and click a session.
 ### `climon <command> [args...]`
 
 Run any command inside a monitored PTY session — a build, a REPL, a coding agent,
-a dev server. You can check on it later from the dashboard without keeping the
-terminal window open.
+a dev server. Detach with `Ctrl-\` then `d` and the command keeps running under
+its own daemon, so you can keep tabs on it from the dashboard or reattach later
+from the CLI.
 
 ```sh
 climon bash                  # monitor an interactive shell
