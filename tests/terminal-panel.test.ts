@@ -65,7 +65,7 @@ describe("TerminalPanel", () => {
     expect(disabledCount).toBeGreaterThanOrEqual(2);
   });
 
-  test("compose insert wiring sends raw text and insert-and-run appends carriage return", () => {
+  test("compose action buttons wire to insert, insert-and-run, and cancel handlers", () => {
     const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
 
     expect(source).toContain("onClick={() => onComposeInsert(composeText)}");
