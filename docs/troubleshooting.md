@@ -78,13 +78,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\diagnostics\Collect-ClimonDev
 
 Add `-Json` to either command if you want structured output to share or diff.
 
-## Windows: interactive sessions don't work
-
-The shipped `climon` client is a native Rust binary with Windows PTY support via
-ConPTY, so interactive sessions work directly in PowerShell or Windows Terminal —
-WSL is not required. If sessions still misbehave, confirm you're running the
-installed `climon.exe` (not an old Bun build) with `climon --version`.
-
 ## Cleaning up stale state
 
 Session metadata and sockets live under `$CLIMON_HOME` (default `~/.climon`). If
