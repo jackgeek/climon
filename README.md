@@ -40,18 +40,19 @@ dashboard — locally, or securely from your phone over an authenticated dev tun
 
 ## Why climon?
 
-You start a long build, a coding agent, a dev server, or a REPL, and then you
-lose track of it behind a wall of terminal tabs. climon runs each command inside
-its own detached pseudo-terminal and surfaces them all in a browser dashboard, so
-you can:
+You run long builds, dev servers, REPLs, and coding agent CLIs across a sprawl of
+terminal tabs and VS Code windows. Terminals are easy to lose track of — and when
+one is waiting on your input, *you* become the bottleneck, hunting for the tab
+that needs attention (coding agents make this worse, stopping to ask questions
+whenever they need a decision). climon runs each command inside its own
+pseudo-terminal and surfaces them all in one browser dashboard: a **prioritized
+list** of your sessions that bumps the ones needing attention to the top and
+**notifies you** when they do. So you can:
 
-- detach from a session (`Ctrl-\` then `d`) and the command keeps running under
-  its own daemon,
-- reattach from the CLI **or** drive it live from the browser,
-- see at a glance which session is waiting on you,
-- review the final output after a command finishes, and
 - **check on and drive your sessions from your phone**, with push notifications
   when one needs attention — see [Work from your phone](#work-from-your-phone-tunnel-link--pwa).
+- see at a glance which session is waiting on you, and
+- review the final output after a command finishes.
 
 ## Features
 
@@ -285,19 +286,19 @@ climon config --debug              # show all config files in resolution order
 
 Common settings:
 
-| Key | Default | Purpose |
-| --- | --- | --- |
-| `server.host` | `127.0.0.1` | Dashboard bind address (`0.0.0.0` to expose on LAN). |
-| `server.port` | `3131` | Dashboard port. |
-| `attention.idleSeconds` | `10` | Idle seconds before a session is flagged for attention. |
-| `terminal.setTitle` | `true` | Whether climon sets the terminal window title. |
-| `terminal.clampBrowserToHost` | `false` | Clamp browser viewer resizes to the host terminal size. |
-| `dashboard.theme` | `Default` | Terminal colour theme (also settable from the ☰ menu). |
-| `session.color` | `auto` | Default accent colour for new sessions. |
-| `session.priority` | `500` | Default sort priority for new sessions. |
-| `telemetry.enabled` | `false` | Anonymous usage telemetry. |
-| `update.auto` | `false` | Background auto-update. |
-| `logging.level` | `trace` | Log verbosity (`trace`…`fatal`, or `silent`). |
+| Key                           | Default     | Purpose                                                 |
+| ----------------------------- | ----------- | ------------------------------------------------------- |
+| `server.host`                 | `127.0.0.1` | Dashboard bind address (`0.0.0.0` to expose on LAN).    |
+| `server.port`                 | `3131`      | Dashboard port.                                         |
+| `attention.idleSeconds`       | `10`        | Idle seconds before a session is flagged for attention. |
+| `terminal.setTitle`           | `true`      | Whether climon sets the terminal window title.          |
+| `terminal.clampBrowserToHost` | `false`     | Clamp browser viewer resizes to the host terminal size. |
+| `dashboard.theme`             | `Default`   | Terminal colour theme (also settable from the ☰ menu). |
+| `session.color`               | `auto`      | Default accent colour for new sessions.                 |
+| `session.priority`            | `500`       | Default sort priority for new sessions.                 |
+| `telemetry.enabled`           | `false`     | Anonymous usage telemetry.                              |
+| `update.auto`                 | `false`     | Background auto-update.                                 |
+| `logging.level`               | `trace`     | Log verbosity (`trace`…`fatal`, or `silent`).           |
 
 Run `climon config` without arguments, or see [docs/usage.md](docs/usage.md) for
 the full list.
@@ -307,12 +308,12 @@ the full list.
 Several capabilities are **experimental and disabled by default**, gated behind
 flags under the `feature.` prefix. Each accepts `"enabled"` or `"disabled"`:
 
-| Flag | Enables |
-| --- | --- |
+| Flag                      | Enables                                                                                |
+| ------------------------- | -------------------------------------------------------------------------------------- |
 | `feature.sessionSpawning` | Spawning new sessions from the dashboard (the per-session and global **[+]** buttons). |
-| `feature.remotes` | Connecting a remote devbox's sessions to this dashboard over the ingest/uplink bridge. |
-| `feature.remoteSpawn` | Spawning sessions on a remote devbox over a signed command channel. |
-| `feature.wslBridge` | Streaming sessions between a same-machine WSL distro and Windows. |
+| `feature.remotes`         | Connecting a remote devbox's sessions to this dashboard over the ingest/uplink bridge. |
+| `feature.remoteSpawn`     | Spawning sessions on a remote devbox over a signed command channel.                    |
+| `feature.wslBridge`       | Streaming sessions between a same-machine WSL distro and Windows.                      |
 
 Enable one with, for example:
 
