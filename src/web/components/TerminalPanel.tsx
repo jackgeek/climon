@@ -3,7 +3,6 @@ import {
   ArrowEnterLeft24Regular,
   ChevronDown24Regular,
   ChevronUp24Regular,
-  ClipboardPaste24Regular,
   Compose24Regular,
   Dismiss24Regular,
   Keyboard24Regular,
@@ -24,7 +23,6 @@ interface Props {
   onAdjustFont: (delta: number) => void;
   onComposeTextChange: (text: string) => void;
   onComposeInsert: (text: string) => void;
-  onComposeInsertRun: (text: string) => void;
   onComposeCancel: () => void;
   onSend: (data: string) => void;
 }
@@ -94,7 +92,6 @@ export function TerminalPanel({
   onAdjustFont,
   onComposeTextChange,
   onComposeInsert,
-  onComposeInsertRun,
   onComposeCancel,
   onSend
 }: Props) {
@@ -127,20 +124,12 @@ export function TerminalPanel({
             Cancel
           </Button>
           <Button
-            appearance="outline"
-            icon={<ClipboardPaste24Regular />}
+            appearance="primary"
+            icon={<ArrowEnterLeft24Regular />}
             disabled={empty}
             onClick={() => onComposeInsert(composeText)}
           >
             Insert
-          </Button>
-          <Button
-            appearance="primary"
-            icon={<ArrowEnterLeft24Regular />}
-            disabled={empty}
-            onClick={() => onComposeInsertRun(composeText)}
-          >
-            Insert &amp; Run
           </Button>
         </div>
       </div>

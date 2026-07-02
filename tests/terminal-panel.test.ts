@@ -13,7 +13,6 @@ function renderPanel(overrides: Partial<Parameters<typeof TerminalPanel>[0]> = {
     onAdjustFont: () => undefined,
     onComposeTextChange: () => undefined,
     onComposeInsert: () => undefined,
-    onComposeInsertRun: () => undefined,
     onComposeCancel: () => undefined,
     onSend: () => undefined,
     ...overrides
@@ -55,21 +54,19 @@ describe("TerminalPanel", () => {
     expect(markup).toContain("hello world");
     expect(markup).toContain(">Cancel<");
     expect(markup).toContain(">Insert<");
-    expect(markup).toContain("Insert &amp; Run");
   });
 
-  test("compose insert buttons are disabled when text is empty", () => {
+  test("compose insert button is disabled when text is empty", () => {
     const markup = renderPanel({ composeText: "" });
 
     const disabledCount = (markup.match(/disabled=""|disabled/g) ?? []).length;
-    expect(disabledCount).toBeGreaterThanOrEqual(2);
+    expect(disabledCount).toBeGreaterThanOrEqual(1);
   });
 
-  test("compose action buttons wire to insert, insert-and-run, and cancel handlers", () => {
+  test("compose action buttons wire to insert and cancel handlers", () => {
     const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
 
     expect(source).toContain("onClick={() => onComposeInsert(composeText)}");
-    expect(source).toContain("onClick={() => onComposeInsertRun(composeText)}");
     expect(source).toContain("onClick={() => onComposeCancel()}");
   });
 });

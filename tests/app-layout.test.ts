@@ -206,14 +206,12 @@ describe("scheduleTerminalRefit", () => {
   });
 
   describe("compose staging area handlers", () => {
-    test("Insert sends raw text, Insert & Run appends a carriage return, and both clear the staging text", () => {
+    test("Insert sends raw text and clears the staging text", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
       // Insert: raw text, then clear.
       expect(source).toContain("onComposeInsert={(text) => {\n                  terminalRef.current?.sendInput(text);\n                  setComposeText(\"\");");
-      // Insert & Run: text + carriage return (\r, not \n), then clear.
-      expect(source).toContain("onComposeInsertRun={(text) => {\n                  terminalRef.current?.sendInput(`${text}\\r`);\n                  setComposeText(\"\");");
-      expect(source).not.toContain("sendInput(`${text}\\n`)");
+      expect(source).not.toContain("onComposeInsertRun");
     });
 
     test("Cancel closes the panel without clearing the staging text", () => {

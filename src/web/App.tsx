@@ -1456,11 +1456,6 @@ export function App() {
                   setComposeText("");
                   setPanelView(keyBarPinned ? "chooser" : "closed");
                 }}
-                onComposeInsertRun={(text) => {
-                  terminalRef.current?.sendInput(`${text}\r`);
-                  setComposeText("");
-                  setPanelView(keyBarPinned ? "chooser" : "closed");
-                }}
                 onComposeCancel={() => {
                   setPanelView(keyBarPinned ? "chooser" : "closed");
                 }}
