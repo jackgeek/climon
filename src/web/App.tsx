@@ -1466,6 +1466,7 @@ export function App() {
                 view={panelView}
                 fontSize={fontSize}
                 composeText={composeText}
+                showLabels={!isMobile}
                 onSelect={setPanelView}
                 onAdjustFont={adjustFontSize}
                 onComposeTextChange={setComposeText}

@@ -245,6 +245,12 @@ describe("scheduleTerminalRefit", () => {
       expect(source).toContain("const keyBarDockedInline = isTouchPrimary && !isMobile;");
     });
 
+    test("passes showLabels to the keybar based on viewport width", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+
+      expect(source).toContain("showLabels={!isMobile}");
+    });
+
     test("keybar availability requires maximized OR docked inline for a live session", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 

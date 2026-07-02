@@ -11,7 +11,6 @@ import {
 import { KeyBar } from "./KeyBar.js";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "../fontSize.js";
 import { encodeSpecial, type Mods } from "../keys.js";
-import { MOBILE_MEDIA_QUERY_RULE } from "../mobile.js";
 
 export type TerminalPanelView = "chooser" | "keyboard" | "font" | "compose";
 export type TerminalPanelArrowDirection = "up" | "down";
@@ -20,6 +19,7 @@ interface Props {
   view: TerminalPanelView;
   fontSize: number;
   composeText: string;
+  showLabels: boolean;
   onSelect: (view: Exclude<TerminalPanelView, "chooser">) => void;
   onAdjustFont: (delta: number) => void;
   onComposeTextChange: (text: string) => void;
@@ -49,9 +49,7 @@ const useStyles = makeStyles({
     flex: "0 0 auto"
   },
   chooserLabel: {
-    [MOBILE_MEDIA_QUERY_RULE]: {
-      display: "none"
-    }
+    whiteSpace: "nowrap"
   },
   fontRow: {
     display: "flex",
@@ -94,6 +92,7 @@ export function TerminalPanel({
   view,
   fontSize,
   composeText,
+  showLabels,
   onSelect,
   onAdjustFont,
   onComposeTextChange,
@@ -184,7 +183,7 @@ export function TerminalPanel({
         icon={<Keyboard24Regular />}
         onClick={() => onSelect("keyboard")}
       >
-        <span className={styles.chooserLabel}>Keyboard</span>
+        {showLabels ? <span className={styles.chooserLabel}>Keyboard</span> : undefined}
       </Button>
       <Button
         appearance="outline"
@@ -192,7 +191,7 @@ export function TerminalPanel({
         icon={<TextFont24Regular />}
         onClick={() => onSelect("font")}
       >
-        <span className={styles.chooserLabel}>Font size</span>
+        {showLabels ? <span className={styles.chooserLabel}>Font size</span> : undefined}
       </Button>
       <Button
         appearance="outline"
@@ -200,7 +199,7 @@ export function TerminalPanel({
         icon={<Compose24Regular />}
         onClick={() => onSelect("compose")}
       >
-        <span className={styles.chooserLabel}>Composer</span>
+        {showLabels ? <span className={styles.chooserLabel}>Composer</span> : undefined}
       </Button>
       <Button
         appearance="outline"
