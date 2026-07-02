@@ -590,3 +590,8 @@ See [`docs/cheat-sheet.md`](docs/cheat-sheet.md),
 [`docs/deployment.md`](docs/deployment.md),
 [`docs/logging.md`](docs/logging.md), and
 [`docs/troubleshooting.md`](docs/troubleshooting.md) for details.
+
+## License
+
+climon is open source under the MIT License. See [`LICENSE`](LICENSE). Run
+`climon license` to print the licence and third-party attributions.
