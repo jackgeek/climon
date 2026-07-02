@@ -1,8 +1,11 @@
 # Logging
 
-climon uses [pino](https://getpino.io) for structured logging across the client,
-per-session daemon, dashboard server, and remote ingest/uplink processes, plus a
-browser logger for the dashboard.
+climon emits structured NDJSON logs across the client, per-session daemon,
+dashboard server, and remote ingest/uplink processes, plus a browser logger for
+the dashboard. The Rust processes (client, daemons, ingest/uplink) use an
+in-house [pino](https://getpino.io)-compatible logger, while the Bun dashboard
+server and browser dashboard use pino itself — so the log format (levels, field
+names, NDJSON layout) is consistent across all of them.
 
 ## Turning logging on and off
 
