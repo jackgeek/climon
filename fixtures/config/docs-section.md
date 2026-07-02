@@ -14,7 +14,7 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 
 | Path | Type | Default | Scope | Description |
 |------|------|---------|-------|-------------|
-| `version` | number | `1` | client, daemon, server | Schema version for the persisted config.json format. Always 1 for the current release. (**internal**) |
+| `version` | number | `1` | client, daemon, server | Schema version for the persisted config file format. Always 1 for the current release. (**internal**) |
 | `server.host` | string | `127.0.0.1` | server | IP address the dashboard server binds to. Defaults to loopback for local-only access. |
 | `server.port` | number | `3131` | server | TCP port the dashboard server listens on. Change if 3131 conflicts with another service. |
 | `terminal.clampBrowserToHost` | boolean | `false` | daemon | When false (default), a browser viewer may grow the shared PTY beyond the host terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent content mangling. |

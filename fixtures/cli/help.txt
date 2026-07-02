@@ -13,14 +13,11 @@ Usage:
                                (--no-takeover: never terminate an existing
                                server; start on the next available port)
   climon ls                    List monitored sessions
-  climon remotes [--watch] [--json]
-                               Show connected remote hosts and uplinks
   climon config <key> [value]   Get/set configuration (git-style)
   climon config --help          Show config settings, defaults, and scopes
   climon config --debug         Show config files, keys, and values (redacted) in resolution order
   climon config --purge         Prompt to delete config files in resolution order
   climon cleanup                Stop this machine's dashboard, ingest, and uplink
-  climon link [--peer-home P]   Link WSL<->Windows dashboard discovery
   climon kill <id>             Terminate a session
   climon kill --all            Kill or remove all active sessions
   climon update                Download, verify, and apply the latest version

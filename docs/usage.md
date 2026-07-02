@@ -51,22 +51,12 @@ default set from the dashboard **Default theme** menu (`dashboard.theme`).
 ### Nested invocations
 
 If you run `climon <cmd>` from a shell that is itself running inside a climon
-session, climon does **not** start a second nested session. It detects the
-existing session (via the `CLIMON_SESSION_ID` environment variable), prints an
-error, and exits without running the nested command.
+session, climon **still starts the session** and runs your command. It detects
+the nesting via the `CLIMON_NEST_LEVEL` environment variable (incremented for
+each level) and prints a yellow `climon: nested session (depth N)` warning to
+stderr so you're aware you're stacking sessions, but it does not block or exit.
 
-### Detach and reattach
-
-While attached, press **Ctrl-\\** then **d** to detach. The command keeps running
-in its daemon. Reattach later:
-
-```bash
-climon ls                 # find the session id
-climon attach <id>        # reconnect your terminal
-```
-
-Detaching does **not** stop the command, and restarting `climon server` does not
-affect running sessions.
+### Terminal size while attached
 
 If the dashboard is in Fill window mode and the browser grows the shared PTY
 beyond your attached local terminal, press **Ctrl-\\** then **c** in the local
@@ -76,7 +66,6 @@ climon client to restore Clamp to remote terminal size mode.
 
 ```bash
 climon ls                 # list sessions (attention-flagged first)
-climon attach <id>        # reattach a running session
 climon kill <id>          # terminate a session and remove its metadata
 ```
 
@@ -427,7 +416,7 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 
 | Path | Type | Default | Scope | Description |
 |------|------|---------|-------|-------------|
-| `version` | number | `1` | client, daemon, server | Schema version for the persisted config.json format. Always 1 for the current release. (**internal**) |
+| `version` | number | `1` | client, daemon, server | Schema version for the persisted config file format. Always 1 for the current release. (**internal**) |
 | `server.host` | string | `127.0.0.1` | server | IP address the dashboard server binds to. Defaults to loopback for local-only access. |
 | `server.port` | number | `3131` | server | TCP port the dashboard server listens on. Change if 3131 conflicts with another service. |
 | `terminal.clampBrowserToHost` | boolean | `false` | daemon | When false (default), a browser viewer may grow the shared PTY beyond the host terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent content mangling. |
