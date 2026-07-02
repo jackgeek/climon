@@ -68,3 +68,21 @@ into the terminal, and whose text is retained when cancelled.
   enabled. Typing any character enables Insert.
 - **Platforms:** iOS Safari, Android Chrome.
 - **Result:** _date / tester / platform / pass-fail / notes_
+
+## TSA-5 — Pre-existing text is selected when re-opening the composer
+
+- **Feature:** Text staging area
+- **Preconditions:** As TSA-2.
+- **Config-matrix cell:** Browser = mobile Safari/Chrome; viewport ≤ 768px.
+- **Steps:**
+  1. Open the compose overlay and type `reusable draft`.
+  2. Tap **Cancel** to close it (text is retained per TSA-3).
+  3. Re-open the compose overlay.
+  4. Observe the staged text.
+- **Expected result:** On re-open the retained `reusable draft` text is fully
+  selected/highlighted, so a single keystroke replaces it, Delete clears it, and
+  the user can still choose to keep and reuse it. An empty composer opens with no
+  selection and just a focused caret.
+- **Platforms:** iOS Safari, Android Chrome.
+- **Result:** _date / tester / platform / pass-fail / notes_
+

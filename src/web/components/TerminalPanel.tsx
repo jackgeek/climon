@@ -1,4 +1,5 @@
 import { Button, Text, Textarea, makeStyles, tokens } from "@fluentui/react-components";
+import { useEffect, useRef } from "react";
 import {
   ArrowEnterLeft24Regular,
   ChevronDown24Regular,
@@ -101,6 +102,19 @@ export function TerminalPanel({
   onSend
 }: Props) {
   const styles = useStyles();
+  const composeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // When the composer opens with pre-existing text, select it so the user can
+  // immediately replace, delete, or reuse it.
+  useEffect(() => {
+    if (view !== "compose") {
+      return;
+    }
+    const el = composeTextareaRef.current;
+    if (el && el.value.length > 0) {
+      el.select();
+    }
+  }, [view]);
 
   if (view === "keyboard") {
     return <KeyBar onSend={onSend} />;
@@ -117,7 +131,7 @@ export function TerminalPanel({
           aria-label="Text to insert"
           autoFocus
           resize="none"
-          textarea={{ style: { height: "100%" } }}
+          textarea={{ ref: composeTextareaRef, style: { height: "100%" } }}
           onChange={(_e, data) => onComposeTextChange(data.value)}
         />
         <div className={styles.composeActions}>

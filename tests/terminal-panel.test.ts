@@ -86,6 +86,14 @@ describe("TerminalPanel", () => {
     expect(disabledCount).toBeGreaterThanOrEqual(1);
   });
 
+  test("compose view selects pre-existing text when opened", () => {
+    const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
+
+    expect(source).toContain("const composeTextareaRef = useRef<HTMLTextAreaElement | null>(null);");
+    expect(source).toContain("textarea={{ ref: composeTextareaRef, style: { height: \"100%\" } }}");
+    expect(source).toContain("el.select();");
+  });
+
   test("compose action buttons wire to insert and cancel handlers", () => {
     const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
 
