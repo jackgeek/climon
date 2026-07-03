@@ -30,15 +30,38 @@ Three paths currently reach shell mode:
 
 ## Target behavior
 
-1. **No args** (`climon`) → `Help`.
+1. **No args** (`climon`) → implicit `Help` (with the friendly note; see below).
 2. **New `shell` subcommand**: `climon shell [--priority N] [--color C]
    [--name S] [--theme T]` → `Shell{...}` with the parsed session flags. Trailing
    non-flag arguments (e.g. `climon shell npm test`) are an **error** that
    directs the user to `climon <command>` for running a command.
 3. **Leading session flags with no command** (e.g. `climon --priority 5`) →
-   fall through to `Help`. (Previously started a shell; now the explicit
-   `climon shell` is required.)
+   fall through to implicit `Help` (with the friendly note). (Previously started
+   a shell; now the explicit `climon shell` is required.)
 4. **`climon <command>` / `climon --priority 5 npm test`** → `Run` (unchanged).
+
+## Friendly implicit-help note
+
+Because this is a behavior change, when help is shown *implicitly* (cases 1 and
+3 above — bare `climon`, or leading session flags with no command) the client
+first prints a friendly note explaining why. An *explicit* `climon --help` /
+`climon help` must NOT print the note — its output stays byte-for-byte identical
+to `fixtures/cli/help.txt`.
+
+The note is written to **stderr** (so piping the help text stays clean), then the
+normal help text is written to **stdout**:
+
+```
+climon on its own no longer starts a session — showing help instead.
+Use `climon shell` to start a monitored shell, or `climon <command>` to run a command.
+```
+
+To distinguish the two paths, the parser marks implicit help. The Rust
+`ParsedCommand::Help` gains a boolean field (e.g. `Help { implicit: bool }`);
+`main.rs` prints the note only when `implicit` is true. The TS `parseArgs`
+mirrors this with an `implicit` flag on the `help` command, but since the server
+entrypoint only prints `helpText` on an *error* path (never the implicit note),
+the TS change is limited to keeping the parsed shape and help text in sync.
 
 ## Help text change
 
@@ -54,10 +77,13 @@ Replace the first usage line. The bare-`climon` shell line becomes an explicit
 
 ## Files touched
 
-- `rust/climon-cli/src/args.rs` — add `shell` parsing; no-args → `Help`;
-  leading-flags-only → `Help`; update `help_text`; update unit tests.
-- `src/cli/args.ts` — mirror the same parsing and `helpText` change (keeps the
-  server entrypoint and the shared fixture in sync).
+- `rust/climon-cli/src/args.rs` — add `shell` parsing; no-args → implicit
+  `Help`; leading-flags-only → implicit `Help`; `Help` carries an `implicit`
+  flag; update `help_text`; update unit tests.
+- `rust/climon-cli/src/main.rs` — print the friendly note to stderr when `Help`
+  is implicit.
+- `src/cli/args.ts` — mirror the same parsing (incl. the `implicit` flag) and
+  `helpText` change (keeps the server entrypoint and the shared fixture in sync).
 - `fixtures/cli/help.txt` — regenerate to match the new help text.
 - `tests/args.test.ts` — update the no-args expectation and add `shell` cases.
 - `docs/manual-tests/phase08-cli.md` — update the step that runs bare `climon`,
@@ -68,10 +94,10 @@ Replace the first usage line. The bare-`climon` shell line becomes an explicit
 ## Dispatch
 
 `rust/climon-cli/src/main.rs` already dispatches `ParsedCommand::Shell` (detect
-parent shell, build shell argv, start monitored command) and `ParsedCommand::Help`.
-Only the parser's output changes, so no new dispatch arm is required. The
-`command_name` mapping already returns `"shell"` for `Shell` and `"help"` for
-`Help`.
+parent shell, build shell argv, start monitored command). The `Help` arm gains a
+small change: when `implicit` is true it writes the friendly note to stderr
+before writing the help text to stdout. The `command_name` mapping already
+returns `"shell"` for `Shell` and `"help"` for `Help`.
 
 ## Testing
 
