@@ -462,3 +462,34 @@ fn strip_exe(s: &str) -> &str {
         s
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::command_name;
+    use climon_cli::args::ParsedCommand;
+    use climon_logging::cli_io::CLIMON_SUBCOMMANDS;
+
+    /// Every subcommand keyword `command_name` can emit must be covered by the
+    /// telemetry allowlist, so `log_cli_command` never trips its debug assert and
+    /// only ever records a known keyword — never a user-supplied command.
+    #[test]
+    fn command_name_outputs_are_allowlisted() {
+        let zero_field = [
+            command_name(&ParsedCommand::Help { implicit: false }),
+            command_name(&ParsedCommand::Version),
+            command_name(&ParsedCommand::Ls),
+            command_name(&ParsedCommand::KillAll),
+            command_name(&ParsedCommand::Uplink),
+            command_name(&ParsedCommand::Cleanup),
+            command_name(&ParsedCommand::UpdateCheck),
+            command_name(&ParsedCommand::Ingest),
+            command_name(&ParsedCommand::License),
+        ];
+        for name in zero_field {
+            assert!(
+                CLIMON_SUBCOMMANDS.contains(&name),
+                "command_name returned {name:?}, not in CLIMON_SUBCOMMANDS"
+            );
+        }
+    }
+}

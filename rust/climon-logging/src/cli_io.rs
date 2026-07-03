@@ -98,12 +98,49 @@ pub fn write_stderr(text: &str, log: bool) {
     }
 }
 
-/// Records a CLI command invocation at debug level. Mirrors `logCliCommand`.
-pub fn log_cli_command(command: &str) {
+/// The closed set of climon subcommand names that may be recorded by
+/// [`log_cli_command`]. Only the fixed subcommand keyword is ever logged — never
+/// the user-supplied command a session executes. Mirrors `command_name` in
+/// `climon-cli` and `CLIMON_SUBCOMMANDS` in `src/logging/cli-io.ts`.
+pub const CLIMON_SUBCOMMANDS: [&str; 20] = [
+    "help",
+    "version",
+    "server",
+    "shell",
+    "ls",
+    "kill",
+    "kill-all",
+    "run",
+    "spawn",
+    "config",
+    "cleanup",
+    "remotes",
+    "link",
+    "uplink",
+    "session",
+    "update",
+    "setup",
+    "update-check",
+    "ingest",
+    "license",
+];
+
+/// Records which climon subcommand was invoked at debug level. Mirrors
+/// `logCliCommand`.
+///
+/// Only the fixed subcommand keyword (e.g. `run`, `server`) is recorded; the
+/// user-supplied command a session executes is deliberately never logged here.
+/// `subcommand` must be one of [`CLIMON_SUBCOMMANDS`]; passing anything else is
+/// a programming error and trips a debug assertion.
+pub fn log_cli_command(subcommand: &str) {
+    debug_assert!(
+        CLIMON_SUBCOMMANDS.contains(&subcommand),
+        "log_cli_command called with non-allowlisted subcommand {subcommand:?}"
+    );
     child("cli").log_with(
         LogLevel::Debug,
-        json!({ "command": command }),
-        &format!("cli command: {command}"),
+        json!({ "subcommand": subcommand }),
+        &format!("cli command: {subcommand}"),
     );
 }
 
@@ -215,14 +252,31 @@ mod tests {
     }
 
     #[test]
-    fn log_cli_command_records_the_command() {
+    fn log_cli_command_records_the_subcommand() {
         let _guard = crate::test_lock();
         let home = temp_home();
         init_client(&home);
         log_cli_command("cleanup");
         let logs = read_client_logs(&home);
         assert!(logs.contains("cli command: cleanup"));
-        assert!(logs.contains("\"command\":\"cleanup\""));
+        assert!(logs.contains("\"subcommand\":\"cleanup\""));
+        assert!(!logs.contains("\"command\":\"cleanup\""));
+        reset_logger_for_tests();
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn log_cli_command_accepts_only_allowlisted_subcommands() {
+        let _guard = crate::test_lock();
+        let home = temp_home();
+        init_client(&home);
+        for name in CLIMON_SUBCOMMANDS {
+            log_cli_command(name);
+        }
+        let logs = read_client_logs(&home);
+        for name in CLIMON_SUBCOMMANDS {
+            assert!(logs.contains(&format!("\"subcommand\":\"{name}\"")));
+        }
         reset_logger_for_tests();
         let _ = fs::remove_dir_all(&home);
     }

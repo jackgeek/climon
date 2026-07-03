@@ -6,9 +6,18 @@ export type RedactCategory =
   | "config"
   | "pii"
   | "token"
+  | "diagnostic"
   | "generic";
 
-/** Metadata for a single interpolated parameter of a message template. */
+/**
+ * Metadata for a single interpolated parameter of a message template.
+ *
+ * `redact: true` scrubs the value before it reaches Application Insights. The
+ * scrub behavior depends on `category`: `diagnostic` values (error/reason
+ * messages) are passed through {@link sanitizeDiagnostic} so their diagnostic
+ * skeleton survives while identifiers are stripped; every other redacted
+ * category is replaced with a flat `[REDACTED:<category>]` marker.
+ */
 export interface ParamMeta {
   /** When true, the value is scrubbed before transmission to Application Insights. */
   redact: boolean;
