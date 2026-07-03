@@ -95,6 +95,22 @@ yourself.
 > [`install.ps1`](install.ps1). Later `climon update` downloads are still verified
 > against climon's embedded Ed25519 signing key.
 
+> [!IMPORTANT]
+> **Antivirus / malware tools may block climon.** Because the release binaries
+> aren't code-signed yet, some antivirus, EDR, or SmartScreen tools may quarantine
+> or block them. I'm actively working on getting the executables signed to stop
+> this from happening. In the meantime, if your security software blocks climon,
+> you may need to add exceptions for these installed files:
+>
+> - `climon` (`climon.exe` on Windows) — the CLI client
+> - `climon-server` (`climon-server.exe` on Windows) — the dashboard server
+>
+> They are installed to:
+>
+> - **Linux / macOS:** `~/.local/bin`
+> - **Windows:** `%LOCALAPPDATA%\Programs\climon` (e.g.
+>   `C:\Users\<you>\AppData\Local\Programs\climon`)
+
 ### Optional: the `devtunnel` CLI
 
 The dev tunnel features — **Tunnel Link** and **Remote sessions over a dev
@@ -194,8 +210,7 @@ to all running session daemons over WebSocket.
 
 - `--port N` — use a custom port instead of the default `3131`.
 - `--no-takeover` — never terminate (or prompt to terminate) an already-running
-  dashboard; instead start a second server on the next free port. Useful for
-  throwaway dashboards.
+  dashboard; instead start a second server on the next free port.
 
 Running `climon server` locates and runs the `climon-server` binary — via
 `CLIMON_SERVER_BIN`, then a sibling binary next to `climon`, then your `PATH`.
@@ -280,7 +295,7 @@ Common settings:
 
 | Key                           | Default     | Purpose                                                 |
 | ----------------------------- | ----------- | ------------------------------------------------------- |
-| `server.host`                 | `127.0.0.1` | Dashboard bind address (`0.0.0.0` to expose on LAN).    |
+| `server.host`                 | `127.0.0.1` | Dashboard bind address. **Never change this** — see the security warning below. |
 | `server.port`                 | `3131`      | Dashboard port.                                         |
 | `attention.idleSeconds`       | `10`        | Idle seconds before a session is flagged for attention. |
 | `terminal.setTitle`           | `true`      | Whether climon sets the terminal window title.          |
@@ -294,6 +309,13 @@ Common settings:
 
 Run `climon config` without arguments, or see [docs/usage.md](docs/usage.md) for
 the full list.
+
+> [!WARNING]
+> **Never change `server.host` from `127.0.0.1`.** The dashboard must stay
+> loopback-only. Binding it to `0.0.0.0` (or any non-loopback address) exposes
+> your terminal sessions on the network — anyone who can reach that address can
+> take over your climon sessions. To reach the dashboard from another machine,
+> use the authenticated private dev tunnel (Tunnel Link) instead.
 
 ## Feature flags
 
@@ -316,9 +338,6 @@ climon config feature.sessionSpawning enabled
 Once `feature.sessionSpawning` is on, hover any live session and click its
 **[+]** to launch a new session from it (inheriting its working directory and
 metadata); when there are no sessions, a global **[+]** appears in the sidebar.
-For security, all dashboard-initiated session creation only works from the
-machine running the server (loopback) — remote/LAN clients cannot create
-sessions.
 
 ## Work from your phone (Tunnel Link + PWA)
 
@@ -439,17 +458,6 @@ Each archive contains the Rust `install` binary, `climon-server`, and a
 `climon-alpha` sentinel; running `install` self-installs `climon` and
 `climon-server` side by side. See [docs/deployment.md](docs/deployment.md) for
 the full release and signing pipeline.
-
-## Documentation
-
-- [docs/cheat-sheet.md](docs/cheat-sheet.md) — one-page command reference
-- [docs/setup.md](docs/setup.md) — install locations and onboarding state
-- [docs/usage.md](docs/usage.md) — detailed usage, config, and remote/WSL setup
-- [docs/architecture.md](docs/architecture.md) — components and data flow
-- [docs/security.md](docs/security.md) — threat model for remote features
-- [docs/deployment.md](docs/deployment.md) — release, signing, and update trust
-- [docs/logging.md](docs/logging.md) — logging and diagnostics
-- [docs/troubleshooting.md](docs/troubleshooting.md) — common problems
 
 ## Contributing
 
