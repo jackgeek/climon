@@ -95,6 +95,17 @@ yourself.
 > [`install.ps1`](install.ps1). Later `climon update` downloads are still verified
 > against climon's embedded Ed25519 signing key.
 
+> [!IMPORTANT]
+> **Antivirus / malware tools may block climon.** Because the release binaries
+> aren't code-signed yet, some antivirus, EDR, or SmartScreen tools may quarantine
+> or block them. I'm actively working on getting the executables signed to stop
+> this from happening. In the meantime, if your security software blocks climon,
+> you may need to add exceptions for these files:
+>
+> - `climon` (`climon.exe` on Windows) — the CLI client
+> - `climon-server` (`climon-server.exe` on Windows) — the dashboard server
+> - `install` (`install.exe` on Windows) — the self-installer
+
 ### Optional: the `devtunnel` CLI
 
 The dev tunnel features — **Tunnel Link** and **Remote sessions over a dev
