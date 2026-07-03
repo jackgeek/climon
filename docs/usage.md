@@ -32,6 +32,16 @@ climon npm run dev
 climon bash
 ```
 
+To monitor an interactive shell without naming a command, use `climon shell`:
+
+```bash
+climon shell
+```
+
+This launches your detected parent shell (PowerShell on Windows) in a managed
+PTY. Running `climon` with no arguments prints the help text instead of starting
+a shell.
+
 This starts the command inside a managed PTY and attaches your terminal to it —
 it behaves exactly like running the command directly. Meanwhile it appears on the
 dashboard.

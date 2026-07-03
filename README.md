@@ -153,6 +153,19 @@ climon copilot               # monitor a coding agent session
 climon npm run dev           # monitor a dev server
 ```
 
+### `climon shell`
+
+Start a monitored session running your current shell (PowerShell on Windows).
+This is what a bare `climon` used to do; run it explicitly to launch a shell
+inside a climon session.
+
+```sh
+climon shell                 # monitor the detected parent shell
+climon shell --name "work"   # …with a friendly name
+```
+
+Running `climon` with no command now prints help instead of starting a shell.
+
 Tag a session at launch with organizing metadata, placed **before** the command:
 
 ```sh

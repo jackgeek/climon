@@ -11,7 +11,8 @@ Background: Phase 8 ports `src/cli/args.ts`, `src/client/detach-key.ts`,
 `src/launcher.ts`, `src/client/connect.ts`, `src/cli/server-exec.ts`,
 `src/cli/config-cmd.ts`, `src/detect-shell.ts`, and the `src/index.ts` dispatch
 into the `climon-cli` crate. The parser is hand-rolled (not clap) to keep the
-accepted argv surface — including bare-flag→shell, `--flag=value`, and the
+accepted argv surface — including bare `climon`→help, `climon shell`,
+`--flag=value`, and the
 hidden `__session`/`__uplink`/`__ingest`/`__update-check` entrypoints —
 byte-for-byte compatible with the Bun client. The version is read from
 `package.json` at build time so `climon --version` and the help banner are
@@ -85,7 +86,7 @@ generated from the TS client). `climon license` appears in `--help`.
 
 ---
 
-## MT-P8-03 — bare `climon` starts a monitored shell session
+## MT-P8-03 — `climon shell` starts a monitored shell session
 
 - **ID:** MT-P8-03
 - **Preconditions:** `export CLIMON_HOME=$(mktemp -d)` (PowerShell: set
@@ -94,7 +95,7 @@ generated from the TS client). `climon license` appears in `--help`.
 - **Platforms:** all
 
 **Steps:**
-1. From an interactive shell, run `climon` with no args.
+1. From an interactive shell, run `climon shell`.
 2. Observe the launch banner and that your shell is now running inside the PTY.
 3. In another terminal, run `climon ls` (same `CLIMON_HOME`) and confirm the
    session is listed as `running` with a display command matching your shell.
@@ -262,6 +263,30 @@ restore-clamped detach. The session continues under its daemon.
 **Expected:** Resolution order (CLIMON_SERVER_BIN → sibling `climon-server[.exe]`
 → bare `climon-server` on PATH) matches the TS client; missing server →
 127 + exact message; present server → delegated exit code.
+
+| Date | Tester | OS | Result | Notes |
+|---|---|---|---|---|
+| | | | | |
+
+---
+
+## MT-P8-10 — bare `climon` prints a friendly note and help
+
+- **ID:** MT-P8-10
+- **Preconditions:** `export CLIMON_HOME=$(mktemp -d)` (PowerShell: set
+  `$env:CLIMON_HOME`).
+- **Config-matrix cell:** CLI-linux / CLI-macos / CLI-win
+- **Platforms:** all
+
+**Steps:**
+1. Run `climon` with no arguments.
+2. Run `climon --priority 5` (session flags, no command).
+3. Run `climon --help` and compare its output.
+
+**Expected:** Steps 1 and 2 print a two-line note to stderr
+(`climon on its own no longer starts a session — showing help instead.` / ``Use
+`climon shell` …``) followed by the full help text on stdout; no session is
+started. Step 3 prints the same help text on stdout with **no** note on stderr.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
