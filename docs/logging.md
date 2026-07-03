@@ -97,7 +97,9 @@ connection string and it is enabled automatically (off by default):
 - `climon config logging.appInsights.connectionString "<connection-string>"`
 - or the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable
 
-This sends log data over the network and is opt-in only.
+This sends log data over the network and is opt-in only. See the
+[Privacy Policy](privacy.md) for what is and is not collected and how it is
+handled.
 
 Every record forwarded to Application Insights carries an anonymous
 `installId` — a random UUID stored in `$CLIMON_HOME/install.json`, generated on

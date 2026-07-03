@@ -380,6 +380,9 @@ locally. climon does **not** collect:
 Disable it at any time with `climon config telemetry.enabled false` or by
 re-running `climon setup`.
 
+For the full data-handling details, legal basis, and your rights, see the
+[Privacy Policy](privacy.md).
+
 ## Update trust model
 
 Releases are signed with an **Ed25519** private key held only in CI (the
