@@ -2,7 +2,12 @@
   {
     "version": "3.0.0",
     "changes": [
-      "Start a monitored shell with the new `climon shell` command; running `climon` with no command now prints help instead of starting a shell",
+      "Start a monitored shell with the new `climon shell` command; running `climon` with no command now prints help instead of starting a shell"
+    ]
+  },
+  {
+    "version": "2.5.1",
+    "changes": [
       "Fix the dashboard key bar and font size bar not closing when tapping outside them on wide touch devices"
     ]
   },
