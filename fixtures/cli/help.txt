@@ -1,7 +1,7 @@
-climon v2.5.0 — web-based monitor for interactive CLI sessions
+climon v3.0.0 — web-based monitor for interactive CLI sessions
 
 Usage:
-  climon [--priority N] [--color C] [--name S] [--theme T]
+  climon shell [--priority N] [--color C] [--name S] [--theme T]
                                Start a monitored session for the current shell
   climon [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
                                Run a command in a monitored PTY session
