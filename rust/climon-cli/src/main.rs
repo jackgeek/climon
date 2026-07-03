@@ -83,7 +83,7 @@ fn run() -> Result<i32, String> {
     }
 
     match parsed {
-        ParsedCommand::Help => {
+        ParsedCommand::Help { implicit } => {
             let cfg_env = ConfigEnv::real();
             let experimental = climon_config::config::load_config(&cfg_env)
                 .map(|cfg| climon_cli::args::ExperimentalHelp {
@@ -92,6 +92,12 @@ fn run() -> Result<i32, String> {
                     wsl_bridge: climon_config::features::is_feature_enabled(&cfg, "wslBridge"),
                 })
                 .unwrap_or_default();
+            if implicit {
+                write_stderr(
+                    "climon on its own no longer starts a session — showing help instead.\nUse `climon shell` to start a monitored shell, or `climon <command>` to run a command.\n\n",
+                    false,
+                );
+            }
             write_stdout(&help_text(experimental), false);
             Ok(0)
         }
@@ -417,7 +423,7 @@ fn run_ingest_entry() -> i32 {
 /// strings used for logging).
 fn command_name(parsed: &ParsedCommand) -> &'static str {
     match parsed {
-        ParsedCommand::Help => "help",
+        ParsedCommand::Help { .. } => "help",
         ParsedCommand::Version => "version",
         ParsedCommand::Server { .. } => "server",
         ParsedCommand::Shell { .. } => "shell",
