@@ -416,9 +416,10 @@ describe("logging config settings", () => {
     expect(() => coerceConfigValueFromSettings("logging.level", "loud")).toThrow();
   });
 
-  test("logging.appInsights.connectionString is sensitive and unset by default", () => {
-    const setting = findConfigSetting("logging.appInsights.connectionString");
-    expect(setting?.sensitive).toBe(true);
-    expect(setting?.defaultValue).toBeUndefined();
+  test("logging.appInsights.connectionString is not a configurable setting", () => {
+    // The App Insights connection string is a secret and must not live in
+    // climon config; it is supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING
+    // environment variable or the build-time embedded constant instead.
+    expect(findConfigSetting("logging.appInsights.connectionString")).toBeUndefined();
   });
 });

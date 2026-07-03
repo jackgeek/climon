@@ -13,8 +13,33 @@ const CAT: Catalog = {
       user: { redact: true, category: "pii" },
     },
   },
+  "srv.error": {
+    id: "0000000e",
+    t: "operation failed: {error}",
+    hint: "diagnostic error whose free text is sanitized before egress",
+    params: {
+      error: { redact: true, category: "diagnostic" },
+    },
+  },
   "srv.started": { id: "0000000d", t: "server started", hint: "server boot completed", params: {} },
 };
+
+describe("redactParams diagnostic sanitization", () => {
+  test("sanitizes diagnostic params instead of blanking them", () => {
+    const out = redactParams(
+      { error: "ENOENT open /Users/alice/.climon/config.jsonc" },
+      CAT["srv.error"],
+    );
+    expect(out.error).toContain("ENOENT");
+    expect(out.error).not.toContain("alice");
+    expect(out.error).toContain("<path>");
+  });
+
+  test("leaves non-string diagnostic params untouched", () => {
+    const out = redactParams({ error: 42 }, CAT["srv.error"]);
+    expect(out.error).toBe(42);
+  });
+});
 
 describe("redactParams", () => {
   test("replaces redacted params with a typed marker", () => {
@@ -88,11 +113,55 @@ describe("compactRecord", () => {
     expect(out.level).toBe(20);
   });
 
-  test("uncatalogued record: assigns sentinel id and keeps the text (migration)", () => {
-    const rec = { level: 30, role: "server", msg: "legacy interpolated message" };
+  test("uncatalogued record: stamps the sentinel id and drops all free-form text", () => {
+    const rec = {
+      level: 30,
+      time: 5,
+      role: "server",
+      pid: 42,
+      version: "1.2.3",
+      installId: "iid",
+      component: "cli",
+      msg: "legacy message with /Users/alice/secret path and host.corp.example",
+      someArbitraryField: "sensitive value",
+    };
     const out = compactRecord(rec, CAT);
     expect(out.msgId).toBe("00000000");
-    expect(out.msg).toBe("legacy interpolated message");
+    // The rendered text is never forwarded; the trace message is the sentinel id.
+    expect(out.msg).toBe("00000000");
+    expect(out.someArbitraryField).toBeUndefined();
+    // Allowlisted base fields survive.
+    expect(out.role).toBe("server");
+    expect(out.installId).toBe("iid");
+    expect(out.level).toBe(30);
+    expect(out.pid).toBe(42);
+    expect(out.version).toBe("1.2.3");
+    expect(out.component).toBe("cli");
+    // Nothing outside the allowlist leaks.
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain("/Users/alice");
+    expect(serialized).not.toContain("host.corp.example");
+    expect(serialized).not.toContain("sensitive value");
+  });
+
+  test("catalogued record: drops non-allowlisted extra properties", () => {
+    const rec = {
+      level: 20,
+      role: "server",
+      installId: "iid",
+      msgId: "0000000c",
+      msgKey: "srv.connect_failed",
+      host: "h1",
+      port: 22,
+      user: "alice",
+      msg: "connect to h1:22 failed for alice",
+      strayField: "/home/alice/stuff",
+    };
+    const out = compactRecord(rec, CAT);
+    expect(out.strayField).toBeUndefined();
+    expect(out.host).toBe("[REDACTED:hostname]");
+    expect(out.port).toBe(22);
+    expect(JSON.stringify(out)).not.toContain("/home/alice");
   });
 
   test("does not mutate the input record", () => {
@@ -133,8 +202,13 @@ describe("createCompactingTransform stream", () => {
     expect(rec.msg).toBe("0000000d");
   });
 
-  test("forwards an unparseable line unchanged", async () => {
-    const result = await run(["not json\n"]);
-    expect(result.trim()).toBe("not json");
+  test("replaces an unparseable line with a sentinel record, never raw text", async () => {
+    const result = await run(["not json with /Users/alice/secret and host.corp.example\n"]);
+    const rec = JSON.parse(result.trim());
+    expect(rec.msgId).toBe("00000000");
+    expect(rec.msg).toBe("00000000");
+    expect(result).not.toContain("/Users/alice");
+    expect(result).not.toContain("host.corp.example");
+    expect(result).not.toContain("not json");
   });
 });

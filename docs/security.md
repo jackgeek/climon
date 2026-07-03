@@ -184,8 +184,11 @@ Logs are written locally under `$CLIMON_HOME/logs/` by default and never leave t
 machine unless you opt in. Secrets (auth tokens, tunnel credentials, the App
 Insights connection string) are redacted to `[REDACTED]` in all log output. The
 Application Insights sink is the only network egress path for logs and is disabled
-unless a connection string is configured (`logging.appInsights.connectionString`
-or `APPLICATIONINSIGHTS_CONNECTION_STRING`). See [`logging.md`](logging.md).
+unless you opt in with `telemetry.enabled` **and** a connection string is supplied
+via the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable or the
+build-time embedded constant (injected from a CI secret at release-compile time,
+never stored in climon config or committed to source). See
+[`logging.md`](logging.md).
 
 ## Containment: server-side sanitization
 
@@ -379,6 +382,9 @@ locally. climon does **not** collect:
 
 Disable it at any time with `climon config telemetry.enabled false` or by
 re-running `climon setup`.
+
+For the full data-handling details, legal basis, and your rights, see the
+[Privacy Policy](privacy.md).
 
 ## Update trust model
 
