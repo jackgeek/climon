@@ -109,7 +109,9 @@ it in one of two ways:
   `APPLICATIONINSIGHTS_CONNECTION_STRING` GitHub Actions secret via
   `bun build --define` (see `telemetryDefineArgs` in `scripts/compile.ts`), so the
   string never lives in source. Builds without the secret (local builds, forks)
-  ship an empty constant and send nothing.
+  ship an empty constant and send nothing. The release workflow **fails fast** if
+  the `APPLICATIONINSIGHTS_CONNECTION_STRING` secret is missing, so an official
+  release can never accidentally ship without an embedded connection string.
 
 When `telemetry.enabled` is `true` and a connection string is available from one
 of those sources, the server forwards logs; otherwise it stays local-only. This
