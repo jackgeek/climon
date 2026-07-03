@@ -524,14 +524,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .default(Value::from("trace"))
         .accept_input()
         .with_validate(v_logging_level),
-        ConfigSetting::new(
-            "logging.appInsights.connectionString",
-            String,
-            "Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable.",
-            vec![Server],
-        )
-        .sensitive()
-        .accept_input(),
     ];
     s.extend(feature_config_settings());
     s.extend(vec![
@@ -853,7 +845,6 @@ mod tests {
                 "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
-                "logging.appInsights.connectionString",
                 "feature.sessionSpawning",
                 "feature.remoteSpawn",
                 "feature.wslBridge",
@@ -870,7 +861,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 41);
+        assert_eq!(all_config_keys().len(), 40);
     }
 
     #[test]
@@ -959,7 +950,6 @@ mod tests {
                 "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
-                "logging.appInsights.connectionString",
                 "feature.sessionSpawning",
                 "feature.remoteSpawn",
                 "feature.wslBridge",
@@ -1133,10 +1123,11 @@ mod tests {
     }
 
     #[test]
-    fn logging_appinsights_sensitive_unset() {
-        let s = find_config_setting("logging.appInsights.connectionString").unwrap();
-        assert!(s.sensitive);
-        assert_eq!(s.default_value, None);
+    fn logging_appinsights_connection_string_is_not_a_setting() {
+        // The App Insights connection string is a secret and must not live in
+        // climon config; it comes from the APPLICATIONINSIGHTS_CONNECTION_STRING
+        // environment variable or the build-time embedded constant instead.
+        assert!(find_config_setting("logging.appInsights.connectionString").is_none());
         let cfg = build_default_config_from_settings();
         assert_eq!(cfg["logging"]["level"], json!("trace"));
     }

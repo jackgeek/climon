@@ -45,6 +45,21 @@ jobs:
       existing: ${{ steps.compute.outputs.existing }}
       prebumped: ${{ steps.compute.outputs.prebumped }}
     steps:
+      # Fail the release immediately if the Application Insights connection string
+      # secret is missing, so we never publish binaries with an empty embedded
+      # telemetry endpoint by accident. `secrets` is available in step `env:`, so
+      # we map it and check for emptiness (the value stays masked in logs). Set the
+      # `APPLICATIONINSIGHTS_CONNECTION_STRING` repository secret to unblock.
+      - name: Require telemetry connection secret
+        env:
+          APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}
+        run: |
+          if [ -z "${APPLICATIONINSIGHTS_CONNECTION_STRING}" ]; then
+            echo "::error::APPLICATIONINSIGHTS_CONNECTION_STRING secret is not set. Releases must embed the App Insights connection string; add the repository secret before releasing (see docs/logging.md)."
+            exit 1
+          fi
+          echo "Telemetry connection secret present; release may proceed."
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -299,6 +314,11 @@ jobs:
       - name: Assemble release binaries
         env:
           CLIMON_ASSEMBLE: "1"
+          # Baked into the compiled climon-server via bun --define so it never
+          # lives in source. Absent (forks / no secret) => empty embedded string
+          # => no telemetry endpoint shipped. Servers still must opt in via
+          # `telemetry.enabled` for anything to be sent.
+          APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}
         run: bun run compile
 
       - name: Sign release artifacts + emit manifest
