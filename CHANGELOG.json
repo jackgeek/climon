@@ -2,7 +2,10 @@
   {
     "version": "3.0.0",
     "changes": [
-      "Start a monitored shell with the new `climon shell` command; running `climon` with no command now prints help instead of starting a shell"
+      "Start a monitored shell with the new `climon shell` command; running `climon` with no command now prints help instead of starting a shell",
+      "Guarantee opt-in telemetry never transmits personal data or free-form text",
+      "Add a privacy policy describing what telemetry does and does not collect",
+      "Stop storing the telemetry connection string in config; supply it via environment variable or release build"
     ]
   },
   {
