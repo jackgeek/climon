@@ -100,11 +100,16 @@ yourself.
 > aren't code-signed yet, some antivirus, EDR, or SmartScreen tools may quarantine
 > or block them. I'm actively working on getting the executables signed to stop
 > this from happening. In the meantime, if your security software blocks climon,
-> you may need to add exceptions for these files:
+> you may need to add exceptions for these installed files:
 >
 > - `climon` (`climon.exe` on Windows) — the CLI client
 > - `climon-server` (`climon-server.exe` on Windows) — the dashboard server
-> - `install` (`install.exe` on Windows) — the self-installer
+>
+> They are installed to:
+>
+> - **Linux / macOS:** `~/.local/bin`
+> - **Windows:** `%LOCALAPPDATA%\Programs\climon` (e.g.
+>   `C:\Users\<you>\AppData\Local\Programs\climon`)
 
 ### Optional: the `devtunnel` CLI
 
