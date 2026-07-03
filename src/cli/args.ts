@@ -35,7 +35,7 @@ export type ParsedCommand =
 export const helpText = `climon v${VERSION} — web-based monitor for interactive CLI sessions
 
 Usage:
-  climon [--priority N] [--color C] [--name S] [--theme T]
+  climon shell [--priority N] [--color C] [--name S] [--theme T]
                                Start a monitored session for the current shell
   climon [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
                                Run a command in a monitored PTY session
@@ -111,7 +111,7 @@ function parseSessionFlags(tokens: string[]): { flags: SessionFlags; rest: strin
 
 export function parseArgs(argv: string[]): ParsedCommand {
   if (argv.length === 0) {
-    return { command: "shell" };
+    return { command: "help" };
   }
 
   // Handle bare flags that should trigger shell mode with session flags
@@ -119,7 +119,10 @@ export function parseArgs(argv: string[]): ParsedCommand {
   if (argv[0].startsWith("--") && !["--help", "-h", "--version", "-v", "--update"].includes(argv[0])) {
     const { flags, rest } = parseSessionFlags(argv);
     if (rest.length === 0) {
-      return { command: "shell", ...flags };
+      // Session flags with no command no longer start a shell; a shell now
+      // requires the explicit `climon shell`. Fall through to help.
+      void flags;
+      return { command: "help" };
     }
     // If there are remaining tokens, treat as `run`
     return { command: "run", argv: rest, headless: false, ...flags };
@@ -165,6 +168,13 @@ export function parseArgs(argv: string[]): ParsedCommand {
     case "ls":
     case "list":
       return { command: "ls" };
+    case "shell": {
+      const { flags, rest: extra } = parseSessionFlags(rest);
+      if (extra.length > 0) {
+        throw new Error("`climon shell` does not take a command; use `climon <command>` to run one.");
+      }
+      return { command: "shell", ...flags };
+    }
     case "kill": {
       const id = rest[0];
       if (id === "--all") {
