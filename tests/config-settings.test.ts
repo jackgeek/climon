@@ -99,7 +99,7 @@ describe("config settings registry", () => {
         setTitle: true
       },
       hotKeys: { focusTopSession: "Alt+J" },
-      dashboard: { theme: "Default", keyBarPinned: false },
+      dashboard: { theme: "Default", keyBarPinned: true },
       attention: { idleSeconds: 10 },
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },

@@ -23,7 +23,7 @@
     // Default web dashboard terminal colour theme (by display name, e.g. "Dracula"). Sessions without their own theme inherit this. Choose from the dashboard "Default theme" picker; defaults to "Default".
     "theme": "Default",
     // Whether the web dashboard key bar is pinned open.
-    "keyBarPinned": false
+    "keyBarPinned": true
   },
   "attention": {
     // Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.

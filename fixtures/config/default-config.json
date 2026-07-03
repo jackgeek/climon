@@ -14,7 +14,7 @@
   },
   "dashboard": {
     "theme": "Default",
-    "keyBarPinned": false
+    "keyBarPinned": true
   },
   "attention": {
     "idleSeconds": 10

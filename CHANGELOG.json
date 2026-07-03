@@ -4,6 +4,7 @@
     "changes": [
       "Stage and edit terminal input in a new dashboard Composer before sending it",
       "Send staged text with a touch-friendly key bar on mobile",
+      "Pin the dashboard key bar by default",
       "Give the dashboard icons transparent backgrounds"
     ]
   },
