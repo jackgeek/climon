@@ -93,14 +93,15 @@ Each record may include:
 Telemetry is keyed only by the anonymous install identifier. It is not linked to
 your identity, and we do not attempt to re-identify you from it.
 
-### 2.4 Known limitation
+### 2.4 No free-form text is transmitted
 
-A small number of internal log messages have not yet been migrated to the
-identifier-based compact format. Until that migration completes, such records
-may include their rendered English text (still with secrets redacted). These
-messages are not designed to contain personal data, but if you require an
-absolute guarantee that no rendered text is ever transmitted, leave telemetry
-disabled.
+Telemetry emission is allowlist-based: only a fixed set of non-identifying
+fields (an anonymous install id, the application role, process id, climon
+version, component, and a stable message id) plus explicitly-classified,
+redacted-or-sanitized message parameters are ever transmitted. Rendered log
+text, serialized errors, and any unrecognized field are dropped before anything
+leaves your machine — including for internal or not-yet-catalogued log records,
+which are reduced to a bare identifier.
 
 ## 3. Legal basis and your rights
 

@@ -136,8 +136,16 @@ never receives rendered message text:
   replaced with `<path>`, `<host>`, `<ip>`, `<url>`, `<email>`, `<id>` markers,
   and the value is truncated. This keeps error telemetry useful without leaking
   identifiers; when in doubt the sanitizer over-redacts.
-- Records that are not yet catalogued fall back to the sentinel id `00000000`
-  and keep their rendered text, so emission stays correct during the migration.
+- Emission is **allowlist-based**: only a fixed set of non-identifying base
+  fields (`level`, `time`, `role`, `pid`, `version`, `installId`, `component`,
+  `msgId`, `msgKey`) plus the record's own catalog parameters (redacted or
+  sanitized as above) are forwarded. The rendered `msg`, serialized errors, and
+  any stray properties are dropped.
+- Records with no catalog entry — uncatalogued records, or a not-yet-migrated
+  `logMsg` key that resolves to the sentinel id — forward only the allowlisted
+  base fields under the sentinel id `00000000`; their rendered text is never
+  transmitted. Lines that cannot be parsed as JSON are replaced with a bare
+  sentinel record rather than forwarded raw.
 
 Local log streams (console, file) always keep the full rendered text; only the
 Application Insights stream is compacted and redacted.
