@@ -211,6 +211,9 @@ const useStyles = makeStyles({
     display: "none",
     [MOBILE_MEDIA_QUERY_RULE]: {
       display: "block"
+    },
+    [TOUCH_PRIMARY_QUERY_RULE]: {
+      display: "block"
     }
   },
   keyBarWrap: {
@@ -1451,7 +1454,7 @@ export function App() {
         />
         {panelView !== "closed" && keyBarAvailable && (
           <>
-            {maximized && !(keyBarPinned && panelView === "chooser") && (
+            {(maximized || keyBarDockedInline) && !(keyBarPinned && panelView === "chooser") && (
               <div
                 className={styles.keyBarBackdrop}
                 onClick={() => setPanelView(keyBarPinned ? "chooser" : "closed")}
