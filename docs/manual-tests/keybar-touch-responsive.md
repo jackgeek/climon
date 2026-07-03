@@ -89,3 +89,21 @@ when wide enough and collapse to icon-only on narrow viewports.
   stacked layout never shows a docked keybar.
 - **Platforms:** iOS Safari, Android Chrome (phone).
 - **Result:** _date / tester / platform / pass-fail / notes_
+## KBT-6 — Wide touch device collapses the keyboard/font sub-panel with an outside tap
+
+- **Feature:** Touch keybar availability
+- **Preconditions:** A wide touch device (tablet, or landscape phone with
+  viewport > 768px) with one live session, keybar docked inline (pinned or
+  revealed via right-edge swipe), NOT fullscreen.
+- **Config-matrix cell:** Browser = iPadOS Safari / Android Chrome tablet;
+  viewport > 768px; primary pointer coarse.
+- **Steps:**
+  1. From the docked chooser bar, tap "Keyboard" (then repeat for "Font size").
+  2. With the expanded key bar / font size bar showing, tap anywhere outside it
+     (on the terminal above).
+- **Expected result:** The outside tap collapses the expanded key bar / font
+  size bar back to the chooser bar (pinned) or hides it (unpinned) — matching the
+  narrow/fullscreen flow. The user is never stranded with an expanded panel and
+  no way back to the chooser/terminal.
+- **Platforms:** iPadOS Safari, Android Chrome (tablet).
+- **Result:** _date / tester / platform / pass-fail / notes_

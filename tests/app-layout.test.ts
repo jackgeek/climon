@@ -260,10 +260,12 @@ describe("scheduleTerminalRefit", () => {
       expect(source).toContain('{panelView !== "closed" && keyBarAvailable && (');
     });
 
-    test("the tap-catching backdrop is only rendered in fullscreen", () => {
+    test("the tap-catching backdrop renders in fullscreen or docked inline", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
-      expect(source).toContain("maximized && !(keyBarPinned && panelView === \"chooser\") && (");
+      expect(source).toContain(
+        "(maximized || keyBarDockedInline) && !(keyBarPinned && panelView === \"chooser\") && ("
+      );
     });
 
     test("leaving fullscreen keeps the inline-docked keybar open on wide touch", () => {
