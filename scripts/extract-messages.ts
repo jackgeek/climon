@@ -25,9 +25,13 @@ const LOGMSG_RE =
  */
 const TFUNC_RE = /(?<![A-Za-z0-9_$])t\(\s*"([^"]+)"/g;
 
-/** Param names that should almost always be redacted before leaving the machine. */
+/**
+ * Param names that should almost always be redacted before leaving the machine.
+ * `(?<!sub)command` flags `command`/`displayCommand` (which can hold a
+ * user-supplied command line) while allowing `subcommand` (a fixed keyword).
+ */
 const SENSITIVE_PARAM_RE =
-  /(host|hostname|path|url|user|username|token|secret|password|auth|connectionstring|ip|email)/i;
+  /(host|hostname|path|url|user|username|token|secret|password|auth|connectionstring|ip|email|(?<!sub)command|argv)/i;
 
 /**
  * Returns the message keys referenced in source text: the 3rd arg of `logMsg(..)`

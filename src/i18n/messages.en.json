@@ -18,10 +18,10 @@
   },
   "cli.command_invocation": {
     "id": "0b82ce8c",
-    "t": "cli command: {command}",
-    "hint": "Debug log emitted when a CLI command is invoked; {command} is the command line being recorded.",
+    "t": "cli command: {subcommand}",
+    "hint": "Debug log emitted when a climon subcommand is invoked; {subcommand} is the fixed subcommand keyword (e.g. run, server, config), never the user-supplied command a session executes.",
     "params": {
-      "command": {
+      "subcommand": {
         "redact": false,
         "category": "generic"
       }
