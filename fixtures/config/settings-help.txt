@@ -42,7 +42,7 @@
     theme" picker; defaults to "Default".
 
   dashboard.keyBarPinned
-    Type: boolean; Default: false; Scope: server, browser
+    Type: boolean; Default: true; Scope: server, browser
     Whether the web dashboard key bar is pinned open.
 
   attention.idleSeconds

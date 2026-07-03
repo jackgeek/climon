@@ -1,6 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { terminalPanelArrowData } from "../src/web/components/TerminalPanel.js";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { terminalPanelArrowData, TerminalPanel, type TerminalPanelView } from "../src/web/components/TerminalPanel.js";
+
+function renderPanel(overrides: Partial<Parameters<typeof TerminalPanel>[0]> = {}): string {
+  const props = {
+    view: "compose" as TerminalPanelView,
+    fontSize: 14,
+    composeText: "hello world",
+    showLabels: true,
+    onSelect: () => undefined,
+    onAdjustFont: () => undefined,
+    onComposeTextChange: () => undefined,
+    onComposeInsert: () => undefined,
+    onComposeCancel: () => undefined,
+    onSend: () => undefined,
+    ...overrides
+  };
+  return renderToStaticMarkup(createElement(TerminalPanel, props));
+}
 
 describe("TerminalPanel", () => {
   test("maps chooser arrow buttons to page key input", () => {
@@ -15,5 +34,70 @@ describe("TerminalPanel", () => {
     expect(source).toContain('onClick={() => onSend(terminalPanelArrowData("down"))}');
     expect(source).toContain('aria-label="Send PageUp"');
     expect(source).toContain('onClick={() => onSend(terminalPanelArrowData("up"))}');
+  });
+
+  test("chooser buttons keep accessible labels for the icon-only state", () => {
+    const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
+
+    expect(source).toContain('aria-label="Keyboard"');
+    expect(source).toContain('aria-label="Font size"');
+    expect(source).toContain('aria-label="Compose text"');
+    expect(source).toContain('onClick={() => onSelect("compose")}');
+    // Labels are only rendered as children when showLabels is set, so the
+    // buttons collapse to true icon-only Fluent buttons on narrow viewports.
+    expect(source).toContain('{showLabels ? <span className={styles.chooserLabel}>Keyboard</span> : undefined}');
+    expect(source).toContain('{showLabels ? <span className={styles.chooserLabel}>Font size</span> : undefined}');
+    expect(source).toContain('{showLabels ? <span className={styles.chooserLabel}>Composer</span> : undefined}');
+  });
+
+  test("chooser buttons render text labels when showLabels is true", () => {
+    const markup = renderPanel({ view: "chooser", showLabels: true });
+
+    expect(markup).toContain("Keyboard");
+    expect(markup).toContain("Font size");
+    expect(markup).toContain(">Composer</span>");
+  });
+
+  test("chooser buttons omit text labels when showLabels is false", () => {
+    const markup = renderPanel({ view: "chooser", showLabels: false });
+
+    expect(markup).not.toContain("Composer");
+    expect(markup).not.toContain(">Keyboard</span>");
+    expect(markup).not.toContain(">Font size</span>");
+    // Accessible names are still present via aria-label for the icon-only state.
+    expect(markup).toContain('aria-label="Keyboard"');
+    expect(markup).toContain('aria-label="Compose text"');
+  });
+
+  test("compose view renders textarea, staged text, and actions", () => {
+    const markup = renderPanel();
+
+    expect(markup).toContain('aria-label="Compose text"');
+    expect(markup).toContain('aria-label="Text to insert"');
+    expect(markup).toContain("hello world");
+    expect(markup).toContain(">Cancel<");
+    expect(markup).toContain(">Insert<");
+  });
+
+  test("compose insert button is disabled when text is empty", () => {
+    const markup = renderPanel({ composeText: "" });
+
+    const disabledCount = (markup.match(/disabled=""|disabled/g) ?? []).length;
+    expect(disabledCount).toBeGreaterThanOrEqual(1);
+  });
+
+  test("compose view selects pre-existing text when opened", () => {
+    const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
+
+    expect(source).toContain("const composeTextareaRef = useRef<HTMLTextAreaElement | null>(null);");
+    expect(source).toContain("textarea={{ ref: composeTextareaRef, style: { height: \"100%\" } }}");
+    expect(source).toContain("el.setSelectionRange(0, el.value.length);");
+  });
+
+  test("compose action buttons wire to insert and cancel handlers", () => {
+    const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
+
+    expect(source).toContain("onClick={() => onComposeInsert(composeText)}");
+    expect(source).toContain("onClick={() => onComposeCancel()}");
   });
 });

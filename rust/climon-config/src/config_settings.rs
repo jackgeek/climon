@@ -344,7 +344,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "Whether the web dashboard key bar is pinned open.",
             vec![Server, Browser],
         )
-        .default(Value::from(false))
+        .default(Value::from(true))
         .accept_input(),
         ConfigSetting::new(
             "attention.idleSeconds",
@@ -895,7 +895,7 @@ mod tests {
                 "server": { "host": "127.0.0.1", "port": 3131 },
                 "terminal": { "clampBrowserToHost": false, "detachPrefix": 28, "setTitle": true },
                 "hotKeys": { "focusTopSession": "Alt+J" },
-                "dashboard": { "theme": "Default", "keyBarPinned": false },
+                "dashboard": { "theme": "Default", "keyBarPinned": true },
                 "attention": { "idleSeconds": 10 },
                 "remote": { "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },
