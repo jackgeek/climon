@@ -128,6 +128,14 @@ never receives rendered message text:
   parameter the catalog entry marks `redact: true` (hostnames, paths, URLs,
   config values, tokens, PII) is replaced with `[REDACTED:<category>]` before
   sending. Non-redacted params stay as queryable properties.
+- Diagnostic params (`category: "diagnostic"`, e.g. error/reason/message text)
+  are the exception: instead of being blanked, they are passed through the
+  diagnostic sanitizer (`src/logging/sanitize.ts`), which keeps the diagnostic
+  skeleton (error codes, syscalls, HTTP statuses) but strips identifier-shaped
+  tokens — paths, hostnames, IPs, URLs, emails, and long hex/opaque tokens are
+  replaced with `<path>`, `<host>`, `<ip>`, `<url>`, `<email>`, `<id>` markers,
+  and the value is truncated. This keeps error telemetry useful without leaking
+  identifiers; when in doubt the sanitizer over-redacts.
 - Records that are not yet catalogued fall back to the sentinel id `00000000`
   and keep their rendered text, so emission stays correct during the migration.
 

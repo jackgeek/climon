@@ -82,6 +82,13 @@ Each record may include:
 - Non-sensitive structured parameters. Any parameter classified as sensitive
   (hostnames, paths, URLs, configuration values, tokens, or PII) is replaced
   with a typed redaction marker such as `[REDACTED:path]` before transmission.
+- Diagnostic parameters (error, reason, and status messages) are **sanitized**
+  rather than sent verbatim: the diagnostic skeleton (error codes, system-call
+  names, HTTP statuses) is preserved, while any embedded file path, hostname, IP
+  address, URL, email, or long token is stripped and replaced with a typed
+  marker such as `<path>` or `<host>`. This lets us diagnose errors in aggregate
+  without receiving identifying values; the sanitizer errs on the side of
+  removing too much.
 
 Telemetry is keyed only by the anonymous install identifier. It is not linked to
 your identity, and we do not attempt to re-identify you from it.

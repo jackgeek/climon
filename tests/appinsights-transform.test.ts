@@ -13,8 +13,33 @@ const CAT: Catalog = {
       user: { redact: true, category: "pii" },
     },
   },
+  "srv.error": {
+    id: "0000000e",
+    t: "operation failed: {error}",
+    hint: "diagnostic error whose free text is sanitized before egress",
+    params: {
+      error: { redact: true, category: "diagnostic" },
+    },
+  },
   "srv.started": { id: "0000000d", t: "server started", hint: "server boot completed", params: {} },
 };
+
+describe("redactParams diagnostic sanitization", () => {
+  test("sanitizes diagnostic params instead of blanking them", () => {
+    const out = redactParams(
+      { error: "ENOENT open /Users/alice/.climon/config.jsonc" },
+      CAT["srv.error"],
+    );
+    expect(out.error).toContain("ENOENT");
+    expect(out.error).not.toContain("alice");
+    expect(out.error).toContain("<path>");
+  });
+
+  test("leaves non-string diagnostic params untouched", () => {
+    const out = redactParams({ error: 42 }, CAT["srv.error"]);
+    expect(out.error).toBe(42);
+  });
+});
 
 describe("redactParams", () => {
   test("replaces redacted params with a typed marker", () => {

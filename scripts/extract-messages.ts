@@ -29,9 +29,12 @@ const TFUNC_RE = /(?<![A-Za-z0-9_$])t\(\s*"([^"]+)"/g;
  * Param names that should almost always be redacted before leaving the machine.
  * `(?<!sub)command` flags `command`/`displayCommand` (which can hold a
  * user-supplied command line) while allowing `subcommand` (a fixed keyword).
+ * Free-text diagnostic params (`err`/`error`/`message`/`reason`/`detail`) are
+ * flagged too: they must be `redact:true` with `category:"diagnostic"` so they
+ * are sanitized (not sent verbatim) on the telemetry egress path.
  */
 const SENSITIVE_PARAM_RE =
-  /(host|hostname|path|url|user|username|token|secret|password|auth|connectionstring|ip|email|(?<!sub)command|argv)/i;
+  /(host|hostname|path|url|user|username|token|secret|password|auth|connectionstring|ip|email|(?<!sub)command|argv|err|error|message|reason|detail)/i;
 
 /**
  * Returns the message keys referenced in source text: the 3rd arg of `logMsg(..)`

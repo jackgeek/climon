@@ -2,6 +2,7 @@ import { Transform } from "node:stream";
 import { lookupByKey } from "../i18n/catalog.js";
 import { SENTINEL_MSG_ID } from "../i18n/log-msg.js";
 import type { Catalog, CatalogEntry } from "../i18n/types.js";
+import { sanitizeDiagnostic } from "./sanitize.js";
 
 /**
  * Transforms pino records into a compact form for Application Insights so the
@@ -16,8 +17,10 @@ import type { Catalog, CatalogEntry } from "../i18n/types.js";
  */
 
 /**
- * Returns a copy of `record` with every redact:true catalog parameter present
- * at the top level replaced by a typed marker. Other fields are untouched.
+ * Returns a copy of `record` with each redact:true catalog parameter present at
+ * the top level scrubbed. `diagnostic` params are sanitized (their diagnostic
+ * skeleton is kept, identifiers stripped); every other redacted category is
+ * replaced by a flat `[REDACTED:<category>]` marker. Other fields are untouched.
  */
 export function redactParams(
   record: Record<string, unknown>,
@@ -26,7 +29,10 @@ export function redactParams(
   const out = { ...record };
   if (!entry) return out;
   for (const [name, meta] of Object.entries(entry.params)) {
-    if (meta.redact && Object.prototype.hasOwnProperty.call(out, name)) {
+    if (!meta.redact || !Object.prototype.hasOwnProperty.call(out, name)) continue;
+    if (meta.category === "diagnostic") {
+      if (typeof out[name] === "string") out[name] = sanitizeDiagnostic(out[name] as string);
+    } else {
       out[name] = `[REDACTED:${meta.category ?? "generic"}]`;
     }
   }
