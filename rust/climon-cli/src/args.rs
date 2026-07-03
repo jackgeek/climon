@@ -43,7 +43,9 @@ pub enum ParsedCommand {
     /// flags with no command (implicit). When `implicit`, the launcher prints a
     /// friendly note explaining why help is shown; explicit help does not, so it
     /// stays byte-for-byte identical to `fixtures/cli/help.txt`.
-    Help { implicit: bool },
+    Help {
+        implicit: bool,
+    },
     Version,
     Shell {
         priority: Option<i64>,
@@ -945,7 +947,17 @@ mod tests {
     #[test]
     fn parses_shell_subcommand_with_session_flags() {
         assert_eq!(
-            parse(&["shell", "--priority", "5", "--color", "blue", "--name", "dev", "--theme", "Dracula"]),
+            parse(&[
+                "shell",
+                "--priority",
+                "5",
+                "--color",
+                "blue",
+                "--name",
+                "dev",
+                "--theme",
+                "Dracula"
+            ]),
             ParsedCommand::Shell {
                 priority: Some(5),
                 color: Some(ColorFlag::Color(AnsiColor::Blue)),
