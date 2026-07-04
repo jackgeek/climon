@@ -39,6 +39,11 @@ describe("isStaleCacheName", () => {
     expect(isStaleCacheName(CACHE_NAME)).toBe(false);
     expect(isStaleCacheName("some-other-cache")).toBe(false);
   });
+
+  test("flags the previous cache version so activate purges a poisoned bundle", () => {
+    expect(isStaleCacheName("climon-shell-v1")).toBe(true);
+    expect(CACHE_NAME).not.toBe("climon-shell-v1");
+  });
 });
 
 describe("SHELL_ASSETS", () => {
@@ -70,12 +75,19 @@ describe("shouldCacheAssetResponse", () => {
     expect(shouldCacheAssetResponse({ ok: true, redirected: false, type: "basic", contentType: "text/javascript; charset=utf-8" })).toBe(true);
     expect(shouldCacheAssetResponse({ ok: true, redirected: false, type: "basic", contentType: "text/css; charset=utf-8" })).toBe(true);
   });
+  test("caches a redirected JS/CSS asset (authed dev-tunnel resolves via a redirect)", () => {
+    // A dev tunnel authenticates each asset request through a redirect chain that
+    // resolves to the real bundle. Rejecting these would pin the SW to a stale
+    // (possibly broken) cached copy that can never self-heal.
+    expect(shouldCacheAssetResponse({ ok: true, redirected: true, type: "basic", contentType: "text/javascript; charset=utf-8" })).toBe(true);
+  });
   test("rejects an inline text/html login page served for an asset path", () => {
     expect(shouldCacheAssetResponse({ ok: true, redirected: false, type: "basic", contentType: "text/html; charset=utf-8" })).toBe(false);
+    expect(shouldCacheAssetResponse({ ok: true, redirected: true, type: "basic", contentType: "text/html; charset=utf-8" })).toBe(false);
   });
-  test("rejects redirected, opaque, and non-ok responses", () => {
-    expect(shouldCacheAssetResponse({ ok: true, redirected: true, type: "basic", contentType: "text/javascript" })).toBe(false);
+  test("rejects opaque and non-ok responses", () => {
     expect(shouldCacheAssetResponse({ ok: true, redirected: false, type: "opaqueredirect", contentType: "" })).toBe(false);
     expect(shouldCacheAssetResponse({ ok: false, redirected: false, type: "basic", contentType: "text/javascript" })).toBe(false);
+    expect(shouldCacheAssetResponse({ ok: false, redirected: true, type: "opaque", contentType: "" })).toBe(false);
   });
 });

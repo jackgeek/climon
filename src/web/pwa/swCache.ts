@@ -4,7 +4,7 @@
  * is unit-testable, matching the `pwaContext.ts` / `api.ts` split.
  */
 
-export const CACHE_NAME = "climon-shell-v1";
+export const CACHE_NAME = "climon-shell-v2";
 
 /** The document served for every navigation (the dashboard HTML shell). */
 export const NAVIGATION_SHELL_URL = "/";
@@ -68,8 +68,14 @@ export function shouldCacheShellResponse(
 
 /**
  * Whether a network asset response is a real asset (safe to cache). Rejects
- * redirects/opaque responses and any `text/html` body (an inline dev-tunnel
- * login page served for an asset path), so HTML is never cached as JS/CSS.
+ * opaque/non-ok responses and any `text/html` body (an inline dev-tunnel login
+ * page served for an asset path), so HTML is never cached as JS/CSS.
+ *
+ * A `redirected` response is trusted as long as it is `ok` and not `text/html`:
+ * an authenticated dev tunnel resolves each asset request through a redirect
+ * chain that lands on the genuine bundle. Rejecting redirects here would pin the
+ * SW to its cached copy, so a once-poisoned (e.g. broken build) cache entry
+ * could never self-heal even after the server is fixed.
  */
 export function shouldCacheAssetResponse(res: {
   ok: boolean;
@@ -77,7 +83,7 @@ export function shouldCacheAssetResponse(res: {
   type: string;
   contentType: string;
 }): boolean {
-  if (!res.ok || res.redirected || res.type === "opaqueredirect") {
+  if (!res.ok || res.type === "opaqueredirect") {
     return false;
   }
   return !res.contentType.toLowerCase().includes("text/html");
