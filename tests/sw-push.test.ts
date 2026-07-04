@@ -1,10 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   handlePush,
-  anyClientForeground,
   pickNotificationClient,
   resolveNotificationClick,
-  type PushWindowClient,
   type NotificationClickClient,
 } from "../src/web/pwa/swPush.js";
 
@@ -12,69 +10,16 @@ function sessionPush(sessionId: string): string {
   return JSON.stringify({ title: "climon session x needs attention", body: "", sessionId });
 }
 
-function windowClient(overrides: Partial<PushWindowClient> = {}): PushWindowClient {
-  return { focused: false, visibilityState: "hidden", ...overrides };
-}
-
-describe("anyClientForeground", () => {
-  test("true when a client is focused or visible", () => {
-    expect(anyClientForeground([windowClient({ focused: true })])).toBe(true);
-    expect(anyClientForeground([windowClient({ visibilityState: "visible" })])).toBe(true);
-  });
-
-  test("false when there are no clients or all are hidden", () => {
-    expect(anyClientForeground([])).toBe(false);
-    expect(anyClientForeground([windowClient(), windowClient()])).toBe(false);
-  });
-});
-
 describe("handlePush", () => {
-  test("shows the notification when there are no open clients", async () => {
+  test("always shows the notification for a push", async () => {
     const shown: string[] = [];
     await handlePush({
       raw: sessionPush("sess-1"),
-      matchWindowClients: async () => [],
       showNotification: (title) => {
         shown.push(title);
       },
     });
     expect(shown).toEqual(["climon session x needs attention"]);
-  });
-
-  test("shows the notification when all clients are hidden (backgrounded)", async () => {
-    const shown: string[] = [];
-    await handlePush({
-      raw: sessionPush("sess-1"),
-      matchWindowClients: async () => [windowClient(), windowClient()],
-      showNotification: (title) => {
-        shown.push(title);
-      },
-    });
-    expect(shown).toEqual(["climon session x needs attention"]);
-  });
-
-  test("suppresses the notification when a client is visible (foreground handles it via toast)", async () => {
-    const shown: string[] = [];
-    await handlePush({
-      raw: sessionPush("sess-1"),
-      matchWindowClients: async () => [windowClient({ visibilityState: "visible" })],
-      showNotification: (title) => {
-        shown.push(title);
-      },
-    });
-    expect(shown).toEqual([]);
-  });
-
-  test("suppresses the notification when a client is focused", async () => {
-    const shown: string[] = [];
-    await handlePush({
-      raw: sessionPush("sess-1"),
-      matchWindowClients: async () => [windowClient({ focused: true })],
-      showNotification: (title) => {
-        shown.push(title);
-      },
-    });
-    expect(shown).toEqual([]);
   });
 });
 
