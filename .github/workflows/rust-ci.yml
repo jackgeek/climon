@@ -18,6 +18,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Fail fast instead of burning up to 6h of runner time if a test deadlocks
+    # (e.g. the Windows ConPTY reader-join hang fixed in #38). A full run is
+    # ~1-5 min per OS, so 20 min leaves ample headroom for cold caches.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
