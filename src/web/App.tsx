@@ -521,6 +521,7 @@ export function App() {
   const [maximized, setMaximized] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
+  const [selecting, setSelecting] = useState(false);
   const [composeText, setComposeText] = useState("");
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
@@ -1037,6 +1038,15 @@ export function App() {
     scheduleTerminalRefit(terminalRef.current);
   }, [panelView]);
 
+  // Selection mode only makes sense while the chooser bar is visible. Leaving
+  // the chooser (keyboard/compose/font view, or closing the panel) exits it so
+  // the terminal returns to normal focus/keyboard behavior.
+  useEffect(() => {
+    if (panelView !== "chooser") {
+      setSelecting(false);
+    }
+  }, [panelView]);
+
   // Mobile soft keyboards shrink the visual viewport without reliably changing
   // CSS vh/dvh units on every browser. Mirror the visual viewport into CSS so
   // fixed/full-height UI and xterm fit inside the visible area while typing.
@@ -1451,6 +1461,7 @@ export function App() {
           serverConnected={serverConnected}
           serverReconnectToken={serverReconnectToken}
           onLiveInteraction={handleLiveInteraction}
+          selecting={selecting}
         />
         {panelView !== "closed" && keyBarAvailable && (
           <>
@@ -1470,7 +1481,10 @@ export function App() {
                 fontSize={fontSize}
                 composeText={composeText}
                 showLabels={!isMobile}
+                showSelect={isTouchPrimary}
+                selecting={selecting}
                 onSelect={setPanelView}
+                onToggleSelect={() => setSelecting((prev) => !prev)}
                 onAdjustFont={adjustFontSize}
                 onComposeTextChange={setComposeText}
                 onComposeInsert={(text) => {

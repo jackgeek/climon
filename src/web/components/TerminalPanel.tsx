@@ -7,6 +7,7 @@ import {
   Compose24Regular,
   Dismiss24Regular,
   Keyboard24Regular,
+  SelectObject24Regular,
   TextFont24Regular
 } from "@fluentui/react-icons";
 import { KeyBar } from "./KeyBar.js";
@@ -21,7 +22,10 @@ interface Props {
   fontSize: number;
   composeText: string;
   showLabels: boolean;
+  showSelect: boolean;
+  selecting: boolean;
   onSelect: (view: Exclude<TerminalPanelView, "chooser">) => void;
+  onToggleSelect: () => void;
   onAdjustFont: (delta: number) => void;
   onComposeTextChange: (text: string) => void;
   onComposeInsert: (text: string) => void;
@@ -94,7 +98,10 @@ export function TerminalPanel({
   fontSize,
   composeText,
   showLabels,
+  showSelect,
+  selecting,
   onSelect,
+  onToggleSelect,
   onAdjustFont,
   onComposeTextChange,
   onComposeInsert,
@@ -224,6 +231,17 @@ export function TerminalPanel({
       >
         {showLabels ? <span className={styles.chooserLabel}>Composer</span> : undefined}
       </Button>
+      {showSelect ? (
+        <Button
+          appearance={selecting ? "primary" : "outline"}
+          aria-label="Select text"
+          aria-pressed={selecting}
+          icon={<SelectObject24Regular />}
+          onClick={() => onToggleSelect()}
+        >
+          {showLabels ? <span className={styles.chooserLabel}>Select</span> : undefined}
+        </Button>
+      ) : undefined}
       <Button
         appearance="outline"
         aria-label="Send PageUp"

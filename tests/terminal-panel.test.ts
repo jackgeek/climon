@@ -10,7 +10,10 @@ function renderPanel(overrides: Partial<Parameters<typeof TerminalPanel>[0]> = {
     fontSize: 14,
     composeText: "hello world",
     showLabels: true,
+    showSelect: false,
+    selecting: false,
     onSelect: () => undefined,
+    onToggleSelect: () => undefined,
     onAdjustFont: () => undefined,
     onComposeTextChange: () => undefined,
     onComposeInsert: () => undefined,
@@ -67,6 +70,22 @@ describe("TerminalPanel", () => {
     // Accessible names are still present via aria-label for the icon-only state.
     expect(markup).toContain('aria-label="Keyboard"');
     expect(markup).toContain('aria-label="Compose text"');
+  });
+
+  test("chooser shows the Select toggle only when showSelect is set", () => {
+    const withSelect = renderPanel({ view: "chooser", showSelect: true });
+    const withoutSelect = renderPanel({ view: "chooser", showSelect: false });
+
+    expect(withSelect).toContain('aria-label="Select text"');
+    expect(withoutSelect).not.toContain('aria-label="Select text"');
+  });
+
+  test("Select toggle reflects the active selection state via aria-pressed", () => {
+    const active = renderPanel({ view: "chooser", showSelect: true, selecting: true });
+    const inactive = renderPanel({ view: "chooser", showSelect: true, selecting: false });
+
+    expect(active).toContain('aria-pressed="true"');
+    expect(inactive).toContain('aria-pressed="false"');
   });
 
   test("compose view renders textarea, staged text, and actions", () => {

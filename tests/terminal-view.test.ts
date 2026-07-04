@@ -9,6 +9,7 @@ import {
   applyTerminalScrollbackForSession,
   canRefitTerminalForSession,
   completeInitialReplay,
+  configureSelectionTextarea,
   focusTerminalPane,
   mapWheelToScrollLines,
   reconnectDelayMs,
@@ -176,6 +177,51 @@ describe("TerminalView", () => {
 
     expect(focusCalls).toBe(1);
     expect(refreshCalls).toBe(1);
+  });
+
+  test("selection mode blurs and disables the helper textarea to suppress the keyboard", () => {
+    const attrs: Record<string, string> = {};
+    let blurred = 0;
+    const textarea = {
+      blur: () => blurred++,
+      setAttribute: (name: string, value: string) => {
+        attrs[name] = value;
+      },
+      removeAttribute: (name: string) => {
+        delete attrs[name];
+      }
+    };
+
+    configureSelectionTextarea(textarea, true);
+
+    expect(blurred).toBe(1);
+    expect(attrs.inputmode).toBe("none");
+    expect(attrs.readonly).toBe("true");
+    expect(attrs.tabindex).toBe("-1");
+  });
+
+  test("leaving selection mode restores the helper textarea for input", () => {
+    const attrs: Record<string, string> = { inputmode: "none", readonly: "true", tabindex: "-1" };
+    const textarea = {
+      blur: () => {},
+      setAttribute: (name: string, value: string) => {
+        attrs[name] = value;
+      },
+      removeAttribute: (name: string) => {
+        delete attrs[name];
+      }
+    };
+
+    configureSelectionTextarea(textarea, false);
+
+    expect(attrs.inputmode).toBeUndefined();
+    expect(attrs.readonly).toBeUndefined();
+    expect(attrs.tabindex).toBe("0");
+  });
+
+  test("selection textarea config tolerates a missing textarea", () => {
+    expect(() => configureSelectionTextarea(null, true)).not.toThrow();
+    expect(() => configureSelectionTextarea(undefined, false)).not.toThrow();
   });
 
   test("repaints visible terminal rows without resetting the buffer", () => {
