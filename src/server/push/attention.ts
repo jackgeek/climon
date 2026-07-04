@@ -11,8 +11,6 @@ export interface AttentionTracker {
   update: (sessions: SessionMeta[]) => SessionMeta[];
 }
 
-const NOTIFICATION_TITLE = "climon needs attention";
-
 function attentionStateKey(session: Pick<SessionMeta, "id" | "attentionMatchedAt">): string {
   return `${session.id}:${session.attentionMatchedAt ?? "attention"}`;
 }
@@ -29,11 +27,9 @@ function attentionLabel(
 
 export function buildPushPayload(session: SessionMeta): PushPayload {
   const label = attentionLabel(session);
-  const base = `${label} needs attention`;
-  const reason = session.attentionReason?.trim();
   return {
-    title: NOTIFICATION_TITLE,
-    body: reason ? `${base}: ${reason}` : base,
+    title: `${label} needs attention`,
+    body: session.terminalTitle?.trim() ?? "",
     sessionId: session.id,
     key: attentionStateKey(session),
   };

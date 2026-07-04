@@ -66,17 +66,19 @@ not on the previously shown list/session B.
 - **ID:** MT-PWA-CLICK-03
 - **Feature:** PWA notification click → originating session
 - **Preconditions:** Common preconditions; PWA open and visible on the session
-  list or session B (not viewing session A, so the push is not suppressed).
+  list or session B (not viewing session A).
 - **Config-matrix cell:** installed PWA, tunnel origin (push)
 - **Platforms:** Android (Chrome PWA), iOS (Safari PWA)
 
 **Steps:**
 1. Keep the PWA in the foreground on the session list or session B.
-2. Drive session A into `needs-attention`; a push notification appears.
-3. Tap the notification.
+2. Drive session A into `needs-attention`.
 
-**Expected result:** The PWA switches to session A's terminal immediately
-without a full reload (live terminal state for other sessions is preserved).
+**Expected result:** While the PWA is in the foreground the system push banner
+is **suppressed**; instead an in-app toast `A needs attention` appears (see
+`foreground-attention-toast.md`). Tapping the toast switches to session A's
+terminal immediately without a full reload (live terminal state for other
+sessions is preserved).
 
 **Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
 | --- | --- | --- | --- | --- | --- |

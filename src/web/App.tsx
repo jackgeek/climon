@@ -10,6 +10,11 @@ import {
   FluentProvider,
   Spinner,
   Text,
+  Toast,
+  ToastTitle,
+  Toaster,
+  useId,
+  useToastController,
   makeStyles,
   mergeClasses,
   tokens,
@@ -83,10 +88,9 @@ import {
 } from "./pwa/push.js";
 import {
   parseSessionFromSearch,
-  parseOpenSessionMessage,
-  isViewedSessionQuery,
-  viewedSessionResponse
+  parseOpenSessionMessage
 } from "./pwa/pushData.js";
+import { buildAttentionToast } from "./attentionToast.js";
 import { computeViewedSessionId, viewedSessionAttentionAck } from "./viewedSession.js";
 import { parseShortcut, matchesShortcut } from "../hotkeys.js";
 import { webLog } from "./log.js";
@@ -718,10 +722,6 @@ export function App() {
   // The session the user is actively looking at. Used to suppress its
   // needs-attention notifications and to auto-acknowledge it.
   const viewedSessionId = computeViewedSessionId({ activeId, sessions, pageVisible, isMobile, maximized });
-  const viewedSessionIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    viewedSessionIdRef.current = viewedSessionId;
-  }, [viewedSessionId]);
 
   // Treat viewing a session as acknowledgement: when the viewed session enters
   // needs-attention, send a single ack so the daemon clears the attention state.
@@ -742,10 +742,6 @@ export function App() {
       return;
     }
     const onMessage = (event: MessageEvent): void => {
-      if (isViewedSessionQuery(event.data)) {
-        event.ports[0]?.postMessage(viewedSessionResponse(viewedSessionIdRef.current));
-        return;
-      }
       const id = parseOpenSessionMessage(event.data);
       if (id) {
         popSession(id);
@@ -778,7 +774,38 @@ export function App() {
     };
   }, []);
 
-  useAttentionAlerts(sessions, undefined, viewedSessionId);
+  const attentionToasterId = useId("attention-toaster");
+  const { dispatchToast, dismissToast } = useToastController(attentionToasterId);
+
+  // In-app alerts (toast/sound/vibration) are shown while the dashboard is in
+  // the foreground, except on the mobile session list, where the attention
+  // badge is already visible.
+  const alertsVisible = pageVisible && (!isMobile || maximized);
+
+  const dispatchAttentionToast = useCallback(
+    (session: SessionMeta): void => {
+      const toast = buildAttentionToast(session);
+      dispatchToast(
+        <Toast
+          onClick={() => {
+            popSession(toast.sessionId);
+            dismissToast(toast.toastId);
+          }}
+          style={{ cursor: "pointer" }}
+        >
+          <ToastTitle>{toast.message}</ToastTitle>
+        </Toast>,
+        { toastId: toast.toastId, intent: "warning", timeout: 6000 }
+      );
+    },
+    [dispatchToast, dismissToast, popSession]
+  );
+
+  useAttentionAlerts(sessions, {
+    onAttention: dispatchAttentionToast,
+    viewedSessionId,
+    alertsVisible
+  });
 
   // Subscribe to live session updates and load the initial list.
   useEffect(() => {
@@ -1375,6 +1402,7 @@ export function App() {
 
   return (
     <FluentProvider theme={fluentTheme} style={{ height: "100%" }}>
+    <Toaster toasterId={attentionToasterId} position="top" />
     <FeatureFlagsProvider value={features}>
     <div className={styles.root}>
       {showSplash && <SplashScreen onDone={dismissSplash} />}

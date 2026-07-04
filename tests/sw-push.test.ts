@@ -1,44 +1,63 @@
 import { describe, expect, test } from "bun:test";
 import {
   handlePush,
-  queryViewedSession,
+  anyClientForeground,
   pickNotificationClient,
   resolveNotificationClick,
-  type PushClient,
-  type ViewedSessionChannel,
+  type PushWindowClient,
   type NotificationClickClient,
 } from "../src/web/pwa/swPush.js";
-import { VIEWED_SESSION_QUERY, viewedSessionResponse } from "../src/web/pwa/pushData.js";
 
 function sessionPush(sessionId: string): string {
-  return JSON.stringify({ title: "climon needs attention", body: "x", sessionId });
+  return JSON.stringify({ title: "climon session x needs attention", body: "", sessionId });
 }
 
+function windowClient(overrides: Partial<PushWindowClient> = {}): PushWindowClient {
+  return { focused: false, visibilityState: "hidden", ...overrides };
+}
+
+describe("anyClientForeground", () => {
+  test("true when a client is focused or visible", () => {
+    expect(anyClientForeground([windowClient({ focused: true })])).toBe(true);
+    expect(anyClientForeground([windowClient({ visibilityState: "visible" })])).toBe(true);
+  });
+
+  test("false when there are no clients or all are hidden", () => {
+    expect(anyClientForeground([])).toBe(false);
+    expect(anyClientForeground([windowClient(), windowClient()])).toBe(false);
+  });
+});
+
 describe("handlePush", () => {
-  test("shows the notification for a generic push without querying clients", async () => {
-    let queried = 0;
+  test("shows the notification when there are no open clients", async () => {
     const shown: string[] = [];
     await handlePush({
-      raw: JSON.stringify({ title: "climon", body: "A session needs attention" }),
-      matchWindowClients: async () => {
-        queried += 1;
-        return [];
-      },
-      queryClient: async () => null,
+      raw: sessionPush("sess-1"),
+      matchWindowClients: async () => [],
       showNotification: (title) => {
         shown.push(title);
       },
     });
-    expect(shown).toEqual(["climon"]);
-    expect(queried).toBe(0);
+    expect(shown).toEqual(["climon session x needs attention"]);
   });
 
-  test("suppresses the push when a client is viewing the pushed session", async () => {
+  test("shows the notification when all clients are hidden (backgrounded)", async () => {
     const shown: string[] = [];
     await handlePush({
       raw: sessionPush("sess-1"),
-      matchWindowClients: async () => [{ postMessage: () => {} }, { postMessage: () => {} }],
-      queryClient: async (client) => (client === undefined ? null : "sess-1"),
+      matchWindowClients: async () => [windowClient(), windowClient()],
+      showNotification: (title) => {
+        shown.push(title);
+      },
+    });
+    expect(shown).toEqual(["climon session x needs attention"]);
+  });
+
+  test("suppresses the notification when a client is visible (foreground handles it via toast)", async () => {
+    const shown: string[] = [];
+    await handlePush({
+      raw: sessionPush("sess-1"),
+      matchWindowClients: async () => [windowClient({ visibilityState: "visible" })],
       showNotification: (title) => {
         shown.push(title);
       },
@@ -46,111 +65,16 @@ describe("handlePush", () => {
     expect(shown).toEqual([]);
   });
 
-  test("shows the push when no client is viewing the pushed session", async () => {
+  test("suppresses the notification when a client is focused", async () => {
     const shown: string[] = [];
     await handlePush({
       raw: sessionPush("sess-1"),
-      matchWindowClients: async () => [{ postMessage: () => {} }],
-      queryClient: async () => "sess-2",
+      matchWindowClients: async () => [windowClient({ focused: true })],
       showNotification: (title) => {
         shown.push(title);
       },
     });
-    expect(shown).toEqual(["climon needs attention"]);
-  });
-
-  test("shows the push when there are no open clients", async () => {
-    const shown: string[] = [];
-    await handlePush({
-      raw: sessionPush("sess-1"),
-      matchWindowClients: async () => [],
-      queryClient: async () => null,
-      showNotification: (title) => {
-        shown.push(title);
-      },
-    });
-    expect(shown).toEqual(["climon needs attention"]);
-  });
-});
-
-/** Builds a fake MessageChannel whose port1 can be driven from the test. */
-function fakeChannel(): ViewedSessionChannel & { reply: (data: unknown) => void; closed: boolean } {
-  const channel = {
-    port1: { onmessage: null as ((event: { data: unknown }) => void) | null, close: () => {} },
-    port2: {} as unknown,
-    closed: false,
-    reply(data: unknown) {
-      this.port1.onmessage?.({ data });
-    },
-  };
-  channel.port1.close = () => {
-    channel.closed = true;
-  };
-  return channel;
-}
-
-describe("queryViewedSession", () => {
-  test("resolves the session id the client reports and closes the port", async () => {
-    const channel = fakeChannel();
-    let sentMessage: unknown;
-    const client: PushClient = {
-      postMessage: (message) => {
-        sentMessage = message;
-        channel.reply(viewedSessionResponse("sess-9"));
-      },
-    };
-    const result = await queryViewedSession(client, {
-      createChannel: () => channel,
-      schedule: () => {},
-      timeoutMs: 500,
-    });
-    expect(result).toBe("sess-9");
-    expect((sentMessage as { type: string }).type).toBe(VIEWED_SESSION_QUERY);
-    expect(channel.closed).toBe(true);
-  });
-
-  test("resolves null when the client does not reply before the timeout", async () => {
-    const channel = fakeChannel();
-    const timer: { fire: (() => void) | null } = { fire: null };
-    const client: PushClient = { postMessage: () => {} };
-    const pending = queryViewedSession(client, {
-      createChannel: () => channel,
-      schedule: (callback) => {
-        timer.fire = callback;
-      },
-      timeoutMs: 500,
-    });
-    timer.fire?.();
-    expect(await pending).toBeNull();
-    expect(channel.closed).toBe(true);
-  });
-
-  test("a late reply after timeout does not override the resolved value", async () => {
-    const channel = fakeChannel();
-    const timer: { fire: (() => void) | null } = { fire: null };
-    const client: PushClient = { postMessage: () => {} };
-    const pending = queryViewedSession(client, {
-      createChannel: () => channel,
-      schedule: (callback) => {
-        timer.fire = callback;
-      },
-      timeoutMs: 500,
-    });
-    timer.fire?.();
-    channel.reply(viewedSessionResponse("sess-late"));
-    expect(await pending).toBeNull();
-  });
-
-  test("resolves null when creating the channel throws", async () => {
-    const client: PushClient = { postMessage: () => {} };
-    const result = await queryViewedSession(client, {
-      createChannel: () => {
-        throw new Error("no channels");
-      },
-      schedule: () => {},
-      timeoutMs: 500,
-    });
-    expect(result).toBeNull();
+    expect(shown).toEqual([]);
   });
 });
 
