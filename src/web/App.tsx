@@ -30,6 +30,7 @@ import {
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
   probeTunnelAuth,
+  shouldPromptTunnelReauth,
   fetchRemotes,
   type RemotesResponse,
   type DashboardTunnelStatus
@@ -737,6 +738,25 @@ export function App() {
     navigator.serviceWorker.addEventListener("message", onMessage);
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
   }, [popSession]);
+
+  // Cold start of an installed PWA: the dashboard boots from the cached shell
+  // even when the dev tunnel would auth-redirect. Probe once on mount so an
+  // expired sign-in surfaces the re-auth overlay immediately, instead of waiting
+  // for a live connection to drop (which never happens on a cold start).
+  useEffect(() => {
+    if (!readIsTunnelOrigin()) {
+      return;
+    }
+    let cancelled = false;
+    void probeTunnelAuth().then((state) => {
+      if (!cancelled && shouldPromptTunnelReauth(state)) {
+        setTunnelAuthRequired(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useAttentionAlerts(sessions, undefined, viewedSessionId);
 
