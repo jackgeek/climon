@@ -148,18 +148,6 @@ fn basename(s: &str) -> &str {
     }
 }
 
-/// Removes control characters and caps length at 256.
-fn sanitize_title(name: &str) -> String {
-    const MAX_TITLE_LENGTH: usize = 256;
-    name.chars()
-        .filter(|&c| {
-            let code = c as u32;
-            !(code <= 0x1f || code == 0x7f)
-        })
-        .take(MAX_TITLE_LENGTH)
-        .collect()
-}
-
 /// Strips a trailing `.exe` (case-insensitive). Mirrors `replace(/\.exe$/i, "")`.
 fn strip_exe(s: &str) -> &str {
     if s.len() >= 4 && s[s.len() - 4..].eq_ignore_ascii_case(".exe") {
@@ -471,7 +459,6 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
     let store_env = StoreEnv::from_env();
     let config_env = ConfigEnv::real();
     ensure_climon_home(&config_env)?;
-    let config = load_config(&config_env).map_err(|e| e.to_string())?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
 
     let defaults = resolve_session_defaults(
@@ -510,18 +497,7 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         return Ok(0);
     }
 
-    let mut name = options.name;
-    if name.is_none() && cfg_bool(&config, "terminal", "setTitle", true) {
-        let queried = crate::query_title::query_terminal_title(150);
-        let inferred = queried
-            .map(|q| sanitize_title(&q).trim().to_string())
-            .unwrap_or_default();
-        name = Some(if !inferred.is_empty() {
-            inferred
-        } else {
-            build_display_command(command)
-        });
-    }
+    let name = options.name;
 
     let id = generate_session_id(&store_env).map_err(|e| e.to_string())?;
     let (cols, rows) = terminal_size();
@@ -573,15 +549,6 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         );
     }
     Ok(exit_code)
-}
-
-/// Reads a nested boolean config value with a default.
-fn cfg_bool(config: &serde_json::Value, section: &str, key: &str, default: bool) -> bool {
-    config
-        .get(section)
-        .and_then(|s| s.get(key))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(default)
 }
 
 /// Lists monitored sessions to stdout. Mirrors `listSessionsCommand`.
