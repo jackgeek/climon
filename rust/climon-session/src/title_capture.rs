@@ -174,7 +174,7 @@ mod tests {
         let (cur, _) = capture(b"\x1b]0;ab\x01cd\x07");
         assert_eq!(cur.as_deref(), Some("abcd"));
         let mut long = Vec::from(&b"\x1b]0;"[..]);
-        long.extend(std::iter::repeat(b'x').take(300));
+        long.extend(vec![b'x'; 300]);
         long.push(BEL);
         let (cur, _) = capture(&long);
         assert_eq!(cur.unwrap().len(), MAX_TITLE_LENGTH);
@@ -205,7 +205,7 @@ mod tests {
     fn discards_overlong_unterminated_remainder() {
         let mut cur = None;
         let mut chunk = Vec::from(&b"\x1b]0;"[..]);
-        chunk.extend(std::iter::repeat(b'x').take(MAX_REMAINDER + 10));
+        chunk.extend(vec![b'x'; MAX_REMAINDER + 10]);
         let rem = capture_terminal_title_from_output(&mut cur, &chunk, "");
         assert_eq!(cur, None);
         assert_eq!(rem, "");
