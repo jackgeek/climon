@@ -92,6 +92,31 @@ describe("createPresenceReporter", () => {
     expect(h.reports.length).toBe(count);
   });
 
+  test("dispose reports foreground:false so the server stops suppressing", () => {
+    const h = harness();
+    const r = createPresenceReporter(h.deps);
+    r.start();
+    r.dispose();
+    expect(h.reports.at(-1)).toEqual({ endpoint: "https://push/a", foreground: false });
+  });
+
+  test("dispose before start reports nothing", () => {
+    const h = harness();
+    const r = createPresenceReporter(h.deps);
+    r.dispose();
+    expect(h.reports).toEqual([]);
+  });
+
+  test("repeated dispose reports background only once", () => {
+    const h = harness();
+    const r = createPresenceReporter(h.deps);
+    r.start();
+    r.dispose();
+    const backgroundReports = h.reports.filter((entry) => entry.foreground === false).length;
+    r.dispose();
+    expect(h.reports.filter((entry) => entry.foreground === false).length).toBe(backgroundReports);
+  });
+
   test("dispose is idempotent and safe before start", () => {
     const h = harness();
     const r = createPresenceReporter(h.deps);

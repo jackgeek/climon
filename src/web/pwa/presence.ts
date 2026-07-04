@@ -53,6 +53,7 @@ export function createPresenceReporter(deps: PresenceReporterDeps): PresenceRepo
   };
 
   const dispose = () => {
+    const wasStarted = started;
     if (intervalHandle !== null) {
       clearIntervalFn(intervalHandle);
       intervalHandle = null;
@@ -62,6 +63,13 @@ export function createPresenceReporter(deps: PresenceReporterDeps): PresenceRepo
       unsubscribe = null;
     }
     started = false;
+    // Proactively tell the server this device is no longer reporting presence so
+    // it stops suppressing OS pushes immediately, rather than waiting out the
+    // server-side TTL. Only when we had actually started (so dispose-before-start
+    // and repeated dispose calls stay quiet).
+    if (wasStarted) {
+      deps.postPresence(deps.endpoint, false);
+    }
   };
 
   return { start, dispose };
