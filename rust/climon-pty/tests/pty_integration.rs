@@ -76,6 +76,10 @@ fn spawns_and_reads_output() {
     let reader = pty.try_clone_reader().expect("reader");
     let handle = std::thread::spawn(move || read_to_end(reader));
     let code = pty.wait().expect("wait");
+    // Drop the master so the cloned reader EOFs: on Windows the ConPTY
+    // pseudoconsole only closes its output pipe when the master is dropped, so
+    // without this `read_to_end` (and thus `join`) blocks forever there.
+    drop(pty);
     let out = handle.join().expect("join");
     if no_controlling_terminal(&out) {
         return;
@@ -95,6 +99,9 @@ fn propagates_nonzero_exit_code() {
     let reader = pty.try_clone_reader().expect("reader");
     let handle = std::thread::spawn(move || read_to_end(reader));
     let code = pty.wait().expect("wait");
+    // Drop the master so the cloned reader EOFs on Windows (see
+    // `spawns_and_reads_output`); otherwise `join` blocks forever there.
+    drop(pty);
     let out = handle.join().expect("join");
     if no_controlling_terminal(&out) {
         return;
@@ -133,6 +140,9 @@ fn resize_dedupes_and_does_not_panic() {
     assert_eq!(pty.size(), (120, 50));
 
     let code = pty.wait().expect("wait");
+    // Drop the master so the cloned reader EOFs on Windows (see
+    // `spawns_and_reads_output`); otherwise `join` blocks forever there.
+    drop(pty);
     let _ = handle.join();
     let _ = code;
 }
