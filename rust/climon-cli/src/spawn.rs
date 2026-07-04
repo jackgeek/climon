@@ -152,6 +152,7 @@ pub fn spawn_headless_session(
         color: options.color.map(Some),
         theme: options.theme,
         user_paused: None,
+        terminal_title: None,
     };
     write_session_meta(store_env, &meta).map_err(|e| e.to_string())?;
     spawn_daemon(&id, store_env).map_err(|e| e.to_string())?;

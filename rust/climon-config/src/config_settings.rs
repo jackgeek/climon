@@ -315,13 +315,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .default(Value::from(DEFAULT_DETACH_PREFIX))
         .with_validate(v_detach_prefix),
         ConfigSetting::new(
-            "terminal.setTitle",
-            Boolean,
-            "When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.",
-            vec![Client],
-        )
-        .default(Value::from(true)),
-        ConfigSetting::new(
             "hotKeys.focusTopSession",
             String,
             "Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is \"Mod+...+Key\" (e.g. \"Alt+T\", \"Ctrl+Shift+J\"). Set to an empty string to disable.",
@@ -820,7 +813,6 @@ mod tests {
                 "server.port",
                 "terminal.clampBrowserToHost",
                 "terminal.detachPrefix",
-                "terminal.setTitle",
                 "hotKeys.focusTopSession",
                 "dashboard.theme",
                 "dashboard.keyBarPinned",
@@ -861,7 +853,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 40);
+        assert_eq!(all_config_keys().len(), 39);
     }
 
     #[test]
@@ -884,7 +876,7 @@ mod tests {
             json!({
                 "version": 1,
                 "server": { "host": "127.0.0.1", "port": 3131 },
-                "terminal": { "clampBrowserToHost": false, "detachPrefix": 28, "setTitle": true },
+                "terminal": { "clampBrowserToHost": false, "detachPrefix": 28 },
                 "hotKeys": { "focusTopSession": "Alt+J" },
                 "dashboard": { "theme": "Default", "keyBarPinned": true },
                 "attention": { "idleSeconds": 10 },

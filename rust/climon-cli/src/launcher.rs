@@ -29,7 +29,6 @@ use crate::args::ColorFlag;
 use crate::pathenv::which;
 use crate::process_kill::{is_process_alive, kill_process};
 use crate::spawn::{resolve_client_id, spawn_headless_session, SessionMetaOptions};
-use crate::title::sanitize_title;
 use crate::uplink_spawn::spawn_uplink_detached;
 use crate::version::VERSION;
 use climon_remote::discovery::{discover_dashboard, DashboardLocation, DiscoveryDeps};
@@ -460,7 +459,6 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
     let store_env = StoreEnv::from_env();
     let config_env = ConfigEnv::real();
     ensure_climon_home(&config_env)?;
-    let config = load_config(&config_env).map_err(|e| e.to_string())?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
 
     let defaults = resolve_session_defaults(
@@ -499,18 +497,7 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         return Ok(0);
     }
 
-    let mut name = options.name;
-    if name.is_none() && cfg_bool(&config, "terminal", "setTitle", true) {
-        let queried = crate::query_title::query_terminal_title(150);
-        let inferred = queried
-            .map(|q| sanitize_title(&q).trim().to_string())
-            .unwrap_or_default();
-        name = Some(if !inferred.is_empty() {
-            inferred
-        } else {
-            build_display_command(command)
-        });
-    }
+    let name = options.name;
 
     let id = generate_session_id(&store_env).map_err(|e| e.to_string())?;
     let (cols, rows) = terminal_size();
@@ -543,6 +530,7 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         color: defaults.color.map(Some),
         theme,
         user_paused: None,
+        terminal_title: None,
     };
     write_session_meta(&store_env, &meta).map_err(|e| e.to_string())?;
 
@@ -561,15 +549,6 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         );
     }
     Ok(exit_code)
-}
-
-/// Reads a nested boolean config value with a default.
-fn cfg_bool(config: &serde_json::Value, section: &str, key: &str, default: bool) -> bool {
-    config
-        .get(section)
-        .and_then(|s| s.get(key))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(default)
 }
 
 /// Lists monitored sessions to stdout. Mirrors `listSessionsCommand`.

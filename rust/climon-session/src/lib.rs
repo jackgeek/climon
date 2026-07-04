@@ -35,6 +35,7 @@ pub mod idle;
 pub mod replay;
 pub mod resize;
 pub mod socket;
+pub mod title_capture;
 
 pub use error::{SessionError, SessionResult};
 pub use host::{run_session_host, SessionHostOptions};

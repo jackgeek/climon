@@ -85,7 +85,6 @@ describe("generated config docs", () => {
     
     // Should contain all default config fields with correct values
     expect(setup).toContain('"detachPrefix": 28');
-    expect(setup).toContain('"setTitle": true');
     expect(setup).toContain('"idleSeconds": 10');
     expect(setup).toContain('"priority": 500');
   });

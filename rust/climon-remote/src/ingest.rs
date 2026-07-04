@@ -317,6 +317,9 @@ pub fn sanitize_remote_patch(input: &Value) -> SessionMetaPatch {
             clean.color = Some(Some(c));
         }
     }
+    if let Some(v) = obj.get("terminalTitle").filter(|v| v.is_string()) {
+        clean.terminal_title = Some(bounded_string(v, ""));
+    }
     clean
 }
 
@@ -380,6 +383,14 @@ pub fn to_local_meta(
             None
         }
     };
+    let terminal_title = {
+        let v = get("terminalTitle");
+        if v.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+            Some(bounded_string(&v, ""))
+        } else {
+            None
+        }
+    };
 
     SessionMeta {
         id: local_id.to_string(),
@@ -412,6 +423,7 @@ pub fn to_local_meta(
         color,
         theme,
         user_paused: None,
+        terminal_title,
     }
 }
 

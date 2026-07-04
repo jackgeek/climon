@@ -24,11 +24,6 @@
     Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd'
     to detach without stopping the command. Must be an integer in [0, 255].
 
-  terminal.setTitle
-    Type: boolean; Default: true; Scope: client
-    When true (default), climon sets the attached local terminal's title to the session
-    name and updates it live on rename. Disables the whole title feature when false.
-
   hotKeys.focusTopSession
     Type: string; Default: Alt+J; Scope: server, browser
     Web dashboard shortcut that selects the top session in the list and focuses its

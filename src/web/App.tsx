@@ -192,6 +192,14 @@ const useStyles = makeStyles({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap"
   },
+  headerSubtitle: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground3
+  },
   headerMeta: {
     flex: "0 0 auto",
     display: "flex",
@@ -417,6 +425,12 @@ export function MainHeader({ activeSession, hidden }: MainHeaderProps) {
           <span className={styles.headerTitleContent}>
             <span className={styles.headerSessionName}>{activeSession.name || activeSession.displayCommand}</span>
             <StatusBadge status={activeSession.status} />
+            {activeSession.terminalTitle &&
+              activeSession.terminalTitle !== (activeSession.name || activeSession.displayCommand) && (
+                <span className={styles.headerSubtitle} title={activeSession.terminalTitle}>
+                  {activeSession.terminalTitle}
+                </span>
+              )}
           </span>
         ) : (
           <span className={styles.empty}>Select a session</span>
