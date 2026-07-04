@@ -39,7 +39,7 @@ result-tracking row.
 | 4 | `climon-logging` crate (levels, redaction parity, pretty/sinks, CLI I/O) | [phase04-logging.md](phase04-logging.md) |
 | 5 | `climon-store` crate — atomic metadata IO, patch serialization, session ids, server state | [phase05-store.md](phase05-store.md) |
 | 6 | climon-pty crate — cross-platform PTY spawn/resize, raw-mode termios/ConPTY, scrollback, terminal size | [phase06-pty.md](phase06-pty.md) |
-| 7 | climon-session crate — session host: PTY ownership, per-session IPC socket, scrollback shadow, idle/attention, frame relay, title broadcast, local relay, lifecycle | [phase07-session.md](phase07-session.md) |
+| 7 | climon-session crate — session host: PTY ownership, per-session IPC socket, scrollback shadow, idle/attention, frame relay, terminal-title capture, local relay, lifecycle | [phase07-session.md](phase07-session.md) |
 | 8 | climon-cli core — daily-driver `climon` client: arg parser, launcher (run/shell/ls/kill), attach client + detach, config/server delegation, license notices, version-from-package.json | [phase08-cli.md](phase08-cli.md) |
 | 9 | climon-remote crate — uplink/ingest mux bridge (byte-exact wire), devtunnel detection, WSL↔Windows link/discovery, keepalive, singleton recycle, demotion, cleanup; wired `__uplink`/`__ingest`/`link`/`cleanup` + launcher auto-uplink/auto-link | [phase09-remote.md](phase09-remote.md) |
 | 10 | climon-update — self-update: byte-for-byte Ed25519 verify + AES-256-GCM/scrypt envelope decrypt, release manifest, atomic no-kill binary swap, background check + launch banner, `climon update` | [phase10-update.md](phase10-update.md) |
@@ -54,6 +54,7 @@ result-tracking row.
 | — | Legacy Bun client removal — Rust client plus maintained Bun dashboard/server workflow | [phase17-legacy-client-removal.md](phase17-legacy-client-removal.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
+| — | Foreground attention toast (in-app toast instead of system notification) | [foreground-attention-toast.md](foreground-attention-toast.md) |
 | — | PWA zoom lock & no overscroll (pinch-zoom disabled, page pinned 1:1 on swipe) | [pwa-zoom-lock.md](pwa-zoom-lock.md) |
 | — | Security — Web Push endpoint SSRF guard | [security-push-ssrf.md](security-push-ssrf.md) |
 | — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |
@@ -65,12 +66,17 @@ result-tracking row.
 | — | Interactive install opt-ins default to Yes (telemetry + auto-update prompts) | [optin-default-yes.md](optin-default-yes.md) |
 | — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
 | — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
+| — | Tunnel Link start reliability — patient relay-propagation health check + verified self-heal recreation | [tunnel-link-reliability.md](tunnel-link-reliability.md) |
 | — | MIT license transition — `climon license`, one-time upgrade notice, no notice on fresh installs | [mit-license-transition.md](mit-license-transition.md) |
 | — | Release signing-key preflight — CI blocks release when the signing key is missing or doesn't match the embedded public key (forks skip) | [release-signing-key-preflight.md](release-signing-key-preflight.md) |
 | — | Text staging area — icon-only keybar chooser + full-viewport compose overlay (Insert / Cancel) | [text-staging-area.md](text-staging-area.md) |
 | — | Telemetry privacy — no PII / no user command / no rendered text in App Insights egress (sanitizer + field allowlist + `subcommand`-only) | [telemetry-privacy.md](telemetry-privacy.md) |
 | — | Touch keybar availability + responsive chooser labels — touch-primary keybar, inline docking on wide touch, width-responsive button labels | [keybar-touch-responsive.md](keybar-touch-responsive.md) |
 | — | App Insights connection string source — env var / embedded constant only, never climon config | [appinsights-connection-source.md](appinsights-connection-source.md) |
+| — | Terminal font-size repaint — viewport repaints cleanly on font-size change without waiting for focus | [terminal-font-size-repaint.md](terminal-font-size-repaint.md) |
+| — | Terminal title as session subtitle — capture PTY OSC 0/2 title, drop name→title | [terminal-title-subtitle.md](terminal-title-subtitle.md) |
+| — | Terminal selection / copy (touch) — Select button captures full scrollback into a monospaced textarea for native copy, with a strip-decorations toggle | [terminal-select-mode.md](terminal-select-mode.md) |
+| — | `bun run build` builds the Rust client + on-demand rustup bootstrap when cargo is missing | [build-all-rust-toolchain.md](build-all-rust-toolchain.md) |
 
 ## Recording results
 

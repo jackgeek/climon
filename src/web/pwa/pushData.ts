@@ -14,7 +14,7 @@ export function parsePushData(raw: string | null | undefined): ParsedPushData {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const title = typeof parsed.title === "string" && parsed.title ? parsed.title : DEFAULT_TITLE;
-    const body = typeof parsed.body === "string" && parsed.body ? parsed.body : DEFAULT_BODY;
+    const body = typeof parsed.body === "string" ? parsed.body : DEFAULT_BODY;
     const sessionId = typeof parsed.sessionId === "string" ? parsed.sessionId : undefined;
     return { title, body, sessionId };
   } catch {
@@ -75,49 +75,4 @@ export function parseOpenSessionMessage(value: unknown): string | null {
   return typeof message.sessionId === "string" && message.sessionId.length > 0
     ? message.sessionId
     : null;
-}
-
-/** Message the service worker posts to a page to ask which session it is viewing. */
-export const VIEWED_SESSION_QUERY = "climon:viewed-session-query";
-
-export interface ViewedSessionResponse {
-  type: typeof VIEWED_SESSION_QUERY;
-  sessionId: string | null;
-}
-
-/** Builds a page's reply to a viewed-session query. Empty ids normalize to null. */
-export function viewedSessionResponse(sessionId: string | null): ViewedSessionResponse {
-  return {
-    type: VIEWED_SESSION_QUERY,
-    sessionId: sessionId && sessionId.length > 0 ? sessionId : null,
-  };
-}
-
-/** Validates a service-worker → page viewed-session query message. */
-export function isViewedSessionQuery(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  return (value as Record<string, unknown>).type === VIEWED_SESSION_QUERY;
-}
-
-/** Parses a page → service-worker viewed-session reply; returns the viewed id or null. */
-export function parseViewedSessionResponse(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const message = value as Record<string, unknown>;
-  if (message.type !== VIEWED_SESSION_QUERY) return null;
-  return typeof message.sessionId === "string" && message.sessionId.length > 0
-    ? message.sessionId
-    : null;
-}
-
-/**
- * Decides whether a push for `pushSessionId` should be suppressed because a
- * client is currently viewing that session. Suppresses only when the push
- * targets a specific session and at least one client reports viewing it.
- */
-export function shouldSuppressPush(
-  pushSessionId: string | undefined,
-  viewedSessionIds: (string | null)[],
-): boolean {
-  if (!pushSessionId) return false;
-  return viewedSessionIds.some((id) => id === pushSessionId);
 }

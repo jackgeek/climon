@@ -443,22 +443,22 @@ misread as activity and reverted the acknowledged session to `running`.
 
 
 - **ID:** MT-P7-06
-- **Feature / phase:** Phase 7 — title watch thread
-- **Preconditions:** A running session, a connected viewer, and write access to
-  the session metadata (rename via the dashboard or `climon` rename command).
-- **Config-matrix cell:** all (with `terminal.setTitle = true`)
+- **Feature / phase:** Phase 7 — terminal-title capture thread
+- **Preconditions:** A running session and a connected viewer (dashboard).
+- **Config-matrix cell:** default config
 - **Platforms:** macOS, Linux, Windows
 
 **Steps:**
-1. With `terminal.setTitle = true`, rename the session from the dashboard.
-2. Confirm a `Title` frame carrying the new name is broadcast to viewers within
-   ~1s (the title-watch polls the metadata file).
-3. For an **attached** session, confirm the local terminal title updates via the
-   `\x1b]0;<name>\x07` OSC sequence.
+1. In the session's PTY, run `printf '\033]0;captured-title\007'`.
+2. Confirm the captured title is written to session metadata as `terminalTitle`
+   within ~1s (the capture thread flushes on change).
+3. Confirm the dashboard shows `captured-title` as a subtitle under the session
+   name (see also [terminal-title-subtitle.md](terminal-title-subtitle.md)).
 
 **Expected result:**
-- Renames are detected from the metadata file and re-broadcast as a `Title`
-  frame; attached sessions also emit the OSC title escape to the local terminal.
+- The daemon parses the OSC 0/2 title from PTY output and stores it in
+  `terminalTitle` metadata; renaming the session does NOT push the name to the
+  attached terminal's title (that behavior was removed).
 
 **Result-tracking row:**
 

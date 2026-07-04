@@ -192,11 +192,9 @@ climon --priority 100 --color red --name "dev server" npm run dev
   the dashboard and `climon ls`; lower sorts to the top.
 - `--color C` — one of `black`, `red`, `green`, `yellow`, `blue`, `magenta`,
   `cyan`, `white`, `none`, or `auto`; shown as a coloured accent on the session.
-- `--name S` — a friendly label shown instead of the command. It is also used as
-  the terminal window title and updates live if you rename the session from the
-  dashboard. When omitted, climon adopts the terminal's current title if
-  available; otherwise the command is shown. Disable all title behaviour with
-  `climon config terminal.setTitle false`.
+- `--name S` — a friendly label shown instead of the command in the dashboard. When
+  omitted, the command is shown. The dashboard also displays the terminal's own
+  title (set by programs such as `copilot` or `vim`) as a subtitle beneath it.
 - `--theme T` — a dashboard terminal theme for this session by display name (e.g.
   `"Dracula"`); an unrecognised name falls back to the dashboard default.
 
@@ -298,7 +296,6 @@ Common settings:
 | `server.host`                 | `127.0.0.1` | Dashboard bind address. **Never change this** — see the security warning below. |
 | `server.port`                 | `3131`      | Dashboard port.                                         |
 | `attention.idleSeconds`       | `10`        | Idle seconds before a session is flagged for attention. |
-| `terminal.setTitle`           | `true`      | Whether climon sets the terminal window title.          |
 | `terminal.clampBrowserToHost` | `false`     | Clamp browser viewer resizes to the host terminal size. |
 | `dashboard.theme`             | `Default`   | Terminal colour theme (also settable from the ☰ menu). |
 | `session.color`               | `auto`      | Default accent colour for new sessions.                 |
@@ -437,15 +434,21 @@ climon ships as two binaries built from two toolchains:
 
 Requirements:
 
-- A stable **Rust** toolchain (edition 2021) to build the client.
 - [Bun](https://bun.sh) ≥ 1.3.0 (≥ 1.3.14 on Windows) to build/run the dashboard
-  server.
+  server and drive the build.
+- A stable **Rust** toolchain (edition 2021) to build the client. You don't need
+  to install it up front — `bun run build` provisions a minimal toolchain via
+  [rustup](https://rustup.rs) on demand when `cargo` is missing (opt out with
+  `CLIMON_SKIP_RUST_INSTALL=1`). On **Windows**, building the client also needs
+  the Visual Studio C++ Build Tools (for `link.exe`), which rustup cannot install.
 
 ```sh
-cargo build --release --manifest-path rust/Cargo.toml   # build the Rust client
-bun install                                             # server dependencies
-bun run build:server                                    # build climon-server
+bun install            # install server dependencies
+bun run build          # build the web bundle, climon-server, and the Rust client
 ```
+
+`bun run build` runs `build:web`, `build:server`, and `build:rust` in turn; run
+those individually if you only need one artifact.
 
 To produce self-contained release archives (the same ones the installer
 downloads):

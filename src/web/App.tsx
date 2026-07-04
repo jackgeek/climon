@@ -10,6 +10,12 @@ import {
   FluentProvider,
   Spinner,
   Text,
+  Toast,
+  ToastBody,
+  ToastTitle,
+  Toaster,
+  useId,
+  useToastController,
   makeStyles,
   mergeClasses,
   tokens,
@@ -30,7 +36,9 @@ import {
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
   probeTunnelAuth,
+  shouldPromptTunnelReauth,
   fetchRemotes,
+  postPushPresence,
   type RemotesResponse,
   type DashboardTunnelStatus
 } from "./api.js";
@@ -42,7 +50,7 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { RemoteHostsPanel } from "./components/RemoteHostsPanel.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
-import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
+import { TerminalView, type TerminalHandle, stripTerminalDecorations } from "./components/TerminalView.js";
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
@@ -82,10 +90,10 @@ import {
 } from "./pwa/push.js";
 import {
   parseSessionFromSearch,
-  parseOpenSessionMessage,
-  isViewedSessionQuery,
-  viewedSessionResponse
+  parseOpenSessionMessage
 } from "./pwa/pushData.js";
+import { createPresenceReporter } from "./pwa/presence.js";
+import { buildAttentionToast } from "./attentionToast.js";
 import { computeViewedSessionId, viewedSessionAttentionAck } from "./viewedSession.js";
 import { parseShortcut, matchesShortcut } from "../hotkeys.js";
 import { webLog } from "./log.js";
@@ -190,6 +198,14 @@ const useStyles = makeStyles({
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap"
+  },
+  headerSubtitle: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontSize: "12px",
+    color: tokens.colorNeutralForeground3
   },
   headerMeta: {
     flex: "0 0 auto",
@@ -416,6 +432,12 @@ export function MainHeader({ activeSession, hidden }: MainHeaderProps) {
           <span className={styles.headerTitleContent}>
             <span className={styles.headerSessionName}>{activeSession.name || activeSession.displayCommand}</span>
             <StatusBadge status={activeSession.status} />
+            {activeSession.terminalTitle &&
+              activeSession.terminalTitle !== (activeSession.name || activeSession.displayCommand) && (
+                <span className={styles.headerSubtitle} title={activeSession.terminalTitle}>
+                  {activeSession.terminalTitle}
+                </span>
+              )}
           </span>
         ) : (
           <span className={styles.empty}>Select a session</span>
@@ -522,6 +544,8 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
   const [composeText, setComposeText] = useState("");
+  const [selectionCaptureText, setSelectionCaptureText] = useState("");
+  const [stripDecorations, setStripDecorations] = useState(false);
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
   );
@@ -631,6 +655,46 @@ export function App() {
     });
   }, [pushSupported, isTunnelOrigin]);
 
+  // Report this device's foreground/background presence to the server while
+  // notifications are on, keyed by its push-subscription endpoint. The server
+  // uses it to skip sending an OS push to a device that is actively viewing the
+  // dashboard (iOS can't suppress a delivered push in the service worker, so it
+  // must not be sent in the first place).
+  useEffect(() => {
+    if (!notificationsEnabled || !pushSupported || !isTunnelOrigin) {
+      return;
+    }
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return;
+    }
+    let reporter: ReturnType<typeof createPresenceReporter> | null = null;
+    let disposed = false;
+    void navigator.serviceWorker.ready
+      .then((registration) => registration.pushManager.getSubscription())
+      .then((subscription) => {
+        if (disposed || !subscription) {
+          return;
+        }
+        reporter = createPresenceReporter({
+          endpoint: subscription.endpoint,
+          postPresence: postPushPresence,
+          isVisible: () => document.visibilityState !== "hidden",
+          onVisibilityChange: (listener) => {
+            document.addEventListener("visibilitychange", listener);
+            return () => document.removeEventListener("visibilitychange", listener);
+          }
+        });
+        reporter.start();
+      })
+      .catch((error) => {
+        log.warn({ err: String(error) }, "Presence reporter failed to start");
+      });
+    return () => {
+      disposed = true;
+      reporter?.dispose();
+    };
+  }, [notificationsEnabled, pushSupported, isTunnelOrigin]);
+
   useEffect(() => {
     function onBeforeInstall(event: Event): void {
       event.preventDefault();
@@ -701,10 +765,6 @@ export function App() {
   // The session the user is actively looking at. Used to suppress its
   // needs-attention notifications and to auto-acknowledge it.
   const viewedSessionId = computeViewedSessionId({ activeId, sessions, pageVisible, isMobile, maximized });
-  const viewedSessionIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    viewedSessionIdRef.current = viewedSessionId;
-  }, [viewedSessionId]);
 
   // Treat viewing a session as acknowledgement: when the viewed session enters
   // needs-attention, send a single ack so the daemon clears the attention state.
@@ -725,10 +785,6 @@ export function App() {
       return;
     }
     const onMessage = (event: MessageEvent): void => {
-      if (isViewedSessionQuery(event.data)) {
-        event.ports[0]?.postMessage(viewedSessionResponse(viewedSessionIdRef.current));
-        return;
-      }
       const id = parseOpenSessionMessage(event.data);
       if (id) {
         popSession(id);
@@ -738,7 +794,62 @@ export function App() {
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
   }, [popSession]);
 
-  useAttentionAlerts(sessions, undefined, viewedSessionId);
+  // Cold start of an installed PWA: the dashboard boots from the cached shell
+  // even when the dev tunnel would auth-redirect. Probe once on mount so an
+  // expired sign-in surfaces the re-auth overlay immediately, instead of waiting
+  // for a live connection to drop (which never happens on a cold start).
+  useEffect(() => {
+    if (!readIsTunnelOrigin()) {
+      return;
+    }
+    let cancelled = false;
+    void probeTunnelAuth().then((state) => {
+      if (
+        !cancelled &&
+        shouldPromptTunnelReauth(state) &&
+        serverConnectionStateRef.current !== "connected"
+      ) {
+        setTunnelAuthRequired(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const attentionToasterId = useId("attention-toaster");
+  const { dispatchToast, dismissToast } = useToastController(attentionToasterId);
+
+  // In-app alerts (toast/sound/vibration) are shown while the dashboard is in
+  // the foreground, except on the mobile session list, where the attention
+  // badge is already visible.
+  const alertsVisible = pageVisible && (!isMobile || maximized);
+
+  const dispatchAttentionToast = useCallback(
+    (session: SessionMeta): void => {
+      const toast = buildAttentionToast(session);
+      dispatchToast(
+        <Toast
+          onClick={() => {
+            popSession(toast.sessionId);
+            dismissToast(toast.toastId);
+          }}
+          style={{ cursor: "pointer" }}
+        >
+          <ToastTitle>{toast.message}</ToastTitle>
+          {toast.body ? <ToastBody>{toast.body}</ToastBody> : null}
+        </Toast>,
+        { toastId: toast.toastId, intent: "warning", timeout: 6000 }
+      );
+    },
+    [dispatchToast, dismissToast, popSession]
+  );
+
+  useAttentionAlerts(sessions, {
+    onAttention: dispatchAttentionToast,
+    viewedSessionId,
+    alertsVisible
+  });
 
   // Subscribe to live session updates and load the initial list.
   useEffect(() => {
@@ -1318,6 +1429,8 @@ export function App() {
   // showing. Tying it to the overlay's own render condition avoids trapping the
   // user in fullscreen if the session stops being live mid-compose.
   const composeOverlayVisible = keyBarAvailable && panelView === "compose";
+  const selectionOverlayVisible = keyBarAvailable && panelView === "selection";
+  const fullscreenOverlayVisible = composeOverlayVisible || selectionOverlayVisible;
   const serverConnected = serverConnectionState === "connected";
   const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(
     serverConnectionState,
@@ -1333,6 +1446,7 @@ export function App() {
 
   return (
     <FluentProvider theme={fluentTheme} style={{ height: "100%" }}>
+    <Toaster toasterId={attentionToasterId} position="top" />
     <FeatureFlagsProvider value={features}>
     <div className={styles.root}>
       {showSplash && <SplashScreen onDone={dismissSplash} />}
@@ -1469,8 +1583,16 @@ export function App() {
                 view={panelView}
                 fontSize={fontSize}
                 composeText={composeText}
+                selectionText={stripDecorations ? stripTerminalDecorations(selectionCaptureText) : selectionCaptureText}
+                stripDecorations={stripDecorations}
                 showLabels={!isMobile}
-                onSelect={setPanelView}
+                showSelect={isTouchPrimary}
+                onSelect={(next) => {
+                  if (next === "selection") {
+                    setSelectionCaptureText(terminalRef.current?.captureText() ?? "");
+                  }
+                  setPanelView(next);
+                }}
                 onAdjustFont={adjustFontSize}
                 onComposeTextChange={setComposeText}
                 onComposeInsert={(text) => {
@@ -1481,13 +1603,18 @@ export function App() {
                 onComposeCancel={() => {
                   setPanelView(keyBarPinned ? "chooser" : "closed");
                 }}
+                onToggleStripDecorations={setStripDecorations}
+                onSelectionClose={() => {
+                  setSelectionCaptureText("");
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
                 onSend={(d) => terminalRef.current?.sendInput(d)}
               />
             </div>
           </>
         )}
       </div>
-      {maximized && !composeOverlayVisible && (
+      {maximized && !fullscreenOverlayVisible && (
         <Button
           className={styles.exitBtn}
           appearance="outline"

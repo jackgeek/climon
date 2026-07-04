@@ -1,6 +1,6 @@
 {
   "name": "climon",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
   "license": "MIT",
   "author": "Brodie Jack Allan",
@@ -16,7 +16,9 @@
     "clean": "rm -rf dist",
     "build:server": "bun build ./src/server.ts --outdir ./dist --target bun --format esm",
     "build:web": "bun scripts/build-web.ts",
-    "build:all": "bun run clean && bun run build:web && bun run build:server",
+    "build:rust": "bun scripts/build-rust.ts",
+    "build": "bun run clean && bun run build:web && bun run build:server && bun run build:rust",
+    "postinstall": "bun scripts/rust-toolchain.ts",
     "compile": "bun scripts/compile.ts",
     "sign-release": "bun scripts/sign-release.ts",
     "verify-signing-key": "bun scripts/verify-signing-key.ts",

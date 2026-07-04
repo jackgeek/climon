@@ -47,13 +47,6 @@ export interface TerminalConfig {
    * terminal. Must be an integer in [0, 255].
    */
   detachPrefix: number;
-  /**
-   * When true (default), climon sets the attached local terminal's title to the
-   * session name and updates it live on rename. Disables the whole title feature
-   * (including reading the terminal's current title to default an unnamed
-   * session) when false.
-   */
-  setTitle: boolean;
 }
 
 export interface HotKeysConfig {
@@ -210,6 +203,8 @@ export interface SessionMeta {
   theme?: string;
   /** User-controlled pause marker; live daemon writes must not visually unpause while true. */
   userPaused?: boolean;
+  /** Latest terminal title emitted by a program inside the PTY (OSC 0/2), shown as a subtitle. */
+  terminalTitle?: string;
 }
 
 export interface SessionMetaPatch {
@@ -230,6 +225,7 @@ export interface SessionMetaPatch {
   color?: AnsiColor | null;
   theme?: string;
   userPaused?: boolean;
+  terminalTitle?: string;
 }
 
 export interface SessionListResponse {
