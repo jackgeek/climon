@@ -5,7 +5,17 @@ import { buildWebBundle, buildServiceWorkerBundle } from "./web-build.js";
 interface StaticAsset {
   contentType: string;
   body: Buffer;
+  /**
+   * Optional `Cache-Control` header. Set to `no-cache` for unhashed, frequently
+   * rebuilt code assets (the app bundle, service worker, manifest) so the browser
+   * revalidates every load and a stale HTTP-cached copy can never mask a new
+   * build — the failure that previously pinned installed PWAs to a broken bundle.
+   */
+  cacheControl?: string;
 }
+
+/** Forces revalidation of unhashed code assets served under a fixed URL. */
+const NO_HTTP_CACHE = "no-cache";
 
 const assetSpecifiers: Record<string, { specifier: string; contentType: string; embeddedKey?: string }> = {
   "/assets/xterm.css": { specifier: "@xterm/xterm/css/xterm.css", contentType: "text/css; charset=utf-8", embeddedKey: "XTERM_CSS" }
@@ -66,7 +76,7 @@ async function getServiceWorkerBundle(): Promise<StaticAsset | undefined> {
       return undefined;
     }
   }
-  const asset: StaticAsset = { contentType: SW_JS_CONTENT_TYPE, body };
+  const asset: StaticAsset = { contentType: SW_JS_CONTENT_TYPE, body, cacheControl: NO_HTTP_CACHE };
   assetCache.set(SW_JS_PATH, asset);
   return asset;
 }
@@ -109,7 +119,7 @@ async function getAppBundle(): Promise<StaticAsset | undefined> {
       return undefined;
     }
   }
-  const asset: StaticAsset = { contentType: APP_JS_CONTENT_TYPE, body };
+  const asset: StaticAsset = { contentType: APP_JS_CONTENT_TYPE, body, cacheControl: NO_HTTP_CACHE };
   assetCache.set(APP_JS_PATH, asset);
   return asset;
 }
@@ -121,7 +131,8 @@ export async function getStaticAsset(pathname: string): Promise<StaticAsset | un
   if (pathname === "/manifest.webmanifest") {
     return {
       contentType: "application/manifest+json; charset=utf-8",
-      body: Buffer.from(renderManifest(), "utf8")
+      body: Buffer.from(renderManifest(), "utf8"),
+      cacheControl: NO_HTTP_CACHE
     };
   }
   if (pathname === APP_JS_PATH) {

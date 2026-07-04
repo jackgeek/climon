@@ -72,6 +72,48 @@ automatically.
 
 ---
 
+## DTR-04 — PWA self-heals a stale/broken cached app bundle over the tunnel
+
+- **ID:** DTR-04
+- **Feature / phase:** Dev tunnel app-shell cache recovery — mutable code assets
+  are served `Cache-Control: no-cache`, the service worker fetches assets with
+  `cache: "no-store"` (true network-first), it trusts a redirected-but-valid
+  bundle, and a `CACHE_NAME` bump purges a poisoned cache
+  (`src/server/assets.ts` cache-control, `src/web/sw.ts` `assetResponse`,
+  `src/web/pwa/swCache.ts` `shouldCacheAssetResponse` / `CACHE_NAME` /
+  `isStaleCacheName`).
+- **Preconditions:** An authenticated (non-anonymous) dashboard dev tunnel is
+  running and the dashboard is installed as a PWA from the dev-tunnel URL and has
+  been opened once while signed in (so the service worker cached `/assets/app.js`).
+- **Config-matrix cell:** Remote / dev-tunnel, installed PWA standalone
+- **Platforms:** iOS/iPadOS PWA (primary); Android/desktop installed PWA (secondary)
+
+**Steps:**
+1. Confirm the server sends `Cache-Control: no-cache` for `/assets/app.js`,
+   `/sw.js`, `/manifest.webmanifest` and `/` (e.g. `curl -sI <url>/assets/app.js`).
+2. While the PWA is open and signed in, deploy a new server build whose
+   `/assets/app.js` differs from the copy the PWA has cached (any visible change
+   is enough — e.g. a new build after a code edit).
+3. Reload the PWA (pull-to-refresh) while still signed in to the tunnel —
+   **without** clearing any browsing data.
+
+**Expected:** The reloaded PWA runs the **new** bundle, not the previously cached
+one, and **without** having to clear the browser's data. Because the assets are
+served `no-cache` and the service worker fetches them with `cache: "no-store"`,
+the browser's HTTP disk cache can no longer mask a new build; the SW then caches
+the redirected-but-valid JS response, and (when `CACHE_NAME` is bumped) its
+`activate` step deletes the previous `climon-shell-*` cache so a poisoned/broken
+bundle is discarded rather than served forever. The dashboard loads without a
+JavaScript console error.
+
+**Result-tracking row:**
+
+| Date | Build | Platform | Result | Notes |
+|---|---|---|---|---|
+| | | | | |
+
+---
+
 ## DTR-03 — Cold-launch PWA with an expired tunnel session boots and prompts sign-in
 
 - **ID:** DTR-03

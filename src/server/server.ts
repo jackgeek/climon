@@ -1433,7 +1433,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const asset = await getStaticAsset(url.pathname);
       if (asset) {
-        return new Response(new Uint8Array(asset.body), { headers: { "content-type": asset.contentType } });
+        const headers: Record<string, string> = { "content-type": asset.contentType };
+        if (asset.cacheControl) {
+          headers["cache-control"] = asset.cacheControl;
+        }
+        return new Response(new Uint8Array(asset.body), { headers });
       }
 
       if (!authorize(request, srv)) {
@@ -1441,7 +1445,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/") {
-        return new Response(renderDashboard(), { headers: { "content-type": "text/html; charset=utf-8" } });
+        return new Response(renderDashboard(), {
+          headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }
+        });
       }
 
       if (url.pathname === "/api/sessions" && request.method === "POST") {

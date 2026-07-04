@@ -98,7 +98,11 @@ async function refreshShell(cache: Cache): Promise<void> {
 async function assetResponse(request: Request): Promise<Response> {
   const cache = await caches.open(CACHE_NAME);
   try {
-    const res = await fetch(request);
+    // `cache: "no-store"` bypasses the browser HTTP cache so "network-first"
+    // truly hits the network — otherwise a stale HTTP-cached bundle (these assets
+    // are served under fixed URLs) would be handed back as if it were fresh,
+    // pinning the app to an outdated/broken build. Matches refreshShell/precacheAsset.
+    const res = await fetch(request, { cache: "no-store" });
     const meta = {
       ok: res.ok,
       redirected: res.redirected,
