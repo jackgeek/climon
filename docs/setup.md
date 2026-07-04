@@ -2,7 +2,13 @@
 
 ## Prerequisites
 
-- **Rust stable** to build the native `climon` client from `rust/`.
+- **Rust stable** to build the native `climon` client from `rust/`. You don't
+  have to install it up front: `bun run build` provisions a minimal Rust
+  toolchain via [rustup](https://rustup.rs) on demand when `cargo` is missing
+  (set `CLIMON_SKIP_RUST_INSTALL=1` to opt out and install it yourself). On
+  **Windows**, building the client additionally needs the Visual Studio C++
+  Build Tools (for `link.exe`), which rustup cannot install — add them separately
+  if the build reports a missing linker.
 - **Bun >= 1.3.0** to build and run the maintained dashboard server/web and the
   Bun test suite. Check with `bun --version`.
 

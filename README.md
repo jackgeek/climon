@@ -434,15 +434,21 @@ climon ships as two binaries built from two toolchains:
 
 Requirements:
 
-- A stable **Rust** toolchain (edition 2021) to build the client.
 - [Bun](https://bun.sh) ≥ 1.3.0 (≥ 1.3.14 on Windows) to build/run the dashboard
-  server.
+  server and drive the build.
+- A stable **Rust** toolchain (edition 2021) to build the client. You don't need
+  to install it up front — `bun run build` provisions a minimal toolchain via
+  [rustup](https://rustup.rs) on demand when `cargo` is missing (opt out with
+  `CLIMON_SKIP_RUST_INSTALL=1`). On **Windows**, building the client also needs
+  the Visual Studio C++ Build Tools (for `link.exe`), which rustup cannot install.
 
 ```sh
-cargo build --release --manifest-path rust/Cargo.toml   # build the Rust client
-bun install                                             # server dependencies
-bun run build:server                                    # build climon-server
+bun install            # install server dependencies
+bun run build          # build the web bundle, climon-server, and the Rust client
 ```
+
+`bun run build` runs `build:web`, `build:server`, and `build:rust` in turn; run
+those individually if you only need one artifact.
 
 To produce self-contained release archives (the same ones the installer
 downloads):
