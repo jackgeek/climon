@@ -71,6 +71,7 @@ result-tracking row.
 | — | Telemetry privacy — no PII / no user command / no rendered text in App Insights egress (sanitizer + field allowlist + `subcommand`-only) | [telemetry-privacy.md](telemetry-privacy.md) |
 | — | Touch keybar availability + responsive chooser labels — touch-primary keybar, inline docking on wide touch, width-responsive button labels | [keybar-touch-responsive.md](keybar-touch-responsive.md) |
 | — | App Insights connection string source — env var / embedded constant only, never climon config | [appinsights-connection-source.md](appinsights-connection-source.md) |
+| — | `bun run build` builds the Rust client + on-demand rustup bootstrap when cargo is missing | [build-all-rust-toolchain.md](build-all-rust-toolchain.md) |
 
 ## Recording results
 
