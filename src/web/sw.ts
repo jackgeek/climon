@@ -13,7 +13,6 @@ import {
   handlePush,
   resolveNotificationClick,
   type NotificationClickClient,
-  type PushWindowClient,
 } from "./pwa/swPush.js";
 
 declare const self: ServiceWorkerGlobalScope;
@@ -143,19 +142,10 @@ async function precacheAsset(cache: Cache, url: string): Promise<void> {
   }
 }
 
-/** Projects a live `WindowClient` onto the descriptor push suppression uses. */
-function toPushWindowClient(client: WindowClient): PushWindowClient {
-  return { visibilityState: client.visibilityState, focused: client.focused };
-}
-
 self.addEventListener("push", (event: PushEvent) => {
   event.waitUntil(
     handlePush({
       raw: event.data?.text(),
-      matchWindowClients: async () =>
-        (await self.clients.matchAll({ type: "window", includeUncontrolled: true })).map(
-          toPushWindowClient,
-        ),
       showNotification: (title, options) => self.registration.showNotification(title, options),
     }),
   );
