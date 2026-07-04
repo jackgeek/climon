@@ -1794,6 +1794,33 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         return new Response(null, { status: 204 });
       }
 
+      if (url.pathname === "/api/push/presence" && request.method === "POST") {
+        if (!pushService) {
+          return new Response("Push unavailable", { status: 503 });
+        }
+        if (!isSameOriginRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let body: { endpoint?: unknown; foreground?: unknown };
+        try {
+          body = (await request.json()) as { endpoint?: unknown; foreground?: unknown };
+        } catch {
+          return new Response("Invalid JSON body", { status: 400 });
+        }
+        if (typeof body.endpoint !== "string" || body.endpoint.length === 0) {
+          return new Response("Invalid endpoint", { status: 400 });
+        }
+        if (typeof body.foreground !== "boolean") {
+          return new Response("Invalid foreground", { status: 400 });
+        }
+        pushService.recordPresence(body.endpoint, body.foreground);
+        return new Response(null, { status: 204 });
+      }
+
       if (url.pathname === "/api/dashboard/preferences" && request.method === "POST") {
         // Same-origin guard: reachable over the tunnel (remote viewers may change
         // cosmetic prefs) while blocking cross-origin CSRF / DNS-rebinding.

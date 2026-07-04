@@ -5,41 +5,22 @@ import {
   type PushNotificationOptions,
 } from "./pushData.js";
 
-/** Minimal slice of a window `Client` the push suppression check needs. */
-export interface PushWindowClient {
-  visibilityState: "hidden" | "visible" | "prerender" | "unloaded";
-  focused: boolean;
-}
-
-/**
- * True when at least one open window client is in the foreground (focused or
- * visible). When so, the in-app attention toast handles alerting, so the
- * service worker must not also raise a system notification.
- */
-export function anyClientForeground(clients: readonly PushWindowClient[]): boolean {
-  return clients.some((client) => client.focused || client.visibilityState === "visible");
-}
-
 export interface HandlePushDeps {
   /** Raw push payload text (or null/undefined when absent). */
   raw: string | null | undefined;
-  /** Returns the currently open window clients. */
-  matchWindowClients: () => Promise<readonly PushWindowClient[]>;
   /** Displays the notification. */
   showNotification: (title: string, options: PushNotificationOptions) => Promise<void> | void;
 }
 
 /**
- * Core push-event behavior: shows the system notification only when the
- * dashboard is not open in the foreground. If any window client is
- * visible/focused, the foreground app raises a subtle in-app toast instead, so
- * the system banner is suppressed to avoid a double alert.
+ * Core push-event behavior: always shows the system notification for the push.
+ *
+ * iOS/WebKit requires a PWA service worker to call `showNotification()` for
+ * every push it receives; silently suppressing raises a generic fallback banner
+ * and can revoke the subscription. Foreground suppression is therefore done on
+ * the server (it skips push subscriptions reported foreground) rather than here.
  */
 export async function handlePush(deps: HandlePushDeps): Promise<void> {
-  const clients = await deps.matchWindowClients();
-  if (anyClientForeground(clients)) {
-    return;
-  }
   const data = parsePushData(deps.raw);
   await deps.showNotification(data.title, buildNotificationOptions(data));
 }

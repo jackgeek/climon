@@ -11,6 +11,7 @@ import {
   Spinner,
   Text,
   Toast,
+  ToastBody,
   ToastTitle,
   Toaster,
   useId,
@@ -37,6 +38,7 @@ import {
   probeTunnelAuth,
   shouldPromptTunnelReauth,
   fetchRemotes,
+  postPushPresence,
   type RemotesResponse,
   type DashboardTunnelStatus
 } from "./api.js";
@@ -90,6 +92,7 @@ import {
   parseSessionFromSearch,
   parseOpenSessionMessage
 } from "./pwa/pushData.js";
+import { createPresenceReporter } from "./pwa/presence.js";
 import { buildAttentionToast } from "./attentionToast.js";
 import { computeViewedSessionId, viewedSessionAttentionAck } from "./viewedSession.js";
 import { parseShortcut, matchesShortcut } from "../hotkeys.js";
@@ -652,6 +655,46 @@ export function App() {
     });
   }, [pushSupported, isTunnelOrigin]);
 
+  // Report this device's foreground/background presence to the server while
+  // notifications are on, keyed by its push-subscription endpoint. The server
+  // uses it to skip sending an OS push to a device that is actively viewing the
+  // dashboard (iOS can't suppress a delivered push in the service worker, so it
+  // must not be sent in the first place).
+  useEffect(() => {
+    if (!notificationsEnabled || !pushSupported || !isTunnelOrigin) {
+      return;
+    }
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return;
+    }
+    let reporter: ReturnType<typeof createPresenceReporter> | null = null;
+    let disposed = false;
+    void navigator.serviceWorker.ready
+      .then((registration) => registration.pushManager.getSubscription())
+      .then((subscription) => {
+        if (disposed || !subscription) {
+          return;
+        }
+        reporter = createPresenceReporter({
+          endpoint: subscription.endpoint,
+          postPresence: postPushPresence,
+          isVisible: () => document.visibilityState !== "hidden",
+          onVisibilityChange: (listener) => {
+            document.addEventListener("visibilitychange", listener);
+            return () => document.removeEventListener("visibilitychange", listener);
+          }
+        });
+        reporter.start();
+      })
+      .catch((error) => {
+        log.warn({ err: String(error) }, "Presence reporter failed to start");
+      });
+    return () => {
+      disposed = true;
+      reporter?.dispose();
+    };
+  }, [notificationsEnabled, pushSupported, isTunnelOrigin]);
+
   useEffect(() => {
     function onBeforeInstall(event: Event): void {
       event.preventDefault();
@@ -794,6 +837,7 @@ export function App() {
           style={{ cursor: "pointer" }}
         >
           <ToastTitle>{toast.message}</ToastTitle>
+          {toast.body ? <ToastBody>{toast.body}</ToastBody> : null}
         </Toast>,
         { toastId: toast.toastId, intent: "warning", timeout: 6000 }
       );
