@@ -100,13 +100,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
-    path: "terminal.setTitle",
-    type: "boolean",
-    defaultValue: true,
-    purpose: "When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.",
-    scope: ["client"]
-  },
-  {
     path: "hotKeys.focusTopSession",
     type: "string",
     defaultValue: "Alt+J",

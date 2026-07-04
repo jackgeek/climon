@@ -1,4 +1,4 @@
-import { Button, Text, Textarea, makeStyles, tokens } from "@fluentui/react-components";
+import { Button, Checkbox, Text, Textarea, makeStyles, tokens } from "@fluentui/react-components";
 import { useEffect, useRef } from "react";
 import {
   ArrowEnterLeft24Regular,
@@ -7,25 +7,32 @@ import {
   Compose24Regular,
   Dismiss24Regular,
   Keyboard24Regular,
+  SelectAllOn24Regular,
+  SelectObject24Regular,
   TextFont24Regular
 } from "@fluentui/react-icons";
 import { KeyBar } from "./KeyBar.js";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "../fontSize.js";
 import { encodeSpecial, type Mods } from "../keys.js";
 
-export type TerminalPanelView = "chooser" | "keyboard" | "font" | "compose";
+export type TerminalPanelView = "chooser" | "keyboard" | "font" | "compose" | "selection";
 export type TerminalPanelArrowDirection = "up" | "down";
 
 interface Props {
   view: TerminalPanelView;
   fontSize: number;
   composeText: string;
+  selectionText: string;
+  stripDecorations: boolean;
   showLabels: boolean;
+  showSelect: boolean;
   onSelect: (view: Exclude<TerminalPanelView, "chooser">) => void;
   onAdjustFont: (delta: number) => void;
   onComposeTextChange: (text: string) => void;
   onComposeInsert: (text: string) => void;
   onComposeCancel: () => void;
+  onToggleStripDecorations: (value: boolean) => void;
+  onSelectionClose: () => void;
   onSend: (data: string) => void;
 }
 
@@ -86,6 +93,21 @@ const useStyles = makeStyles({
     justifyContent: "center",
     gap: "12px",
     flex: "0 0 auto"
+  },
+  selectionTextarea: {
+    flex: "1 1 auto",
+    minHeight: 0,
+    "& textarea": {
+      maxHeight: "100%",
+      fontFamily: "ui-monospace, monospace",
+      whiteSpace: "pre",
+      overflowWrap: "normal"
+    }
+  },
+  selectionOptions: {
+    display: "flex",
+    justifyContent: "center",
+    flex: "0 0 auto"
   }
 });
 
@@ -93,16 +115,22 @@ export function TerminalPanel({
   view,
   fontSize,
   composeText,
+  selectionText,
+  stripDecorations,
   showLabels,
+  showSelect,
   onSelect,
   onAdjustFont,
   onComposeTextChange,
   onComposeInsert,
   onComposeCancel,
+  onToggleStripDecorations,
+  onSelectionClose,
   onSend
 }: Props) {
   const styles = useStyles();
   const composeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const selectionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // When the composer opens with pre-existing text, select it so the user can
   // immediately replace, delete, or reuse it. Deferred to the next frame so it
@@ -121,6 +149,22 @@ export function TerminalPanel({
         el.focus();
         el.setSelectionRange(0, el.value.length);
       }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [view]);
+
+  // Open the capture at the bottom (newest output), matching the terminal's
+  // scroll position, so the user sees the most recent lines first.
+  useEffect(() => {
+    if (view !== "selection") {
+      return;
+    }
+    const el = selectionTextareaRef.current;
+    if (!el) {
+      return;
+    }
+    const id = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
     });
     return () => cancelAnimationFrame(id);
   }, [view]);
@@ -158,6 +202,50 @@ export function TerminalPanel({
             onClick={() => onComposeInsert(composeText)}
           >
             Insert
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "selection") {
+    return (
+      <div className={styles.composeOverlay} role="group" aria-label="Copy terminal text">
+        <Textarea
+          className={styles.selectionTextarea}
+          value={selectionText}
+          readOnly
+          aria-label="Captured terminal text"
+          resize="none"
+          textarea={{ ref: selectionTextareaRef, style: { height: "100%", fontSize: `${fontSize}px` } }}
+        />
+        <div className={styles.selectionOptions}>
+          <Checkbox
+            checked={stripDecorations}
+            label="Strip scrollbars & decorations"
+            onChange={(_e, data) => onToggleStripDecorations(data.checked === true)}
+          />
+        </div>
+        <div className={styles.composeActions}>
+          <Button
+            appearance="outline"
+            icon={<Dismiss24Regular />}
+            onClick={() => onSelectionClose()}
+          >
+            Close
+          </Button>
+          <Button
+            appearance="primary"
+            icon={<SelectAllOn24Regular />}
+            onClick={() => {
+              const el = selectionTextareaRef.current;
+              if (el) {
+                el.focus();
+                el.select();
+              }
+            }}
+          >
+            Select all
           </Button>
         </div>
       </div>
@@ -224,6 +312,16 @@ export function TerminalPanel({
       >
         {showLabels ? <span className={styles.chooserLabel}>Composer</span> : undefined}
       </Button>
+      {showSelect ? (
+        <Button
+          appearance="outline"
+          aria-label="Select text"
+          icon={<SelectObject24Regular />}
+          onClick={() => onSelect("selection")}
+        >
+          {showLabels ? <span className={styles.chooserLabel}>Select</span> : undefined}
+        </Button>
+      ) : undefined}
       <Button
         appearance="outline"
         aria-label="Send PageUp"

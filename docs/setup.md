@@ -69,9 +69,7 @@ On first run, climon writes `~/.climon/config.jsonc`:
     // When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling.
     "clampBrowserToHost": true,
     // Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255].
-    "detachPrefix": 28,
-    // When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.
-    "setTitle": true
+    "detachPrefix": 28
   },
   "attention": {
     // Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.

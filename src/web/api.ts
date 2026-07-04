@@ -65,6 +65,15 @@ export function classifyTunnelAuthResponse(res: Response): TunnelAuthState {
 }
 
 /**
+ * Whether a tunnel-auth probe result should surface the in-app "Sign in again"
+ * prompt. Only an expired/absent dev-tunnel sign-in (`auth-required`) prompts;
+ * a transient outage (`unreachable`) or a healthy relay (`ok`) must not.
+ */
+export function shouldPromptTunnelReauth(state: TunnelAuthState): boolean {
+  return state === "auth-required";
+}
+
+/**
  * Probes the tunnel relay to decide whether the dashboard connection dropped
  * because the Microsoft dev-tunnel sign-in expired. Only runs on dev-tunnel
  * hosts; everywhere else it is a no-op that reports `ok`. Network

@@ -192,11 +192,9 @@ climon --priority 100 --color red --name "dev server" npm run dev
   the dashboard and `climon ls`; lower sorts to the top.
 - `--color C` — one of `black`, `red`, `green`, `yellow`, `blue`, `magenta`,
   `cyan`, `white`, `none`, or `auto`; shown as a coloured accent on the session.
-- `--name S` — a friendly label shown instead of the command. It is also used as
-  the terminal window title and updates live if you rename the session from the
-  dashboard. When omitted, climon adopts the terminal's current title if
-  available; otherwise the command is shown. Disable all title behaviour with
-  `climon config terminal.setTitle false`.
+- `--name S` — a friendly label shown instead of the command in the dashboard. When
+  omitted, the command is shown. The dashboard also displays the terminal's own
+  title (set by programs such as `copilot` or `vim`) as a subtitle beneath it.
 - `--theme T` — a dashboard terminal theme for this session by display name (e.g.
   `"Dracula"`); an unrecognised name falls back to the dashboard default.
 
@@ -298,7 +296,6 @@ Common settings:
 | `server.host`                 | `127.0.0.1` | Dashboard bind address. **Never change this** — see the security warning below. |
 | `server.port`                 | `3131`      | Dashboard port.                                         |
 | `attention.idleSeconds`       | `10`        | Idle seconds before a session is flagged for attention. |
-| `terminal.setTitle`           | `true`      | Whether climon sets the terminal window title.          |
 | `terminal.clampBrowserToHost` | `false`     | Clamp browser viewer resizes to the host terminal size. |
 | `dashboard.theme`             | `Default`   | Terminal colour theme (also settable from the ☰ menu). |
 | `session.color`               | `auto`      | Default accent colour for new sessions.                 |

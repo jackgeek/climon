@@ -9,7 +9,7 @@
 
 ## Workflow
 
-- Always start new work in a fresh git worktree under the `.worktrees/` folder, never directly on the main checkout. Create one per task with `git worktree add .worktrees/<branch-name> -b <branch-name>` (or check out an existing branch) and do all edits, builds, and tests there. The `.worktrees/` folder is gitignored.
+- Always start new work in a fresh git worktree under the `.worktrees/` folder, never directly on the main or dev checkout. Create one per task with `git worktree add .worktrees/<branch-name> -b <branch-name>` (or check out an existing branch) and do all edits, builds, and tests there. The `.worktrees/` folder is gitignored.
 - **Always open pull requests against the `dev` branch, never `main`.** Pushing to `main` triggers the [`Release`](.github/workflows/release.yml) workflow (it bumps the version, tags, and publishes), so feature/fix PRs must target `dev` to avoid cutting an accidental release. `dev` is only merged into `main` when we deliberately want to ship a release.
 
 ## Local Copilot CLI skills

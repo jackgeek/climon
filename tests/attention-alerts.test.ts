@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMeta } from "../src/types.js";
 import {
-  buildAttentionNotification,
   browserNotificationPermissionMessage,
   browserNotificationPermissionFailureTitle,
   createAttentionAlertManager,
-  createBrowserNotificationAdapter,
   formatAttentionTitle,
   notificationsEnabledFromState,
   requestBrowserNotificationPermission,
@@ -33,7 +31,8 @@ function session(overrides: Partial<SessionMeta>): SessionMeta {
 function createHarness() {
   let currentTitle = "climon";
   const soundCalls: string[] = [];
-  const notifications: { title: string; body: string; sessionId: string; key: string }[] = [];
+  const vibrations: number[][] = [];
+  const attentions: SessionMeta[] = [];
   const manager = createAttentionAlertManager({
     title: {
       get: () => currentTitle,
@@ -46,16 +45,18 @@ function createHarness() {
         soundCalls.push("play");
       }
     },
-    notifications: {
-      notify: (alert) => {
-        notifications.push(alert);
-      }
+    vibrate: (pattern) => {
+      vibrations.push(pattern);
+    },
+    onAttention: (attentive) => {
+      attentions.push(attentive);
     }
   });
   return {
     manager,
     soundCalls,
-    notifications,
+    vibrations,
+    attentions,
     title: () => currentTitle
   };
 }
@@ -75,7 +76,7 @@ describe("formatAttentionTitle", () => {
   });
 });
 
-describe("attention notification content", () => {
+describe("sessionAttentionLabel", () => {
   test("uses name, then displayCommand, then command for the session label", () => {
     expect(sessionAttentionLabel(session({ name: "API server", displayCommand: "bun run server" }))).toBe(
       "API server"
@@ -83,252 +84,138 @@ describe("attention notification content", () => {
     expect(sessionAttentionLabel(session({ name: "", displayCommand: "bun test" }))).toBe("bun test");
     expect(sessionAttentionLabel(session({ displayCommand: "", command: ["bun", "test"] }))).toBe("bun test");
   });
+});
 
-  describe("requestBrowserNotificationPermission", () => {
-    test("requests permission when browser notification permission is still default", async () => {
-      let requested = 0;
-      const permission = await requestBrowserNotificationPermission({
-        get permission() {
-          return "default" as NotificationPermission;
-        },
-        requestPermission: async () => {
-          requested++;
-          return "granted";
-        }
-      });
-
-      expect(permission).toBe("granted");
-      expect(requested).toBe(1);
-    });
-
-    test("returns the existing permission without prompting again", async () => {
-      let requested = 0;
-      const permission = await requestBrowserNotificationPermission({
-        get permission() {
-          return "granted" as NotificationPermission;
-        },
-        requestPermission: async () => {
-          requested++;
-          return "denied";
-        }
-      });
-
-      expect(permission).toBe("granted");
-      expect(requested).toBe(0);
-    });
-  });
-
-  describe("createBrowserNotificationAdapter", () => {
-    test("does not request permission when notifying without explicit user action", async () => {
-      const originalNotification = globalThis.Notification;
-      let requested = 0;
-      let created = 0;
-      class FakeNotification {
-        static permission: NotificationPermission = "default";
-        static requestPermission = async (): Promise<NotificationPermission> => {
-          requested++;
-          return "granted";
-        };
-        constructor() {
-          created++;
-        }
-      }
-      Object.defineProperty(globalThis, "Notification", {
-        configurable: true,
-        value: FakeNotification
-      });
-
-      try {
-        await createBrowserNotificationAdapter().notify({
-          title: "climon needs attention",
-          body: "Session needs attention",
-          sessionId: "sess-1",
-          key: "sess-1:attention"
-        });
-      } finally {
-        Object.defineProperty(globalThis, "Notification", {
-          configurable: true,
-          value: originalNotification
-        });
-      }
-
-      expect(requested).toBe(0);
-      expect(created).toBe(0);
-    });
-
-    test("deduplicates notifications across multiple adapter instances (cross-tab)", async () => {
-      const originalNotification = globalThis.Notification;
-      const originalLocalStorage = (globalThis as Record<string, unknown>).localStorage;
-      let created = 0;
-      class FakeNotification {
-        static permission: NotificationPermission = "granted";
-        static requestPermission = async (): Promise<NotificationPermission> => "granted";
-        constructor() {
-          created++;
-        }
-      }
-      const store = new Map<string, string>();
-      const fakeStorage = {
-        getItem: (key: string) => store.get(key) ?? null,
-        setItem: (key: string, value: string) => { store.set(key, value); },
-        removeItem: (key: string) => { store.delete(key); }
-      };
-      Object.defineProperty(globalThis, "Notification", {
-        configurable: true,
-        value: FakeNotification
-      });
-      Object.defineProperty(globalThis, "localStorage", {
-        configurable: true,
-        value: fakeStorage
-      });
-      // Ensure notifications read as enabled.
-      fakeStorage.setItem("climon.notificationsEnabled", "true");
-
-      try {
-        const adapter1 = createBrowserNotificationAdapter();
-        const adapter2 = createBrowserNotificationAdapter();
-        const alert = {
-          title: "climon needs attention",
-          body: "Session needs attention",
-          sessionId: "sess-dedup",
-          key: "sess-dedup:token-1"
-        };
-        await adapter1.notify(alert);
-        await adapter2.notify(alert);
-        // Only the first adapter should have created a Notification.
-        expect(created).toBe(1);
-      } finally {
-        Object.defineProperty(globalThis, "Notification", {
-          configurable: true,
-          value: originalNotification
-        });
-        if (originalLocalStorage !== undefined) {
-          Object.defineProperty(globalThis, "localStorage", {
-            configurable: true,
-            value: originalLocalStorage
-          });
-        } else {
-          delete (globalThis as Record<string, unknown>).localStorage;
-        }
+describe("requestBrowserNotificationPermission", () => {
+  test("requests permission when browser notification permission is still default", async () => {
+    let requested = 0;
+    const permission = await requestBrowserNotificationPermission({
+      get permission() {
+        return "default" as NotificationPermission;
+      },
+      requestPermission: async () => {
+        requested++;
+        return "granted";
       }
     });
+
+    expect(permission).toBe("granted");
+    expect(requested).toBe(1);
   });
 
-  describe("notificationsEnabledFromState", () => {
-    test("requires granted browser permission and enabled climon preference", () => {
-      expect(notificationsEnabledFromState("granted", true)).toBe(true);
-      expect(notificationsEnabledFromState("default", true)).toBe(false);
-      expect(notificationsEnabledFromState("denied", true)).toBe(false);
-      expect(notificationsEnabledFromState("granted", false)).toBe(false);
+  test("returns the existing permission without prompting again", async () => {
+    let requested = 0;
+    const permission = await requestBrowserNotificationPermission({
+      get permission() {
+        return "granted" as NotificationPermission;
+      },
+      requestPermission: async () => {
+        requested++;
+        return "denied";
+      }
     });
 
-    describe("browserNotificationPermissionMessage", () => {
-      test("titles permission failures as failed notification enabling", () => {
-        expect(browserNotificationPermissionFailureTitle).toBe("Failed to enable notifications");
-      });
+    expect(permission).toBe("granted");
+    expect(requested).toBe(0);
+  });
+});
 
-      test("explains when the browser blocked the notification permission prompt", () => {
-        expect(browserNotificationPermissionMessage("denied")).toBe(
-          "Notifications are blocked in your browser. Enable them for this site in Edge site settings, then try again."
-        );
-      });
-
-      test("explains when the dashboard origin cannot request notifications", () => {
-        expect(browserNotificationPermissionMessage("insecure-context")).toBe(
-          "This dashboard is not on a secure origin, so the browser will not show a notification permission prompt. Open climon from localhost or HTTPS and try again."
-        );
-      });
-    });
+describe("notificationsEnabledFromState", () => {
+  test("requires granted browser permission and enabled climon preference", () => {
+    expect(notificationsEnabledFromState("granted", true)).toBe(true);
+    expect(notificationsEnabledFromState("default", true)).toBe(false);
+    expect(notificationsEnabledFromState("denied", true)).toBe(false);
+    expect(notificationsEnabledFromState("granted", false)).toBe(false);
   });
 
-  test("builds notification title and body without a reason", () => {
-    expect(buildAttentionNotification(session({ name: "API server", status: "needs-attention" }))).toEqual({
-      title: "climon needs attention",
-      body: "API server needs attention",
-      sessionId: "sess-1",
-      key: "sess-1:attention"
-    });
+  test("titles permission failures as failed notification enabling", () => {
+    expect(browserNotificationPermissionFailureTitle).toBe("Failed to enable notifications");
   });
 
-  test("appends attentionReason when present", () => {
-    expect(
-      buildAttentionNotification(
-        session({
-          name: "API server",
-          status: "needs-attention",
-          attentionMatchedAt: "token-1",
-          attentionReason: "Screen idle for 10s"
-        })
-      )
-    ).toEqual({
-      title: "climon needs attention",
-      body: "API server needs attention: Screen idle for 10s",
-      sessionId: "sess-1",
-      key: "sess-1:token-1"
-    });
+  test("explains when the browser blocked the notification permission prompt", () => {
+    expect(browserNotificationPermissionMessage("denied")).toBe(
+      "Notifications are blocked in your browser. Enable them for this site in Edge site settings, then try again."
+    );
+  });
+
+  test("explains when the dashboard origin cannot request notifications", () => {
+    expect(browserNotificationPermissionMessage("insecure-context")).toBe(
+      "This dashboard is not on a secure origin, so the browser will not show a notification permission prompt. Open climon from localhost or HTTPS and try again."
+    );
   });
 });
 
 describe("createAttentionAlertManager", () => {
-  test("initial update seeds existing attention sessions without sound or notifications", () => {
+  test("initial update seeds existing attention sessions without sound, vibration, or toast", () => {
     const h = createHarness();
-    h.manager.update([
-      session({
-        status: "needs-attention",
-        attentionMatchedAt: "token-1",
-        name: "API server"
-      })
-    ]);
+    h.manager.update([session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })]);
     expect(h.title()).toBe("climon (!1)");
     expect(h.soundCalls).toEqual([]);
-    expect(h.notifications).toEqual([]);
+    expect(h.vibrations).toEqual([]);
+    expect(h.attentions).toEqual([]);
   });
 
-  test("new transition into needs-attention fires one sound and one notification", () => {
+  test("new transition into needs-attention fires one sound, one vibration, and one toast", () => {
     const h = createHarness();
     h.manager.update([session({ status: "running", name: "API server" })]);
     h.manager.update([
-      session({
-        status: "needs-attention",
-        attentionMatchedAt: "token-1",
-        attentionReason: "Screen idle for 10s",
-        name: "API server"
-      })
+      session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })
     ]);
     expect(h.title()).toBe("climon (!1)");
     expect(h.soundCalls).toEqual(["play"]);
-    expect(h.notifications).toEqual([
-      {
-        title: "climon needs attention",
-        body: "API server needs attention: Screen idle for 10s",
-        sessionId: "sess-1",
-        key: "sess-1:token-1"
-      }
-    ]);
+    expect(h.vibrations.length).toBe(1);
+    expect(h.vibrations[0]!.length).toBeGreaterThan(0);
+    expect(h.attentions.map((s) => s.id)).toEqual(["sess-1"]);
   });
 
-  test("repeated updates for the same attention token do not duplicate alerts", () => {
+  test("does not fire for the actively viewed session", () => {
     const h = createHarness();
-    const attentive = session({
-      status: "needs-attention",
-      attentionMatchedAt: "token-1",
-      name: "API server"
-    });
     h.manager.update([session({ status: "running", name: "API server" })]);
-    h.manager.update([attentive]);
-    h.manager.update([attentive]);
-    expect(h.soundCalls).toEqual(["play"]);
-    expect(h.notifications).toHaveLength(1);
+    h.manager.update(
+      [session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })],
+      { viewedSessionId: "sess-1" }
+    );
+    expect(h.attentions).toEqual([]);
+    expect(h.soundCalls).toEqual([]);
+    // Viewed session is excluded from the attention count too.
+    expect(h.title()).toBe("climon");
   });
 
-  test("a later distinct attention token alerts again", () => {
+  test("does not fire when alerts are not visible (mobile session-list), but records it as seen", () => {
+    const h = createHarness();
+    h.manager.update([session({ status: "running", name: "API server" })]);
+    // On the mobile session list: alertsVisible=false, so no toast/sound/vibration.
+    h.manager.update(
+      [session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })],
+      { alertsVisible: false }
+    );
+    expect(h.attentions).toEqual([]);
+    expect(h.soundCalls).toEqual([]);
+    expect(h.vibrations).toEqual([]);
+    // Navigating into a session (alertsVisible=true) must not retroactively toast
+    // the same attention episode.
+    h.manager.update(
+      [session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })],
+      { alertsVisible: true }
+    );
+    expect(h.attentions).toEqual([]);
+  });
+
+  test("repeated updates for the same attention token do not duplicate toasts", () => {
     const h = createHarness();
     h.manager.update([session({ status: "running", name: "API server" })]);
     h.manager.update([session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })]);
+    h.manager.update([session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })]);
+    expect(h.attentions.map((s) => s.id)).toEqual(["sess-1"]);
+    expect(h.soundCalls).toEqual(["play"]);
+  });
+
+  test("a later distinct attention token toasts again", () => {
+    const h = createHarness();
     h.manager.update([session({ status: "running", name: "API server" })]);
+    h.manager.update([session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })]);
     h.manager.update([session({ status: "needs-attention", attentionMatchedAt: "token-2", name: "API server" })]);
-    expect(h.soundCalls).toEqual(["play", "play"]);
-    expect(h.notifications.map((n) => n.key)).toEqual(["sess-1:token-1", "sess-1:token-2"]);
+    expect(h.attentions.length).toBe(2);
   });
 
   test("title returns to climon after all sessions leave needs-attention", () => {
@@ -341,7 +228,7 @@ describe("createAttentionAlertManager", () => {
     expect(h.title()).toBe("climon");
   });
 
-  test("multiple newly attentive sessions produce one notification per session", () => {
+  test("multiple newly attentive sessions produce one toast per session", () => {
     const h = createHarness();
     h.manager.update([
       session({ id: "a", status: "running", name: "API server" }),
@@ -353,129 +240,27 @@ describe("createAttentionAlertManager", () => {
     ]);
     expect(h.title()).toBe("climon (!2)");
     expect(h.soundCalls).toEqual(["play", "play"]);
-    expect(h.notifications.map((n) => n.body)).toEqual([
-      "API server needs attention",
-      "Worker needs attention"
-    ]);
+    expect(h.attentions.map((s) => s.id)).toEqual(["a", "b"]);
   });
 
-  test("dispose restores title and calls sound.dispose when provided", () => {
+  test("works without a vibrate adapter (no throw)", () => {
     let currentTitle = "climon";
-    let disposeCount = 0;
+    const attentions: SessionMeta[] = [];
     const manager = createAttentionAlertManager({
       title: { get: () => currentTitle, set: (t) => { currentTitle = t; } },
-      sound: {
-        play: () => { soundCalls.push("play"); },
-        dispose: () => { disposeCount++; }
-      },
-      notifications: { notify: () => {} }
+      sound: { play: () => {} },
+      onAttention: (s) => { attentions.push(s); }
     });
-    const soundCalls: string[] = [];
+    manager.update([session({ status: "running", name: "API" })]);
     manager.update([session({ status: "needs-attention", attentionMatchedAt: "t1", name: "API" })]);
-    expect(currentTitle).toBe("climon (!1)");
-    manager.dispose();
-    expect(currentTitle).toBe("climon");
-    expect(disposeCount).toBe(1);
+    expect(attentions.map((s) => s.id)).toEqual(["sess-1"]);
   });
 
-  test("dispose restores title even when sound.dispose throws", () => {
-    let currentTitle = "climon";
-    const manager = createAttentionAlertManager({
-      title: { get: () => currentTitle, set: (t) => { currentTitle = t; } },
-      sound: {
-        play: () => {},
-        dispose: () => { throw new Error("audio close failed"); }
-      },
-      notifications: { notify: () => {} }
-    });
-    manager.update([session({ status: "needs-attention", attentionMatchedAt: "t1", name: "API" })]);
-    expect(() => manager.dispose()).not.toThrow();
-    expect(currentTitle).toBe("climon");
-  });
-
-  test("dispose works without sound.dispose (plain SoundAdapter)", () => {
+  test("dispose restores the base title", () => {
     const h = createHarness();
     h.manager.update([session({ status: "needs-attention", attentionMatchedAt: "t1", name: "API" })]);
-    expect(() => h.manager.dispose()).not.toThrow();
-    expect(h.title()).toBe("climon");
-  });
-
-  test("adapter errors do not prevent title updates", () => {
-    let currentTitle = "climon";
-    let soundCallCount = 0;
-    let notificationCallCount = 0;
-    const manager = createAttentionAlertManager({
-      title: {
-        get: () => currentTitle,
-        set: (title) => {
-          currentTitle = title;
-        }
-      },
-      sound: {
-        play: () => {
-          soundCallCount++;
-          throw new Error("audio blocked");
-        }
-      },
-      notifications: {
-        notify: () => {
-          notificationCallCount++;
-          throw new Error("notifications blocked");
-        }
-      }
-    });
-    manager.update([session({ status: "running", name: "API server" })]);
-    manager.update([session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })]);
-    expect(currentTitle).toBe("climon (!1)");
-    expect(soundCallCount).toBe(1);
-    expect(notificationCallCount).toBe(1);
-  });
-
-  test("excludes the viewed session from the attention count and alerts", () => {
-    const h = createHarness();
-    h.manager.update([session({ id: "a", status: "running", name: "API server" })]);
-    h.manager.update(
-      [session({ id: "a", status: "needs-attention", attentionMatchedAt: "a-1", name: "API server" })],
-      "a"
-    );
-    expect(h.title()).toBe("climon");
-    expect(h.soundCalls).toEqual([]);
-    expect(h.notifications).toEqual([]);
-  });
-
-  test("still alerts for non-viewed sessions while one session is viewed", () => {
-    const h = createHarness();
-    h.manager.update([
-      session({ id: "a", status: "running", name: "API server" }),
-      session({ id: "b", status: "running", name: "Worker" })
-    ]);
-    h.manager.update(
-      [
-        session({ id: "a", status: "needs-attention", attentionMatchedAt: "a-1", name: "API server" }),
-        session({ id: "b", status: "needs-attention", attentionMatchedAt: "b-1", name: "Worker" })
-      ],
-      "a"
-    );
     expect(h.title()).toBe("climon (!1)");
-    expect(h.soundCalls).toEqual(["play"]);
-    expect(h.notifications.map((n) => n.sessionId)).toEqual(["b"]);
-  });
-
-  test("does not re-alert a still-attentive session after the user navigates away", () => {
-    const h = createHarness();
-    h.manager.update([session({ id: "a", status: "running", name: "API server" })]);
-    const attentive = session({
-      id: "a",
-      status: "needs-attention",
-      attentionMatchedAt: "a-1",
-      name: "API server"
-    });
-    // Enters needs-attention while viewed -> suppressed but recorded as seen.
-    h.manager.update([attentive], "a");
-    // User navigates away while it is still attentive -> no new alert.
-    h.manager.update([attentive], null);
-    expect(h.soundCalls).toEqual([]);
-    expect(h.notifications).toEqual([]);
-    expect(h.title()).toBe("climon (!1)");
+    h.manager.dispose();
+    expect(h.title()).toBe("climon");
   });
 });

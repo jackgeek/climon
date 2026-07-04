@@ -10,6 +10,7 @@ import {
   isDevTunnelHost,
   isLiveStatus,
   probeTunnelAuth,
+  shouldPromptTunnelReauth,
   TUNNEL_SKIP_ANTI_PHISHING_PARAM,
   withQuery
 } from "../src/web/api.js";
@@ -298,5 +299,13 @@ describe("probeTunnelAuth", () => {
     }) as unknown as typeof fetch;
     const state = await probeTunnelAuth({ isTunnelHost: true, fetchImpl });
     expect(state).toBe("unreachable");
+  });
+});
+
+describe("shouldPromptTunnelReauth", () => {
+  test("prompts only when the probe reports auth-required", () => {
+    expect(shouldPromptTunnelReauth("auth-required")).toBe(true);
+    expect(shouldPromptTunnelReauth("ok")).toBe(false);
+    expect(shouldPromptTunnelReauth("unreachable")).toBe(false);
   });
 });
