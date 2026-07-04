@@ -21,7 +21,14 @@ declare const self: ServiceWorkerGlobalScope;
 
 self.addEventListener("install", (event: ExtendableEvent) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_ASSETS)),
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      await Promise.all(
+        SHELL_ASSETS.map((url) =>
+          url === NAVIGATION_SHELL_URL ? refreshShell(cache) : precacheAsset(cache, url),
+        ),
+      );
+    })(),
   );
   void self.skipWaiting();
 });
@@ -112,6 +119,24 @@ async function assetResponse(request: Request): Promise<Response> {
       return cached;
     }
     throw new Error("asset unavailable");
+  }
+}
+
+/** Guarded precache for a single non-shell asset: only stores a genuine asset. */
+async function precacheAsset(cache: Cache, url: string): Promise<void> {
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    const meta = {
+      ok: res.ok,
+      redirected: res.redirected,
+      type: res.type,
+      contentType: res.headers.get("content-type") ?? "",
+    };
+    if (shouldCacheAssetResponse(meta)) {
+      await cache.put(url, res.clone());
+    }
+  } catch {
+    // Offline or auth-blocked: keep any existing cached entry (do not overwrite).
   }
 }
 
