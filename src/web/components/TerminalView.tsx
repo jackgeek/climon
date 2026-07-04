@@ -334,7 +334,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       return;
     }
     fontSizeRef.current = fontSize;
-    applyTerminalFontSize(term, fontSize, refit);
+    applyTerminalFontSize(term, fontSize, refitThenRefresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fontSize]);
 
@@ -445,6 +445,19 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // Refit after layout has settled so xterm measures the final pane size.
     requestAnimationFrame(() => {
       requestAnimationFrame(fitNow);
+    });
+  }
+
+  // A font-size change reflows the grid to a new cell size. xterm only repaints
+  // the region touched by the reflow, so the resized viewport can keep stale
+  // glyphs (the corruption that previously only cleared on the next focus
+  // repaint). Repaint the whole viewport once the fit has settled.
+  function refitThenRefresh(): void {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        fitNow();
+        refreshTerminalRender(termRef.current);
+      });
     });
   }
 
