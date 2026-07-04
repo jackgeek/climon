@@ -544,3 +544,27 @@ export async function postPushUnsubscribe(endpoint: string): Promise<void> {
     throw new Error(`Failed to unsubscribe from push (${res.status})`);
   }
 }
+
+/**
+ * Reports this device's foreground/background presence for a push subscription
+ * so the server can skip sending an OS push to a device that is currently
+ * viewing the dashboard. Best-effort: prefers `navigator.sendBeacon` (survives
+ * page hide, e.g. reporting `foreground:false` on `visibilitychange`), and
+ * falls back to a keepalive `fetch` when the beacon is unavailable or rejected.
+ */
+export function postPushPresence(endpoint: string, foreground: boolean): void {
+  const url = withQuery("/api/push/presence");
+  const payload = JSON.stringify({ endpoint, foreground });
+  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+    const blob = new Blob([payload], { type: "application/json" });
+    if (navigator.sendBeacon(url, blob)) {
+      return;
+    }
+  }
+  void fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: payload,
+    keepalive: true
+  }).catch(() => {});
+}
