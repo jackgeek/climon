@@ -43,4 +43,15 @@ describe("buildAttentionToast", () => {
     expect(a.toastId).toBe(b.toastId);
     expect(a.toastId).not.toBe(c.toastId);
   });
+
+  test("includes the terminal title as the toast body", () => {
+    const toast = buildAttentionToast(session({ name: "API server", terminalTitle: "vim server.ts", attentionMatchedAt: "t1" }));
+    expect(toast.message).toBe("API server needs attention");
+    expect(toast.body).toBe("vim server.ts");
+  });
+
+  test("omits the body when there is no terminal title", () => {
+    const toast = buildAttentionToast(session({ name: "API server", attentionMatchedAt: "t1" }));
+    expect(toast.body).toBeUndefined();
+  });
 });
