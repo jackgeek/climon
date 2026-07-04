@@ -47,13 +47,6 @@ export interface TerminalConfig {
    * terminal. Must be an integer in [0, 255].
    */
   detachPrefix: number;
-  /**
-   * When true (default), climon sets the attached local terminal's title to the
-   * session name and updates it live on rename. Disables the whole title feature
-   * (including reading the terminal's current title to default an unnamed
-   * session) when false.
-   */
-  setTitle: boolean;
 }
 
 export interface HotKeysConfig {

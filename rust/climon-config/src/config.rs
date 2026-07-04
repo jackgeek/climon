@@ -560,13 +560,6 @@ pub fn load_config(env: &Env) -> Result<Value, String> {
             }
             let normalized = normalize_detach_prefix(terminal.get("detachPrefix"));
             terminal.insert("detachPrefix".to_string(), normalized);
-            if !terminal
-                .get("setTitle")
-                .map(|v| v.is_boolean())
-                .unwrap_or(false)
-            {
-                terminal.insert("setTitle".to_string(), Value::from(true));
-            }
         }
         {
             let attention = out.get_mut("attention").unwrap().as_object_mut().unwrap();
@@ -854,7 +847,6 @@ mod tests {
         assert_eq!(cfg["server"]["host"], json!("127.0.0.1"));
         assert_eq!(cfg["server"]["port"], json!(3131));
         assert_eq!(cfg["terminal"]["clampBrowserToHost"], json!(false));
-        assert_eq!(cfg["terminal"]["setTitle"], json!(true));
         assert_eq!(cfg["terminal"]["detachPrefix"], json!(0x1c));
         assert_eq!(cfg["hotKeys"]["focusTopSession"], json!("Alt+J"));
         assert_eq!(cfg["session"]["color"], json!("auto"));
@@ -1235,7 +1227,6 @@ mod tests {
         );
         let cfg = load_config(&env).unwrap();
         assert_eq!(cfg["attention"]["idleSeconds"], json!(10));
-        assert_eq!(cfg["terminal"]["setTitle"], json!(true));
         assert_eq!(cfg["terminal"]["detachPrefix"], json!(0x1c));
         assert_eq!(cfg["session"]["color"], json!("auto"));
     }

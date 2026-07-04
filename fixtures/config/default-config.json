@@ -6,8 +6,7 @@
   },
   "terminal": {
     "clampBrowserToHost": false,
-    "detachPrefix": 28,
-    "setTitle": true
+    "detachPrefix": 28
   },
   "hotKeys": {
     "focusTopSession": "Alt+J"
