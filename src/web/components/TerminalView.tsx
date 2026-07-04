@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { makeStyles, mergeClasses } from "@fluentui/react-components";
+import { makeStyles } from "@fluentui/react-components";
 import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -100,35 +100,48 @@ export function focusTerminalPane(term: FocusableTerminal | null, onFocused?: ()
   onFocused?.();
 }
 
-interface SelectableHelperTextarea {
-  blur: () => void;
-  setAttribute: (name: string, value: string) => void;
-  removeAttribute: (name: string) => void;
+interface CapturableTerminal {
+  buffer: {
+    active: {
+      length: number;
+      getLine: (index: number) => { translateToString: (trimRight?: boolean) => string } | undefined;
+    };
+  };
+}
+
+/** Matches box-drawing, block-element, and geometric-shape glyphs (U+2500–U+25FF) */
+const DECORATION_GLYPH_RE = /[\u2500-\u25FF]/g;
+
+/**
+ * Replace terminal "decoration" glyphs (scrollbars, borders, block/box-drawing
+ * characters some CLI tools paint, e.g. ▌ █ ░ │ ┃ ●) with spaces so column
+ * alignment is preserved, then trim trailing whitespace from each line.
+ */
+export function stripTerminalDecorations(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(DECORATION_GLYPH_RE, " ").replace(/[ \t]+$/, ""))
+    .join("\n");
 }
 
 /**
- * Toggle xterm's hidden helper textarea between normal input and selection
- * mode. In selection mode we blur it and mark it non-focusable with
- * `inputmode="none"` so tapping the terminal never raises the mobile soft
- * keyboard; native text selection (enabled via CSS) drives copy instead.
+ * Read the terminal's full scrollback buffer as plain text. Each row is
+ * right-trimmed by xterm; trailing blank rows are dropped so the capture ends at
+ * the last line with content.
  */
-export function configureSelectionTextarea(
-  textarea: SelectableHelperTextarea | null | undefined,
-  selecting: boolean
-): void {
-  if (!textarea) {
-    return;
+export function captureTerminalText(term: CapturableTerminal | null): string {
+  if (!term) {
+    return "";
   }
-  if (selecting) {
-    textarea.blur();
-    textarea.setAttribute("inputmode", "none");
-    textarea.setAttribute("readonly", "true");
-    textarea.setAttribute("tabindex", "-1");
-  } else {
-    textarea.removeAttribute("inputmode");
-    textarea.removeAttribute("readonly");
-    textarea.setAttribute("tabindex", "0");
+  const buffer = term.buffer.active;
+  const lines: string[] = [];
+  for (let i = 0; i < buffer.length; i++) {
+    lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
   }
+  while (lines.length > 0 && lines[lines.length - 1].length === 0) {
+    lines.pop();
+  }
+  return lines.join("\n");
 }
 
 export function mapWheelToScrollLines(event: Pick<WheelEvent, "deltaY" | "deltaMode">, rows: number): number {
@@ -263,6 +276,7 @@ export interface TerminalHandle {
   setViewMode: (mode: TerminalResizeMode) => void;
   acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
   focus: () => void;
+  captureText: () => string;
 }
 
 const useStyles = makeStyles({
@@ -276,16 +290,6 @@ const useStyles = makeStyles({
     },
     "& .xterm-viewport::-webkit-scrollbar": {
       display: "none"
-    }
-  },
-  // Selection mode: xterm normally disables text selection so pointer drags
-  // drive its own selection service. Re-enable native browser selection on the
-  // rendered rows so touch users get the OS selection handles + Copy menu.
-  selecting: {
-    "& .xterm .xterm-screen, & .xterm .xterm-rows": {
-      userSelect: "text",
-      WebkitUserSelect: "text",
-      cursor: "text"
     }
   }
 });
@@ -303,7 +307,6 @@ interface Props {
   serverConnected: boolean;
   serverReconnectToken: number;
   onLiveInteraction?: () => void;
-  selecting?: boolean;
 }
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
@@ -319,8 +322,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     onFontSizeChange,
     serverConnected,
     serverReconnectToken,
-    onLiveInteraction,
-    selecting = false
+    onLiveInteraction
   },
   ref
 ) {
@@ -348,7 +350,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const replayAfterNextResizeRef = useRef(false);
   const lastServerReconnectTokenRef = useRef(serverReconnectToken);
   const onLiveInteractionRef = useRef(onLiveInteraction);
-  const selectingRef = useRef(selecting);
 
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -391,17 +392,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       refreshTerminalRender(term);
     }
   }, [xtermTheme]);
-
-  // Selection mode toggles native browser text selection on the terminal rows
-  // (see the `selecting` style) and suppresses the mobile soft keyboard so touch
-  // users can drag-select and copy via the OS selection menu.
-  useEffect(() => {
-    selectingRef.current = selecting;
-    configureSelectionTextarea(termRef.current?.textarea, selecting);
-    if (!selecting && typeof window !== "undefined") {
-      window.getSelection()?.removeAllRanges();
-    }
-  }, [selecting]);
 
   // A queued view-mode request belongs to the session that was attached when it
   // was queued. Drop it when the session changes so it can never flush to a
@@ -522,9 +512,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }
 
   function focusActiveTerminal(): void {
-    if (selectingRef.current) {
-      return;
-    }
     focusTerminalPane(termRef.current, refreshActiveTerminal);
   }
 
@@ -903,13 +890,14 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       refit();
     },
     acknowledgeAttention: sendAttentionAck,
-    focus: focusActiveTerminal
+    focus: focusActiveTerminal,
+    captureText: () => captureTerminalText(termRef.current)
   }));
 
   return (
     <div
       ref={containerRef}
-      className={mergeClasses(styles.root, selecting && styles.selecting)}
+      className={styles.root}
       style={{
         backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
         ...(accentColor

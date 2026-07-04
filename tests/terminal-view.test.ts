@@ -9,7 +9,8 @@ import {
   applyTerminalScrollbackForSession,
   canRefitTerminalForSession,
   completeInitialReplay,
-  configureSelectionTextarea,
+  captureTerminalText,
+  stripTerminalDecorations,
   focusTerminalPane,
   mapWheelToScrollLines,
   reconnectDelayMs,
@@ -179,49 +180,36 @@ describe("TerminalView", () => {
     expect(refreshCalls).toBe(1);
   });
 
-  test("selection mode blurs and disables the helper textarea to suppress the keyboard", () => {
-    const attrs: Record<string, string> = {};
-    let blurred = 0;
-    const textarea = {
-      blur: () => blurred++,
-      setAttribute: (name: string, value: string) => {
-        attrs[name] = value;
-      },
-      removeAttribute: (name: string) => {
-        delete attrs[name];
-      }
-    };
+  test("captures the full terminal buffer as text, dropping trailing blank rows", async () => {
+    const term = new Terminal({ cols: 20, rows: 4, allowProposedApi: true });
+    await writeTerminal(term, "line one\r\nline two\r\n");
 
-    configureSelectionTextarea(textarea, true);
+    const captured = captureTerminalText(term as unknown as Parameters<typeof captureTerminalText>[0]);
+    term.dispose();
 
-    expect(blurred).toBe(1);
-    expect(attrs.inputmode).toBe("none");
-    expect(attrs.readonly).toBe("true");
-    expect(attrs.tabindex).toBe("-1");
+    expect(captured).toContain("line one");
+    expect(captured).toContain("line two");
+    expect(captured.endsWith("line two")).toBe(true);
   });
 
-  test("leaving selection mode restores the helper textarea for input", () => {
-    const attrs: Record<string, string> = { inputmode: "none", readonly: "true", tabindex: "-1" };
-    const textarea = {
-      blur: () => {},
-      setAttribute: (name: string, value: string) => {
-        attrs[name] = value;
-      },
-      removeAttribute: (name: string) => {
-        delete attrs[name];
-      }
-    };
-
-    configureSelectionTextarea(textarea, false);
-
-    expect(attrs.inputmode).toBeUndefined();
-    expect(attrs.readonly).toBeUndefined();
-    expect(attrs.tabindex).toBe("0");
+  test("captureTerminalText tolerates a missing terminal", () => {
+    expect(captureTerminalText(null)).toBe("");
   });
 
-  test("selection textarea config tolerates a missing textarea", () => {
-    expect(() => configureSelectionTextarea(null, true)).not.toThrow();
-    expect(() => configureSelectionTextarea(undefined, false)).not.toThrow();
+  test("stripTerminalDecorations replaces box/block glyphs with spaces to keep alignment", () => {
+    const input = "cmd output      \u2502\nmore text here  \u2588";
+
+    const cleaned = stripTerminalDecorations(input);
+
+    expect(cleaned).toBe("cmd output\nmore text here");
+    // Same column count before the (now-blank) decoration column is preserved.
+    expect(cleaned.split("\n")[0]).toBe("cmd output");
+  });
+
+  test("stripTerminalDecorations preserves interior spacing when a mid-line glyph is removed", () => {
+    const input = "a\u2502b";
+
+    expect(stripTerminalDecorations(input)).toBe("a b");
   });
 
   test("repaints visible terminal rows without resetting the buffer", () => {

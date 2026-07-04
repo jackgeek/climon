@@ -42,7 +42,7 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { RemoteHostsPanel } from "./components/RemoteHostsPanel.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
-import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
+import { TerminalView, type TerminalHandle, stripTerminalDecorations } from "./components/TerminalView.js";
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
@@ -521,8 +521,9 @@ export function App() {
   const [maximized, setMaximized] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
-  const [selecting, setSelecting] = useState(false);
   const [composeText, setComposeText] = useState("");
+  const [selectionCaptureText, setSelectionCaptureText] = useState("");
+  const [stripDecorations, setStripDecorations] = useState(false);
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
   );
@@ -1038,15 +1039,6 @@ export function App() {
     scheduleTerminalRefit(terminalRef.current);
   }, [panelView]);
 
-  // Selection mode only makes sense while the chooser bar is visible. Leaving
-  // the chooser (keyboard/compose/font view, or closing the panel) exits it so
-  // the terminal returns to normal focus/keyboard behavior.
-  useEffect(() => {
-    if (panelView !== "chooser") {
-      setSelecting(false);
-    }
-  }, [panelView]);
-
   // Mobile soft keyboards shrink the visual viewport without reliably changing
   // CSS vh/dvh units on every browser. Mirror the visual viewport into CSS so
   // fixed/full-height UI and xterm fit inside the visible area while typing.
@@ -1328,6 +1320,8 @@ export function App() {
   // showing. Tying it to the overlay's own render condition avoids trapping the
   // user in fullscreen if the session stops being live mid-compose.
   const composeOverlayVisible = keyBarAvailable && panelView === "compose";
+  const selectionOverlayVisible = keyBarAvailable && panelView === "selection";
+  const fullscreenOverlayVisible = composeOverlayVisible || selectionOverlayVisible;
   const serverConnected = serverConnectionState === "connected";
   const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(
     serverConnectionState,
@@ -1461,7 +1455,6 @@ export function App() {
           serverConnected={serverConnected}
           serverReconnectToken={serverReconnectToken}
           onLiveInteraction={handleLiveInteraction}
-          selecting={selecting}
         />
         {panelView !== "closed" && keyBarAvailable && (
           <>
@@ -1480,11 +1473,16 @@ export function App() {
                 view={panelView}
                 fontSize={fontSize}
                 composeText={composeText}
+                selectionText={stripDecorations ? stripTerminalDecorations(selectionCaptureText) : selectionCaptureText}
+                stripDecorations={stripDecorations}
                 showLabels={!isMobile}
                 showSelect={isTouchPrimary}
-                selecting={selecting}
-                onSelect={setPanelView}
-                onToggleSelect={() => setSelecting((prev) => !prev)}
+                onSelect={(next) => {
+                  if (next === "selection") {
+                    setSelectionCaptureText(terminalRef.current?.captureText() ?? "");
+                  }
+                  setPanelView(next);
+                }}
                 onAdjustFont={adjustFontSize}
                 onComposeTextChange={setComposeText}
                 onComposeInsert={(text) => {
@@ -1495,13 +1493,18 @@ export function App() {
                 onComposeCancel={() => {
                   setPanelView(keyBarPinned ? "chooser" : "closed");
                 }}
+                onToggleStripDecorations={setStripDecorations}
+                onSelectionClose={() => {
+                  setSelectionCaptureText("");
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
                 onSend={(d) => terminalRef.current?.sendInput(d)}
               />
             </div>
           </>
         )}
       </div>
-      {maximized && !composeOverlayVisible && (
+      {maximized && !fullscreenOverlayVisible && (
         <Button
           className={styles.exitBtn}
           appearance="outline"

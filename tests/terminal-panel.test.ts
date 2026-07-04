@@ -9,15 +9,17 @@ function renderPanel(overrides: Partial<Parameters<typeof TerminalPanel>[0]> = {
     view: "compose" as TerminalPanelView,
     fontSize: 14,
     composeText: "hello world",
+    selectionText: "",
+    stripDecorations: false,
     showLabels: true,
     showSelect: false,
-    selecting: false,
     onSelect: () => undefined,
-    onToggleSelect: () => undefined,
     onAdjustFont: () => undefined,
     onComposeTextChange: () => undefined,
     onComposeInsert: () => undefined,
     onComposeCancel: () => undefined,
+    onToggleStripDecorations: () => undefined,
+    onSelectionClose: () => undefined,
     onSend: () => undefined,
     ...overrides
   };
@@ -72,7 +74,7 @@ describe("TerminalPanel", () => {
     expect(markup).toContain('aria-label="Compose text"');
   });
 
-  test("chooser shows the Select toggle only when showSelect is set", () => {
+  test("chooser shows the Select button only when showSelect is set", () => {
     const withSelect = renderPanel({ view: "chooser", showSelect: true });
     const withoutSelect = renderPanel({ view: "chooser", showSelect: false });
 
@@ -80,12 +82,28 @@ describe("TerminalPanel", () => {
     expect(withoutSelect).not.toContain('aria-label="Select text"');
   });
 
-  test("Select toggle reflects the active selection state via aria-pressed", () => {
-    const active = renderPanel({ view: "chooser", showSelect: true, selecting: true });
-    const inactive = renderPanel({ view: "chooser", showSelect: true, selecting: false });
+  test("selection view renders captured text in a read-only textarea with a strip toggle", () => {
+    const markup = renderPanel({
+      view: "selection",
+      selectionText: "captured line one\ncaptured line two",
+      stripDecorations: false
+    });
 
-    expect(active).toContain('aria-pressed="true"');
-    expect(inactive).toContain('aria-pressed="false"');
+    expect(markup).toContain("captured line one");
+    expect(markup).toContain('aria-label="Captured terminal text"');
+    expect(markup).toContain("readOnly");
+    expect(markup).toContain("Strip scrollbars &amp; decorations");
+    expect(markup).toContain("Select all");
+    expect(markup).toContain("Close");
+  });
+
+  test("selection view reflects the checked strip-decorations state", () => {
+    const checked = renderPanel({ view: "selection", selectionText: "x", stripDecorations: true });
+    const unchecked = renderPanel({ view: "selection", selectionText: "x", stripDecorations: false });
+
+    expect(checked).toContain('type="checkbox"');
+    expect(checked).toContain('checked=""');
+    expect(unchecked).not.toContain('checked=""');
   });
 
   test("compose view renders textarea, staged text, and actions", () => {

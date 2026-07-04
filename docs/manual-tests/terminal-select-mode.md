@@ -1,14 +1,16 @@
-# Terminal selection mode (touch)
+# Terminal selection / copy (touch)
 
-Manual checks for the terminal keybar **Select** toggle: a touch-only mode that
-enables native text selection on the xterm rows and suppresses the mobile soft
-keyboard, so users can drag-select terminal output and copy it via the OS
-selection menu. Copying relies on the browser/OS native selection toolbar — the
-app adds no Copy button.
+Manual checks for the terminal keybar **Select** button: a touch-only action that
+captures the terminal's full scrollback buffer into a read-only, monospaced
+textarea so the text can be copied with the platform's native tools. A "Strip
+scrollbars & decorations" toggle replaces block/box-drawing glyphs (scrollbars,
+borders) with spaces to keep column alignment while cleaning up the copy. Copy
+itself uses native selection (long-press / Select all → OS Copy) — no in-app
+clipboard button.
 
-## TSM-1 — Select toggle is touch-only
+## TSM-1 — Select button is touch-only
 
-- **Feature:** Terminal selection mode
+- **Feature:** Terminal selection / copy
 - **Preconditions:** One live session, maximized so the keybar chooser is
   visible.
 - **Config-matrix cell:** Browser = mobile Safari/Chrome (touch-primary) vs.
@@ -24,53 +26,69 @@ app adds no Copy button.
 - **Platforms:** iOS Safari, Android Chrome; desktop Chrome/Firefox.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
-## TSM-2 — Entering selection mode suppresses the soft keyboard
+## TSM-2 — Capturing the full scrollback into the textarea
 
-- **Feature:** Terminal selection mode
-- **Preconditions:** As TSM-1 on a touch device, with a shell prompt and some
-  scrollback output visible.
+- **Feature:** Terminal selection / copy
+- **Preconditions:** As TSM-1 on a touch device, with enough output to have
+  scrolled the terminal (several screens of history).
 - **Config-matrix cell:** Browser = mobile Safari/Chrome; touch-primary.
 - **Steps:**
   1. Tap the **Select** button in the chooser.
-  2. Confirm the button shows an active/pressed (primary) appearance.
-  3. Tap inside the terminal output area.
-- **Expected result:** The soft keyboard does **not** appear when tapping the
-  terminal while selection mode is active. The Select button stays visibly
-  active.
+  2. Observe the full-viewport overlay that appears.
+  3. Scroll the textarea up and down.
+- **Expected result:** A full-viewport overlay opens with a read-only textarea
+  containing the terminal's full scrollback (not just the visible screen).
+  Scrolling the textarea reveals earlier history. The font is monospaced and the
+  original column formatting is preserved. Tapping the textarea does **not**
+  submit anything to the terminal.
 - **Platforms:** iOS Safari, Android Chrome.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
-## TSM-3 — Drag-select terminal text and copy via the OS menu
+## TSM-3 — Copying text with native tools
 
-- **Feature:** Terminal selection mode
-- **Preconditions:** As TSM-2, selection mode active.
+- **Feature:** Terminal selection / copy
+- **Preconditions:** As TSM-2, overlay open.
 - **Config-matrix cell:** Browser = mobile Safari/Chrome; touch-primary.
 - **Steps:**
-  1. Touch-and-drag across a range of terminal text (or long-press to start a
-     native selection).
-  2. Adjust the native selection handles to cover the desired text.
-  3. Tap **Copy** in the OS selection toolbar.
-  4. Paste into another field/app to verify.
-- **Expected result:** Native selection handles appear over the terminal rows,
-  the highlighted range matches the on-screen text, and the OS **Copy** action
-  places the selected text on the clipboard. The app shows no in-app Copy
-  button.
+  1. Tap **Select all** (or long-press in the textarea and choose Select All).
+  2. Tap **Copy** in the OS selection toolbar.
+  3. Paste into another field/app to verify.
+- **Expected result:** Select all highlights the whole capture without opening
+  the soft keyboard (the textarea is read-only). The OS **Copy** action places
+  the text on the clipboard. Long-press selection of a sub-range also works.
 - **Platforms:** iOS Safari, Android Chrome.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
-## TSM-4 — Exiting selection mode restores normal input
+## TSM-4 — Strip scrollbars & decorations toggle
 
-- **Feature:** Terminal selection mode
-- **Preconditions:** As TSM-3, selection mode active with text selected.
+- **Feature:** Terminal selection / copy
+- **Preconditions:** A tool that paints a right-edge scrollbar or box borders is
+  running in the session (e.g. Copilot CLI, or any TUI drawing │ ▌ █ ░).
 - **Config-matrix cell:** Browser = mobile Safari/Chrome; touch-primary.
 - **Steps:**
-  1. Tap the **Select** button again to toggle it off (or switch to another
-     chooser view such as Keyboard/Compose/Font, or close the panel).
-  2. Observe the selection state and button appearance.
-  3. Tap the terminal.
-- **Expected result:** Selection mode turns off (button returns to the default
-  outline appearance), any lingering selection is cleared, and tapping the
-  terminal again focuses it and raises the soft keyboard as normal. Switching to
-  another chooser view or closing the panel also exits selection mode.
+  1. Tap **Select** to capture the text (toggle initially off).
+  2. Note the block/box-drawing glyphs in the captured text.
+  3. Enable **Strip scrollbars & decorations**.
+  4. Compare the text; disable the toggle again.
+- **Expected result:** With the toggle on, block/box-drawing/geometric glyphs
+  (U+2500–U+25FF) are replaced with spaces so the surrounding columns stay
+  aligned, and trailing whitespace is trimmed — the scrollbar/border noise is
+  gone while the rest of the layout is preserved. Toggling off restores the raw
+  captured text. Copy reflects whichever state is shown.
+- **Platforms:** iOS Safari, Android Chrome.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## TSM-5 — Closing the overlay
+
+- **Feature:** Terminal selection / copy
+- **Preconditions:** As TSM-2, overlay open.
+- **Config-matrix cell:** Browser = mobile Safari/Chrome; touch-primary.
+- **Steps:**
+  1. Tap **Close**.
+  2. Observe the terminal and keybar.
+- **Expected result:** The overlay closes, the terminal is visible again, and
+  the keybar returns to its chooser (or closed) state. Re-opening **Select**
+  re-captures the current scrollback afresh (with the strip toggle applied to
+  the new capture).
 - **Platforms:** iOS Safari, Android Chrome.
 - **Result:** _date / tester / platform / pass-fail / notes_
