@@ -5,6 +5,8 @@ import {
   SHELL_ASSETS,
   chooseCacheStrategy,
   isStaleCacheName,
+  shouldCacheShellResponse,
+  shouldCacheAssetResponse,
 } from "../src/web/pwa/swCache.js";
 
 const base = { method: "GET", mode: "no-cors", sameOrigin: true, path: "/other" };
@@ -44,5 +46,36 @@ describe("SHELL_ASSETS", () => {
     expect(SHELL_ASSETS).toContain(NAVIGATION_SHELL_URL);
     expect(SHELL_ASSETS).toContain("/assets/app.js");
     expect(SHELL_ASSETS).toContain("/assets/xterm.css");
+  });
+});
+
+describe("shouldCacheShellResponse", () => {
+  const good = { ok: true, redirected: false, type: "basic", contentType: "text/html; charset=utf-8" };
+  test("caches the real dashboard shell", () => {
+    expect(shouldCacheShellResponse(good, '<div id="root"></div>')).toBe(true);
+  });
+  test("rejects an inline text/html login page (no app-shell marker)", () => {
+    expect(shouldCacheShellResponse(good, "<html><body>Sign in to Microsoft</body></html>")).toBe(false);
+  });
+  test("rejects redirected, opaque, non-ok, and non-html responses", () => {
+    expect(shouldCacheShellResponse({ ...good, redirected: true }, '<div id="root"></div>')).toBe(false);
+    expect(shouldCacheShellResponse({ ...good, type: "opaqueredirect" }, "")).toBe(false);
+    expect(shouldCacheShellResponse({ ...good, ok: false }, '<div id="root"></div>')).toBe(false);
+    expect(shouldCacheShellResponse({ ...good, contentType: "application/json" }, '<div id="root"></div>')).toBe(false);
+  });
+});
+
+describe("shouldCacheAssetResponse", () => {
+  test("caches a real JS/CSS asset", () => {
+    expect(shouldCacheAssetResponse({ ok: true, redirected: false, type: "basic", contentType: "text/javascript; charset=utf-8" })).toBe(true);
+    expect(shouldCacheAssetResponse({ ok: true, redirected: false, type: "basic", contentType: "text/css; charset=utf-8" })).toBe(true);
+  });
+  test("rejects an inline text/html login page served for an asset path", () => {
+    expect(shouldCacheAssetResponse({ ok: true, redirected: false, type: "basic", contentType: "text/html; charset=utf-8" })).toBe(false);
+  });
+  test("rejects redirected, opaque, and non-ok responses", () => {
+    expect(shouldCacheAssetResponse({ ok: true, redirected: true, type: "basic", contentType: "text/javascript" })).toBe(false);
+    expect(shouldCacheAssetResponse({ ok: true, redirected: false, type: "opaqueredirect", contentType: "" })).toBe(false);
+    expect(shouldCacheAssetResponse({ ok: false, redirected: false, type: "basic", contentType: "text/javascript" })).toBe(false);
   });
 });

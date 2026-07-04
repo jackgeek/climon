@@ -6,6 +6,8 @@ import {
   SHELL_ASSETS,
   chooseCacheStrategy,
   isStaleCacheName,
+  shouldCacheShellResponse,
+  shouldCacheAssetResponse,
 } from "./pwa/swCache.js";
 import {
   handlePush,
@@ -69,8 +71,15 @@ async function navigationResponse(): Promise<Response> {
 
 async function refreshShell(cache: Cache): Promise<void> {
   try {
-    const res = await fetch(NAVIGATION_SHELL_URL, { cache: "no-store" });
-    if (res.ok) {
+    const res = await fetch(NAVIGATION_SHELL_URL, { cache: "no-store", redirect: "manual" });
+    const body = res.type === "opaqueredirect" ? "" : await res.clone().text();
+    const meta = {
+      ok: res.ok,
+      redirected: res.redirected,
+      type: res.type,
+      contentType: res.headers.get("content-type") ?? "",
+    };
+    if (shouldCacheShellResponse(meta, body)) {
       await cache.put(NAVIGATION_SHELL_URL, res.clone());
     }
   } catch {
@@ -83,10 +92,20 @@ async function assetResponse(request: Request): Promise<Response> {
   const cache = await caches.open(CACHE_NAME);
   try {
     const res = await fetch(request);
-    if (res.ok) {
+    const meta = {
+      ok: res.ok,
+      redirected: res.redirected,
+      type: res.type,
+      contentType: res.headers.get("content-type") ?? "",
+    };
+    if (shouldCacheAssetResponse(meta)) {
       await cache.put(request, res.clone());
+      return res;
     }
-    return res;
+    // Auth-blocked or not a real asset: prefer the last known-good cached copy so
+    // a login page is never returned in place of the app bundle.
+    const cached = await cache.match(request);
+    return cached ?? res;
   } catch {
     const cached = await cache.match(request);
     if (cached) {

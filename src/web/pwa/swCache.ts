@@ -43,3 +43,42 @@ export function chooseCacheStrategy(req: {
 export function isStaleCacheName(name: string): boolean {
   return name.startsWith("climon-shell-") && name !== CACHE_NAME;
 }
+
+/** Substring present in the real dashboard shell but not a relay login page. */
+const APP_SHELL_MARKER = 'id="root"';
+
+/**
+ * Whether a refetched navigation response is genuinely the dashboard shell (safe
+ * to cache). Rejects redirects/opaque responses and, crucially, an inline
+ * `text/html` dev-tunnel login page — which is a same-origin 200 but lacks the
+ * app-shell marker — so an expired session can never poison the cached shell.
+ */
+export function shouldCacheShellResponse(
+  res: { ok: boolean; redirected: boolean; type: string; contentType: string },
+  body: string,
+): boolean {
+  if (!res.ok || res.redirected || res.type === "opaqueredirect") {
+    return false;
+  }
+  if (!res.contentType.toLowerCase().includes("text/html")) {
+    return false;
+  }
+  return body.includes(APP_SHELL_MARKER);
+}
+
+/**
+ * Whether a network asset response is a real asset (safe to cache). Rejects
+ * redirects/opaque responses and any `text/html` body (an inline dev-tunnel
+ * login page served for an asset path), so HTML is never cached as JS/CSS.
+ */
+export function shouldCacheAssetResponse(res: {
+  ok: boolean;
+  redirected: boolean;
+  type: string;
+  contentType: string;
+}): boolean {
+  if (!res.ok || res.redirected || res.type === "opaqueredirect") {
+    return false;
+  }
+  return !res.contentType.toLowerCase().includes("text/html");
+}
