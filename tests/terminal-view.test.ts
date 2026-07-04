@@ -405,6 +405,15 @@ describe("TerminalView", () => {
     expect(refits).toBe(1);
   });
 
+  test("repaints the viewport after the font-size reflow settles", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // The font-size effect reflows via a refit that repaints once layout settles,
+    // instead of repainting before the grid has reflowed to the new cell size.
+    expect(source).toContain("applyTerminalFontSize(term, fontSize, refitThenRefresh)");
+    // refitThenRefresh fits first, then repaints the whole viewport.
+    expect(source).toContain("fitNow();\n        refreshTerminalRender(termRef.current);");
+  });
+
   test("keeps alternate-screen output out of normal browser scrollback", async () => {
     const term = new Terminal({ cols: 20, rows: 3, scrollback: 100, allowProposedApi: true });
 
