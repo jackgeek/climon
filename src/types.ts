@@ -203,6 +203,8 @@ export interface SessionMeta {
   theme?: string;
   /** User-controlled pause marker; live daemon writes must not visually unpause while true. */
   userPaused?: boolean;
+  /** Latest terminal title emitted by a program inside the PTY (OSC 0/2), shown as a subtitle. */
+  terminalTitle?: string;
 }
 
 export interface SessionMetaPatch {
@@ -223,6 +225,7 @@ export interface SessionMetaPatch {
   color?: AnsiColor | null;
   theme?: string;
   userPaused?: boolean;
+  terminalTitle?: string;
 }
 
 export interface SessionListResponse {
