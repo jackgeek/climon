@@ -100,6 +100,50 @@ export function focusTerminalPane(term: FocusableTerminal | null, onFocused?: ()
   onFocused?.();
 }
 
+interface CapturableTerminal {
+  buffer: {
+    active: {
+      length: number;
+      getLine: (index: number) => { translateToString: (trimRight?: boolean) => string } | undefined;
+    };
+  };
+}
+
+/** Matches box-drawing, block-element, and geometric-shape glyphs (U+2500–U+25FF) */
+const DECORATION_GLYPH_RE = /[\u2500-\u25FF]/g;
+
+/**
+ * Replace terminal "decoration" glyphs (scrollbars, borders, block/box-drawing
+ * characters some CLI tools paint, e.g. ▌ █ ░ │ ┃ ●) with spaces so column
+ * alignment is preserved, then trim trailing whitespace from each line.
+ */
+export function stripTerminalDecorations(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.replace(DECORATION_GLYPH_RE, " ").replace(/[ \t]+$/, ""))
+    .join("\n");
+}
+
+/**
+ * Read the terminal's full scrollback buffer as plain text. Each row is
+ * right-trimmed by xterm; trailing blank rows are dropped so the capture ends at
+ * the last line with content.
+ */
+export function captureTerminalText(term: CapturableTerminal | null): string {
+  if (!term) {
+    return "";
+  }
+  const buffer = term.buffer.active;
+  const lines: string[] = [];
+  for (let i = 0; i < buffer.length; i++) {
+    lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+  }
+  while (lines.length > 0 && lines[lines.length - 1].length === 0) {
+    lines.pop();
+  }
+  return lines.join("\n");
+}
+
 export function mapWheelToScrollLines(event: Pick<WheelEvent, "deltaY" | "deltaMode">, rows: number): number {
   if (event.deltaY === 0) {
     return 0;
@@ -232,6 +276,7 @@ export interface TerminalHandle {
   setViewMode: (mode: TerminalResizeMode) => void;
   acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
   focus: () => void;
+  captureText: () => string;
 }
 
 const useStyles = makeStyles({
@@ -845,7 +890,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       refit();
     },
     acknowledgeAttention: sendAttentionAck,
-    focus: focusActiveTerminal
+    focus: focusActiveTerminal,
+    captureText: () => captureTerminalText(termRef.current)
   }));
 
   return (

@@ -43,7 +43,7 @@ import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDi
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { RemoteHostsPanel } from "./components/RemoteHostsPanel.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
-import { TerminalView, type TerminalHandle } from "./components/TerminalView.js";
+import { TerminalView, type TerminalHandle, stripTerminalDecorations } from "./components/TerminalView.js";
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
@@ -537,6 +537,8 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
   const [composeText, setComposeText] = useState("");
+  const [selectionCaptureText, setSelectionCaptureText] = useState("");
+  const [stripDecorations, setStripDecorations] = useState(false);
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
   );
@@ -1356,6 +1358,8 @@ export function App() {
   // showing. Tying it to the overlay's own render condition avoids trapping the
   // user in fullscreen if the session stops being live mid-compose.
   const composeOverlayVisible = keyBarAvailable && panelView === "compose";
+  const selectionOverlayVisible = keyBarAvailable && panelView === "selection";
+  const fullscreenOverlayVisible = composeOverlayVisible || selectionOverlayVisible;
   const serverConnected = serverConnectionState === "connected";
   const serverReconnectOverlayVisible = shouldShowServerReconnectOverlay(
     serverConnectionState,
@@ -1507,8 +1511,16 @@ export function App() {
                 view={panelView}
                 fontSize={fontSize}
                 composeText={composeText}
+                selectionText={stripDecorations ? stripTerminalDecorations(selectionCaptureText) : selectionCaptureText}
+                stripDecorations={stripDecorations}
                 showLabels={!isMobile}
-                onSelect={setPanelView}
+                showSelect={isTouchPrimary}
+                onSelect={(next) => {
+                  if (next === "selection") {
+                    setSelectionCaptureText(terminalRef.current?.captureText() ?? "");
+                  }
+                  setPanelView(next);
+                }}
                 onAdjustFont={adjustFontSize}
                 onComposeTextChange={setComposeText}
                 onComposeInsert={(text) => {
@@ -1519,13 +1531,18 @@ export function App() {
                 onComposeCancel={() => {
                   setPanelView(keyBarPinned ? "chooser" : "closed");
                 }}
+                onToggleStripDecorations={setStripDecorations}
+                onSelectionClose={() => {
+                  setSelectionCaptureText("");
+                  setPanelView(keyBarPinned ? "chooser" : "closed");
+                }}
                 onSend={(d) => terminalRef.current?.sendInput(d)}
               />
             </div>
           </>
         )}
       </div>
-      {maximized && !composeOverlayVisible && (
+      {maximized && !fullscreenOverlayVisible && (
         <Button
           className={styles.exitBtn}
           appearance="outline"
