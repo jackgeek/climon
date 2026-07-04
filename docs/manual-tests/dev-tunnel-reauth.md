@@ -69,3 +69,40 @@ automatically.
 | Date | Build | Platform | Result | Notes |
 |---|---|---|---|---|
 | | | | | |
+
+---
+
+## DTR-03 — Cold-launch PWA with an expired tunnel session boots and prompts sign-in
+
+- **ID:** DTR-03
+- **Feature / phase:** Dev tunnel initial authentication (PWA cold start) —
+  service-worker app-shell cache (`src/web/sw.ts`, `src/web/pwa/swCache.ts`) plus the
+  startup `probeTunnelAuth` in `src/web/App.tsx`.
+- **Preconditions:** An authenticated (non-anonymous) dashboard dev tunnel is running
+  (climon "Tunnel Link" started; tunnel is **not** anonymous). The dashboard is
+  installed as a PWA from the dev-tunnel URL, and you have opened it once while signed
+  in (so the service worker registered and cached the app shell).
+- **Config-matrix cell:** Remote / dev-tunnel, installed PWA standalone
+- **Platforms:** iOS/iPadOS PWA; Android installed PWA; desktop installed PWA
+  (Chrome/Edge)
+
+**Steps:**
+1. Fully close the installed PWA (swipe it away / quit it — not just background it).
+2. Expire the tunnel sign-in: in a desktop browser, sign out of the dev tunnel / clear
+   `*.devtunnels.ms` cookies for the account, OR leave it until the Microsoft session
+   naturally expires.
+3. Cold-launch the installed PWA from the home screen / app launcher.
+
+**Expected:** The PWA **boots** (the dashboard shell renders from the service-worker
+cache) instead of showing a blank page or downloading an empty file. It then shows the
+**"Session expired"** overlay with a **"Sign in again"** button. Tapping the button
+opens the tunnel URL in the **system browser** (a real tab), where the Microsoft
+sign-in loads normally. Complete the sign-in there, then return to the PWA: its live
+connection reconnects, the overlay disappears, and the sessions list/terminal load —
+no need to manually copy the tunnel URL into a browser.
+
+**Result-tracking row:**
+
+| Date | Build | Platform | Result | Notes |
+|---|---|---|---|---|
+| | | | | |
