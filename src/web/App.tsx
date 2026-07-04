@@ -749,7 +749,11 @@ export function App() {
     }
     let cancelled = false;
     void probeTunnelAuth().then((state) => {
-      if (!cancelled && shouldPromptTunnelReauth(state)) {
+      if (
+        !cancelled &&
+        shouldPromptTunnelReauth(state) &&
+        serverConnectionStateRef.current !== "connected"
+      ) {
         setTunnelAuthRequired(true);
       }
     });
