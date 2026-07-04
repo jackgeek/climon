@@ -13,12 +13,10 @@ use std::sync::Arc;
 use climon_proto::frame::{
     encode_frame, encode_json_frame, parse_json_payload, ExitPayload, FrameDecoder, FrameType,
     ResizePayload, ResizeSource, TerminalModePayload, TerminalResizeMode, TerminalWarningPayload,
-    TitlePayload,
 };
 use climon_session::socket::connect_session_socket;
 
 use crate::detach_key::describe_detach_key;
-use crate::title::TitleController;
 
 /// Default detach prefix (Ctrl-\\). Matches `connectToSession`'s default.
 pub const DEFAULT_DETACH_PREFIX: u8 = 0x1c;
@@ -146,13 +144,12 @@ or stop viewing the terminal in the web server.\x1b[0m\r\n",
 }
 
 /// Processes a single decoded frame from the daemon, writing PTY output to
-/// `out`, applying titles via `title`, and updating the gate/exit-code. Pure
-/// (no socket / raw-mode side effects) so it is unit-testable.
-pub fn consume_frame<W: Write, T: Write>(
+/// `out` and updating the gate/exit-code. Pure (no socket / raw-mode side
+/// effects) so it is unit-testable.
+pub fn consume_frame<W: Write>(
     frame_type: FrameType,
     payload: &[u8],
     gate: &mut LocalTerminalOutputGate,
-    title: &mut TitleController<T>,
     out: &mut W,
     detach_prefix: u8,
     exit_code: &mut i32,
@@ -167,11 +164,6 @@ pub fn consume_frame<W: Write, T: Write>(
         FrameType::Exit => {
             if let Ok(p) = parse_json_payload::<ExitPayload>(payload) {
                 *exit_code = p.exit_code;
-            }
-        }
-        FrameType::Title => {
-            if let Ok(p) = parse_json_payload::<TitlePayload>(payload) {
-                title.apply(&p.name);
             }
         }
         FrameType::TerminalWarning => {
@@ -388,16 +380,13 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
     let detached = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
 
-    // Reader thread: decode daemon frames → stdout / title / exit.
+    // Reader thread: decode daemon frames → stdout / exit.
     let reader_stream = stream.try_clone_box()?;
     let reader_exit = Arc::clone(&exit_code);
     let reader_done = Arc::clone(&done);
     let reader = std::thread::spawn(move || {
         let mut decoder = FrameDecoder::new();
         let mut gate = LocalTerminalOutputGate::new();
-        let stdout = std::io::stdout();
-        let is_tty = is_stdout_tty();
-        let mut title = TitleController::new(stdout, is_tty);
         let mut buf = [0u8; 8192];
         let mut stream = reader_stream;
         loop {
@@ -411,7 +400,6 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                             frame.frame_type,
                             &frame.payload,
                             &mut gate,
-                            &mut title,
                             &mut out,
                             detach_prefix,
                             &mut code,
@@ -421,7 +409,6 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                 }
             }
         }
-        title.clear();
         reader_done.store(true, Ordering::SeqCst);
     });
 
@@ -548,17 +535,6 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
         detached: detached.load(Ordering::SeqCst),
         exit_code: exit_code.load(Ordering::SeqCst),
     })
-}
-
-#[cfg(unix)]
-fn is_stdout_tty() -> bool {
-    use std::os::fd::AsRawFd;
-    unsafe { libc::isatty(std::io::stdout().as_raw_fd()) == 1 }
-}
-
-#[cfg(not(unix))]
-fn is_stdout_tty() -> bool {
-    false
 }
 
 #[cfg(test)]

@@ -412,6 +412,7 @@ pub fn to_local_meta(
         color,
         theme,
         user_paused: None,
+        terminal_title: None,
     }
 }
 

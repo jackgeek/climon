@@ -29,7 +29,6 @@ use crate::args::ColorFlag;
 use crate::pathenv::which;
 use crate::process_kill::{is_process_alive, kill_process};
 use crate::spawn::{resolve_client_id, spawn_headless_session, SessionMetaOptions};
-use crate::title::sanitize_title;
 use crate::uplink_spawn::spawn_uplink_detached;
 use crate::version::VERSION;
 use climon_remote::discovery::{discover_dashboard, DashboardLocation, DiscoveryDeps};
@@ -147,6 +146,18 @@ fn basename(s: &str) -> &str {
         Some(i) => &s[i + 1..],
         None => s,
     }
+}
+
+/// Removes control characters and caps length at 256.
+fn sanitize_title(name: &str) -> String {
+    const MAX_TITLE_LENGTH: usize = 256;
+    name.chars()
+        .filter(|&c| {
+            let code = c as u32;
+            !(code <= 0x1f || code == 0x7f)
+        })
+        .take(MAX_TITLE_LENGTH)
+        .collect()
 }
 
 /// Strips a trailing `.exe` (case-insensitive). Mirrors `replace(/\.exe$/i, "")`.
@@ -543,6 +554,7 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         color: defaults.color.map(Some),
         theme,
         user_paused: None,
+        terminal_title: None,
     };
     write_session_meta(&store_env, &meta).map_err(|e| e.to_string())?;
 

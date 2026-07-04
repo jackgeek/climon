@@ -1152,6 +1152,7 @@ mod tests {
             color: None,
             theme: None,
             user_paused: None,
+            terminal_title: None,
         }
     }
 
