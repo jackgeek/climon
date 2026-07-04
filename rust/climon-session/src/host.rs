@@ -36,11 +36,11 @@ use crate::replay::{
     build_mouse_private_mode_replay_suffix, track_mouse_private_modes_from_output,
     TRACKED_MOUSE_PRIVATE_MODES,
 };
-use crate::title_capture::capture_terminal_title_from_output;
 use crate::resize::{clamp_resize, revert_size, Dimensions, ResizeRequest};
 use crate::socket::{
     cleanup_session_socket, listen_on_session_socket, SessionListener, SessionStream,
 };
+use crate::title_capture::capture_terminal_title_from_output;
 
 const SESSION_ENV_VAR: &str = "CLIMON_SESSION_ID";
 const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
