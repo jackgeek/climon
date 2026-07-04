@@ -11,6 +11,7 @@ import {
   Spinner,
   Text,
   Toast,
+  ToastBody,
   ToastTitle,
   Toaster,
   useId,
@@ -794,6 +795,7 @@ export function App() {
           style={{ cursor: "pointer" }}
         >
           <ToastTitle>{toast.message}</ToastTitle>
+          {toast.body ? <ToastBody>{toast.body}</ToastBody> : null}
         </Toast>,
         { toastId: toast.toastId, intent: "warning", timeout: 6000 }
       );
