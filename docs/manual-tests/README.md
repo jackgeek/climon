@@ -54,6 +54,7 @@ result-tracking row.
 | — | Legacy Bun client removal — Rust client plus maintained Bun dashboard/server workflow | [phase17-legacy-client-removal.md](phase17-legacy-client-removal.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
+| — | Foreground attention toast (in-app toast instead of system notification) | [foreground-attention-toast.md](foreground-attention-toast.md) |
 | — | PWA zoom lock & no overscroll (pinch-zoom disabled, page pinned 1:1 on swipe) | [pwa-zoom-lock.md](pwa-zoom-lock.md) |
 | — | Security — Web Push endpoint SSRF guard | [security-push-ssrf.md](security-push-ssrf.md) |
 | — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |
@@ -65,6 +66,7 @@ result-tracking row.
 | — | Interactive install opt-ins default to Yes (telemetry + auto-update prompts) | [optin-default-yes.md](optin-default-yes.md) |
 | — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
 | — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
+| — | Tunnel Link start reliability — patient relay-propagation health check + verified self-heal recreation | [tunnel-link-reliability.md](tunnel-link-reliability.md) |
 | — | MIT license transition — `climon license`, one-time upgrade notice, no notice on fresh installs | [mit-license-transition.md](mit-license-transition.md) |
 | — | Release signing-key preflight — CI blocks release when the signing key is missing or doesn't match the embedded public key (forks skip) | [release-signing-key-preflight.md](release-signing-key-preflight.md) |
 | — | Text staging area — icon-only keybar chooser + full-viewport compose overlay (Insert / Cancel) | [text-staging-area.md](text-staging-area.md) |

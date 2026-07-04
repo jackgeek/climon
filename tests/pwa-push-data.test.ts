@@ -6,11 +6,6 @@ import {
   parseSessionFromSearch,
   parseOpenSessionMessage,
   OPEN_SESSION_MESSAGE,
-  VIEWED_SESSION_QUERY,
-  viewedSessionResponse,
-  parseViewedSessionResponse,
-  isViewedSessionQuery,
-  shouldSuppressPush,
 } from "../src/web/pwa/pushData.js";
 
 describe("parsePushData", () => {
@@ -31,6 +26,12 @@ describe("parsePushData", () => {
   test("falls back when JSON is malformed", () => {
     const data = parsePushData("{not json");
     expect(data.title).toBe("climon");
+  });
+
+  test("preserves an explicit empty body so only the title shows", () => {
+    const data = parsePushData(JSON.stringify({ title: "climon session deploy needs attention", body: "", sessionId: "s1" }));
+    expect(data.title).toBe("climon session deploy needs attention");
+    expect(data.body).toBe("");
   });
 });
 
@@ -92,55 +93,5 @@ describe("parseOpenSessionMessage", () => {
     expect(parseOpenSessionMessage({ type: OPEN_SESSION_MESSAGE })).toBeNull();
     expect(parseOpenSessionMessage(null)).toBeNull();
     expect(parseOpenSessionMessage("nope")).toBeNull();
-  });
-});
-
-describe("viewedSessionResponse", () => {
-  test("wraps a session id", () => {
-    expect(viewedSessionResponse("s1")).toEqual({ type: VIEWED_SESSION_QUERY, sessionId: "s1" });
-  });
-
-  test("normalizes empty/null to null", () => {
-    expect(viewedSessionResponse(null)).toEqual({ type: VIEWED_SESSION_QUERY, sessionId: null });
-    expect(viewedSessionResponse("")).toEqual({ type: VIEWED_SESSION_QUERY, sessionId: null });
-  });
-});
-
-describe("parseViewedSessionResponse", () => {
-  test("reads a viewed session id from a valid reply", () => {
-    expect(parseViewedSessionResponse({ type: VIEWED_SESSION_QUERY, sessionId: "s1" })).toBe("s1");
-  });
-
-  test("returns null for a not-viewing reply or malformed input", () => {
-    expect(parseViewedSessionResponse({ type: VIEWED_SESSION_QUERY, sessionId: null })).toBeNull();
-    expect(parseViewedSessionResponse({ type: VIEWED_SESSION_QUERY })).toBeNull();
-    expect(parseViewedSessionResponse({ type: "other", sessionId: "s1" })).toBeNull();
-    expect(parseViewedSessionResponse(null)).toBeNull();
-    expect(parseViewedSessionResponse("nope")).toBeNull();
-  });
-});
-
-describe("isViewedSessionQuery", () => {
-  test("accepts the query message and rejects others", () => {
-    expect(isViewedSessionQuery({ type: VIEWED_SESSION_QUERY })).toBe(true);
-    expect(isViewedSessionQuery({ type: "other" })).toBe(false);
-    expect(isViewedSessionQuery(null)).toBe(false);
-    expect(isViewedSessionQuery("nope")).toBe(false);
-  });
-});
-
-describe("shouldSuppressPush", () => {
-  test("suppresses when a client is viewing the pushed session", () => {
-    expect(shouldSuppressPush("s1", ["s1"])).toBe(true);
-    expect(shouldSuppressPush("s1", [null, "s2", "s1"])).toBe(true);
-  });
-
-  test("does not suppress when no client views the pushed session", () => {
-    expect(shouldSuppressPush("s1", ["s2", null])).toBe(false);
-    expect(shouldSuppressPush("s1", [])).toBe(false);
-  });
-
-  test("never suppresses a generic push with no session id", () => {
-    expect(shouldSuppressPush(undefined, ["s1"])).toBe(false);
   });
 });

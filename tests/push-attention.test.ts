@@ -43,12 +43,12 @@ describe("attention tracker", () => {
     expect(out.map((s) => s.id)).toEqual(["s1"]);
   });
 
-  test("buildPushPayload includes label, reason, and session id", () => {
+  test("buildPushPayload titles with the session name and drops the reason", () => {
     const payload = buildPushPayload(
       session({ id: "s1", name: "deploy", status: "needs-attention", attentionReason: "prompt" }),
     );
-    expect(payload.title).toBe("climon needs attention");
-    expect(payload.body).toBe("deploy needs attention: prompt");
+    expect(payload.title).toBe("climon session deploy needs attention");
+    expect(payload.body).toBe("");
     expect(payload.sessionId).toBe("s1");
   });
 });

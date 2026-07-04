@@ -272,9 +272,9 @@ The browser side registers `src/web/sw.ts` (served at `/sw.js`), subscribes via
 plays its alert sound/haptics, and tapping it focuses (or opens) the dashboard
 deep-linked to the session that needs attention (`/?session=<id>` plus an
 `open-session` postMessage to an already-open tab). Push is only offered over a
-dev-tunnel origin (`*.devtunnels.ms` + HTTPS); desktop/localhost keeps the
-foreground `Notification` API. SSE (`/api/events`) remains the live in-app update
-channel; Web Push is only for background attention alerts. The service worker also
+dev-tunnel origin (`*.devtunnels.ms` + HTTPS). SSE (`/api/events`) remains the
+live in-app update channel; Web Push is only for background attention alerts.
+The service worker also
 precaches the app shell (`/`, `/assets/app.js`, `/assets/xterm.css`) and serves
 navigations cache-first (the app bundle network-first, via
 `src/web/pwa/swCache.ts`), so an installed PWA boots on cold launch even when a
@@ -282,15 +282,20 @@ dev tunnel would return the Microsoft auth redirect; a startup `probeTunnelAuth`
 in `App.tsx` then surfaces the "Sign in again" overlay. Cache writes reject
 dev-tunnel login responses so an expired session cannot poison the cached shell.
 
-Notifications for the session the user is actively viewing are suppressed. The
-client computes a single "viewed session" (mirroring `TerminalView`'s
-`terminalVisible` rule). The in-app alert manager (`src/web/attentionAlerts.ts`)
-excludes it from the title count and alerts, and `App.tsx` auto-acknowledges it
-so the daemon clears the attention state. For background push, `sw.ts` asks open
-window clients which session they are viewing (via a `MessageChannel` reply) and
-suppresses the OS notification when any client reports viewing the pushed session
-(`shouldSuppressPush` in `src/web/pwa/pushData.ts`); it defaults to showing the
-notification on no/late reply.
+Attention alerting splits by foreground vs. background. While the dashboard is
+open in the foreground, the in-app alert manager
+(`src/web/attentionAlerts.ts`) raises a subtle Fluent **toast** at the top of
+the viewport (`<session name> needs attention`, `src/web/attentionToast.ts`)
+with sound and `navigator.vibrate`, and tapping it opens the session via
+`popSession`. Toasts are suppressed for the session the user is actively viewing
+(the client's single "viewed session", mirroring `TerminalView`'s
+`terminalVisible` rule — `App.tsx` also auto-acknowledges it so the daemon
+clears attention) and on the mobile session list, where the attention badge is
+already visible (`alertsVisible = pageVisible && (!isMobile || maximized)`). For
+background alerts, `sw.ts` suppresses the OS notification whenever any window
+client is visible/focused (`anyClientForeground` in `src/web/pwa/swPush.ts`), so
+a foreground app never gets both a toast and a system banner; when the dashboard
+is hidden or closed, the system push notification fires.
 
 ## Remote clients (dev-tunnel uplink)
 

@@ -11,10 +11,9 @@ import {
 } from "./pwa/swCache.js";
 import {
   handlePush,
-  queryViewedSession,
   resolveNotificationClick,
   type NotificationClickClient,
-  type ViewedSessionChannel,
+  type PushWindowClient,
 } from "./pwa/swPush.js";
 
 declare const self: ServiceWorkerGlobalScope;
@@ -144,20 +143,19 @@ async function precacheAsset(cache: Cache, url: string): Promise<void> {
   }
 }
 
-/** How long to wait for a client to report its viewed session before showing. */
-const VIEWED_SESSION_QUERY_TIMEOUT_MS = 500;
+/** Projects a live `WindowClient` onto the descriptor push suppression uses. */
+function toPushWindowClient(client: WindowClient): PushWindowClient {
+  return { visibilityState: client.visibilityState, focused: client.focused };
+}
 
 self.addEventListener("push", (event: PushEvent) => {
   event.waitUntil(
     handlePush({
       raw: event.data?.text(),
-      matchWindowClients: () => self.clients.matchAll({ type: "window" }),
-      queryClient: (client) =>
-        queryViewedSession(client, {
-          createChannel: () => new MessageChannel() as unknown as ViewedSessionChannel,
-          schedule: (callback, delayMs) => setTimeout(callback, delayMs),
-          timeoutMs: VIEWED_SESSION_QUERY_TIMEOUT_MS,
-        }),
+      matchWindowClients: async () =>
+        (await self.clients.matchAll({ type: "window", includeUncontrolled: true })).map(
+          toPushWindowClient,
+        ),
       showNotification: (title, options) => self.registration.showNotification(title, options),
     }),
   );
