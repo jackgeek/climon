@@ -274,7 +274,13 @@ deep-linked to the session that needs attention (`/?session=<id>` plus an
 `open-session` postMessage to an already-open tab). Push is only offered over a
 dev-tunnel origin (`*.devtunnels.ms` + HTTPS); desktop/localhost keeps the
 foreground `Notification` API. SSE (`/api/events`) remains the live in-app update
-channel; Web Push is only for background attention alerts.
+channel; Web Push is only for background attention alerts. The service worker also
+precaches the app shell (`/`, `/assets/app.js`, `/assets/xterm.css`) and serves
+navigations cache-first (the app bundle network-first, via
+`src/web/pwa/swCache.ts`), so an installed PWA boots on cold launch even when a
+dev tunnel would return the Microsoft auth redirect; a startup `probeTunnelAuth`
+in `App.tsx` then surfaces the "Sign in again" overlay. Cache writes reject
+dev-tunnel login responses so an expired session cannot poison the cached shell.
 
 Notifications for the session the user is actively viewing are suppressed. The
 client computes a single "viewed session" (mirroring `TerminalView`'s

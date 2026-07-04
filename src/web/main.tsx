@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import { registerServiceWorker } from "./pwa/push.js";
 
 // Lock the PWA to a 1:1 view. The viewport meta (user-scalable=no) handles most
 // browsers, but iOS Safari ignores it and instead emits non-standard
@@ -24,6 +25,13 @@ function lockPageZoom() {
 }
 
 lockPageZoom();
+
+// Register the service worker on every load (not just on push opt-in) so its
+// app-shell cache is active for future cold starts. Best-effort: a failed
+// registration must not block the dashboard from rendering.
+if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  void registerServiceWorker().catch(() => {});
+}
 
 const container = document.getElementById("root");
 if (!container) {
