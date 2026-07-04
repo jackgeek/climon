@@ -72,6 +72,7 @@ result-tracking row.
 | — | Touch keybar availability + responsive chooser labels — touch-primary keybar, inline docking on wide touch, width-responsive button labels | [keybar-touch-responsive.md](keybar-touch-responsive.md) |
 | — | App Insights connection string source — env var / embedded constant only, never climon config | [appinsights-connection-source.md](appinsights-connection-source.md) |
 | — | Terminal font-size repaint — viewport repaints cleanly on font-size change without waiting for focus | [terminal-font-size-repaint.md](terminal-font-size-repaint.md) |
+| — | Terminal selection / copy (touch) — Select button captures full scrollback into a monospaced textarea for native copy, with a strip-decorations toggle | [terminal-select-mode.md](terminal-select-mode.md) |
 
 ## Recording results
 
