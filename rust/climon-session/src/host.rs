@@ -155,14 +155,12 @@ struct Client {
 struct HostState {
     env: StoreEnv,
     id: String,
-    headless: bool,
     resizer: PtyResizer,
 
     clients: HashMap<u64, Client>,
 
     clamp_browser_to_host: bool,
     terminal_mode: TerminalResizeMode,
-    current_name: String,
     host_cols: u16,
     host_rows: u16,
     applied_cols: u16,
@@ -847,12 +845,10 @@ pub fn run_session_host(
     let state: Shared = Arc::new(Mutex::new(HostState {
         env: env.clone(),
         id: id.to_string(),
-        headless,
         resizer,
         clients: HashMap::new(),
         clamp_browser_to_host,
         terminal_mode: initial_mode,
-        current_name: meta.name.clone().unwrap_or_default(),
         host_cols: meta.cols,
         host_rows: meta.rows,
         applied_cols: meta.cols,
