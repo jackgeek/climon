@@ -1,5 +1,19 @@
 [
   {
+    "version": "3.1.0",
+    "changes": [
+      "Show a subtle in-app toast when a session needs attention while you are viewing the dashboard, instead of a system notification",
+      "Title attention notifications \"<session> needs attention\" and use the session's terminal title as the body",
+      "Fix push notifications on iOS home-screen PWAs, and only notify devices that are not already viewing the session",
+      "Show the captured terminal title as a session subtitle",
+      "Add a touch Select mode to drag-select and copy terminal output on mobile",
+      "Use a darker green for the completed status pill",
+      "Fix the installed PWA failing to sign in to a dev tunnel on a cold start",
+      "Fix the terminal not repainting after a font-size change",
+      "Fix a stale cached bundle pinning the installed PWA to an old version"
+    ]
+  },
+  {
     "version": "3.0.0",
     "changes": [
       "Start a monitored shell with the new `climon shell` command; running `climon` with no command now prints help instead of starting a shell",
