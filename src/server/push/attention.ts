@@ -28,8 +28,8 @@ function attentionLabel(
 export function buildPushPayload(session: SessionMeta): PushPayload {
   const label = attentionLabel(session);
   return {
-    title: `climon session ${label} needs attention`,
-    body: "",
+    title: `${label} needs attention`,
+    body: session.terminalTitle?.trim() ?? "",
     sessionId: session.id,
     key: attentionStateKey(session),
   };
