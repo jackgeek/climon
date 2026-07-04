@@ -37,10 +37,12 @@ clipboard button.
   2. Observe the full-viewport overlay that appears.
   3. Scroll the textarea up and down.
 - **Expected result:** A full-viewport overlay opens with a read-only textarea
-  containing the terminal's full scrollback (not just the visible screen).
-  Scrolling the textarea reveals earlier history. The font is monospaced and the
-  original column formatting is preserved. Tapping the textarea does **not**
-  submit anything to the terminal.
+  that fills the whole viewport (minus the strip toggle + action buttons) and
+  opens **scrolled to the bottom** (newest output), matching the terminal.
+  Scrolling the textarea up reveals earlier history. The font is monospaced and
+  the original column formatting is preserved (long lines scroll horizontally
+  rather than wrapping). Tapping the textarea does **not** submit anything to the
+  terminal.
 - **Platforms:** iOS Safari, Android Chrome.
 - **Result:** _date / tester / platform / pass-fail / notes_
 

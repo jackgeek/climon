@@ -98,6 +98,7 @@ const useStyles = makeStyles({
     flex: "1 1 auto",
     minHeight: 0,
     "& textarea": {
+      maxHeight: "100%",
       fontFamily: "ui-monospace, monospace",
       whiteSpace: "pre",
       overflowWrap: "normal"
@@ -148,6 +149,22 @@ export function TerminalPanel({
         el.focus();
         el.setSelectionRange(0, el.value.length);
       }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [view]);
+
+  // Open the capture at the bottom (newest output), matching the terminal's
+  // scroll position, so the user sees the most recent lines first.
+  useEffect(() => {
+    if (view !== "selection") {
+      return;
+    }
+    const el = selectionTextareaRef.current;
+    if (!el) {
+      return;
+    }
+    const id = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
     });
     return () => cancelAnimationFrame(id);
   }, [view]);
