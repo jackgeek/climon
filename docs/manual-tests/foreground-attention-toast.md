@@ -9,9 +9,14 @@ hidden/backgrounded or closed.
 
 Implementation: `src/web/attentionAlerts.ts` (manager fires `onAttention` +
 sound + vibration, gated by `alertsVisible`), `src/web/attentionToast.ts`
-(toast content), the Fluent `Toaster` wiring in `src/web/App.tsx`, and push
-suppression in `src/web/pwa/swPush.ts` / `src/web/sw.ts` (`anyClientForeground`).
-See the [design spec](../superpowers/specs/2026-07-04-foreground-attention-toast-design.md).
+(toast content — title `<session name> needs attention`, terminal title as a
+second line), the Fluent `Toaster` wiring in `src/web/App.tsx`, and **per-device
+server-side push suppression**: the client presence reporter
+(`src/web/pwa/presence.ts`, wired in `App.tsx`) POSTs `/api/push/presence`, and
+the server's `src/server/push/presence.ts` skips foreground endpoints when
+sending. The service worker (`src/web/pwa/swPush.ts` / `src/web/sw.ts`) now
+**always** shows a notification for every push (iOS/WebKit requires it).
+See the [design spec](../superpowers/specs/2026-07-04-ios-safe-push-suppression-design.md).
 
 Preconditions common to all cases:
 
@@ -36,9 +41,10 @@ Preconditions common to all cases:
 1. Keep the dashboard focused on session B.
 2. Drive session A into `needs-attention`.
 
-**Expected result:** A subtle toast `A needs attention` appears at the top of
-the viewport with a sound (and vibration if the device supports it). **No** OS
-notification banner appears. Tapping the toast switches to session A's terminal.
+**Expected result:** A subtle toast `A needs attention` (with session A's
+terminal title on a second line) appears at the top of the viewport with a sound
+(and vibration if the device supports it). **No** OS notification banner appears.
+Tapping the toast switches to session A's terminal.
 
 **Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
 | --- | --- | --- | --- | --- | --- |
@@ -122,8 +128,60 @@ shows session A's attention badge, which updates visibly.
 2. Background or close the PWA, then drive session B into `needs-attention`.
 
 **Expected result:** Step 1 shows only the in-app toast. Step 2 shows an OS
-notification `climon session B needs attention` (no toast, since the app is not
-foreground). Tapping it opens session B (see `pwa-notification-click.md`).
+notification titled `B needs attention` with session B's terminal title as the
+body (no toast, since the app is not foreground). Tapping it opens session B (see
+`pwa-notification-click.md`).
+
+**Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
+| --- | --- | --- | --- | --- | --- |
+
+---
+
+## MT-FG-TOAST-06 — iOS PWA: exactly one notification, no generic fallback banner
+
+- **ID:** MT-FG-TOAST-06
+- **Feature:** iOS-safe push (service worker always shows)
+- **Preconditions:** Common push preconditions on an **iOS/iPadOS** installed
+  Safari PWA (notifications granted). The PWA is backgrounded or the device is
+  locked so a push is delivered.
+- **Config-matrix cell:** iOS installed PWA, backgrounded (push)
+- **Platforms:** iOS/iPadOS (Safari PWA)
+
+**Steps:**
+1. Background the PWA (or lock the device).
+2. Drive session A into `needs-attention`.
+
+**Expected result:** Exactly **one** OS notification appears, titled
+`A needs attention` with session A's terminal title as the body. There is **no**
+second generic/empty "climon" banner, and the push subscription is **not**
+revoked (a subsequent attention event still delivers a push). This confirms the
+service worker calls `showNotification` for the push rather than silently
+dropping it.
+
+**Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
+| --- | --- | --- | --- | --- | --- |
+
+---
+
+## MT-FG-TOAST-07 — Multi-device: foreground device toasts, other device still gets push
+
+- **ID:** MT-FG-TOAST-07
+- **Feature:** Per-device server-side push suppression
+- **Preconditions:** Common push preconditions. **Two** devices are subscribed to
+  push for the same climon server (e.g. a desktop browser and a phone PWA), both
+  with notifications granted.
+- **Config-matrix cell:** two subscribed devices, one foreground + one backgrounded
+- **Platforms:** Desktop + Android/iOS phone (mixed)
+
+**Steps:**
+1. Keep device 1 (desktop) foreground on the dashboard (not viewing session A).
+2. Background device 2 (phone) so it is not foreground.
+3. Drive session A into `needs-attention`.
+
+**Expected result:** Device 1 (foreground) shows only the in-app toast and **no**
+OS notification. Device 2 (backgrounded) receives the OS push
+`A needs attention`. Suppression is keyed per push-subscription endpoint via the
+presence heartbeat, so foregrounding one device never suppresses another.
 
 **Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
 | --- | --- | --- | --- | --- | --- |
