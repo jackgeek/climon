@@ -56,6 +56,7 @@ self.addEventListener("fetch", (event: FetchEvent) => {
     mode: request.mode,
     sameOrigin: url.origin === self.location.origin,
     path: url.pathname,
+    search: url.search,
   });
   if (strategy === "passthrough") {
     return;

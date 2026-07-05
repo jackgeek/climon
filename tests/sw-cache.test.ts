@@ -3,13 +3,15 @@ import {
   CACHE_NAME,
   NAVIGATION_SHELL_URL,
   SHELL_ASSETS,
+  REAUTH_PARAM,
   chooseCacheStrategy,
+  isReauthNavigation,
   isStaleCacheName,
   shouldCacheShellResponse,
   shouldCacheAssetResponse,
 } from "../src/web/pwa/swCache.js";
 
-const base = { method: "GET", mode: "no-cors", sameOrigin: true, path: "/other" };
+const base = { method: "GET", mode: "no-cors", sameOrigin: true, path: "/other", search: "" };
 
 describe("chooseCacheStrategy", () => {
   test("navigation requests use the navigation (cache-first) strategy", () => {
@@ -30,6 +32,28 @@ describe("chooseCacheStrategy", () => {
     expect(chooseCacheStrategy({ ...base, method: "POST", mode: "navigate", path: "/" })).toBe("passthrough");
     expect(chooseCacheStrategy({ ...base, sameOrigin: false, mode: "navigate", path: "/" })).toBe("passthrough");
     expect(chooseCacheStrategy({ ...base, path: "/events" })).toBe("passthrough");
+  });
+
+  test("a reauth navigation passes through so the browser follows the auth redirect", () => {
+    expect(chooseCacheStrategy({ ...base, mode: "navigate", path: "/", search: "?reauth=1" })).toBe(
+      "passthrough",
+    );
+  });
+
+  test("a normal navigation without the reauth marker still uses cache-first", () => {
+    expect(chooseCacheStrategy({ ...base, mode: "navigate", path: "/", search: "" })).toBe(
+      "navigation",
+    );
+  });
+});
+
+describe("isReauthNavigation", () => {
+  test("detects the reauth marker and ignores everything else", () => {
+    expect(isReauthNavigation("?reauth=1")).toBe(true);
+    expect(isReauthNavigation("?foo=bar&reauth=1")).toBe(true);
+    expect(isReauthNavigation("?reauth=0")).toBe(false);
+    expect(isReauthNavigation("")).toBe(false);
+    expect(REAUTH_PARAM).toBe("reauth");
   });
 });
 
