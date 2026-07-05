@@ -424,6 +424,7 @@ pub fn to_local_meta(
         theme,
         user_paused: None,
         terminal_title,
+        attention_snippet: None,
     }
 }
 

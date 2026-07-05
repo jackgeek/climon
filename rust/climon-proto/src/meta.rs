@@ -136,6 +136,8 @@ pub struct SessionMeta {
     pub user_paused: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,6 +195,8 @@ pub struct SessionMetaPatch {
     pub user_paused: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_snippet: Option<String>,
 }
 
 /// serde helper that distinguishes an absent field (`None`) from an explicit
@@ -334,6 +338,32 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&patch).unwrap(),
             r#"{"terminalTitle":"build ok"}"#
+        );
+    }
+
+    #[test]
+    fn session_meta_attention_snippet_round_trips() {
+        let mut meta: SessionMeta = serde_json::from_str(minimal_json()).unwrap();
+        assert_eq!(meta.attention_snippet, None);
+        meta.attention_snippet = Some("all 12 tests pass. Update integration tests?".into());
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("\"attentionSnippet\":\"all 12 tests pass. Update integration tests?\""));
+        let back: SessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.attention_snippet.as_deref(),
+            Some("all 12 tests pass. Update integration tests?")
+        );
+    }
+
+    #[test]
+    fn patch_attention_snippet_serializes_camel_case() {
+        let patch = SessionMetaPatch {
+            attention_snippet: Some("done".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&patch).unwrap(),
+            r#"{"attentionSnippet":"done"}"#
         );
     }
 }

@@ -205,6 +205,8 @@ export interface SessionMeta {
   userPaused?: boolean;
   /** Latest terminal title emitted by a program inside the PTY (OSC 0/2), shown as a subtitle. */
   terminalTitle?: string;
+  /** Fuzzy-extracted last relevant terminal output at attention time; the smart-notification body. */
+  attentionSnippet?: string;
 }
 
 export interface SessionMetaPatch {
@@ -226,6 +228,7 @@ export interface SessionMetaPatch {
   theme?: string;
   userPaused?: boolean;
   terminalTitle?: string;
+  attentionSnippet?: string;
 }
 
 export interface SessionListResponse {

@@ -101,6 +101,9 @@ pub fn merge_patch(base: &SessionMeta, patch: &SessionMetaPatch) -> SessionMeta 
     if let Some(v) = patch.terminal_title.clone() {
         out.terminal_title = Some(v);
     }
+    if let Some(v) = patch.attention_snippet.clone() {
+        out.attention_snippet = Some(v);
+    }
     out
 }
 
@@ -226,6 +229,7 @@ mod tests {
             user_paused: None,
             theme: None,
             terminal_title: None,
+            attention_snippet: None,
         }
     }
 
@@ -415,6 +419,19 @@ mod tests {
         base.terminal_title = Some("keep".into());
         let unchanged = merge_patch(&base, &SessionMetaPatch::default());
         assert_eq!(unchanged.terminal_title.as_deref(), Some("keep"));
+    }
+
+    #[test]
+    fn merge_patch_sets_attention_snippet() {
+        let base = base_meta("snip");
+        let patched = merge_patch(
+            &base,
+            &SessionMetaPatch {
+                attention_snippet: Some("build ok. Proceed?".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(patched.attention_snippet.as_deref(), Some("build ok. Proceed?"));
     }
 
     #[test]

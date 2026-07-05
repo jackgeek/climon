@@ -531,6 +531,7 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         theme,
         user_paused: None,
         terminal_title: None,
+        attention_snippet: None,
     };
     write_session_meta(&store_env, &meta).map_err(|e| e.to_string())?;
 
