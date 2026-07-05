@@ -12,6 +12,19 @@ export const NAVIGATION_SHELL_URL = "/";
 /** Assets precached on install so the PWA can boot when the tunnel auth-blocks. */
 export const SHELL_ASSETS = [NAVIGATION_SHELL_URL, "/assets/app.js", "/assets/xterm.css"];
 
+/**
+ * Query-param marker set on the top-level re-auth navigation. It signals the
+ * service worker to pass the navigation through (rather than serve the cached
+ * shell) so the browser can follow the cross-origin dev-tunnel → Microsoft
+ * sign-in redirect natively, landing the fresh cookie in the PWA's own jar.
+ */
+export const REAUTH_PARAM = "reauth";
+
+/** True when a navigation's query string carries the reauth marker (`reauth=1`). */
+export function isReauthNavigation(search: string): boolean {
+  return new URLSearchParams(search).get(REAUTH_PARAM) === "1";
+}
+
 export type CacheStrategy = "navigation" | "asset" | "passthrough";
 
 /**
@@ -26,12 +39,13 @@ export function chooseCacheStrategy(req: {
   mode: string;
   sameOrigin: boolean;
   path: string;
+  search: string;
 }): CacheStrategy {
   if (req.method !== "GET" || !req.sameOrigin) {
     return "passthrough";
   }
   if (req.mode === "navigate") {
-    return "navigation";
+    return isReauthNavigation(req.search) ? "passthrough" : "navigation";
   }
   if (req.path !== NAVIGATION_SHELL_URL && SHELL_ASSETS.includes(req.path)) {
     return "asset";
