@@ -42,6 +42,9 @@ Usage:
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white;
                                theme: a dashboard theme name, e.g. "Dracula")
+  climon run [flags] <command> [args...]
+                               Explicit form of the command above (handy in
+                               scripts); accepts the same session flags
   climon command <command> [args...]
                                Run a command whose name clashes with a climon
                                subcommand (e.g. \`climon command shell\`)
