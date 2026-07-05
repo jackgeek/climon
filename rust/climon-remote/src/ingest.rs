@@ -243,11 +243,17 @@ fn parse_progress(value: &Value) -> Option<TerminalProgress> {
         "warning" => ProgressState::Warning,
         _ => return None,
     };
+    // A determinate (`normal`) update always carries an explicit percentage:
+    // missing/invalid/negative wire values normalize to 0 so untrusted input
+    // is bounded and matches the local OSC parser byte-for-byte.
     let value = if matches!(state, ProgressState::Normal) {
-        value
-            .get("value")
-            .and_then(as_integer)
-            .map(|v| v.clamp(0, 100) as u8)
+        Some(
+            value
+                .get("value")
+                .and_then(as_integer)
+                .map(|v| v.clamp(0, 100) as u8)
+                .unwrap_or(0),
+        )
     } else {
         None
     };
@@ -2057,6 +2063,21 @@ mod tests {
                 value: None
             })
         );
+        // A determinate update with no/non-numeric percentage normalizes to 0 so
+        // it matches the local OSC parser and never persists `normal` without a value.
+        for missing in [
+            serde_json::json!({ "state": "normal" }),
+            serde_json::json!({ "state": "normal", "value": "oops" }),
+            serde_json::json!({ "state": "normal", "value": 12.5 }),
+        ] {
+            assert_eq!(
+                parse_progress(&missing),
+                Some(TerminalProgress {
+                    state: ProgressState::Normal,
+                    value: Some(0)
+                })
+            );
+        }
     }
 
     #[tokio::test]

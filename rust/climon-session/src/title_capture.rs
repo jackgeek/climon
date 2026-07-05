@@ -143,12 +143,15 @@ fn parse_osc9_4_progress(payload: &str) -> Option<Option<TerminalProgress>> {
     }
     let state = parts.next()?;
     let percent = parts.next().and_then(|s| s.parse::<u16>().ok());
-    let value = || percent.map(|p| p.min(100) as u8);
+    // A determinate (`normal`) update always carries an explicit percentage:
+    // missing/invalid/negative values normalize to 0 so the persisted metadata
+    // is deterministic and matches the remote-ingest path byte-for-byte.
+    let value = || percent.map(|p| p.min(100) as u8).unwrap_or(0);
     match state {
         "0" => Some(None),
         "1" => Some(Some(TerminalProgress {
             state: ProgressState::Normal,
-            value: value(),
+            value: Some(value()),
         })),
         "2" => Some(Some(TerminalProgress {
             state: ProgressState::Error,
@@ -328,6 +331,28 @@ mod tests {
     fn progress_unknown_state_is_ignored() {
         let (_, prog, _) = capture(b"\x1b]9;4;9\x07");
         assert_eq!(prog, None);
+    }
+
+    #[test]
+    fn progress_normal_without_percent_defaults_to_zero() {
+        // A determinate update with no/invalid percentage normalizes to 0 so the
+        // persisted metadata is deterministic and matches the remote path.
+        let (_, prog, _) = capture(b"\x1b]9;4;1\x07");
+        assert_eq!(
+            prog,
+            Some(Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(0)
+            }))
+        );
+        let (_, neg, _) = capture(b"\x1b]9;4;1;-5\x07");
+        assert_eq!(
+            neg,
+            Some(Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(0)
+            }))
+        );
     }
 
     #[test]
