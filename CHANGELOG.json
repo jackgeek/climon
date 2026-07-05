@@ -1,5 +1,11 @@
 [
   {
+    "version": "3.1.1",
+    "changes": [
+      "Fix the installed iOS PWA getting stuck on \"Session expired\" when signing in to a dev tunnel"
+    ]
+  },
+  {
     "version": "3.1.0",
     "changes": [
       "Show a subtle in-app toast when a session needs attention while you are viewing the dashboard, instead of a system notification",
