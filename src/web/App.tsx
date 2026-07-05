@@ -81,6 +81,7 @@ import { toggleViewMode } from "./view-mode.js";
 import { InstallPwaDialog } from "./components/InstallPwaDialog.js";
 import { TunnelExpiryBanner } from "./components/TunnelExpiryBanner.js";
 import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa, reauthenticateTunnel } from "./pwa/pwaContext.js";
+import { REAUTH_PARAM } from "./pwa/swCache.js";
 import {
   registerServiceWorker,
   subscribeToPush,
@@ -539,8 +540,8 @@ function stripReauthParam(): void {
     return;
   }
   const url = new URL(window.location.href);
-  if (url.searchParams.has("reauth")) {
-    url.searchParams.delete("reauth");
+  if (url.searchParams.has(REAUTH_PARAM)) {
+    url.searchParams.delete(REAUTH_PARAM);
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }
 }
