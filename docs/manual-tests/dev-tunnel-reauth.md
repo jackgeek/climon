@@ -25,8 +25,8 @@ Manual checks for the in-app dev-tunnel sign-in recovery flow.
 3. Return to the PWA (foreground it) and wait for the live connection to drop.
 4. Observe the overlay that appears.
 5. Tap **Sign in again**.
-6. Complete the Microsoft sign-in in the system browser tab that opens, then
-   foreground the PWA again.
+6. Complete the Microsoft sign-in that renders inside the PWA window (it should
+   not open Safari or download an empty file).
 
 **Expected:** After steps 3-4 the PWA shows the **"Session expired"** overlay
 with a **"Sign in again"** button (it appears promptly, without waiting out the
