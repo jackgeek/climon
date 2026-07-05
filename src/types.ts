@@ -141,6 +141,15 @@ export interface AttentionConfig {
   idleSeconds: number;
 }
 
+export interface NotificationsConfig {
+  /**
+   * When true (default), attention notifications include a fuzzy-extracted
+   * snippet of the last relevant terminal output as the notification body.
+   * Set false to send only the session name / terminal title.
+   */
+  smartSnippet: boolean;
+}
+
 export interface ClimonConfig {
   version: 1;
   server: ServerConfig;
@@ -148,6 +157,7 @@ export interface ClimonConfig {
   hotKeys: HotKeysConfig;
   dashboard?: DashboardConfig;
   attention: AttentionConfig;
+  notifications?: NotificationsConfig;
   remote?: RemoteConfig;
   session?: SessionDefaultsConfig;
   tunnelLink?: TunnelLinkConfig;
