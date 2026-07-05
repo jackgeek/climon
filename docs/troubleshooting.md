@@ -5,7 +5,8 @@
 climon isn't on your `PATH`. Install it with the one-liner from the
 [README](../README.md#install) (which runs the bundled self-installer and sets up
 your `PATH`), then open a new shell. For local development from a source checkout,
-run the Rust client with `bun dev -- <args>` (which wraps `cargo run -p climon-cli`).
+run the Rust client with `bun dev -- <args>` (which builds `climon-cli` and runs
+the freshly built binary).
 
 ## The web terminal is blank / black
 

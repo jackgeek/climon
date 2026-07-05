@@ -44,9 +44,14 @@ source via the `dev` script (from the repo root):
 bun dev -- <args>     # e.g. bun dev -- --help
 ```
 
-This wraps `cargo run -p climon-cli --bin climon -- <args>`; you can also invoke
-that directly from `rust/` if you prefer. To run the dashboard server from
-source, use `bun run server` (or `bun src/server.ts server`).
+This runs `cargo build -p climon-cli` (showing compile progress) and then
+executes a copy of the freshly built binary from `rust/target/dev-run/`. Running
+from a copy keeps `rust/target/debug/climon` free to relink even while a previous
+`bun dev` session (or its detached uplink) is still running, so a live session
+never blocks the next build with `Access is denied (os error 5)`. You can also
+invoke `cargo run -p climon-cli --bin climon -- <args>` directly from `rust/` if
+you prefer. To run the dashboard server from source, use `bun run server` (or
+`bun src/server.ts server`).
 
 ## Configuration
 
