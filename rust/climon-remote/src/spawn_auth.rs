@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::mux::ControlMessage;
