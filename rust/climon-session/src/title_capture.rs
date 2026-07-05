@@ -309,10 +309,31 @@ mod tests {
     }
 
     #[test]
-    fn progress_passes_bytes_unchanged() {
-        // The parser must not consume/alter bytes; verify by re-scanning is n/a,
-        // so assert the remainder is empty for a complete sequence.
-        let (_, _, rem) = capture(b"\x1b]9;4;1;10\x07");
+    fn progress_buffered_across_chunks() {
+        let mut title = None;
+        let mut progress = None;
+        // Sequence "\x1b]9;4;1;40\x07" split mid-number: first chunk ends at "4".
+        let rem = capture_terminal_output(&mut title, &mut progress, b"\x1b]9;4;1;4", "");
+        assert_eq!(progress, None, "incomplete sequence must not set progress yet");
+        assert_eq!(rem, "\x1b]9;4;1;4");
+        let rem2 = capture_terminal_output(&mut title, &mut progress, b"0\x07", &rem);
+        assert_eq!(
+            progress,
+            Some(Some(TerminalProgress { state: ProgressState::Normal, value: Some(40) }))
+        );
+        assert_eq!(rem2, "");
+    }
+
+    #[test]
+    fn progress_only_chunk_leaves_title_untouched() {
+        let mut title = Some("existing".to_string());
+        let mut progress = None;
+        let rem = capture_terminal_output(&mut title, &mut progress, b"\x1b]9;4;3\x07", "");
+        assert_eq!(title.as_deref(), Some("existing"), "progress sequence must not alter title");
+        assert_eq!(
+            progress,
+            Some(Some(TerminalProgress { state: ProgressState::Indeterminate, value: None }))
+        );
         assert_eq!(rem, "");
     }
 }
