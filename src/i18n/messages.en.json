@@ -11,17 +11,17 @@
     "hint": "Warning logged during dashboard server startup when Application Insights cannot initialize; {err} is the initialization error and the server falls back to local logging.",
     "params": {
       "err": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
   "cli.command_invocation": {
     "id": "0b82ce8c",
-    "t": "cli command: {command}",
-    "hint": "Debug log emitted when a CLI command is invoked; {command} is the command line being recorded.",
+    "t": "cli command: {subcommand}",
+    "hint": "Debug log emitted when a climon subcommand is invoked; {subcommand} is the fixed subcommand keyword (e.g. run, server, config), never the user-supplied command a session executes.",
     "params": {
-      "command": {
+      "subcommand": {
         "redact": false,
         "category": "generic"
       }
@@ -78,8 +78,8 @@
     "hint": "Debug log emitted when the daemon marks a session as needing attention; {reason} explains why and {fingerprint} is the current screen fingerprint.",
     "params": {
       "reason": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       },
       "fingerprint": {
         "redact": true,
@@ -473,8 +473,8 @@
         "category": "generic"
       },
       "reason": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -574,8 +574,8 @@
         "category": "url"
       },
       "err": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -600,8 +600,8 @@
     "hint": "Info log when the dashboard server begins graceful shutdown; {reason} explains the trigger such as a signal or internal HTTP request.",
     "params": {
       "reason": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -634,8 +634,8 @@
     "hint": "Debug log when the existing-dashboard health probe throws; {error} is the probe failure message.",
     "params": {
       "error": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -829,8 +829,8 @@
         "category": "generic"
       },
       "error": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -852,8 +852,8 @@
     "hint": "Error log during graceful shutdown when stopping the colocated ingest daemon throws; {error} is the failure message.",
     "params": {
       "error": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -884,8 +884,8 @@
         "category": "generic"
       },
       "reason": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       },
       "path": {
         "redact": true,
@@ -899,8 +899,8 @@
     "hint": "Error log when the push service fails to send an attention notification; {error} is the failure message.",
     "params": {
       "error": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -910,8 +910,8 @@
     "hint": "Error log when the push service cannot initialize; {error} is the initialization failure message.",
     "params": {
       "error": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -939,8 +939,8 @@
     "hint": "Error log when the HTTP request to the shutdown endpoint fails; {error} is the request failure message.",
     "params": {
       "error": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -1108,8 +1108,8 @@
     "hint": "Debug log when stopDashboardServer cannot stop the associated ingest daemon; {error} is the failure message.",
     "params": {
       "error": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -1156,8 +1156,8 @@
     "hint": "Warning log when a persisted dashboard Tunnel Link cannot be restored; {message} is the failure explanation shown to the user.",
     "params": {
       "message": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -1178,8 +1178,8 @@
     "hint": "Debug log from parent-shell detection; {detail} is the diagnostic message about the detected or fallback shell.",
     "params": {
       "detail": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -1189,8 +1189,8 @@
     "hint": "Trace log from parent-shell detection; {detail} is a fine-grained diagnostic message about process-tree probing.",
     "params": {
       "detail": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -1234,8 +1234,8 @@
         "category": "generic"
       },
       "reason": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -1462,8 +1462,8 @@
     "hint": "Error logged when the active uplink socket reports a channel failure; {message} is the low-level socket error text.",
     "params": {
       "message": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -1484,8 +1484,8 @@
     "hint": "Informational debug log emitted while shutting down an uplink bridge; {reason} explains why it ended, and {bytesSent} and {bytesReceived} are traffic counters.",
     "params": {
       "reason": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       },
       "bytesSent": {
         "redact": false,
@@ -1514,8 +1514,8 @@
     "hint": "Error logged after an uplink connection attempt fails; {message} is the failure text and {code} is the Node or socket error code, or none.",
     "params": {
       "message": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       },
       "code": {
         "redact": false,
@@ -1602,8 +1602,8 @@
     "hint": "Informational debug log when no uplink destination can be selected; {detail} says whether this is a retry because a peer may start later or a final exit.",
     "params": {
       "detail": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },
@@ -1627,8 +1627,8 @@
         "category": "generic"
       },
       "reason": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },

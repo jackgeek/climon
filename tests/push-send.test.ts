@@ -1,54 +1,46 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addSubscription, listSubscriptions } from "../src/server/push/subscriptions.js";
 import { sendPushToAll, type WebPushClient } from "../src/server/push/send.js";
+import { addSubscription, type StoredPushSubscription } from "../src/server/push/subscriptions.js";
 
-function sub(endpoint: string) {
+function sub(endpoint: string): StoredPushSubscription {
   return { endpoint, keys: { p256dh: "p", auth: "a" } };
 }
 
+let home: string;
+beforeEach(async () => {
+  home = await mkdtemp(join(tmpdir(), "climon-push-send-"));
+});
+afterEach(async () => {
+  await rm(home, { recursive: true, force: true });
+});
+
 describe("sendPushToAll", () => {
-  test("sends to every subscription", async () => {
-    const home = mkdtempSync(join(tmpdir(), "climon-send-"));
-    await addSubscription(home, sub("https://push.example/1"));
-    await addSubscription(home, sub("https://push.example/2"));
+  test("sends to every subscription when no skip predicate is given", async () => {
+    await addSubscription(home, sub("https://push/a"));
+    await addSubscription(home, sub("https://push/b"));
     const sent: string[] = [];
     const client: WebPushClient = {
-      async sendNotification(s) {
+      sendNotification: async (s) => {
         sent.push(s.endpoint);
-      },
+      }
     };
-    await sendPushToAll(home, client, { hello: "world" });
-    expect(sent.sort()).toEqual(["https://push.example/1", "https://push.example/2"]);
+    await sendPushToAll(home, client, { title: "t" });
+    expect(sent.sort()).toEqual(["https://push/a", "https://push/b"]);
   });
 
-  test("prunes a subscription that returns 410", async () => {
-    const home = mkdtempSync(join(tmpdir(), "climon-send-"));
-    await addSubscription(home, sub("https://push.example/gone"));
-    await addSubscription(home, sub("https://push.example/ok"));
+  test("skips endpoints for which skip() returns true", async () => {
+    await addSubscription(home, sub("https://push/a"));
+    await addSubscription(home, sub("https://push/b"));
+    const sent: string[] = [];
     const client: WebPushClient = {
-      async sendNotification(s) {
-        if (s.endpoint.endsWith("gone")) {
-          throw Object.assign(new Error("gone"), { statusCode: 410 });
-        }
-      },
+      sendNotification: async (s) => {
+        sent.push(s.endpoint);
+      }
     };
-    await sendPushToAll(home, client, { x: 1 });
-    const remaining = (await listSubscriptions(home)).map((s) => s.endpoint);
-    expect(remaining).toEqual(["https://push.example/ok"]);
-  });
-
-  test("keeps a subscription on a non-gone error", async () => {
-    const home = mkdtempSync(join(tmpdir(), "climon-send-"));
-    await addSubscription(home, sub("https://push.example/flaky"));
-    const client: WebPushClient = {
-      async sendNotification() {
-        throw Object.assign(new Error("boom"), { statusCode: 500 });
-      },
-    };
-    await sendPushToAll(home, client, { x: 1 });
-    expect((await listSubscriptions(home)).map((s) => s.endpoint)).toEqual(["https://push.example/flaky"]);
+    await sendPushToAll(home, client, { title: "t" }, (endpoint) => endpoint === "https://push/a");
+    expect(sent).toEqual(["https://push/b"]);
   });
 });

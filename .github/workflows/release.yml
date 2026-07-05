@@ -45,6 +45,21 @@ jobs:
       existing: ${{ steps.compute.outputs.existing }}
       prebumped: ${{ steps.compute.outputs.prebumped }}
     steps:
+      # Fail the release immediately if the Application Insights connection string
+      # secret is missing, so we never publish binaries with an empty embedded
+      # telemetry endpoint by accident. `secrets` is available in step `env:`, so
+      # we map it and check for emptiness (the value stays masked in logs). Set the
+      # `APPLICATIONINSIGHTS_CONNECTION_STRING` repository secret to unblock.
+      - name: Require telemetry connection secret
+        env:
+          APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}
+        run: |
+          if [ -z "${APPLICATIONINSIGHTS_CONNECTION_STRING}" ]; then
+            echo "::error::APPLICATIONINSIGHTS_CONNECTION_STRING secret is not set. Releases must embed the App Insights connection string; add the repository secret before releasing (see docs/logging.md)."
+            exit 1
+          fi
+          echo "Telemetry connection secret present; release may proceed."
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -97,11 +112,34 @@ jobs:
           echo "existing=$existing" >> "$GITHUB_OUTPUT"
           echo "prebumped=$prebumped" >> "$GITHUB_OUTPUT"
 
+  # Fail fast on the canonical repo if the update signing key is missing or does
+  # not correspond to the public key embedded in the client (src/update/pubkey.ts).
+  # Signing is otherwise a late, skippable step: an absent/mismatched key would
+  # ship an unverifiable release and break `climon --update`. Gating here — before
+  # any tag/push/publish side effect — prevents that. Forks (any other repository)
+  # skip the check so keyless releases still build.
+  verify-signing-key:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        if: ${{ github.repository == 'jackgeek/climon' }}
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      - name: Verify signing key matches embedded public key
+        if: ${{ github.repository == 'jackgeek/climon' }}
+        env:
+          CLIMON_UPDATE_PRIVATE_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY }}
+        run: bun run verify-signing-key
+
   # Cross-compile the Rust client for every target on a native runner. Each leg
   # uploads its `install`/`install.exe` binary as an artifact for the assemble
   # step. CLIMON_VERSION pins the bumped version into the binary (build.rs).
   build-client:
-    needs: version
+    needs: [version, verify-signing-key]
     strategy:
       fail-fast: true
       matrix:
@@ -189,7 +227,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: [version, build-client]
+    needs: [version, build-client, verify-signing-key]
     runs-on: ubuntu-latest
     env:
       # Non-sensitive boolean mapped at job level so the `if:` guards on the
@@ -276,6 +314,11 @@ jobs:
       - name: Assemble release binaries
         env:
           CLIMON_ASSEMBLE: "1"
+          # Baked into the compiled climon-server via bun --define so it never
+          # lives in source. Absent (forks / no secret) => empty embedded string
+          # => no telemetry endpoint shipped. Servers still must opt in via
+          # `telemetry.enabled` for anything to be sent.
+          APPLICATIONINSIGHTS_CONNECTION_STRING: ${{ secrets.APPLICATIONINSIGHTS_CONNECTION_STRING }}
         run: bun run compile
 
       - name: Sign release artifacts + emit manifest

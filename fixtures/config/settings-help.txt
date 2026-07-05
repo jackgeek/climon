@@ -24,11 +24,6 @@
     Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd'
     to detach without stopping the command. Must be an integer in [0, 255].
 
-  terminal.setTitle
-    Type: boolean; Default: true; Scope: client
-    When true (default), climon sets the attached local terminal's title to the session
-    name and updates it live on rename. Disables the whole title feature when false.
-
   hotKeys.focusTopSession
     Type: string; Default: Alt+J; Scope: server, browser
     Web dashboard shortcut that selects the top session in the list and focuses its
@@ -42,7 +37,7 @@
     theme" picker; defaults to "Default".
 
   dashboard.keyBarPinned
-    Type: boolean; Default: false; Scope: server, browser
+    Type: boolean; Default: true; Scope: server, browser
     Whether the web dashboard key bar is pinned open.
 
   attention.idleSeconds
@@ -160,13 +155,6 @@
     Minimum log level emitted by climon processes. One of: trace, debug, info, warn,
     error, fatal, silent. Defaults to trace (everything). Set to silent to disable
     logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable.
-
-  logging.appInsights.connectionString
-    Type: string; Default: unset; Scope: server; sensitive
-    Azure Application Insights connection string. When set, the dashboard server also
-    forwards structured logs to Application Insights. Leave unset to disable (the
-    default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING
-    environment variable.
 
   feature.sessionSpawning
     Type: string; Default: disabled; Scope: client, daemon, server, browser

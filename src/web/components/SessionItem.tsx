@@ -75,6 +75,16 @@ const useStyles = makeStyles({
     textOverflow: "ellipsis",
     paddingRight: "20px"
   },
+  subtitle: {
+    display: "block",
+    fontSize: "11px",
+    color: tokens.colorNeutralForeground3,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    paddingRight: "20px",
+    marginTop: "2px"
+  },
   meta: {
     display: "flex",
     alignItems: "center",
@@ -301,6 +311,11 @@ export function SessionItem({
           title={session.displayCommand}
         >
           {displayTitle}
+        </Text>
+      )}
+      {!compact && session.terminalTitle && session.terminalTitle !== displayTitle && (
+        <Text className={styles.subtitle} title={session.terminalTitle}>
+          {session.terminalTitle}
         </Text>
       )}
       {active && !compact && (

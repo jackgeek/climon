@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { initLogger, resetLoggerForTests, getLogger } from "../src/logging/logger.js";
-import { writeStdout, writeStderr, logCliCommand } from "../src/logging/cli-io.js";
+import { writeStdout, writeStderr, logCliCommand, CLIMON_SUBCOMMANDS } from "../src/logging/cli-io.js";
 
 function withCapturedStdio(fn: () => void): { out: string; err: string } {
   const origOut = process.stdout.write.bind(process.stdout);
@@ -64,7 +64,7 @@ describe("cli-io tee", () => {
     }
   });
 
-  test("logCliCommand records the command at debug", () => {
+  test("logCliCommand records the subcommand at debug", () => {
     const home = mkdtempSync(join(tmpdir(), "climon-cliio-"));
     try {
       resetLoggerForTests();
@@ -73,7 +73,27 @@ describe("cli-io tee", () => {
       getLogger().flush?.();
       const logs = readLogs(home);
       expect(logs).toContain("cli command: cleanup");
-      expect(logs).toContain("\"command\":\"cleanup\"");
+      expect(logs).toContain("\"subcommand\":\"cleanup\"");
+      expect(logs).not.toContain("\"command\":\"cleanup\"");
+    } finally {
+      resetLoggerForTests();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("logCliCommand only accepts allowlisted subcommand names", () => {
+    const home = mkdtempSync(join(tmpdir(), "climon-cliio-"));
+    try {
+      resetLoggerForTests();
+      initLogger("client", { level: "debug", env: { CLIMON_HOME: home } as NodeJS.ProcessEnv });
+      for (const name of CLIMON_SUBCOMMANDS) {
+        logCliCommand(name);
+      }
+      getLogger().flush?.();
+      const logs = readLogs(home);
+      for (const name of CLIMON_SUBCOMMANDS) {
+        expect(logs).toContain(`"subcommand":"${name}"`);
+      }
     } finally {
       resetLoggerForTests();
       rmSync(home, { recursive: true, force: true });
