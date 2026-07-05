@@ -6,7 +6,7 @@ import { listSessions, readSessionMeta } from "../src/store.js";
 import { getRemoteHostPath } from "../src/config.js";
 import { connectSessionSocket } from "../src/session-socket.js";
 import { encodeControl, MuxDecoder } from "../src/remote/mux.js";
-import { isValidRemoteId, runIngestConnection, TunnelHostSupervisor } from "../src/remote/ingest.js";
+import { isValidRemoteId, runIngestConnection, TunnelHostSupervisor, toLocalMeta } from "../src/remote/ingest.js";
 import type { SessionMeta } from "../src/types.js";
 
 let home: string;
@@ -272,6 +272,71 @@ describe("runIngestConnection", () => {
   });
 });
 
+
+describe("toLocalMeta", () => {
+  test("carries a bounded attentionSnippet", () => {
+    const remote = {
+      id: "r1",
+      command: ["bash"],
+      displayCommand: "bash",
+      cwd: "/tmp",
+      status: "needs-attention",
+      priorityReason: "attention",
+      socketPath: "tcp://127.0.0.1:1",
+      cols: 80,
+      rows: 24,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      attentionSnippet: "Build finished. Deploy now?"
+    } as unknown as SessionMeta;
+    const local = toLocalMeta(remote, "peer", "local-r1", "tcp://127.0.0.1:2", {});
+    expect(local.attentionSnippet).toBe("Build finished. Deploy now?");
+  });
+
+  test("truncates an over-long attentionSnippet", () => {
+    const longSnippet = "x".repeat(5000);
+    const remote = {
+      id: "r2",
+      command: ["bash"],
+      displayCommand: "bash",
+      cwd: "/tmp",
+      status: "needs-attention",
+      priorityReason: "attention",
+      socketPath: "tcp://127.0.0.1:1",
+      cols: 80,
+      rows: 24,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      attentionSnippet: longSnippet
+    } as unknown as SessionMeta;
+    const local = toLocalMeta(remote, "peer", "local-r2", "tcp://127.0.0.1:2", {});
+    expect(local.attentionSnippet).toBeDefined();
+    expect(local.attentionSnippet!.length).toBe(4096); // MAX_STR
+    expect(local.attentionSnippet).toBe("x".repeat(4096));
+  });
+
+  test("omits a non-string attentionSnippet", () => {
+    const remote = {
+      id: "r3",
+      command: ["bash"],
+      displayCommand: "bash",
+      cwd: "/tmp",
+      status: "running",
+      priorityReason: "running",
+      socketPath: "tcp://127.0.0.1:1",
+      cols: 80,
+      rows: 24,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      attentionSnippet: 42 as any
+    } as unknown as SessionMeta;
+    const local = toLocalMeta(remote, "peer", "local-r3", "tcp://127.0.0.1:2", {});
+    expect(local.attentionSnippet).toBeUndefined();
+  });
+});
 
 describe("TunnelHostSupervisor", () => {
   test("starts hosting when remote-host.json appears, stops when removed", async () => {
