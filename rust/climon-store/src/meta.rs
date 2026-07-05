@@ -226,6 +226,7 @@ mod tests {
             user_paused: None,
             theme: None,
             terminal_title: None,
+            progress: None,
         }
     }
 
