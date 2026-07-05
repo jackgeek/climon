@@ -1,6 +1,6 @@
 {
   "name": "climon",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
   "license": "MIT",
   "author": "Brodie Jack Allan",
