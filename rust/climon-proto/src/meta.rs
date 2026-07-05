@@ -375,20 +375,29 @@ mod tests {
         let back: SessionMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(
             back.progress,
-            Some(TerminalProgress { state: ProgressState::Normal, value: Some(40) })
+            Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(40)
+            })
         );
     }
 
     #[test]
     fn progress_indeterminate_omits_value() {
-        let p = TerminalProgress { state: ProgressState::Indeterminate, value: None };
+        let p = TerminalProgress {
+            state: ProgressState::Indeterminate,
+            value: None,
+        };
         let json = serde_json::to_string(&p).unwrap();
         assert_eq!(json, r#"{"state":"indeterminate"}"#);
     }
 
     #[test]
     fn patch_progress_clear_serializes_null() {
-        let patch = SessionMetaPatch { progress: Some(None), ..Default::default() };
+        let patch = SessionMetaPatch {
+            progress: Some(None),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&patch).unwrap();
         assert!(json.contains(r#""progress":null"#));
     }

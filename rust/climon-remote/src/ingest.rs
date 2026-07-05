@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use climon_config::config::{resolve_config_setting, Env as ConfigEnv};
 use climon_proto::meta::{
-    AnsiColor, Origin, PriorityReason, ProgressState, SessionMeta, SessionMetaPatch,
-    SessionStatus, TerminalProgress,
+    AnsiColor, Origin, PriorityReason, ProgressState, SessionMeta, SessionMetaPatch, SessionStatus,
+    TerminalProgress,
 };
 use climon_session::socket::format_session_socket_ref;
 use climon_store::meta::{
@@ -423,7 +423,11 @@ pub fn to_local_meta(
     };
     let progress = {
         let v = get("progress");
-        if v.is_null() { None } else { parse_progress(&v) }
+        if v.is_null() {
+            None
+        } else {
+            parse_progress(&v)
+        }
     };
 
     SessionMeta {
@@ -2028,13 +2032,31 @@ mod tests {
     fn sanitizes_progress_from_wire() {
         use climon_proto::meta::{ProgressState, TerminalProgress};
         let v = serde_json::json!({ "state": "normal", "value": 250 });
-        assert_eq!(parse_progress(&v), Some(TerminalProgress { state: ProgressState::Normal, value: Some(100) }));
+        assert_eq!(
+            parse_progress(&v),
+            Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(100)
+            })
+        );
         let neg = serde_json::json!({ "state": "normal", "value": -5 });
-        assert_eq!(parse_progress(&neg), Some(TerminalProgress { state: ProgressState::Normal, value: Some(0) }));
+        assert_eq!(
+            parse_progress(&neg),
+            Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(0)
+            })
+        );
         let bad = serde_json::json!({ "state": "bogus" });
         assert_eq!(parse_progress(&bad), None);
         let err = serde_json::json!({ "state": "error", "value": 50 });
-        assert_eq!(parse_progress(&err), Some(TerminalProgress { state: ProgressState::Error, value: None }));
+        assert_eq!(
+            parse_progress(&err),
+            Some(TerminalProgress {
+                state: ProgressState::Error,
+                value: None
+            })
+        );
     }
 
     #[tokio::test]

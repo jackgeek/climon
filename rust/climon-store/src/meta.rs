@@ -428,13 +428,25 @@ mod tests {
         let set = merge_patch(
             &base,
             &SessionMetaPatch {
-                progress: Some(Some(TerminalProgress { state: ProgressState::Indeterminate, value: None })),
+                progress: Some(Some(TerminalProgress {
+                    state: ProgressState::Indeterminate,
+                    value: None,
+                })),
                 ..Default::default()
             },
         );
-        assert_eq!(set.progress.map(|p| p.state), Some(ProgressState::Indeterminate));
+        assert_eq!(
+            set.progress.map(|p| p.state),
+            Some(ProgressState::Indeterminate)
+        );
 
-        let cleared = merge_patch(&set, &SessionMetaPatch { progress: Some(None), ..Default::default() });
+        let cleared = merge_patch(
+            &set,
+            &SessionMetaPatch {
+                progress: Some(None),
+                ..Default::default()
+            },
+        );
         assert_eq!(cleared.progress, None);
 
         let unchanged = merge_patch(&base, &SessionMetaPatch::default());

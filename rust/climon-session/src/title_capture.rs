@@ -146,10 +146,22 @@ fn parse_osc9_4_progress(payload: &str) -> Option<Option<TerminalProgress>> {
     let value = || percent.map(|p| p.min(100) as u8);
     match state {
         "0" => Some(None),
-        "1" => Some(Some(TerminalProgress { state: ProgressState::Normal, value: value() })),
-        "2" => Some(Some(TerminalProgress { state: ProgressState::Error, value: None })),
-        "3" => Some(Some(TerminalProgress { state: ProgressState::Indeterminate, value: None })),
-        "4" => Some(Some(TerminalProgress { state: ProgressState::Warning, value: None })),
+        "1" => Some(Some(TerminalProgress {
+            state: ProgressState::Normal,
+            value: value(),
+        })),
+        "2" => Some(Some(TerminalProgress {
+            state: ProgressState::Error,
+            value: None,
+        })),
+        "3" => Some(Some(TerminalProgress {
+            state: ProgressState::Indeterminate,
+            value: None,
+        })),
+        "4" => Some(Some(TerminalProgress {
+            state: ProgressState::Warning,
+            value: None,
+        })),
         _ => None,
     }
 }
@@ -262,18 +274,36 @@ mod tests {
         let (_, prog, _) = capture(b"\x1b]9;4;1;40\x07");
         assert_eq!(
             prog,
-            Some(Some(TerminalProgress { state: ProgressState::Normal, value: Some(40) }))
+            Some(Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(40)
+            }))
         );
     }
 
     #[test]
     fn parses_progress_error_indeterminate_warning() {
-        assert_eq!(capture(b"\x1b]9;4;2\x07").1,
-            Some(Some(TerminalProgress { state: ProgressState::Error, value: None })));
-        assert_eq!(capture(b"\x1b]9;4;3\x1b\\").1,
-            Some(Some(TerminalProgress { state: ProgressState::Indeterminate, value: None })));
-        assert_eq!(capture(b"\x1b]9;4;4\x07").1,
-            Some(Some(TerminalProgress { state: ProgressState::Warning, value: None })));
+        assert_eq!(
+            capture(b"\x1b]9;4;2\x07").1,
+            Some(Some(TerminalProgress {
+                state: ProgressState::Error,
+                value: None
+            }))
+        );
+        assert_eq!(
+            capture(b"\x1b]9;4;3\x1b\\").1,
+            Some(Some(TerminalProgress {
+                state: ProgressState::Indeterminate,
+                value: None
+            }))
+        );
+        assert_eq!(
+            capture(b"\x1b]9;4;4\x07").1,
+            Some(Some(TerminalProgress {
+                state: ProgressState::Warning,
+                value: None
+            }))
+        );
     }
 
     #[test]
@@ -285,7 +315,13 @@ mod tests {
     #[test]
     fn progress_percent_clamped_to_100() {
         let (_, prog, _) = capture(b"\x1b]9;4;1;250\x07");
-        assert_eq!(prog, Some(Some(TerminalProgress { state: ProgressState::Normal, value: Some(100) })));
+        assert_eq!(
+            prog,
+            Some(Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(100)
+            }))
+        );
     }
 
     #[test]
@@ -305,7 +341,13 @@ mod tests {
     fn title_and_progress_in_one_chunk() {
         let (title, prog, _) = capture(b"\x1b]9;4;3\x07\x1b]0;my title\x07");
         assert_eq!(title.as_deref(), Some("my title"));
-        assert_eq!(prog, Some(Some(TerminalProgress { state: ProgressState::Indeterminate, value: None })));
+        assert_eq!(
+            prog,
+            Some(Some(TerminalProgress {
+                state: ProgressState::Indeterminate,
+                value: None
+            }))
+        );
     }
 
     #[test]
@@ -314,12 +356,18 @@ mod tests {
         let mut progress = None;
         // Sequence "\x1b]9;4;1;40\x07" split mid-number: first chunk ends at "4".
         let rem = capture_terminal_output(&mut title, &mut progress, b"\x1b]9;4;1;4", "");
-        assert_eq!(progress, None, "incomplete sequence must not set progress yet");
+        assert_eq!(
+            progress, None,
+            "incomplete sequence must not set progress yet"
+        );
         assert_eq!(rem, "\x1b]9;4;1;4");
         let rem2 = capture_terminal_output(&mut title, &mut progress, b"0\x07", &rem);
         assert_eq!(
             progress,
-            Some(Some(TerminalProgress { state: ProgressState::Normal, value: Some(40) }))
+            Some(Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(40)
+            }))
         );
         assert_eq!(rem2, "");
     }
@@ -329,10 +377,17 @@ mod tests {
         let mut title = Some("existing".to_string());
         let mut progress = None;
         let rem = capture_terminal_output(&mut title, &mut progress, b"\x1b]9;4;3\x07", "");
-        assert_eq!(title.as_deref(), Some("existing"), "progress sequence must not alter title");
+        assert_eq!(
+            title.as_deref(),
+            Some("existing"),
+            "progress sequence must not alter title"
+        );
         assert_eq!(
             progress,
-            Some(Some(TerminalProgress { state: ProgressState::Indeterminate, value: None }))
+            Some(Some(TerminalProgress {
+                state: ProgressState::Indeterminate,
+                value: None
+            }))
         );
         assert_eq!(rem, "");
     }
