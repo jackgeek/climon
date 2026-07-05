@@ -18,6 +18,9 @@
   "attention": {
     "idleSeconds": 10
   },
+  "notifications": {
+    "smartSnippet": true
+  },
   "remote": {
     "ingestPortRetryAttempts": 100,
     "keepAlive": 60,

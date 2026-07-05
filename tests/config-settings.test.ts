@@ -24,6 +24,7 @@ describe("config settings registry", () => {
       "dashboard.theme",
       "dashboard.keyBarPinned",
       "attention.idleSeconds",
+      "notifications.smartSnippet",
       "remote.enabled",
       "remote.host",
       "remote.ingestHost",
@@ -98,6 +99,7 @@ describe("config settings registry", () => {
       hotKeys: { focusTopSession: "Alt+J" },
       dashboard: { theme: "Default", keyBarPinned: true },
       attention: { idleSeconds: 10 },
+      notifications: { smartSnippet: true },
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
       tunnelLink: { keepAlive: 60 },
@@ -166,7 +168,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(39);
+    expect(allConfigKeys().length).toBe(40);
   });
 
   test("coerces values through registry validators", () => {

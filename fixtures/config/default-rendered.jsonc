@@ -27,6 +27,10 @@
     // Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.
     "idleSeconds": 10
   },
+  "notifications": {
+    // When true (default), attention notifications include a fuzzy-extracted snippet of the last relevant terminal output as the notification body. Set false to send only the session name / terminal title.
+    "smartSnippet": true
+  },
   "remote": {
     // How many consecutive ports the ingest daemon will try, starting at its preferred port, before giving up. Raise it if many ports near the default are already in use.
     "ingestPortRetryAttempts": 100,
