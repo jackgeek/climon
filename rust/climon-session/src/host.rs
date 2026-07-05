@@ -637,6 +637,7 @@ impl HostState {
                         priority_reason: Some(PriorityReason::Running),
                         attention_matched_at: Some(None),
                         attention_reason: Some(None),
+                        attention_snippet: Some(None),
                         last_activity_at: Some(now.clone()),
                         ..Default::default()
                     })
@@ -667,7 +668,7 @@ impl HostState {
                     attention_matched_at: Some(Some(now.clone())),
                     attention_reason: Some(reason.clone()),
                     last_activity_at: Some(now.clone()),
-                    attention_snippet: attention_snippet.clone(),
+                    attention_snippet: Some(attention_snippet.clone()),
                     ..Default::default()
                 })
             });

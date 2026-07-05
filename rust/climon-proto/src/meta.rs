@@ -195,8 +195,12 @@ pub struct SessionMetaPatch {
     pub user_paused: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attention_snippet: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "double_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub attention_snippet: Option<Option<String>>,
 }
 
 /// serde helper that distinguishes an absent field (`None`) from an explicit
@@ -360,12 +364,27 @@ mod tests {
     #[test]
     fn patch_attention_snippet_serializes_camel_case() {
         let patch = SessionMetaPatch {
-            attention_snippet: Some("done".into()),
+            attention_snippet: Some(Some("done".into())),
             ..Default::default()
         };
         assert_eq!(
             serde_json::to_string(&patch).unwrap(),
             r#"{"attentionSnippet":"done"}"#
         );
+
+        // A cleared snippet (Some(None)) serializes to "attentionSnippet":null.
+        let cleared = SessionMetaPatch {
+            attention_snippet: Some(None),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&cleared).unwrap(),
+            r#"{"attentionSnippet":null}"#
+        );
+
+        // A default patch (None) omits the key entirely.
+        let default = SessionMetaPatch::default();
+        let json = serde_json::to_string(&default).unwrap();
+        assert!(!json.contains("attentionSnippet"), "json: {json}");
     }
 }

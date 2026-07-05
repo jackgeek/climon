@@ -149,7 +149,9 @@ fn trim_tail(text: &str, max: usize) -> String {
     if let Some(pos) = window.find(' ') {
         return format!("…{}", window[pos..].trim_start());
     }
-    format!("…{window}")
+    // No whitespace: use max-1 chars so the ellipsis doesn't push past the budget.
+    let trimmed: String = chars[chars.len() - (max - 1)..].iter().collect();
+    format!("…{trimmed}")
 }
 
 /// Strips control characters and forces a single trimmed line.
@@ -264,5 +266,22 @@ Finally, should I deploy the release now?";
         ]);
         let snippet = extract_snippet(&screen).expect("expected a snippet");
         assert_eq!(snippet, "Applied 3 edits and the build is green.");
+    }
+
+    #[test]
+    fn trim_tail_no_whitespace_fallback_respects_max_chars() {
+        // A ≥160-char no-whitespace token that clears the threshold should produce
+        // a snippet whose total length (including the leading ellipsis) is ≤160 chars.
+        let long_token = "a".repeat(200);
+        let snippet = extract_snippet(&lines(&[&long_token])).expect("expected a snippet");
+        assert!(
+            snippet.chars().count() <= SNIPPET_MAX_CHARS,
+            "got {} chars: {snippet:?}",
+            snippet.chars().count()
+        );
+        assert!(
+            snippet.starts_with('…'),
+            "expected leading ellipsis, got: {snippet:?}"
+        );
     }
 }

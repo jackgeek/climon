@@ -102,7 +102,7 @@ pub fn merge_patch(base: &SessionMeta, patch: &SessionMetaPatch) -> SessionMeta 
         out.terminal_title = Some(v);
     }
     if let Some(v) = patch.attention_snippet.clone() {
-        out.attention_snippet = Some(v);
+        out.attention_snippet = v;
     }
     out
 }
@@ -427,7 +427,7 @@ mod tests {
         let patched = merge_patch(
             &base,
             &SessionMetaPatch {
-                attention_snippet: Some("build ok. Proceed?".into()),
+                attention_snippet: Some(Some("build ok. Proceed?".into())),
                 ..Default::default()
             },
         );
@@ -435,6 +435,45 @@ mod tests {
             patched.attention_snippet.as_deref(),
             Some("build ok. Proceed?")
         );
+    }
+
+    #[test]
+    fn merge_clears_and_preserves_attention_snippet() {
+        // The attention_snippet field must support the three-state merge behavior:
+        // Some(Some(x)) sets a new snippet, Some(None) clears an existing snippet,
+        // and None (absent) leaves the existing snippet untouched.
+        let mut base = base_meta("snippet-three-state");
+        base.attention_snippet = Some("old snippet from earlier cycle".into());
+
+        // Absent patch field (None) preserves the existing snippet.
+        let noop = SessionMetaPatch {
+            daemon_pid: Some(8),
+            ..Default::default()
+        };
+        let preserved = merge_patch(&base, &noop);
+        assert_eq!(
+            preserved.attention_snippet.as_deref(),
+            Some("old snippet from earlier cycle")
+        );
+
+        // Explicit clear (Some(None)) removes the snippet.
+        let clear = SessionMetaPatch {
+            attention_snippet: Some(None),
+            ..Default::default()
+        };
+        let cleared = merge_patch(&base, &clear);
+        assert!(cleared.attention_snippet.is_none());
+        // Cleared field is omitted from the on-disk JSON.
+        let json = serde_json::to_string(&cleared).unwrap();
+        assert!(!json.contains("attentionSnippet"), "json: {json}");
+
+        // Set (Some(Some(v))) overwrites an existing snippet.
+        let set = SessionMetaPatch {
+            attention_snippet: Some(Some("new snippet".into())),
+            ..Default::default()
+        };
+        let reset = merge_patch(&base, &set);
+        assert_eq!(reset.attention_snippet.as_deref(), Some("new snippet"));
     }
 
     #[test]
