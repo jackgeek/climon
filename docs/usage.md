@@ -226,8 +226,8 @@ a session has the same effect: after you send input, climon will not raise
 sits idle for the window. This keeps a command you started but that runs silently
 (for example `sleep 30`) from being flagged while it works.
 
-Browser notifications use the message title `climon needs attention` and name
-the specific session in the body. Sound and browser notifications depend on the
+Browser notifications use the session's label as the message title and the
+session's terminal title as the body. Sound and browser notifications depend on the
 browser allowing notification permission and audio playback; the tab title count
 still updates when those browser features are blocked.
 
