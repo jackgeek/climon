@@ -353,14 +353,21 @@ any other device) without exposing it to the network, use **Tunnel Link**:
    needs attention** — even when the app is closed.
 
 From the phone you get the same fully interactive web terminal, so you can check
-on and drive your sessions remotely. If the tunnel sign-in expires, the PWA
-prompts you to sign in again; it never stores tunnel credentials in the browser.
+on and drive your sessions remotely. If the tunnel sign-in expires, relaunch the
+PWA — its launch reruns the tunnel sign-in — and it never stores tunnel
+credentials of its own in the browser.
+
+> **PWA works best in Chrome or Edge on mobile.** On iOS, install and open the
+> PWA from **Chrome** (or Edge). iOS **Safari** currently can't complete the
+> Microsoft dev-tunnel sign-in (the auth redirect downloads an empty file), which
+> happens on Microsoft's relay before traffic reaches climon, so it also can't
+> install the PWA over an authenticated tunnel.
 
 > **Requires the `devtunnel` CLI** on the machine running the dashboard. When the
 > tunnel closes, the installed PWA shows a banner asking you to uninstall it.
 
 - Android (Chrome): **Install as PWA → Install**.
-- iPhone (Safari, iOS 16.4+): **Share → Add to Home Screen**, then open climon
+- iPhone (Chrome, iOS 16.4+): **Share → Add to Home Screen**, then open climon
   from the new icon and enable notifications.
 
 See [docs/usage.md](docs/usage.md) and [docs/security.md](docs/security.md) for

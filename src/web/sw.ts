@@ -2,11 +2,9 @@
 import { OPEN_SESSION_MESSAGE } from "./pwa/pushData.js";
 import {
   CACHE_NAME,
-  NAVIGATION_SHELL_URL,
   SHELL_ASSETS,
   chooseCacheStrategy,
   isStaleCacheName,
-  shouldCacheShellResponse,
   shouldCacheAssetResponse,
 } from "./pwa/swCache.js";
 import {
@@ -21,11 +19,7 @@ self.addEventListener("install", (event: ExtendableEvent) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE_NAME);
-      await Promise.all(
-        SHELL_ASSETS.map((url) =>
-          url === NAVIGATION_SHELL_URL ? refreshShell(cache) : precacheAsset(cache, url),
-        ),
-      );
+      await Promise.all(SHELL_ASSETS.map((url) => precacheAsset(cache, url)));
     })(),
   );
   void self.skipWaiting();
@@ -42,11 +36,12 @@ self.addEventListener("activate", (event: ExtendableEvent) => {
 });
 
 /**
- * App-shell caching so an installed PWA boots on cold launch even when the dev
- * tunnel would auth-redirect. Navigations are served cache-first (the app always
- * boots); the app bundle is network-first with a cache fallback (fresh when authed,
- * cached when auth-blocked/offline). A startup auth probe in the page then surfaces
- * the re-auth overlay.
+ * Asset caching so an installed PWA's JS/CSS load fast and survive a brief
+ * offline blip once the dev tunnel is authenticated. Navigations are never
+ * intercepted (passthrough): every top-level navigation hits the network so the
+ * browser natively follows the dev-tunnel sign-in redirect and a cold relaunch
+ * re-authenticates like a fresh install. The app bundle is network-first with a
+ * cache fallback (fresh when authed, cached when auth-blocked/offline).
  */
 self.addEventListener("fetch", (event: FetchEvent) => {
   const request = event.request;
@@ -56,42 +51,12 @@ self.addEventListener("fetch", (event: FetchEvent) => {
     mode: request.mode,
     sameOrigin: url.origin === self.location.origin,
     path: url.pathname,
-    search: url.search,
   });
   if (strategy === "passthrough") {
     return;
   }
-  event.respondWith(strategy === "navigation" ? navigationResponse() : assetResponse(request));
+  event.respondWith(assetResponse(request));
 });
-
-/** Cache-first shell: serve the cached document, refreshing it in the background. */
-async function navigationResponse(): Promise<Response> {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(NAVIGATION_SHELL_URL);
-  void refreshShell(cache);
-  if (cached) {
-    return cached;
-  }
-  return fetch(NAVIGATION_SHELL_URL);
-}
-
-async function refreshShell(cache: Cache): Promise<void> {
-  try {
-    const res = await fetch(NAVIGATION_SHELL_URL, { cache: "no-store", redirect: "manual" });
-    const body = res.type === "opaqueredirect" ? "" : await res.clone().text();
-    const meta = {
-      ok: res.ok,
-      redirected: res.redirected,
-      type: res.type,
-      contentType: res.headers.get("content-type") ?? "",
-    };
-    if (shouldCacheShellResponse(meta, body)) {
-      await cache.put(NAVIGATION_SHELL_URL, res.clone());
-    }
-  } catch {
-    // Offline or auth-blocked: keep the existing cached shell.
-  }
-}
 
 /** Network-first asset: fresh copy when reachable, cached fallback otherwise. */
 async function assetResponse(request: Request): Promise<Response> {

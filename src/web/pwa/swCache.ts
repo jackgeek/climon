@@ -1,83 +1,54 @@
 /**
- * Pure, DOM-free helpers for the service-worker app-shell cache. Kept separate
- * from `sw.ts` (which wires these to the real Cache API) so the decision logic
- * is unit-testable, matching the `pwaContext.ts` / `api.ts` split.
+ * Pure, DOM-free helpers for the service-worker asset cache. Kept separate from
+ * `sw.ts` (which wires these to the real Cache API) so the decision logic is
+ * unit-testable, matching the `pwaContext.ts` / `api.ts` split.
  */
 
-export const CACHE_NAME = "climon-shell-v2";
-
-/** The document served for every navigation (the dashboard HTML shell). */
-export const NAVIGATION_SHELL_URL = "/";
-
-/** Assets precached on install so the PWA can boot when the tunnel auth-blocks. */
-export const SHELL_ASSETS = [NAVIGATION_SHELL_URL, "/assets/app.js", "/assets/xterm.css"];
+export const CACHE_NAME = "climon-shell-v3";
 
 /**
- * Query-param marker set on the top-level re-auth navigation. It signals the
- * service worker to pass the navigation through (rather than serve the cached
- * shell) so the browser can follow the cross-origin dev-tunnel → Microsoft
- * sign-in redirect natively, landing the fresh cookie in the PWA's own jar.
+ * Boot assets precached on install so the PWA's JS/CSS load fast (and survive a
+ * brief offline blip) once the dev tunnel is authenticated.
+ *
+ * The top-level document (`/`) is deliberately NOT cached. An installed iOS PWA
+ * runs as a standalone WKWebView that blocks *script-initiated* cross-origin
+ * navigations, so a dev tunnel can only be (re)authenticated by the browser's
+ * own launch navigation following the cross-origin dev-tunnel → Microsoft
+ * sign-in redirect. Serving a cached shell for that navigation suppressed the
+ * redirect and stranded the PWA on a permanent "Session expired" screen. The
+ * service worker therefore never intercepts navigations (see `chooseCacheStrategy`):
+ * every top-level navigation hits the network, so a cold relaunch re-authenticates
+ * exactly like a fresh install.
  */
-export const REAUTH_PARAM = "reauth";
+export const SHELL_ASSETS = ["/assets/app.js", "/assets/xterm.css"];
 
-/** True when a navigation's query string carries the reauth marker (`reauth=1`). */
-export function isReauthNavigation(search: string): boolean {
-  return new URLSearchParams(search).get(REAUTH_PARAM) === "1";
-}
-
-export type CacheStrategy = "navigation" | "asset" | "passthrough";
+export type CacheStrategy = "asset" | "passthrough";
 
 /**
  * Picks the caching strategy for a request:
- * - `navigation`: cache-first (serve the cached shell so the app always boots).
  * - `asset`: network-first with cache fallback (fresh bundle when authed, cached
  *   copy when the tunnel auth-blocks or the network is down).
- * - `passthrough`: do not intercept.
+ * - `passthrough`: do not intercept — including every top-level navigation, so
+ *   the browser natively follows the dev-tunnel sign-in redirect.
  */
 export function chooseCacheStrategy(req: {
   method: string;
   mode: string;
   sameOrigin: boolean;
   path: string;
-  search: string;
 }): CacheStrategy {
   if (req.method !== "GET" || !req.sameOrigin) {
     return "passthrough";
   }
   if (req.mode === "navigate") {
-    return isReauthNavigation(req.search) ? "passthrough" : "navigation";
+    return "passthrough";
   }
-  if (req.path !== NAVIGATION_SHELL_URL && SHELL_ASSETS.includes(req.path)) {
-    return "asset";
-  }
-  return "passthrough";
+  return SHELL_ASSETS.includes(req.path) ? "asset" : "passthrough";
 }
 
 /** True for a climon shell cache from a previous version that `activate` should delete. */
 export function isStaleCacheName(name: string): boolean {
   return name.startsWith("climon-shell-") && name !== CACHE_NAME;
-}
-
-/** Substring present in the real dashboard shell but not a relay login page. */
-const APP_SHELL_MARKER = 'id="root"';
-
-/**
- * Whether a refetched navigation response is genuinely the dashboard shell (safe
- * to cache). Rejects redirects/opaque responses and, crucially, an inline
- * `text/html` dev-tunnel login page — which is a same-origin 200 but lacks the
- * app-shell marker — so an expired session can never poison the cached shell.
- */
-export function shouldCacheShellResponse(
-  res: { ok: boolean; redirected: boolean; type: string; contentType: string },
-  body: string,
-): boolean {
-  if (!res.ok || res.redirected || res.type === "opaqueredirect") {
-    return false;
-  }
-  if (!res.contentType.toLowerCase().includes("text/html")) {
-    return false;
-  }
-  return body.includes(APP_SHELL_MARKER);
 }
 
 /**

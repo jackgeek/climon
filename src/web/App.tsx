@@ -36,7 +36,6 @@ import {
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
   probeTunnelAuth,
-  shouldPromptTunnelReauth,
   fetchRemotes,
   postPushPresence,
   type RemotesResponse,
@@ -81,7 +80,6 @@ import { toggleViewMode } from "./view-mode.js";
 import { InstallPwaDialog } from "./components/InstallPwaDialog.js";
 import { TunnelExpiryBanner } from "./components/TunnelExpiryBanner.js";
 import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa, reauthenticateTunnel } from "./pwa/pwaContext.js";
-import { REAUTH_PARAM } from "./pwa/swCache.js";
 import {
   registerServiceWorker,
   subscribeToPush,
@@ -530,22 +528,6 @@ export function TunnelReauthOverlay({ onReauth }: { onReauth: () => void }) {
   );
 }
 
-/**
- * Removes the `reauth=1` marker from the address bar once the dashboard has
- * reconnected, so the one-shot re-auth navigation param does not linger (a
- * bookmarked/relaunched `?reauth=1` would otherwise keep bypassing the SW cache).
- */
-function stripReauthParam(): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  const url = new URL(window.location.href);
-  if (url.searchParams.has(REAUTH_PARAM)) {
-    url.searchParams.delete(REAUTH_PARAM);
-    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-  }
-}
-
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -811,29 +793,6 @@ export function App() {
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
   }, [popSession]);
 
-  // Cold start of an installed PWA: the dashboard boots from the cached shell
-  // even when the dev tunnel would auth-redirect. Probe once on mount so an
-  // expired sign-in surfaces the re-auth overlay immediately, instead of waiting
-  // for a live connection to drop (which never happens on a cold start).
-  useEffect(() => {
-    if (!readIsTunnelOrigin()) {
-      return;
-    }
-    let cancelled = false;
-    void probeTunnelAuth().then((state) => {
-      if (
-        !cancelled &&
-        shouldPromptTunnelReauth(state) &&
-        serverConnectionStateRef.current !== "connected"
-      ) {
-        setTunnelAuthRequired(true);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const attentionToasterId = useId("attention-toaster");
   const { dispatchToast, dismissToast } = useToastController(attentionToasterId);
 
@@ -882,7 +841,6 @@ export function App() {
       setServerConnectionState("connected");
       disarmReconnectOverlay();
       setTunnelAuthRequired(false);
-      stripReauthParam();
       return wasReconnecting;
     };
     async function refreshSessionsAfterReconnect(): Promise<void> {
