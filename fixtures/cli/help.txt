@@ -8,6 +8,9 @@ Usage:
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white;
                                theme: a dashboard theme name, e.g. "Dracula")
+  climon command <command> [args...]
+                               Run a command whose name clashes with a climon
+                               subcommand (e.g. `climon command shell`)
   climon server [--port N] [--no-takeover]
                                Start the dashboard web server (loopback only)
                                (--no-takeover: never terminate an existing

@@ -291,3 +291,39 @@ started. Step 3 prints the same help text on stdout with **no** note on stderr.
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
 | | | | | |
+
+---
+
+## MT-P8-11 — `climon command <cmd>` disambiguates reserved-word commands
+
+- **ID:** MT-P8-11
+- **Feature / phase:** Phase 8 — `climon-cli` `command` disambiguation prefix
+- **Preconditions:** `export CLIMON_HOME=$(mktemp -d)` (PowerShell: set
+  `$env:CLIMON_HOME`). Have a program on `PATH` whose name clashes with a climon
+  subcommand — e.g. create a `shell` script/executable, or use `ls` on unix.
+- **Config-matrix cell:** CLI-linux / CLI-macos / CLI-win
+- **Platforms:** all
+
+**Steps:**
+1. `climon --help` → confirm the help lists `climon command <command> [args...]`
+   with the "clashes with a climon subcommand" description.
+2. `climon command ls -la` (unix) or `climon command where.exe cmd` (Windows) →
+   confirm the named **program** runs in a monitored PTY session (not the climon
+   `ls` subcommand), attached to your terminal.
+3. In another terminal (same `CLIMON_HOME`) run `climon ls` and confirm the
+   session's display command is the program you ran (e.g. `ls`), not `climon`.
+4. `climon command --name disambig-test shell` (with a `shell` program on PATH)
+   → confirm a session named `disambig-test` runs the `shell` program, whereas
+   plain `climon shell` still starts a monitored parent-shell session.
+5. `climon command` with no following command → confirm the exact error
+   `Provide a command to run, e.g. \`climon command shell\`.` on stderr, exit 2.
+
+**Expected:** `climon command <cmd>` runs `<cmd>` as an ordinary program in a
+monitored session, bypassing subcommand interpretation; leading session flags
+(`--priority`/`--color`/`--name`/`--theme`) are still honored; a missing command
+produces the parse error and exit code 2. `climon shell`/`climon ls` (without the
+`command` prefix) keep their existing subcommand behavior.
+
+| Date | Tester | OS | Result | Notes |
+|---|---|---|---|---|
+| | | | | |

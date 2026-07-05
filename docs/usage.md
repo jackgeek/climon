@@ -42,6 +42,15 @@ This launches your detected parent shell (PowerShell on Windows) in a managed
 PTY. Running `climon` with no arguments prints the help text instead of starting
 a shell.
 
+If the command you want to run shares its name with a climon subcommand (for
+example a program called `shell`, `ls`, or `server`), prefix it with `climon
+command` to bypass the subcommand and run the program directly:
+
+```bash
+climon command shell    # runs a program named "shell", not `climon shell`
+climon command ls -la   # runs the `ls` program, not `climon ls`
+```
+
 This starts the command inside a managed PTY and attaches your terminal to it —
 it behaves exactly like running the command directly. Meanwhile it appears on the
 dashboard.
