@@ -23,6 +23,7 @@ describe("config settings registry", () => {
       "hotKeys.focusTopSession",
       "dashboard.theme",
       "dashboard.keyBarPinned",
+      "dashboard.stateIconNoMotion",
       "attention.idleSeconds",
       "notifications.smartSnippet",
       "remote.enabled",
@@ -97,7 +98,7 @@ describe("config settings registry", () => {
         detachPrefix: 0x1c
       },
       hotKeys: { focusTopSession: "Alt+J" },
-      dashboard: { theme: "Default", keyBarPinned: true },
+      dashboard: { theme: "Default", keyBarPinned: true, stateIconNoMotion: false },
       attention: { idleSeconds: 10 },
       notifications: { smartSnippet: true },
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
@@ -141,6 +142,7 @@ describe("config settings registry", () => {
       "hotKeys.focusTopSession",
       "dashboard.theme",
       "dashboard.keyBarPinned",
+      "dashboard.stateIconNoMotion",
       "remote.enabled",
       "remote.host",
       "remote.ingestHost",
@@ -168,7 +170,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(40);
+    expect(allConfigKeys().length).toBe(41);
   });
 
   test("coerces values through registry validators", () => {

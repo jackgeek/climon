@@ -33,7 +33,7 @@ use crate::discovery::{discover_dashboard, DashboardLocation, DiscoveryDeps};
 use crate::keepalive::mux_idle_timeout_ms;
 use crate::mux::{encode_control, encode_data, ControlMessage, MuxDecoder, MuxMessage};
 use crate::process::is_process_alive;
-use crate::singleton::acquire_singleton_detailed;
+use crate::singleton::{acquire_singleton_detailed, SingletonResult};
 use crate::spawn_auth::{
     sign_now, verify_signed_control, RejectReason, ReplayGuard, DEFAULT_FRESHNESS_WINDOW_MS,
 };
@@ -875,10 +875,17 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
     }
 
     let pid_file = get_climon_home(&config_env).join("uplink.pid");
-    let singleton = acquire_singleton_detailed(&pid_file);
-    if !singleton.acquired {
-        return 0;
-    }
+    // Hold the singleton guard for the whole supervisor loop: the OS lock is
+    // released only when this process exits, so a crashed uplink (or a recycled
+    // PID) can never block a fresh one from taking over.
+    let _singleton_guard = match acquire_singleton_detailed(&pid_file) {
+        SingletonResult {
+            acquired: true,
+            guard: Some(guard),
+            ..
+        } => guard,
+        _ => return 0,
+    };
 
     let client_id = ensure_client_id(&config_env, cwd);
     let mut backoff_ms: u64 = 1000;
@@ -1154,6 +1161,7 @@ mod tests {
             user_paused: None,
             terminal_title: None,
             attention_snippet: None,
+            progress: None,
         }
     }
 

@@ -55,7 +55,7 @@ import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
 import { getTheme } from "./themes.js";
-import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED } from "../dashboard-preference-keys.js";
+import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED, PREF_STATE_ICON_NO_MOTION } from "../dashboard-preference-keys.js";
 import {
   readCachedPreference,
   setDashboardPreference,
@@ -548,6 +548,9 @@ export function App() {
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
   );
+  const [stateIconNoMotion, setStateIconNoMotion] = useState<boolean>(
+    () => readCachedPreference(PREF_STATE_ICON_NO_MOTION) === true
+  );
   const [themeId, setThemeId] = useState<string>(
     () => (readCachedPreference(PREF_THEME) as string) ?? DEFAULT_THEME_NAME
   );
@@ -962,6 +965,10 @@ export function App() {
         const serverPin = preferences[PREF_KEY_BAR_PINNED];
         if (typeof serverPin === "boolean") {
           setKeyBarPinned(serverPin);
+        }
+        const serverNoMotion = preferences[PREF_STATE_ICON_NO_MOTION];
+        if (typeof serverNoMotion === "boolean") {
+          setStateIconNoMotion(serverNoMotion);
         }
       }
     );
@@ -1499,6 +1506,7 @@ export function App() {
           isMobile={isMobile}
           keyBarPinned={keyBarPinned}
           onToggleKeyBarPinned={handleToggleKeyBarPinned}
+          stateIconNoMotion={stateIconNoMotion}
           currentTheme={themeId}
           onSelectTheme={handleSelectTheme}
           viewMode={authoritativeViewMode ?? "fill"}

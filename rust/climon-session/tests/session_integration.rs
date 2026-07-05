@@ -4,6 +4,29 @@
 //!
 //! These tests touch the real filesystem (CLIMON_HOME) and bind real sockets, so
 //! they serialize on a process-global lock and pin CLIMON_HOME under `target/`.
+//!
+//! # Unix-only
+//!
+//! Every case here drives the full daemon (`run_session_host`) against a real
+//! `sh -c` command and then joins the host thread, which blocks in the daemon's
+//! `Pty::wait()` until the child exits. Under a **headless ConPTY** — every
+//! GitHub-hosted `windows-latest` runner and other windowless sandboxes — a
+//! child attached to the pseudoconsole produces its output but never reaches its
+//! own `ExitProcess`; it only dies once the master is torn down (reporting a
+//! control-C exit, not its real code). So `wait()` never returns, the host
+//! thread never joins, and these tests hang until the CI timeout. No command
+//! self-terminates under that ConPTY, so the exit-code / `Completed` / `Failed`
+//! assertions cannot be satisfied there by any means.
+//!
+//! The behaviour under test — IPC framing, lifecycle metadata, the attention
+//! state machine — is platform-agnostic and fully exercised on the Linux and
+//! macOS runners. The Windows PTY mechanics (spawn, read, resize, exit-code
+//! derivation, master-drop teardown) are covered directly, with a graceful
+//! headless-ConPTY skip, by `climon-pty`'s `pty_integration` tests. A real
+//! interactive Windows desktop exits normally and would pass these too; only the
+//! headless CI environment cannot, so the file is gated to Unix rather than left
+//! to hang.
+#![cfg(unix)]
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -88,6 +111,7 @@ fn base_meta(id: &str, home: &PathBuf, command: Vec<String>) -> SessionMeta {
         user_paused: None,
         terminal_title: None,
         attention_snippet: None,
+        progress: None,
     };
     // The launcher writes the initial meta file before the host starts.
     let env = Env::with_home(home);

@@ -42,6 +42,15 @@ This launches your detected parent shell (PowerShell on Windows) in a managed
 PTY. Running `climon` with no arguments prints the help text instead of starting
 a shell.
 
+If the command you want to run shares its name with a climon subcommand (for
+example a program called `shell`, `ls`, or `server`), prefix it with `climon
+command` to bypass the subcommand and run the program directly:
+
+```bash
+climon command shell    # runs a program named "shell", not `climon shell`
+climon command ls -la   # runs the `ls` program, not `climon ls`
+```
+
 This starts the command inside a managed PTY and attaches your terminal to it —
 it behaves exactly like running the command directly. Meanwhile it appears on the
 dashboard.
@@ -434,6 +443,7 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `hotKeys.focusTopSession` | string | `Alt+J` | server, browser | Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is "Mod+...+Key" (e.g. "Alt+T", "Ctrl+Shift+J"). Set to an empty string to disable. |
 | `dashboard.theme` | string | `Default` | server, browser | Default web dashboard terminal colour theme (by display name, e.g. "Dracula"). Sessions without their own theme inherit this. Choose from the dashboard "Default theme" picker; defaults to "Default". |
 | `dashboard.keyBarPinned` | boolean | `true` | server, browser | Whether the web dashboard key bar is pinned open. |
+| `dashboard.stateIconNoMotion` | boolean | `false` | server, browser | When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated). |
 | `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |
 | `notifications.smartSnippet` | boolean | `true` | daemon | When true (default), attention notifications include a fuzzy-extracted snippet of the last relevant terminal output as the notification body. Set false to send only the session name / terminal title. |
 | `remote.enabled` | boolean | unset | client | Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection. |

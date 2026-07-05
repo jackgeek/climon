@@ -104,6 +104,9 @@ pub fn merge_patch(base: &SessionMeta, patch: &SessionMetaPatch) -> SessionMeta 
     if let Some(v) = patch.attention_snippet.clone() {
         out.attention_snippet = v;
     }
+    if let Some(v) = patch.progress {
+        out.progress = v;
+    }
     out
 }
 
@@ -230,6 +233,7 @@ mod tests {
             theme: None,
             terminal_title: None,
             attention_snippet: None,
+            progress: None,
         }
     }
 
@@ -474,6 +478,38 @@ mod tests {
         };
         let reset = merge_patch(&base, &set);
         assert_eq!(reset.attention_snippet.as_deref(), Some("new snippet"));
+    }
+
+    #[test]
+    fn merge_patch_sets_and_clears_progress() {
+        use climon_proto::meta::{ProgressState, TerminalProgress};
+        let base = base_meta("s1");
+        let set = merge_patch(
+            &base,
+            &SessionMetaPatch {
+                progress: Some(Some(TerminalProgress {
+                    state: ProgressState::Indeterminate,
+                    value: None,
+                })),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            set.progress.map(|p| p.state),
+            Some(ProgressState::Indeterminate)
+        );
+
+        let cleared = merge_patch(
+            &set,
+            &SessionMetaPatch {
+                progress: Some(None),
+                ..Default::default()
+            },
+        );
+        assert_eq!(cleared.progress, None);
+
+        let unchanged = merge_patch(&base, &SessionMetaPatch::default());
+        assert_eq!(unchanged.progress, None);
     }
 
     #[test]

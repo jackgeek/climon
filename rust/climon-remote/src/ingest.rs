@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use climon_config::config::{resolve_config_setting, Env as ConfigEnv};
 use climon_proto::meta::{
-    AnsiColor, Origin, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus,
+    AnsiColor, Origin, PriorityReason, ProgressState, SessionMeta, SessionMetaPatch, SessionStatus,
+    TerminalProgress,
 };
 use climon_session::socket::format_session_socket_ref;
 use climon_store::meta::{
@@ -231,6 +232,34 @@ fn parse_color(value: &Value) -> Option<AnsiColor> {
         .and_then(|s| AnsiColor::ALL.into_iter().find(|c| c.name() == s))
 }
 
+/// Parses an untrusted advertised `progress` object into a bounded
+/// [`TerminalProgress`], or `None` if the state is unknown. Percentages are
+/// clamped to 0..=100 and dropped for non-normal states.
+fn parse_progress(value: &Value) -> Option<TerminalProgress> {
+    let state = match value.get("state").and_then(|s| s.as_str())? {
+        "normal" => ProgressState::Normal,
+        "error" => ProgressState::Error,
+        "indeterminate" => ProgressState::Indeterminate,
+        "warning" => ProgressState::Warning,
+        _ => return None,
+    };
+    // A determinate (`normal`) update always carries an explicit percentage:
+    // missing/invalid/negative wire values normalize to 0 so untrusted input
+    // is bounded and matches the local OSC parser byte-for-byte.
+    let value = if matches!(state, ProgressState::Normal) {
+        Some(
+            value
+                .get("value")
+                .and_then(as_integer)
+                .map(|v| v.clamp(0, 100) as u8)
+                .unwrap_or(0),
+        )
+    } else {
+        None
+    };
+    Some(TerminalProgress { state, value })
+}
+
 fn as_integer(value: &Value) -> Option<i64> {
     let n = value.as_f64()?;
     if n.is_finite() && n.fract() == 0.0 {
@@ -320,6 +349,13 @@ pub fn sanitize_remote_patch(input: &Value) -> SessionMetaPatch {
     if let Some(v) = obj.get("terminalTitle").filter(|v| v.is_string()) {
         clean.terminal_title = Some(bounded_string(v, ""));
     }
+    if let Some(p) = obj.get("progress") {
+        if p.is_null() {
+            clean.progress = Some(None);
+        } else if let Some(parsed) = parse_progress(p) {
+            clean.progress = Some(Some(parsed));
+        }
+    }
     clean
 }
 
@@ -391,6 +427,14 @@ pub fn to_local_meta(
             None
         }
     };
+    let progress = {
+        let v = get("progress");
+        if v.is_null() {
+            None
+        } else {
+            parse_progress(&v)
+        }
+    };
 
     SessionMeta {
         id: local_id.to_string(),
@@ -425,6 +469,7 @@ pub fn to_local_meta(
         user_paused: None,
         terminal_title,
         attention_snippet: None,
+        progress,
     }
 }
 
@@ -1627,9 +1672,18 @@ pub async fn run_ingest_daemon(
     mut deps: IngestDaemonDeps<'_>,
 ) -> std::io::Result<IngestExit> {
     let pid_path = ingest_pid_path(&config_env);
-    if !crate::singleton::acquire_singleton(&pid_path) {
-        return Ok(IngestExit::AlreadyRunning);
-    }
+    // Hold the singleton guard for the daemon's whole lifetime. The OS advisory
+    // lock is released only when this process exits, so a stale pidfile or a
+    // recycled PID can never make a fresh daemon falsely believe another is
+    // already running.
+    let _singleton_guard = match crate::singleton::acquire_singleton_detailed(&pid_path) {
+        crate::singleton::SingletonResult {
+            acquired: true,
+            guard: Some(guard),
+            ..
+        } => guard,
+        _ => return Ok(IngestExit::AlreadyRunning),
+    };
     reconcile_stale_remote_sessions(&store_env);
 
     let state = crate::remote_host::read_remote_host_state(&config_env);
@@ -1988,6 +2042,52 @@ mod tests {
         let snap: Vec<IngestConnectionStatus> = registry.connected_snapshot(1_000_000);
         assert_eq!(snap[0].hostname, "c2");
         assert_eq!(snap[0].os, "unknown");
+    }
+
+    #[test]
+    fn sanitizes_progress_from_wire() {
+        use climon_proto::meta::{ProgressState, TerminalProgress};
+        let v = serde_json::json!({ "state": "normal", "value": 250 });
+        assert_eq!(
+            parse_progress(&v),
+            Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(100)
+            })
+        );
+        let neg = serde_json::json!({ "state": "normal", "value": -5 });
+        assert_eq!(
+            parse_progress(&neg),
+            Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(0)
+            })
+        );
+        let bad = serde_json::json!({ "state": "bogus" });
+        assert_eq!(parse_progress(&bad), None);
+        let err = serde_json::json!({ "state": "error", "value": 50 });
+        assert_eq!(
+            parse_progress(&err),
+            Some(TerminalProgress {
+                state: ProgressState::Error,
+                value: None
+            })
+        );
+        // A determinate update with no/non-numeric percentage normalizes to 0 so
+        // it matches the local OSC parser and never persists `normal` without a value.
+        for missing in [
+            serde_json::json!({ "state": "normal" }),
+            serde_json::json!({ "state": "normal", "value": "oops" }),
+            serde_json::json!({ "state": "normal", "value": 12.5 }),
+        ] {
+            assert_eq!(
+                parse_progress(&missing),
+                Some(TerminalProgress {
+                    state: ProgressState::Normal,
+                    value: Some(0)
+                })
+            );
+        }
     }
 
     #[tokio::test]

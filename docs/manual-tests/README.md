@@ -40,7 +40,7 @@ result-tracking row.
 | 5 | `climon-store` crate — atomic metadata IO, patch serialization, session ids, server state | [phase05-store.md](phase05-store.md) |
 | 6 | climon-pty crate — cross-platform PTY spawn/resize, raw-mode termios/ConPTY, scrollback, terminal size | [phase06-pty.md](phase06-pty.md) |
 | 7 | climon-session crate — session host: PTY ownership, per-session IPC socket, scrollback shadow, idle/attention, frame relay, terminal-title capture, local relay, lifecycle | [phase07-session.md](phase07-session.md) |
-| 8 | climon-cli core — daily-driver `climon` client: arg parser, launcher (run/shell/ls/kill), attach client + detach, config/server delegation, license notices, version-from-package.json | [phase08-cli.md](phase08-cli.md) |
+| 8 | climon-cli core — daily-driver `climon` client: arg parser, launcher (run/shell/command/ls/kill), attach client + detach, config/server delegation, license notices, version-from-package.json | [phase08-cli.md](phase08-cli.md) |
 | 9 | climon-remote crate — uplink/ingest mux bridge (byte-exact wire), devtunnel detection, WSL↔Windows link/discovery, keepalive, singleton recycle, demotion, cleanup; wired `__uplink`/`__ingest`/`link`/`cleanup` + launcher auto-uplink/auto-link | [phase09-remote.md](phase09-remote.md) |
 | 10 | climon-update — self-update: byte-for-byte Ed25519 verify + AES-256-GCM/scrypt envelope decrypt, release manifest, atomic no-kill binary swap, background check + launch banner, `climon update` | [phase10-update.md](phase10-update.md) |
 | 11 | climon-install — client-side install/setup: install-manifest + on-disk layout parity, PATH setup (macOS/Linux/Windows), `climon setup` onboarding, telemetry/auto-update opt-in, stable install id, running-process detection | [phase11-install.md](phase11-install.md) |
@@ -75,9 +75,11 @@ result-tracking row.
 | — | App Insights connection string source — env var / embedded constant only, never climon config | [appinsights-connection-source.md](appinsights-connection-source.md) |
 | — | Terminal font-size repaint — viewport repaints cleanly on font-size change without waiting for focus | [terminal-font-size-repaint.md](terminal-font-size-repaint.md) |
 | — | Terminal title as session subtitle — capture PTY OSC 0/2 title, drop name→title | [terminal-title-subtitle.md](terminal-title-subtitle.md) |
+| — | Terminal progress indicator — capture PTY OSC 9;4 progress, per-session bar/spinner/error/warning on the list (+ `dashboard.stateIconNoMotion`) | [terminal-progress-indicator.md](terminal-progress-indicator.md) |
 | — | Terminal selection / copy (touch) — Select button captures full scrollback into a monospaced textarea for native copy, with a strip-decorations toggle | [terminal-select-mode.md](terminal-select-mode.md) |
 | — | `bun run build` builds the Rust client + on-demand rustup bootstrap when cargo is missing | [build-all-rust-toolchain.md](build-all-rust-toolchain.md) |
 | — | Smart Notifications — attention notification body from fuzzy-extracted terminal output snippet | [smart-notifications.md](smart-notifications.md) |
+| — | Remote uplink/ingest singleton — OS advisory lock immune to PID recycling (fixes silent uplink exit) | [singleton-lock-pid-recycle.md](singleton-lock-pid-recycle.md) |
 
 ## Recording results
 

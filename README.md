@@ -169,6 +169,20 @@ climon copilot               # monitor a coding agent session
 climon npm run dev           # monitor a dev server
 ```
 
+### `climon command <command> [args...]`
+
+Disambiguation prefix for running a command whose name clashes with a climon
+subcommand. For example, `climon shell` starts a monitored shell session rather
+than running a program called `shell`; use `climon command shell` to run the
+`shell` program instead. Anything after `command` is treated as the program and
+its arguments (leading session flags such as `--priority`/`--name` still apply).
+
+```sh
+climon command shell         # run a program named "shell", not `climon shell`
+climon command ls -la        # run the `ls` program, not `climon ls`
+climon command --name web server   # run a `server` program with a friendly name
+```
+
 ### `climon shell`
 
 Start a monitored session running your current shell (PowerShell on Windows).

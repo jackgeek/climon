@@ -148,6 +148,20 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "dashboard.stateIconNoMotion",
+    type: "boolean",
+    defaultValue: false,
+    purpose: "When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated).",
+    scope: ["server", "browser"],
+    acceptInput: true,
+    dashboardWritable: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "boolean") {
+        throw new Error("dashboard.stateIconNoMotion must be a boolean");
+      }
+    }
+  },
+  {
     path: "attention.idleSeconds",
     type: "number",
     defaultValue: 10,
