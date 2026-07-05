@@ -799,10 +799,11 @@ export function App() {
   const attentionToasterId = useId("attention-toaster");
   const { dispatchToast, dismissToast } = useToastController(attentionToasterId);
 
-  // In-app alerts (toast/sound/vibration) are shown while the dashboard is in
-  // the foreground, except on the mobile session list, where the attention
-  // badge is already visible.
-  const alertsVisible = pageVisible && (!isMobile || maximized);
+  // In-app alerts (toast/sound/vibration) fire whenever the dashboard is in the
+  // foreground — including the mobile session list — so an attention event is
+  // never missed. The actively viewed session is excluded separately via
+  // viewedSessionId, and alerts are still suppressed while the tab is hidden.
+  const alertsVisible = pageVisible;
 
   const dispatchAttentionToast = useCallback(
     (session: SessionMeta): void => {

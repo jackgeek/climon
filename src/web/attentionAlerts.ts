@@ -29,8 +29,9 @@ export interface AttentionUpdateContext {
   /** The session the user is actively viewing; never alerts. */
   viewedSessionId?: string | null;
   /**
-   * Whether in-app alerts (toast/sound/vibration) may fire. False when the user
-   * is on the mobile session list (the list already shows the attention badge).
+   * Whether in-app alerts (toast/sound/vibration) may fire. False while the
+   * dashboard tab is hidden/backgrounded (the OS push notification covers that
+   * case). Alerts fire on the mobile session list as well as inside a session.
    * Defaults to true.
    */
   alertsVisible?: boolean;
@@ -215,9 +216,10 @@ export function createAttentionAlertManager(options: AttentionAlertManagerOption
       return;
     }
 
-    // Suppress in-app alerts on the mobile session list, where the badge is
-    // already visible. The seen set is still updated above, so the same episode
-    // will not alert later when the user navigates into a session.
+    // Suppress in-app alerts while the dashboard tab is hidden/backgrounded (the
+    // OS push notification covers that case). The seen set is still updated above,
+    // so the same episode will not alert later when the tab returns to the
+    // foreground.
     if (!alertsVisible) {
       return;
     }

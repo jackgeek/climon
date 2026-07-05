@@ -92,7 +92,7 @@ user is already looking at the session (and it auto-acknowledges).
 
 ---
 
-## MT-FG-TOAST-04 — No toast on the mobile session list
+## MT-FG-TOAST-04 — Toast on the mobile session list
 
 - **ID:** MT-FG-TOAST-04
 - **Feature:** Foreground attention toast
@@ -105,8 +105,10 @@ user is already looking at the session (and it auto-acknowledges).
 1. Stay on the mobile session list.
 2. Drive session A into `needs-attention`.
 
-**Expected result:** No toast (and no system notification) — the list already
-shows session A's attention badge, which updates visibly.
+**Expected result:** A foreground toast appears (with sound and vibration where
+supported) carrying session A's label and smart-notification snippet, in
+addition to the list's attention badge updating. Tapping the toast opens session
+A. No system push notification (the tab is in the foreground).
 
 **Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
 | --- | --- | --- | --- | --- | --- |
