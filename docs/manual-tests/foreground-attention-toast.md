@@ -128,7 +128,7 @@ shows session A's attention badge, which updates visibly.
 2. Background or close the PWA, then drive session B into `needs-attention`.
 
 **Expected result:** Step 1 shows only the in-app toast. Step 2 shows an OS
-notification titled `B needs attention` with session B's terminal title as the
+notification titled `B` (session B's label) with session B's terminal title as the
 body (no toast, since the app is not foreground). Tapping it opens session B (see
 `pwa-notification-click.md`).
 
@@ -152,7 +152,7 @@ body (no toast, since the app is not foreground). Tapping it opens session B (se
 2. Drive session A into `needs-attention`.
 
 **Expected result:** Exactly **one** OS notification appears, titled
-`A needs attention` with session A's terminal title as the body. There is **no**
+`A` (session A's label) with session A's terminal title as the body. There is **no**
 second generic/empty "climon" banner, and the push subscription is **not**
 revoked (a subsequent attention event still delivers a push). This confirms the
 service worker calls `showNotification` for the push rather than silently
@@ -179,8 +179,8 @@ dropping it.
 3. Drive session A into `needs-attention`.
 
 **Expected result:** Device 1 (foreground) shows only the in-app toast and **no**
-OS notification. Device 2 (backgrounded) receives the OS push
-`A needs attention`. Suppression is keyed per push-subscription endpoint via the
+OS notification. Device 2 (backgrounded) receives the OS push titled `A` (session
+A's label). Suppression is keyed per push-subscription endpoint via the
 presence heartbeat, so foregrounding one device never suppresses another.
 
 **Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |

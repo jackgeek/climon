@@ -260,8 +260,8 @@ under `src/server/push/`:
   `$CLIMON_HOME/push/subscriptions.json` (deduped by endpoint).
 - `attention.ts` is a pure tracker that flags sessions newly entering
   `needs-attention` (seed-then-detect, deduped by `id:attentionMatchedAt`), and
-  `buildPushPayload` sets the notification title to `<label> needs attention`
-  with the session's terminal title as the body.
+  `buildPushPayload` sets the notification title to `<label>` (the session
+  label) with the session's terminal title as the body.
 - `presence.ts` is an in-memory registry of which push-subscription endpoints
   are currently foreground (TTL-expired, default 30s) so the server can skip
   devices that are actively viewing the dashboard.

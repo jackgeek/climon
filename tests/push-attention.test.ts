@@ -47,14 +47,14 @@ describe("attention tracker", () => {
     const payload = buildPushPayload(
       session({ id: "s1", name: "deploy", status: "needs-attention", terminalTitle: "npm run deploy" }),
     );
-    expect(payload.title).toBe("deploy needs attention");
+    expect(payload.title).toBe("deploy");
     expect(payload.body).toBe("npm run deploy");
     expect(payload.sessionId).toBe("s1");
   });
 
   test("buildPushPayload body is empty when there is no terminal title", () => {
     const payload = buildPushPayload(session({ id: "s1", name: "deploy", status: "needs-attention" }));
-    expect(payload.title).toBe("deploy needs attention");
+    expect(payload.title).toBe("deploy");
     expect(payload.body).toBe("");
   });
 });

@@ -28,7 +28,7 @@ function attentionLabel(
 export function buildPushPayload(session: SessionMeta): PushPayload {
   const label = attentionLabel(session);
   return {
-    title: `${label} needs attention`,
+    title: label,
     body: session.terminalTitle?.trim() ?? "",
     sessionId: session.id,
     key: attentionStateKey(session),
