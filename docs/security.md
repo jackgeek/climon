@@ -360,6 +360,9 @@ loopback-only:
 
 - **Session metadata** (`toLocalMeta` / `sanitizeRemotePatch`): server-controlled
   fields overwritten, ids namespaced and validated, enum fields allowlisted.
+  Free-text fields (such as `attentionSnippet` and `terminalTitle`) are
+  allowlisted and bounded to 4096 chars to prevent oversize payloads; the
+  snippet is untrusted terminal output content from a remote devbox.
 - **Mux frames**: every frame is length-prefixed and capped
   (`MAX_MUX_PAYLOAD = 8 MiB`); an oversize or malformed frame tears the
   connection down rather than allocating unbounded memory.
