@@ -1160,6 +1160,7 @@ mod tests {
             theme: None,
             user_paused: None,
             terminal_title: None,
+            progress: None,
         }
     }
 

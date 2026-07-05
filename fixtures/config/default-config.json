@@ -13,7 +13,8 @@
   },
   "dashboard": {
     "theme": "Default",
-    "keyBarPinned": true
+    "keyBarPinned": true,
+    "stateIconNoMotion": false
   },
   "attention": {
     "idleSeconds": 10

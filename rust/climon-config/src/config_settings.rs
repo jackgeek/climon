@@ -340,6 +340,14 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .default(Value::from(true))
         .accept_input(),
         ConfigSetting::new(
+            "dashboard.stateIconNoMotion",
+            Boolean,
+            "When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated).",
+            vec![Server, Browser],
+        )
+        .default(Value::from(false))
+        .accept_input(),
+        ConfigSetting::new(
             "attention.idleSeconds",
             Number,
             "Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.",
@@ -816,6 +824,7 @@ mod tests {
                 "hotKeys.focusTopSession",
                 "dashboard.theme",
                 "dashboard.keyBarPinned",
+                "dashboard.stateIconNoMotion",
                 "attention.idleSeconds",
                 "remote.enabled",
                 "remote.host",
@@ -853,7 +862,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 39);
+        assert_eq!(all_config_keys().len(), 40);
     }
 
     #[test]
@@ -878,7 +887,7 @@ mod tests {
                 "server": { "host": "127.0.0.1", "port": 3131 },
                 "terminal": { "clampBrowserToHost": false, "detachPrefix": 28 },
                 "hotKeys": { "focusTopSession": "Alt+J" },
-                "dashboard": { "theme": "Default", "keyBarPinned": true },
+                "dashboard": { "theme": "Default", "keyBarPinned": true, "stateIconNoMotion": false },
                 "attention": { "idleSeconds": 10 },
                 "remote": { "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },
@@ -926,6 +935,7 @@ mod tests {
                 "hotKeys.focusTopSession",
                 "dashboard.theme",
                 "dashboard.keyBarPinned",
+                "dashboard.stateIconNoMotion",
                 "remote.enabled",
                 "remote.host",
                 "remote.ingestHost",

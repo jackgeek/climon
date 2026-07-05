@@ -61,7 +61,13 @@ Launched as `climon __session <id>`, detached from the launcher. It:
    broadcasts it to connected clients, and applies attention transitions
    reported by the attached client (it is the single writer of session
    metadata).
-6. On PTY exit: persists final scrollback, patches metadata to
+6. Scans PTY output for terminal titles (`OSC 0`/`OSC 2`) and progress
+   (`OSC 9;4`, the ConEmu/Windows-Terminal taskbar-progress sequence),
+   debounces them, and persists the latest `terminalTitle`/`progress` to
+   metadata. Both are passthrough — the bytes are forwarded to the client
+   untouched. The dashboard renders `progress` per session (a determinate bar,
+   spinner, or error/warning icon).
+7. On PTY exit: persists final scrollback, patches metadata to
    `completed`/`failed` with the exit code, notifies clients, and shuts down.
 
 Because the daemon owns the PTY, the dashboard server can come and go freely.
