@@ -9,9 +9,10 @@ Manual checks for the in-app dev-tunnel sign-in recovery flow.
   re-authentication (`src/web/api.ts` probe, `TunnelReauthOverlay`).
 - **Preconditions:** An authenticated (non-anonymous) dashboard dev tunnel is
   running (climon "Tunnel Link" started; tunnel is **not** anonymous). The
-  dashboard is installed as a PWA on iOS/iPadOS (Safari → Share → Add to Home
-  Screen) from the dev-tunnel URL, and you have signed in once so the dashboard
-  loads normally.
+  dashboard is installed as a PWA on iOS/iPadOS **from Chrome** (Chrome → Share →
+  Add to Home Screen) from the dev-tunnel URL, and you have signed in once so the
+  dashboard loads normally. (Safari cannot complete the dev-tunnel sign-in — see
+  the note under DTR-03 — so install from Chrome.)
 - **Config-matrix cell:** Remote / dev-tunnel, iOS PWA standalone
 - **Platforms:** iOS/iPadOS PWA (primary); Android/desktop installed PWA
   (secondary)
@@ -19,23 +20,22 @@ Manual checks for the in-app dev-tunnel sign-in recovery flow.
 **Steps:**
 1. Open the installed PWA and confirm the dashboard is connected (sessions list
    loads, no spinner).
-2. Force the tunnel sign-in to expire: in desktop Safari, sign out of the dev
+2. Force the tunnel sign-in to expire: in a desktop browser, sign out of the dev
    tunnel / clear `*.devtunnels.ms` cookies for the account, OR leave the PWA
    until the Microsoft session naturally expires.
 3. Return to the PWA (foreground it) and wait for the live connection to drop.
 4. Observe the overlay that appears.
 5. Tap **Sign in again**.
-6. Complete the Microsoft sign-in that renders inside the PWA window (it should
-   not open Safari or download an empty file).
+6. Complete the Microsoft sign-in (on a normal browser tab / desktop the button
+   re-runs the sign-in in place; on an installed iOS PWA the reliable path is a
+   cold relaunch — see DTR-03 — because iOS blocks the in-app script navigation).
 
 **Expected:** After steps 3-4 the PWA shows the **"Session expired"** overlay
 with a **"Sign in again"** button (it appears promptly, without waiting out the
-~60s reconnect timer). Tapping the button navigates **inside the PWA window** to
-the tunnel sign-in (it does **not** jump out to Safari and does **not** download
-an empty file); the Microsoft sign-in page renders in the PWA. Complete the
-sign-in there and the PWA's live connection reconnects, the overlay is gone, and
-the sessions list/terminal come back — no need to manually copy the tunnel URL
-into a browser.
+~60s reconnect timer). On a normal browser tab the button navigates to the
+tunnel sign-in and, after completing it, the live connection reconnects and the
+overlay disappears. (On an installed iOS PWA the in-app button cannot refresh the
+cookie — a cold relaunch is the recovery path, covered by DTR-03.)
 
 **Result-tracking row:**
 
@@ -114,19 +114,20 @@ JavaScript console error.
 
 ---
 
-## DTR-03 — Cold-launch PWA with an expired tunnel session boots and prompts sign-in
+## DTR-03 — Cold relaunch re-authenticates an expired tunnel session in the PWA
 
 - **ID:** DTR-03
-- **Feature / phase:** Dev tunnel initial authentication (PWA cold start) —
-  service-worker app-shell cache (`src/web/sw.ts`, `src/web/pwa/swCache.ts`) plus the
-  startup `probeTunnelAuth` in `src/web/App.tsx`.
+- **Feature / phase:** Dev tunnel (re)authentication on PWA launch — the service
+  worker **never intercepts top-level navigations**, so the PWA's own launch
+  navigation follows the cross-origin dev-tunnel → Microsoft sign-in redirect
+  (`src/web/pwa/swCache.ts` `chooseCacheStrategy`, `src/web/sw.ts` fetch handler).
 - **Preconditions:** An authenticated (non-anonymous) dashboard dev tunnel is running
   (climon "Tunnel Link" started; tunnel is **not** anonymous). The dashboard is
-  installed as a PWA from the dev-tunnel URL, and you have opened it once while signed
-  in (so the service worker registered and cached the app shell).
+  installed as a PWA **from Chrome** on iOS (Chrome → Share → Add to Home Screen)
+  from the dev-tunnel URL, and you have opened it once while signed in.
 - **Config-matrix cell:** Remote / dev-tunnel, installed PWA standalone
-- **Platforms:** iOS/iPadOS PWA; Android installed PWA; desktop installed PWA
-  (Chrome/Edge)
+- **Platforms:** iOS/iPadOS PWA (Chrome-installed); Android installed PWA; desktop
+  installed PWA (Chrome/Edge)
 
 **Steps:**
 1. Fully close the installed PWA (swipe it away / quit it — not just background it).
@@ -135,14 +136,18 @@ JavaScript console error.
    naturally expires.
 3. Cold-launch the installed PWA from the home screen / app launcher.
 
-**Expected:** The PWA **boots** (the dashboard shell renders from the service-worker
-cache) instead of showing a blank page or downloading an empty file. It then shows the
-**"Session expired"** overlay with a **"Sign in again"** button. Tapping the button
-navigates **inside the PWA window** to the tunnel sign-in (not out to Safari), where
-the Microsoft sign-in renders and the fresh cookie is stored in the PWA's own jar.
-Complete the sign-in and the PWA's live connection reconnects, the overlay disappears,
-and the sessions list/terminal load — no need to manually copy the tunnel URL into a
-browser.
+**Expected:** The launch navigation follows the Microsoft sign-in redirect inside the
+PWA window (exactly like a fresh install); after completing the sign-in the dashboard
+loads signed-in. It does **not** get stuck on a blank page, an "empty file" download,
+or a permanent "Session expired" screen. (If upgrading from a build with the old
+cache-first service worker, delete and reinstall the PWA — or relaunch it twice — so
+the new service worker takes over.)
+
+> **Safari limitation (not a climon defect):** iOS Safari cannot complete the
+> Microsoft dev-tunnel sign-in — it downloads an empty file on the auth redirect,
+> so you cannot install or use the PWA from Safari. The authentication is handled
+> by the Microsoft relay before traffic reaches climon, so this is a Safari +
+> dev-tunnel platform issue. **Use Chrome** (or Edge) on iOS.
 
 **Result-tracking row:**
 

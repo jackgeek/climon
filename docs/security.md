@@ -256,13 +256,26 @@ color, command label) it advertises. It cannot inject into another client's PTY
 (per-connection sockets) or read its keystrokes. Revoke access by deleting
 the tunnel or removing the user's identity from its ACL.
 
-When the dev-tunnel sign-in expires, the dashboard PWA detects the relay's auth
-redirect (a manual-redirect probe of `/health`) and shows an in-app "Sign in
-again" prompt instead of spinning on "Reconnecting". The prompt performs a
-user-initiated top-level navigation **inside the PWA window** to re-run the
-Microsoft sign-in (an installed iOS PWA has a cookie jar isolated from Safari, so
-the sign-in must complete in-context for the resulting cookie to be usable). It
-never auto-navigates and stores no tunnel credentials itself.
+When the dev-tunnel sign-in expires while the dashboard is open, it detects the
+relay's auth redirect (a manual-redirect probe of `/health`) and shows an in-app
+"Sign in again" prompt instead of spinning on "Reconnecting". The prompt performs
+a user-initiated top-level navigation to the dashboard origin to re-run the
+Microsoft sign-in; it never auto-navigates and stores no tunnel credentials
+itself.
+
+The dev tunnel's authentication is a **cross-origin** redirect
+(`*.devtunnels.ms` → Microsoft), handled by the relay before any traffic reaches
+climon. This has two platform consequences on iOS, neither fixable in climon:
+
+- **Installed PWA:** an iOS home-screen PWA runs as a standalone WKWebView that
+  blocks *script-initiated* cross-origin navigations, so the in-app prompt cannot
+  refresh the cookie there. Instead, the service worker **never intercepts
+  top-level navigations** (it only caches JS/CSS assets), so the PWA's own
+  *launch* navigation follows the auth redirect — a cold relaunch re-authenticates
+  exactly like a fresh install. Use **Chrome** to install the PWA.
+- **Safari:** iOS Safari mishandles the relay's auth redirect and downloads an
+  empty file instead of showing the sign-in page. This is a Safari + dev-tunnel
+  limitation; use Chrome (or Edge) to sign in.
 
 ## Dashboard server: loopback only
 
