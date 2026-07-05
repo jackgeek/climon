@@ -82,6 +82,8 @@ export interface DashboardConfig {
   theme?: string;
   /** Whether the dashboard key bar is pinned. */
   keyBarPinned?: boolean;
+  /** When true, freeze the animated terminal-progress indicator into a static icon. */
+  stateIconNoMotion?: boolean;
 }
 
 export interface RemoteConfig {
