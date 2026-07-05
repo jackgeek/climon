@@ -656,7 +656,10 @@ impl HostState {
         let now = now_iso();
         let reason = payload.reason.clone();
         let attention_snippet = if self.snippet_enabled {
-            crate::snippet::extract_snippet(&self.grid.visible_lines())
+            crate::snippet::extract_snippet(
+                &self.grid.visible_lines(),
+                Some(self.grid.cursor_row() as usize),
+            )
         } else {
             None
         };

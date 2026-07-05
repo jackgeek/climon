@@ -127,6 +127,14 @@ impl HeadlessGrid {
         }
         out
     }
+
+    /// Row index (0-based, top of the visible grid) the cursor currently sits on.
+    /// The smart-notification extractor uses this to ignore the input composer and
+    /// any help/status bar rendered at or below it, since the agent's response
+    /// sits above the cursor.
+    pub fn cursor_row(&self) -> u16 {
+        self.parser.screen().cursor_position().0
+    }
 }
 
 #[cfg(test)]
@@ -228,5 +236,14 @@ mod tests {
         assert_eq!(rows[0], "hello world");
         assert_eq!(rows[1], "second line");
         assert_eq!(rows[2], "");
+    }
+
+    #[test]
+    fn cursor_row_tracks_the_current_output_row() {
+        let mut grid = HeadlessGrid::new(20, 4);
+        assert_eq!(grid.cursor_row(), 0);
+        // Two newlines advance the cursor to the third row (index 2).
+        grid.write(b"line one\r\nline two\r\n> ");
+        assert_eq!(grid.cursor_row(), 2);
     }
 }
