@@ -1,6 +1,6 @@
 {
   "name": "climon",
-  "version": "2.4.1",
+  "version": "3.1.2",
   "description": "Web-based monitor for interactive CLI terminals with a built-in PTY session manager and web terminal.",
   "license": "MIT",
   "author": "Brodie Jack Allan",
@@ -16,9 +16,12 @@
     "clean": "rm -rf dist",
     "build:server": "bun build ./src/server.ts --outdir ./dist --target bun --format esm",
     "build:web": "bun scripts/build-web.ts",
-    "build:all": "bun run clean && bun run build:web && bun run build:server",
+    "build:rust": "bun scripts/build-rust.ts",
+    "build": "bun run clean && bun run build:web && bun run build:server && bun run build:rust",
+    "postinstall": "bun scripts/rust-toolchain.ts",
     "compile": "bun scripts/compile.ts",
     "sign-release": "bun scripts/sign-release.ts",
+    "verify-signing-key": "bun scripts/verify-signing-key.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",
@@ -41,13 +44,13 @@
   },
   "packageManager": "bun@1.3.10",
   "dependencies": {
-    "@fluentui/react-components": "^9.74.1",
+    "@fluentui/react-components": "^9.74.3",
     "@fluentui/react-icons": "^2.0.328",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/headless": "^5.5.0",
-    "@xterm/xterm": "^5.5.0",
-    "applicationinsights": "^3.15.0",
+    "@xterm/xterm": "^6.0.0",
+    "applicationinsights": "^3.15.1",
     "human-id": "^4.2.0",
     "pino": "^10.3.1",
     "pino-applicationinsights": "^2.1.0",
@@ -64,6 +67,6 @@
     "@types/web-push": "^3.6.4",
     "bun-types": "^1.3.10",
     "fflate": "^0.8.3",
-    "typescript": "^5.5.4"
+    "typescript": "^6.0.3"
   }
 }

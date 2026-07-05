@@ -27,25 +27,12 @@ describe("pwa context", () => {
     expect(canInstallPwa({ isTunnelOrigin: false, isStandalone: false })).toBe(false);
   });
 
-  test("reauthenticateTunnel opens the tunnel URL in the system browser when standalone", () => {
-    const calls: Array<[string, string]> = [];
+  test("reauthenticateTunnel navigates the current window in place to the origin root", () => {
+    const calls: string[] = [];
     reauthenticateTunnel({
-      isStandalone: true,
-      href: "https://abc-3131.usw2.devtunnels.ms/",
-      openBrowser: (url) => calls.push(["open", url]),
-      navigate: (url) => calls.push(["navigate", url]),
+      origin: "https://abc-3131.usw2.devtunnels.ms",
+      navigate: (url) => calls.push(url),
     });
-    expect(calls).toEqual([["open", "https://abc-3131.usw2.devtunnels.ms/"]]);
-  });
-
-  test("reauthenticateTunnel reloads in place in a normal browser tab", () => {
-    const calls: Array<[string, string]> = [];
-    reauthenticateTunnel({
-      isStandalone: false,
-      href: "https://abc-3131.usw2.devtunnels.ms/",
-      openBrowser: (url) => calls.push(["open", url]),
-      navigate: (url) => calls.push(["navigate", url]),
-    });
-    expect(calls).toEqual([["navigate", "https://abc-3131.usw2.devtunnels.ms/"]]);
+    expect(calls).toEqual(["https://abc-3131.usw2.devtunnels.ms/"]);
   });
 });

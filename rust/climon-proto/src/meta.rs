@@ -134,6 +134,8 @@ pub struct SessionMeta {
     pub theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_paused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +191,8 @@ pub struct SessionMetaPatch {
     pub theme: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_paused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_title: Option<String>,
 }
 
 /// serde helper that distinguishes an absent field (`None`) from an explicit
@@ -308,5 +312,28 @@ mod tests {
         assert!(json.contains("\"theme\":\"Dracula\""));
         let back: SessionMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(back.theme.as_deref(), Some("Dracula"));
+    }
+
+    #[test]
+    fn session_meta_terminal_title_round_trips() {
+        let mut meta: SessionMeta = serde_json::from_str(minimal_json()).unwrap();
+        assert_eq!(meta.terminal_title, None);
+        meta.terminal_title = Some("copilot — repo".to_string());
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("\"terminalTitle\":\"copilot — repo\""));
+        let back: SessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.terminal_title.as_deref(), Some("copilot — repo"));
+    }
+
+    #[test]
+    fn patch_terminal_title_serializes_camel_case() {
+        let patch = SessionMetaPatch {
+            terminal_title: Some("build ok".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&patch).unwrap(),
+            r#"{"terminalTitle":"build ok"}"#
+        );
     }
 }

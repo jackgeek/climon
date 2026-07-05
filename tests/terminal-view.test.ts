@@ -9,6 +9,8 @@ import {
   applyTerminalScrollbackForSession,
   canRefitTerminalForSession,
   completeInitialReplay,
+  captureTerminalText,
+  stripTerminalDecorations,
   focusTerminalPane,
   mapWheelToScrollLines,
   reconnectDelayMs,
@@ -176,6 +178,38 @@ describe("TerminalView", () => {
 
     expect(focusCalls).toBe(1);
     expect(refreshCalls).toBe(1);
+  });
+
+  test("captures the full terminal buffer as text, dropping trailing blank rows", async () => {
+    const term = new Terminal({ cols: 20, rows: 4, allowProposedApi: true });
+    await writeTerminal(term, "line one\r\nline two\r\n");
+
+    const captured = captureTerminalText(term as unknown as Parameters<typeof captureTerminalText>[0]);
+    term.dispose();
+
+    expect(captured).toContain("line one");
+    expect(captured).toContain("line two");
+    expect(captured.endsWith("line two")).toBe(true);
+  });
+
+  test("captureTerminalText tolerates a missing terminal", () => {
+    expect(captureTerminalText(null)).toBe("");
+  });
+
+  test("stripTerminalDecorations replaces box/block glyphs with spaces to keep alignment", () => {
+    const input = "cmd output      \u2502\nmore text here  \u2588";
+
+    const cleaned = stripTerminalDecorations(input);
+
+    expect(cleaned).toBe("cmd output\nmore text here");
+    // Same column count before the (now-blank) decoration column is preserved.
+    expect(cleaned.split("\n")[0]).toBe("cmd output");
+  });
+
+  test("stripTerminalDecorations preserves interior spacing when a mid-line glyph is removed", () => {
+    const input = "a\u2502b";
+
+    expect(stripTerminalDecorations(input)).toBe("a b");
   });
 
   test("repaints visible terminal rows without resetting the buffer", () => {
@@ -403,6 +437,15 @@ describe("TerminalView", () => {
     expect(cleared).toBe(1);
     expect(refreshed).toEqual([{ start: 0, end: 23 }]);
     expect(refits).toBe(1);
+  });
+
+  test("repaints the viewport after the font-size reflow settles", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // The font-size effect reflows via a refit that repaints once layout settles,
+    // instead of repainting before the grid has reflowed to the new cell size.
+    expect(source).toContain("applyTerminalFontSize(term, fontSize, refitThenRefresh)");
+    // refitThenRefresh fits first, then repaints the whole viewport.
+    expect(source).toContain("fitNow();\n        refreshTerminalRender(termRef.current);");
   });
 
   test("keeps alternate-screen output out of normal browser scrollback", async () => {

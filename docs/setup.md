@@ -2,7 +2,13 @@
 
 ## Prerequisites
 
-- **Rust stable** to build the native `climon` client from `rust/`.
+- **Rust stable** to build the native `climon` client from `rust/`. You don't
+  have to install it up front: `bun run build` provisions a minimal Rust
+  toolchain via [rustup](https://rustup.rs) on demand when `cargo` is missing
+  (set `CLIMON_SKIP_RUST_INSTALL=1` to opt out and install it yourself). On
+  **Windows**, building the client additionally needs the Visual Studio C++
+  Build Tools (for `link.exe`), which rustup cannot install — add them separately
+  if the build reports a missing linker.
 - **Bun >= 1.3.0** to build and run the maintained dashboard server/web and the
   Bun test suite. Check with `bun --version`.
 
@@ -63,9 +69,7 @@ On first run, climon writes `~/.climon/config.jsonc`:
     // When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling.
     "clampBrowserToHost": true,
     // Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255].
-    "detachPrefix": 28,
-    // When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.
-    "setTitle": true
+    "detachPrefix": 28
   },
   "attention": {
     // Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.

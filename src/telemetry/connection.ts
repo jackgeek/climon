@@ -1,12 +1,25 @@
 import { readGlobalConfigSetting } from "../config.js";
 
 /**
- * The Application Insights connection string shipped with release builds. Empty
- * by default; the release pipeline can replace this constant (or operators can
- * set APPLICATIONINSIGHTS_CONNECTION_STRING). Telemetry only flows when the user
- * has opted in via `telemetry.enabled`.
+ * Build-time define for the shipped Application Insights connection string. The
+ * release compile step injects it via `bun build --define`
+ * (see `telemetryDefineArgs` in `scripts/compile.ts`) from the
+ * `APPLICATIONINSIGHTS_CONNECTION_STRING` CI secret. Undefined in source mode and
+ * in builds without the secret, so nothing is embedded there.
  */
-export const EMBEDDED_TELEMETRY_CONNECTION = "";
+declare const __CLIMON_TELEMETRY_CONNECTION__: string | undefined;
+
+/**
+ * The Application Insights connection string shipped with release builds. Empty
+ * by default; the release pipeline replaces it at compile time via the
+ * `__CLIMON_TELEMETRY_CONNECTION__` define (or operators can set
+ * APPLICATIONINSIGHTS_CONNECTION_STRING at runtime). Telemetry only flows when the
+ * user has opted in via `telemetry.enabled`.
+ */
+export const EMBEDDED_TELEMETRY_CONNECTION: string =
+  typeof __CLIMON_TELEMETRY_CONNECTION__ !== "undefined"
+    ? __CLIMON_TELEMETRY_CONNECTION__
+    : "";
 
 /**
  * Returns the telemetry connection string only when the user has opted in.

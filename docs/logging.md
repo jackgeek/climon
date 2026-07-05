@@ -91,22 +91,40 @@ are redacted to `[REDACTED]` in all log output.
 
 ## Application Insights (optional)
 
-The dashboard server can forward logs to Azure Application Insights. Set a
-connection string and it is enabled automatically (off by default):
+The dashboard server can forward logs to Azure Application Insights. Forwarding
+is **off by default** and only happens when you opt in with:
 
-- `climon config logging.appInsights.connectionString "<connection-string>"`
-- or the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable
+```sh
+climon config telemetry.enabled true
+```
 
-This sends log data over the network and is opt-in only.
+The connection string is a secret and is **never stored in climon config**. Supply
+it in one of two ways:
+
+- the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable on the machine
+  that runs the dashboard server, or
+- the build-time `EMBEDDED_TELEMETRY_CONNECTION` constant baked into release
+  binaries by the release pipeline (`src/telemetry/connection.ts`). The release
+  workflow injects it at compile time from the
+  `APPLICATIONINSIGHTS_CONNECTION_STRING` GitHub Actions secret via
+  `bun build --define` (see `telemetryDefineArgs` in `scripts/compile.ts`), so the
+  string never lives in source. Builds without the secret (local builds, forks)
+  ship an empty constant and send nothing. The release workflow **fails fast** if
+  the `APPLICATIONINSIGHTS_CONNECTION_STRING` secret is missing, so an official
+  release can never accidentally ship without an embedded connection string.
+
+When `telemetry.enabled` is `true` and a connection string is available from one
+of those sources, the server forwards logs; otherwise it stays local-only. This
+sends log data over the network and is opt-in only. See the
+[Privacy Policy](privacy.md) for what is and is not collected and how it is
+handled.
 
 Every record forwarded to Application Insights carries an anonymous
 `installId` — a random UUID stored in `$CLIMON_HOME/install.json`, generated on
 first server start. It contains no personal information and exists only so logs
 from one installation can be distinguished from another.
 
-Forwarding can be turned off without removing the connection string by setting
-`telemetry.enabled` to `false`. Any other value (including absent) leaves the
-"connection string present ⇒ enabled" behavior unchanged.
+Turn forwarding off at any time with `climon config telemetry.enabled false`.
 
 ### Compact emission
 
@@ -126,8 +144,24 @@ never receives rendered message text:
   parameter the catalog entry marks `redact: true` (hostnames, paths, URLs,
   config values, tokens, PII) is replaced with `[REDACTED:<category>]` before
   sending. Non-redacted params stay as queryable properties.
-- Records that are not yet catalogued fall back to the sentinel id `00000000`
-  and keep their rendered text, so emission stays correct during the migration.
+- Diagnostic params (`category: "diagnostic"`, e.g. error/reason/message text)
+  are the exception: instead of being blanked, they are passed through the
+  diagnostic sanitizer (`src/logging/sanitize.ts`), which keeps the diagnostic
+  skeleton (error codes, syscalls, HTTP statuses) but strips identifier-shaped
+  tokens — paths, hostnames, IPs, URLs, emails, and long hex/opaque tokens are
+  replaced with `<path>`, `<host>`, `<ip>`, `<url>`, `<email>`, `<id>` markers,
+  and the value is truncated. This keeps error telemetry useful without leaking
+  identifiers; when in doubt the sanitizer over-redacts.
+- Emission is **allowlist-based**: only a fixed set of non-identifying base
+  fields (`level`, `time`, `role`, `pid`, `version`, `installId`, `component`,
+  `msgId`, `msgKey`) plus the record's own catalog parameters (redacted or
+  sanitized as above) are forwarded. The rendered `msg`, serialized errors, and
+  any stray properties are dropped.
+- Records with no catalog entry — uncatalogued records, or a not-yet-migrated
+  `logMsg` key that resolves to the sentinel id — forward only the allowlisted
+  base fields under the sentinel id `00000000`; their rendered text is never
+  transmitted. Lines that cannot be parsed as JSON are replaced with a bare
+  sentinel record rather than forwarded raw.
 
 Local log streams (console, file) always keep the full rendered text; only the
 Application Insights stream is compacted and redacted.
