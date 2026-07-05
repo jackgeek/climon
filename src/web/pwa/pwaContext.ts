@@ -1,5 +1,4 @@
 import { isDevTunnelHost } from "../api.js";
-import { REAUTH_PARAM } from "./swCache.js";
 
 export function computeIsTunnelOrigin(hostname: string, protocol: string): boolean {
   return isDevTunnelHost(hostname) && protocol === "https:";
@@ -48,24 +47,17 @@ export interface TunnelReauthEnv {
 }
 
 /**
- * Builds the URL used to re-run the dev-tunnel sign-in. It targets the origin
- * root with the `reauth` marker and deliberately omits the
- * `X-Tunnel-Skip-AntiPhishing-Page` param, so the relay serves its renderable
- * interactive sign-in / anti-phishing page (not the blank programmatic response
- * that a standalone iOS PWA downloaded as an "empty file").
- */
-export function buildTunnelReauthUrl(origin: string): string {
-  return `${origin}/?${REAUTH_PARAM}=1`;
-}
-
-/**
- * Recovers an expired dev-tunnel sign-in with a top-level navigation inside the
- * current window. On iOS a home-screen PWA has a cookie jar isolated from
- * Safari, so the sign-in must complete inside the PWA's own window for the
- * resulting `*.devtunnels.ms` cookie to be usable; opening Safari can never
- * refresh it. The service worker passes the `reauth`-marked navigation through
- * so the browser follows the cross-origin Microsoft redirect natively.
+ * Recovers an expired dev-tunnel sign-in with a full top-level navigation to the
+ * dashboard origin. The service worker never intercepts navigations, so the
+ * browser follows the cross-origin dev-tunnel → Microsoft sign-in redirect
+ * natively and lands the fresh `*.devtunnels.ms` cookie in the current context.
+ *
+ * Note: an installed iOS home-screen PWA runs as a standalone WKWebView that
+ * blocks script-initiated cross-origin navigations, so this in-app button cannot
+ * refresh the cookie there — the reliable path on iOS is to relaunch the app,
+ * whose launch navigation is allowed to follow the redirect. This button remains
+ * effective in a normal browser tab.
  */
 export function reauthenticateTunnel(env: TunnelReauthEnv): void {
-  env.navigate(buildTunnelReauthUrl(env.origin));
+  env.navigate(`${env.origin}/`);
 }
