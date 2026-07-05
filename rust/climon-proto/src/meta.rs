@@ -347,7 +347,9 @@ mod tests {
         assert_eq!(meta.attention_snippet, None);
         meta.attention_snippet = Some("all 12 tests pass. Update integration tests?".into());
         let json = serde_json::to_string(&meta).unwrap();
-        assert!(json.contains("\"attentionSnippet\":\"all 12 tests pass. Update integration tests?\""));
+        assert!(
+            json.contains("\"attentionSnippet\":\"all 12 tests pass. Update integration tests?\"")
+        );
         let back: SessionMeta = serde_json::from_str(&json).unwrap();
         assert_eq!(
             back.attention_snippet.as_deref(),

@@ -431,7 +431,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(patched.attention_snippet.as_deref(), Some("build ok. Proceed?"));
+        assert_eq!(
+            patched.attention_snippet.as_deref(),
+            Some("build ok. Proceed?")
+        );
     }
 
     #[test]

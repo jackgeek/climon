@@ -12,11 +12,40 @@ const RELEVANCE_THRESHOLD: f32 = 0.45;
 
 /// Box-drawing / block glyphs that form terminal UI chrome.
 fn is_box_char(c: char) -> bool {
-    matches!(c,
-        '│' | '┃' | '║' | '╎' | '┆' | '┊' |
-        '─' | '━' | '═' | '╌' | '┄' |
-        '╭' | '╮' | '╰' | '╯' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' |
-        '▌' | '▐' | '█' | '▁' | '▔' | '░' | '▒' | '▓')
+    matches!(
+        c,
+        '│' | '┃'
+            | '║'
+            | '╎'
+            | '┆'
+            | '┊'
+            | '─'
+            | '━'
+            | '═'
+            | '╌'
+            | '┄'
+            | '╭'
+            | '╮'
+            | '╰'
+            | '╯'
+            | '┌'
+            | '┐'
+            | '└'
+            | '┘'
+            | '├'
+            | '┤'
+            | '┬'
+            | '┴'
+            | '┼'
+            | '▌'
+            | '▐'
+            | '█'
+            | '▁'
+            | '▔'
+            | '░'
+            | '▒'
+            | '▓'
+    )
 }
 
 /// Leading prompt sigils to drop from a line's start.
@@ -49,7 +78,14 @@ fn clean_line(line: &str) -> String {
 fn is_status_affordance(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     const NEEDLES: [&str; 8] = [
-        "tokens", "context left", "esc to", "ctrl+", "press enter", "[y/n]", "↑/↓", "to cancel",
+        "tokens",
+        "context left",
+        "esc to",
+        "ctrl+",
+        "press enter",
+        "[y/n]",
+        "↑/↓",
+        "to cancel",
     ];
     if NEEDLES.iter().any(|n| lower.contains(n)) {
         return true;
@@ -171,7 +207,10 @@ mod tests {
             "  ⏎ send   ⌃C quit   1.2k tokens",
         ]);
         let snippet = extract_snippet(&screen).expect("expected a snippet");
-        assert!(snippet.contains("Want me to also update the integration tests?"), "got: {snippet:?}");
+        assert!(
+            snippet.contains("Want me to also update the integration tests?"),
+            "got: {snippet:?}"
+        );
         assert!(snippet.contains("all 12 tests pass"), "got: {snippet:?}");
         assert!(snippet.chars().count() <= SNIPPET_MAX_CHARS);
     }
@@ -200,8 +239,14 @@ Second sentence continues with even more filler words to push us well past the l
 Finally, should I deploy the release now?";
         let snippet = extract_snippet(&lines(&[long])).expect("expected a snippet");
         assert!(snippet.chars().count() <= SNIPPET_MAX_CHARS);
-        assert!(snippet.starts_with('…'), "expected leading ellipsis, got: {snippet:?}");
-        assert!(snippet.ends_with("should I deploy the release now?"), "got: {snippet:?}");
+        assert!(
+            snippet.starts_with('…'),
+            "expected leading ellipsis, got: {snippet:?}"
+        );
+        assert!(
+            snippet.ends_with("should I deploy the release now?"),
+            "got: {snippet:?}"
+        );
     }
 
     #[test]
