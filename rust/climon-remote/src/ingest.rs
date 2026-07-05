@@ -244,7 +244,10 @@ fn parse_progress(value: &Value) -> Option<TerminalProgress> {
         _ => return None,
     };
     let value = if matches!(state, ProgressState::Normal) {
-        value.get("value").and_then(|v| v.as_u64()).map(|v| v.min(100) as u8)
+        value
+            .get("value")
+            .and_then(as_integer)
+            .map(|v| v.clamp(0, 100) as u8)
     } else {
         None
     };
@@ -2026,6 +2029,8 @@ mod tests {
         use climon_proto::meta::{ProgressState, TerminalProgress};
         let v = serde_json::json!({ "state": "normal", "value": 250 });
         assert_eq!(parse_progress(&v), Some(TerminalProgress { state: ProgressState::Normal, value: Some(100) }));
+        let neg = serde_json::json!({ "state": "normal", "value": -5 });
+        assert_eq!(parse_progress(&neg), Some(TerminalProgress { state: ProgressState::Normal, value: Some(0) }));
         let bad = serde_json::json!({ "state": "bogus" });
         assert_eq!(parse_progress(&bad), None);
         let err = serde_json::json!({ "state": "error", "value": 50 });
