@@ -1626,9 +1626,18 @@ pub async fn run_ingest_daemon(
     mut deps: IngestDaemonDeps<'_>,
 ) -> std::io::Result<IngestExit> {
     let pid_path = ingest_pid_path(&config_env);
-    if !crate::singleton::acquire_singleton(&pid_path) {
-        return Ok(IngestExit::AlreadyRunning);
-    }
+    // Hold the singleton guard for the daemon's whole lifetime. The OS advisory
+    // lock is released only when this process exits, so a stale pidfile or a
+    // recycled PID can never make a fresh daemon falsely believe another is
+    // already running.
+    let _singleton_guard = match crate::singleton::acquire_singleton_detailed(&pid_path) {
+        crate::singleton::SingletonResult {
+            acquired: true,
+            guard: Some(guard),
+            ..
+        } => guard,
+        _ => return Ok(IngestExit::AlreadyRunning),
+    };
     reconcile_stale_remote_sessions(&store_env);
 
     let state = crate::remote_host::read_remote_host_state(&config_env);

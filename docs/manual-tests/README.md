@@ -77,6 +77,7 @@ result-tracking row.
 | — | Terminal title as session subtitle — capture PTY OSC 0/2 title, drop name→title | [terminal-title-subtitle.md](terminal-title-subtitle.md) |
 | — | Terminal selection / copy (touch) — Select button captures full scrollback into a monospaced textarea for native copy, with a strip-decorations toggle | [terminal-select-mode.md](terminal-select-mode.md) |
 | — | `bun run build` builds the Rust client + on-demand rustup bootstrap when cargo is missing | [build-all-rust-toolchain.md](build-all-rust-toolchain.md) |
+| — | Remote uplink/ingest singleton — OS advisory lock immune to PID recycling (fixes silent uplink exit) | [singleton-lock-pid-recycle.md](singleton-lock-pid-recycle.md) |
 
 ## Recording results
 
