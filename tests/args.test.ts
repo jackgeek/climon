@@ -18,8 +18,8 @@ describe("helpText", () => {
 });
 
 describe("parseArgs", () => {
-  test("defaults to shell with no args", () => {
-    expect(parseArgs([])).toEqual({ command: "shell" });
+  test("defaults to help with no args", () => {
+    expect(parseArgs([])).toEqual({ command: "help" });
   });
 
   test("parses help flags", () => {
@@ -152,15 +152,22 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--color", "orange", "bash"])).toThrow(/must be one of/);
   });
 
-  test("bare flags with no command defaults to shell", () => {
-    expect(parseArgs(["--name", "my session"])).toEqual({
-      command: "shell",
-      name: "my session"
-    });
-    expect(parseArgs(["--priority", "5", "--color", "blue"])).toEqual({
+  test("bare flags with no command fall through to help", () => {
+    expect(parseArgs(["--name", "my session"])).toEqual({ command: "help" });
+    expect(parseArgs(["--priority", "5", "--color", "blue"])).toEqual({ command: "help" });
+  });
+
+  test("parses the shell subcommand with session flags", () => {
+    expect(parseArgs(["shell"])).toEqual({ command: "shell" });
+    expect(parseArgs(["shell", "--priority", "5", "--color", "blue", "--name", "dev"])).toEqual({
       command: "shell",
       priority: 5,
-      color: "blue"
+      color: "blue",
+      name: "dev"
     });
+  });
+
+  test("shell subcommand rejects a trailing command", () => {
+    expect(() => parseArgs(["shell", "npm", "test"])).toThrow(/does not take a command/);
   });
 });

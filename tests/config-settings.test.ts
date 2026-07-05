@@ -20,7 +20,6 @@ describe("config settings registry", () => {
       "server.port",
       "terminal.clampBrowserToHost",
       "terminal.detachPrefix",
-      "terminal.setTitle",
       "hotKeys.focusTopSession",
       "dashboard.theme",
       "dashboard.keyBarPinned",
@@ -45,7 +44,6 @@ describe("config settings registry", () => {
       "session.terminalProgram",
       "tunnelLink.keepAlive",
       "logging.level",
-      "logging.appInsights.connectionString",
       "feature.sessionSpawning",
       "feature.remoteSpawn",
       "feature.wslBridge",
@@ -95,11 +93,10 @@ describe("config settings registry", () => {
       server: { host: "127.0.0.1", port: 3131 },
       terminal: {
         clampBrowserToHost: false,
-        detachPrefix: 0x1c,
-        setTitle: true
+        detachPrefix: 0x1c
       },
       hotKeys: { focusTopSession: "Alt+J" },
-      dashboard: { theme: "Default", keyBarPinned: false },
+      dashboard: { theme: "Default", keyBarPinned: true },
       attention: { idleSeconds: 10 },
       remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
@@ -158,7 +155,6 @@ describe("config settings registry", () => {
       "session.terminalProgram",
       "tunnelLink.keepAlive",
       "logging.level",
-      "logging.appInsights.connectionString",
       "feature.sessionSpawning",
       "feature.remoteSpawn",
       "feature.wslBridge",
@@ -170,7 +166,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(41);
+    expect(allConfigKeys().length).toBe(39);
   });
 
   test("coerces values through registry validators", () => {

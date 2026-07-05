@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use climon_proto::frame::{
     encode_frame, encode_json_frame, parse_json_payload, AttentionPayload, ExitPayload,
     FrameDecoder, FrameType, PtySizePayload, ResizePayload, ResizeSource, TerminalModePayload,
-    TerminalResizeMode, TerminalWarningPayload, TitlePayload,
+    TerminalResizeMode, TerminalWarningPayload,
 };
 use climon_proto::meta::{PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus};
 use climon_pty::pty::PtyResizer;
@@ -40,6 +40,7 @@ use crate::resize::{clamp_resize, revert_size, Dimensions, ResizeRequest};
 use crate::socket::{
     cleanup_session_socket, listen_on_session_socket, SessionListener, SessionStream,
 };
+use crate::title_capture::capture_terminal_title_from_output;
 
 const SESSION_ENV_VAR: &str = "CLIMON_SESSION_ID";
 const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
@@ -154,15 +155,12 @@ struct Client {
 struct HostState {
     env: StoreEnv,
     id: String,
-    headless: bool,
     resizer: PtyResizer,
 
     clients: HashMap<u64, Client>,
 
     clamp_browser_to_host: bool,
-    set_title: bool,
     terminal_mode: TerminalResizeMode,
-    current_name: String,
     host_cols: u16,
     host_rows: u16,
     applied_cols: u16,
@@ -207,6 +205,11 @@ struct HostState {
     started_at: Instant,
     mouse_mode_state: HashMap<String, bool>,
     mouse_mode_remainder: String,
+    /// Latest terminal title parsed from the PTY output stream (`OSC 0/2`).
+    /// `None` = no program has set a title yet; `Some("")` = explicitly cleared.
+    captured_terminal_title: Option<String>,
+    /// Trailing incomplete OSC bytes carried across reader chunks.
+    terminal_title_remainder: String,
 }
 
 type Shared = Arc<Mutex<HostState>>;
@@ -721,15 +724,6 @@ impl HostState {
             self.clients.remove(&client_id);
             return true;
         }
-        if self.set_title && !self.current_name.is_empty() {
-            let title = encode_json_frame(
-                FrameType::Title,
-                &TitlePayload {
-                    name: self.current_name.clone(),
-                },
-            );
-            self.send_to_client(client_id, &title);
-        }
         false
     }
 
@@ -803,7 +797,6 @@ pub fn run_session_host(
     );
 
     let clamp_browser_to_host = cfg_bool(&config, "terminal", "clampBrowserToHost", false);
-    let set_title = cfg_bool(&config, "terminal", "setTitle", true);
     let idle_seconds = cfg_i64(&config, "attention", "idleSeconds", 10);
     let idle_enabled = idle_seconds > 0;
     let headless = options.headless;
@@ -852,13 +845,10 @@ pub fn run_session_host(
     let state: Shared = Arc::new(Mutex::new(HostState {
         env: env.clone(),
         id: id.to_string(),
-        headless,
         resizer,
         clients: HashMap::new(),
         clamp_browser_to_host,
-        set_title,
         terminal_mode: initial_mode,
-        current_name: meta.name.clone().unwrap_or_default(),
         host_cols: meta.cols,
         host_rows: meta.rows,
         applied_cols: meta.cols,
@@ -879,6 +869,8 @@ pub fn run_session_host(
         started_at: Instant::now(),
         mouse_mode_state: HashMap::new(),
         mouse_mode_remainder: String::new(),
+        captured_terminal_title: None,
+        terminal_title_remainder: String::new(),
     }));
 
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -1001,15 +993,8 @@ pub fn run_session_host(
         None
     };
 
-    // --- Title-watch thread ---
-    let title_handle = if set_title {
-        Some(spawn_title_thread(
-            Arc::clone(&state),
-            Arc::clone(&shutdown),
-        ))
-    } else {
-        None
-    };
+    // --- Title-capture thread ---
+    let title_handle = spawn_title_capture_thread(Arc::clone(&state), Arc::clone(&shutdown));
 
     // --- Signal handling: SIGTERM/SIGINT kill the child ---
     #[cfg(unix)]
@@ -1076,9 +1061,7 @@ pub fn run_session_host(
     if let Some(h) = restore_handle {
         let _ = h.join();
     }
-    if let Some(h) = title_handle {
-        let _ = h.join();
-    }
+    let _ = title_handle.join();
     let _ = reader_handle.join();
     for h in conn_threads.lock().unwrap().drain(..) {
         let _ = h.join();
@@ -1142,6 +1125,11 @@ fn spawn_reader_thread(
                     &remainder,
                     TRACKED_MOUSE_PRIVATE_MODES,
                 );
+                let title_remainder = std::mem::take(&mut s.terminal_title_remainder);
+                let mut captured = s.captured_terminal_title.take();
+                s.terminal_title_remainder =
+                    capture_terminal_title_from_output(&mut captured, data, &title_remainder);
+                s.captured_terminal_title = captured;
                 s.scrollback.append(data);
                 s.grid.write(data);
                 s.broadcast(&frame);
@@ -1519,41 +1507,38 @@ fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()>
     })
 }
 
-fn spawn_title_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
+/// Polls the reader-thread-captured terminal title and persists it to session
+/// metadata, debounced: it wakes every 300ms and writes only when the value
+/// actually changed, coalescing bursts of title updates to the latest value.
+fn spawn_title_capture_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
-        let (env, id, headless) = {
+        let (env, id) = {
             let s = state.lock().unwrap();
-            (s.env.clone(), s.id.clone(), s.headless)
+            (s.env.clone(), s.id.clone())
         };
+        let mut last_written: Option<String> = None;
         loop {
-            thread::sleep(Duration::from_millis(1000));
-            if shutdown.load(Ordering::SeqCst) {
-                break;
-            }
-            let fresh = match climon_store::meta::read_session_meta(&env, &id) {
-                Ok(Some(m)) => m,
-                _ => continue,
+            thread::sleep(Duration::from_millis(300));
+            let stop = shutdown.load(Ordering::SeqCst);
+            let captured = {
+                let s = state.lock().unwrap();
+                s.captured_terminal_title.clone()
             };
-            let new_name = fresh.name.unwrap_or_default();
-            let mut s = state.lock().unwrap();
-            if s.exited {
-                break;
-            }
-            if new_name != s.current_name {
-                s.current_name = new_name.clone();
-                let frame = encode_json_frame(
-                    FrameType::Title,
-                    &TitlePayload {
-                        name: new_name.clone(),
-                    },
-                );
-                s.broadcast(&frame);
-                if !headless {
-                    let stdout = std::io::stdout();
-                    let mut lock = stdout.lock();
-                    let _ = write!(lock, "\x1b]0;{new_name}\x07");
-                    let _ = lock.flush();
+            if let Some(title) = captured {
+                if last_written.as_deref() != Some(title.as_str()) {
+                    let _ = climon_store::patch::patch_session_meta(
+                        &env,
+                        &id,
+                        SessionMetaPatch {
+                            terminal_title: Some(title.clone()),
+                            ..Default::default()
+                        },
+                    );
+                    last_written = Some(title);
                 }
+            }
+            if stop {
+                break;
             }
         }
     })

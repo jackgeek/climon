@@ -315,13 +315,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .default(Value::from(DEFAULT_DETACH_PREFIX))
         .with_validate(v_detach_prefix),
         ConfigSetting::new(
-            "terminal.setTitle",
-            Boolean,
-            "When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.",
-            vec![Client],
-        )
-        .default(Value::from(true)),
-        ConfigSetting::new(
             "hotKeys.focusTopSession",
             String,
             "Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is \"Mod+...+Key\" (e.g. \"Alt+T\", \"Ctrl+Shift+J\"). Set to an empty string to disable.",
@@ -344,7 +337,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "Whether the web dashboard key bar is pinned open.",
             vec![Server, Browser],
         )
-        .default(Value::from(false))
+        .default(Value::from(true))
         .accept_input(),
         ConfigSetting::new(
             "attention.idleSeconds",
@@ -524,14 +517,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .default(Value::from("trace"))
         .accept_input()
         .with_validate(v_logging_level),
-        ConfigSetting::new(
-            "logging.appInsights.connectionString",
-            String,
-            "Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable.",
-            vec![Server],
-        )
-        .sensitive()
-        .accept_input(),
     ];
     s.extend(feature_config_settings());
     s.extend(vec![
@@ -828,7 +813,6 @@ mod tests {
                 "server.port",
                 "terminal.clampBrowserToHost",
                 "terminal.detachPrefix",
-                "terminal.setTitle",
                 "hotKeys.focusTopSession",
                 "dashboard.theme",
                 "dashboard.keyBarPinned",
@@ -853,7 +837,6 @@ mod tests {
                 "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
-                "logging.appInsights.connectionString",
                 "feature.sessionSpawning",
                 "feature.remoteSpawn",
                 "feature.wslBridge",
@@ -870,7 +853,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 41);
+        assert_eq!(all_config_keys().len(), 39);
     }
 
     #[test]
@@ -893,9 +876,9 @@ mod tests {
             json!({
                 "version": 1,
                 "server": { "host": "127.0.0.1", "port": 3131 },
-                "terminal": { "clampBrowserToHost": false, "detachPrefix": 28, "setTitle": true },
+                "terminal": { "clampBrowserToHost": false, "detachPrefix": 28 },
                 "hotKeys": { "focusTopSession": "Alt+J" },
-                "dashboard": { "theme": "Default", "keyBarPinned": false },
+                "dashboard": { "theme": "Default", "keyBarPinned": true },
                 "attention": { "idleSeconds": 10 },
                 "remote": { "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },
@@ -959,7 +942,6 @@ mod tests {
                 "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
-                "logging.appInsights.connectionString",
                 "feature.sessionSpawning",
                 "feature.remoteSpawn",
                 "feature.wslBridge",
@@ -1133,10 +1115,11 @@ mod tests {
     }
 
     #[test]
-    fn logging_appinsights_sensitive_unset() {
-        let s = find_config_setting("logging.appInsights.connectionString").unwrap();
-        assert!(s.sensitive);
-        assert_eq!(s.default_value, None);
+    fn logging_appinsights_connection_string_is_not_a_setting() {
+        // The App Insights connection string is a secret and must not live in
+        // climon config; it comes from the APPLICATIONINSIGHTS_CONNECTION_STRING
+        // environment variable or the build-time embedded constant instead.
+        assert!(find_config_setting("logging.appInsights.connectionString").is_none());
         let cfg = build_default_config_from_settings();
         assert_eq!(cfg["logging"]["level"], json!("trace"));
     }

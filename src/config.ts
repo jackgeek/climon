@@ -170,9 +170,6 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
       parsedConfigObject.terminal = { ...(parsedConfigObject.terminal ?? {}), clampBrowserToHost: false };
     }
     parsedConfigObject.terminal.detachPrefix = normalizeDetachPrefix(parsedConfigObject.terminal.detachPrefix);
-    if (typeof parsedConfigObject.terminal.setTitle !== "boolean") {
-      parsedConfigObject.terminal.setTitle = true;
-    }
     // Backfill the attention section for configs written before it existed.
     if (!parsedConfigObject.attention || typeof parsedConfigObject.attention.idleSeconds !== "number") {
       parsedConfigObject.attention = { ...(parsedConfigObject.attention ?? {}), idleSeconds: 10 };

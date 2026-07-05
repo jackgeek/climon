@@ -9,7 +9,7 @@
 
 ## Workflow
 
-- Always start new work in a fresh git worktree under the `.worktrees/` folder, never directly on the main checkout. Create one per task with `git worktree add .worktrees/<branch-name> -b <branch-name>` (or check out an existing branch) and do all edits, builds, and tests there. The `.worktrees/` folder is gitignored.
+- Always start new work in a fresh git worktree under the `.worktrees/` folder, never directly on the main or dev checkout. Create one per task with `git worktree add .worktrees/<branch-name> -b <branch-name>` (or check out an existing branch) and do all edits, builds, and tests there. The `.worktrees/` folder is gitignored.
 - **Always open pull requests against the `dev` branch, never `main`.** Pushing to `main` triggers the [`Release`](.github/workflows/release.yml) workflow (it bumps the version, tags, and publishes), so feature/fix PRs must target `dev` to avoid cutting an accidental release. `dev` is only merged into `main` when we deliberately want to ship a release.
 
 ## Local Copilot CLI skills
@@ -28,7 +28,7 @@
 ### Bun server + tests
 
 - Install dependencies with `bun install`. The project uses Bun (`packageManager: bun@1.3.10`) and TypeScript ESM.
-- Build all runtime artifacts with `bun run build:all` (`build:web` dashboard bundle, `build:server` server entrypoint). There is no longer a client build.
+- Build all runtime artifacts with `bun run build` (`build:web` dashboard bundle, `build:server` server entrypoint, `build:rust` Rust `climon` client). The `build:rust` step (`scripts/build-rust.ts`) installs a minimal Rust toolchain via rustup on demand when `cargo` is missing (skip with `CLIMON_SKIP_RUST_INSTALL=1`); the `postinstall` hook (`scripts/rust-toolchain.ts`) only reports toolchain status and never downloads during `bun install`.
 - Compile release binaries with `bun run compile`; bump the version and create the matching git tag with `bun run release`.
 - Type-check/lint with `bun run lint` or `bun run typecheck` (`tsc -p tsconfig.json --noEmit`).
 - Run the full suite with `bun test tests`.
