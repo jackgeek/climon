@@ -150,6 +150,7 @@ mod tests {
             color: None,
             user_paused: None,
             theme: None,
+            terminal_title: None,
         }
     }
 

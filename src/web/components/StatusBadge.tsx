@@ -1,5 +1,16 @@
-import { Badge } from "@fluentui/react-components";
+import { Badge, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import type { SessionStatus } from "../../types.js";
+
+const useStyles = makeStyles({
+  completed: {
+    backgroundColor: tokens.colorPaletteDarkGreenBackground2,
+    borderTopColor: tokens.colorPaletteDarkGreenBackground2,
+    borderRightColor: tokens.colorPaletteDarkGreenBackground2,
+    borderBottomColor: tokens.colorPaletteDarkGreenBackground2,
+    borderLeftColor: tokens.colorPaletteDarkGreenBackground2,
+    color: tokens.colorNeutralForegroundOnBrand
+  }
+});
 
 type BadgeColor = "brand" | "informative" | "warning" | "success" | "danger" | "subtle";
 
@@ -44,10 +55,12 @@ interface Props {
 }
 
 export function StatusBadge({ status, compact = false, showTitle = true }: Props) {
+  const styles = useStyles();
   return (
     <Badge
       appearance="filled"
       color={statusBadgeColor(status)}
+      className={status === "completed" ? mergeClasses(styles.completed) : undefined}
       size="small"
       title={showTitle ? STATUS_LABELS[status] : undefined}
     >

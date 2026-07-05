@@ -39,7 +39,13 @@ impl ColorFlag {
 /// The parsed top-level command. Mirrors the TS `ParsedCommand` union.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedCommand {
-    Help,
+    /// `climon --help` / `help` (explicit) or bare `climon` / leading session
+    /// flags with no command (implicit). When `implicit`, the launcher prints a
+    /// friendly note explaining why help is shown; explicit help does not, so it
+    /// stays byte-for-byte identical to `fixtures/cli/help.txt`.
+    Help {
+        implicit: bool,
+    },
     Version,
     Shell {
         priority: Option<i64>,
@@ -146,7 +152,7 @@ pub fn help_text(experimental: ExperimentalHelp) -> String {
         "climon v{VERSION} — web-based monitor for interactive CLI sessions
 
 Usage:
-  climon [--priority N] [--color C] [--name S] [--theme T]
+  climon shell [--priority N] [--color C] [--name S] [--theme T]
                                Start a monitored session for the current shell
   climon [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
                                Run a command in a monitored PTY session
@@ -307,12 +313,7 @@ fn run_from_flags(argv: Vec<String>, headless: bool, flags: SessionFlags) -> Par
 /// `parseArgs`.
 pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
     if argv.is_empty() {
-        return Ok(ParsedCommand::Shell {
-            priority: None,
-            color: None,
-            name: None,
-            theme: None,
-        });
+        return Ok(ParsedCommand::Help { implicit: true });
     }
 
     // Bare leading flags trigger shell mode (or run, if a command follows).
@@ -325,7 +326,10 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
     {
         let (flags, rest) = parse_session_flags(argv)?;
         if rest.is_empty() {
-            return Ok(shell_from_flags(flags));
+            // Session flags with no command no longer start a shell; a shell now
+            // requires the explicit `climon shell`. Fall through to help.
+            let _ = flags;
+            return Ok(ParsedCommand::Help { implicit: true });
         }
         return Ok(run_from_flags(rest, false, flags));
     }
@@ -333,7 +337,7 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
     let rest: Vec<String> = argv[1..].to_vec();
 
     match first.as_str() {
-        "help" | "--help" | "-h" => Ok(ParsedCommand::Help),
+        "help" | "--help" | "-h" => Ok(ParsedCommand::Help { implicit: false }),
         "--version" | "-v" => Ok(ParsedCommand::Version),
         "--update" | "update" => Ok(ParsedCommand::Update { argv: rest }),
         "setup" => Ok(ParsedCommand::Setup { argv: rest }),
@@ -357,6 +361,16 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
             Ok(ParsedCommand::Server { port, no_takeover })
         }
         "ls" | "list" => Ok(ParsedCommand::Ls),
+        "shell" => {
+            let (flags, extra) = parse_session_flags(&rest)?;
+            if !extra.is_empty() {
+                return Err(
+                    "`climon shell` does not take a command; use `climon <command>` to run one."
+                        .to_string(),
+                );
+            }
+            Ok(shell_from_flags(flags))
+        }
         "kill" => {
             let id = rest.first();
             match id {
@@ -605,23 +619,15 @@ mod tests {
     // ---- parseArgs ----
 
     #[test]
-    fn defaults_to_shell_with_no_args() {
-        assert_eq!(
-            parse(&[]),
-            ParsedCommand::Shell {
-                priority: None,
-                color: None,
-                name: None,
-                theme: None,
-            }
-        );
+    fn defaults_to_implicit_help_with_no_args() {
+        assert_eq!(parse(&[]), ParsedCommand::Help { implicit: true });
     }
 
     #[test]
     fn parses_help_flags() {
-        assert_eq!(parse(&["--help"]), ParsedCommand::Help);
-        assert_eq!(parse(&["-h"]), ParsedCommand::Help);
-        assert_eq!(parse(&["help"]), ParsedCommand::Help);
+        assert_eq!(parse(&["--help"]), ParsedCommand::Help { implicit: false });
+        assert_eq!(parse(&["-h"]), ParsedCommand::Help { implicit: false });
+        assert_eq!(parse(&["help"]), ParsedCommand::Help { implicit: false });
     }
 
     #[test]
@@ -914,25 +920,64 @@ mod tests {
     }
 
     #[test]
-    fn bare_flags_with_no_command_defaults_to_shell() {
+    fn bare_flags_with_no_command_show_implicit_help() {
         assert_eq!(
             parse(&["--name", "my session"]),
-            ParsedCommand::Shell {
-                priority: None,
-                color: None,
-                name: Some("my session".to_string()),
-                theme: None,
-            }
+            ParsedCommand::Help { implicit: true }
         );
         assert_eq!(
             parse(&["--priority", "5", "--color", "blue"]),
+            ParsedCommand::Help { implicit: true }
+        );
+    }
+
+    #[test]
+    fn parses_shell_subcommand_with_no_flags() {
+        assert_eq!(
+            parse(&["shell"]),
             ParsedCommand::Shell {
-                priority: Some(5),
-                color: Some(ColorFlag::Color(AnsiColor::Blue)),
+                priority: None,
+                color: None,
                 name: None,
                 theme: None,
             }
         );
+    }
+
+    #[test]
+    fn parses_shell_subcommand_with_session_flags() {
+        assert_eq!(
+            parse(&[
+                "shell",
+                "--priority",
+                "5",
+                "--color",
+                "blue",
+                "--name",
+                "dev",
+                "--theme",
+                "Dracula"
+            ]),
+            ParsedCommand::Shell {
+                priority: Some(5),
+                color: Some(ColorFlag::Color(AnsiColor::Blue)),
+                name: Some("dev".to_string()),
+                theme: Some("Dracula".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn shell_subcommand_rejects_a_trailing_command() {
+        let err = parse_args(&v(&["shell", "npm", "test"])).unwrap_err();
+        assert!(err.contains("does not take a command"), "got: {err}");
+    }
+
+    #[test]
+    fn help_text_documents_shell_command() {
+        let h = help_text(ExperimentalHelp::default());
+        assert!(h.contains("climon shell [--priority N]"));
+        assert!(h.contains("Start a monitored session for the current shell"));
     }
 
     // ---- update / setup ----

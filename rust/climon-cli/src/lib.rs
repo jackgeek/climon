@@ -11,8 +11,6 @@
 //! - [`self_spawn`]  <- `src/self-spawn.ts`
 //! - [`process_kill`]<- `src/process-kill.ts`
 //! - [`detect_shell`]<- `src/detect-shell.ts`
-//! - [`title`]       <- `src/client/title.ts`
-//! - [`query_title`] <- `src/client/query-title.ts`
 //! - [`client`]      <- `src/client/connect.ts`
 //! - [`server_exec`] <- `src/cli/server-exec.ts`
 //! - [`config_cmd`]  <- `src/cli/config-cmd.ts`
@@ -30,14 +28,13 @@ pub mod launcher;
 pub mod link_cmd;
 pub mod pathenv;
 pub mod process_kill;
-pub mod query_title;
+
 pub mod remotes_cmd;
 pub mod self_spawn;
 pub mod server_exec;
 pub mod spawn;
 pub mod spawn_command;
 pub mod terminal_launch;
-pub mod title;
 pub mod uplink_spawn;
 pub mod version;
 

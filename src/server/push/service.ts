@@ -1,6 +1,7 @@
 import webpush from "web-push";
 import type { SessionMeta } from "../../types.js";
 import { buildPushPayload, createAttentionTracker } from "./attention.js";
+import { createPresenceRegistry } from "./presence.js";
 import { sendPushToAll, type WebPushClient } from "./send.js";
 import {
   addSubscription,
@@ -14,6 +15,7 @@ export interface PushService {
   subscribe(subscription: StoredPushSubscription): Promise<void>;
   unsubscribe(endpoint: string): Promise<void>;
   notifyAttention(sessions: SessionMeta[]): Promise<void>;
+  recordPresence(endpoint: string, foreground: boolean): void;
 }
 
 const DEFAULT_VAPID_SUBJECT = "mailto:climon@example.com";
@@ -43,6 +45,7 @@ export async function createPushService(
     };
 
   const tracker = createAttentionTracker();
+  const presence = createPresenceRegistry();
 
   return {
     getVapidPublicKey: () => keys.publicKey,
@@ -51,8 +54,12 @@ export async function createPushService(
     notifyAttention: async (sessions) => {
       const newly = tracker.update(sessions);
       for (const session of newly) {
-        await sendPushToAll(climonHome, pushClient, buildPushPayload(session));
+        await sendPushToAll(climonHome, pushClient, buildPushPayload(session), (endpoint) => presence.isForeground(endpoint));
       }
+    },
+    recordPresence: (endpoint, foreground) => {
+      if (foreground) presence.markForeground(endpoint);
+      else presence.markBackground(endpoint);
     },
   };
 }

@@ -1,15 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { SessionMeta } from "../types.js";
 import { webLog } from "./log.js";
 
 const log = webLog("attention-alerts");
-
-export interface AttentionAlert {
-  title: string;
-  body: string;
-  sessionId: string;
-  key: string;
-}
 
 export interface TitleAdapter {
   get: () => string;
@@ -21,23 +14,37 @@ export interface SoundAdapter {
   dispose?: () => void | Promise<void>;
 }
 
-export interface NotificationAdapter {
-  notify: (alert: AttentionAlert) => void | Promise<void>;
-}
+export type VibrateAdapter = (pattern: number[]) => void;
 
 export interface AttentionAlertManagerOptions {
   title?: TitleAdapter;
   sound?: SoundAdapter;
-  notifications?: NotificationAdapter;
+  vibrate?: VibrateAdapter;
+  /** Invoked once per session that newly needs attention and should alert. */
+  onAttention: (session: SessionMeta) => void;
+}
+
+/** Context for a single attention update. */
+export interface AttentionUpdateContext {
+  /** The session the user is actively viewing; never alerts. */
+  viewedSessionId?: string | null;
+  /**
+   * Whether in-app alerts (toast/sound/vibration) may fire. False when the user
+   * is on the mobile session list (the list already shows the attention badge).
+   * Defaults to true.
+   */
+  alertsVisible?: boolean;
 }
 
 export interface AttentionAlertManager {
-  update: (sessions: SessionMeta[], viewedSessionId?: string | null) => void;
+  update: (sessions: SessionMeta[], context?: AttentionUpdateContext) => void;
   dispose: () => void;
 }
 
+/** Vibration pattern used to alert on devices that support haptics. */
+const ATTENTION_VIBRATE_PATTERN = [200, 100, 200];
+
 const DEFAULT_TITLE = "climon";
-const NOTIFICATION_TITLE = "climon needs attention";
 const NOTIFICATIONS_ENABLED_STORAGE_KEY = "climon.notificationsEnabled";
 
 type AudioContextConstructor = typeof AudioContext;
@@ -69,18 +76,6 @@ export function sessionAttentionLabel(session: Pick<SessionMeta, "name" | "displ
 
 export function attentionStateKey(session: Pick<SessionMeta, "id" | "attentionMatchedAt">): string {
   return `${session.id}:${session.attentionMatchedAt ?? "attention"}`;
-}
-
-export function buildAttentionNotification(session: SessionMeta): AttentionAlert {
-  const label = sessionAttentionLabel(session);
-  const baseBody = `${label} needs attention`;
-  const reason = session.attentionReason?.trim();
-  return {
-    title: NOTIFICATION_TITLE,
-    body: reason ? `${baseBody}: ${reason}` : baseBody,
-    sessionId: session.id,
-    key: attentionStateKey(session)
-  };
 }
 
 export function notificationsEnabledFromState(permission: BrowserNotificationPermissionResult, enabled: boolean): boolean {
@@ -186,15 +181,17 @@ function safeCall(callback: () => void | Promise<void>): void {
   }
 }
 
-export function createAttentionAlertManager(options: AttentionAlertManagerOptions = {}): AttentionAlertManager {
+export function createAttentionAlertManager(options: AttentionAlertManagerOptions): AttentionAlertManager {
   const title = options.title ?? createDocumentTitleAdapter();
   const sound = options.sound ?? createWebAudioSoundAdapter();
-  const notifications = options.notifications ?? createBrowserNotificationAdapter();
+  const vibrate = options.vibrate ?? defaultVibrate;
+  const onAttention = options.onAttention;
   const baseTitle = title.get() || DEFAULT_TITLE;
   const seenAttentionKeys = new Set<string>();
   let seeded = false;
 
-  function update(sessions: SessionMeta[], viewedSessionId?: string | null): void {
+  function update(sessions: SessionMeta[], context: AttentionUpdateContext = {}): void {
+    const { viewedSessionId, alertsVisible = true } = context;
     const attentiveSessions = sessions.filter(isAttentionSession);
     // The session the user is actively viewing must not contribute to the
     // attention count or fire alerts.
@@ -206,7 +203,8 @@ export function createAttentionAlertManager(options: AttentionAlertManagerOption
     );
 
     // Record every attentive session (including the viewed one) as seen so that
-    // navigating away from a still-attentive session does not re-fire an alert.
+    // navigating away from — or into — a still-attentive session does not
+    // re-fire an alert for the same attention episode.
     seenAttentionKeys.clear();
     for (const session of attentiveSessions) {
       seenAttentionKeys.add(attentionStateKey(session));
@@ -217,10 +215,17 @@ export function createAttentionAlertManager(options: AttentionAlertManagerOption
       return;
     }
 
+    // Suppress in-app alerts on the mobile session list, where the badge is
+    // already visible. The seen set is still updated above, so the same episode
+    // will not alert later when the user navigates into a session.
+    if (!alertsVisible) {
+      return;
+    }
+
     for (const session of newlyAttentive) {
-      const alert = buildAttentionNotification(session);
       safeCall(() => sound.play());
-      safeCall(() => notifications.notify(alert));
+      safeCall(() => vibrate(ATTENTION_VIBRATE_PATTERN));
+      safeCall(() => onAttention(session));
     }
   }
 
@@ -234,17 +239,41 @@ export function createAttentionAlertManager(options: AttentionAlertManagerOption
   return { update, dispose };
 }
 
-export function useAttentionAlerts(
-  sessions: SessionMeta[],
-  options?: AttentionAlertManagerOptions,
-  viewedSessionId?: string | null
-): void {
-  // Options are intentionally captured at mount; live adapter swapping is not supported.
-  const manager = useMemo(() => createAttentionAlertManager(options), []);
+function defaultVibrate(pattern: number[]): void {
+  if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+    navigator.vibrate(pattern);
+  }
+}
+
+export interface UseAttentionAlertsParams {
+  onAttention: (session: SessionMeta) => void;
+  viewedSessionId?: string | null;
+  alertsVisible?: boolean;
+  adapters?: Pick<AttentionAlertManagerOptions, "title" | "sound" | "vibrate">;
+}
+
+export function useAttentionAlerts(sessions: SessionMeta[], params: UseAttentionAlertsParams): void {
+  // Keep the latest onAttention without re-creating the manager (which would
+  // reset its seeded/seen state on every render).
+  const onAttentionRef = useRef(params.onAttention);
+  onAttentionRef.current = params.onAttention;
+
+  // Adapters are intentionally captured at mount; live adapter swapping is not supported.
+  const manager = useMemo(
+    () =>
+      createAttentionAlertManager({
+        ...params.adapters,
+        onAttention: (session) => onAttentionRef.current(session)
+      }),
+    []
+  );
 
   useEffect(() => {
-    manager.update(sessions, viewedSessionId);
-  }, [manager, sessions, viewedSessionId]);
+    manager.update(sessions, {
+      viewedSessionId: params.viewedSessionId,
+      alertsVisible: params.alertsVisible
+    });
+  }, [manager, sessions, params.viewedSessionId, params.alertsVisible]);
 
   useEffect(() => {
     return () => manager.dispose();
@@ -258,56 +287,6 @@ function createDocumentTitleAdapter(): TitleAdapter {
       if (typeof document !== "undefined") {
         document.title = t;
       }
-    }
-  };
-}
-
-/**
- * Deduplication window (ms) for cross-tab notification coordination.
- * If another tab already fired a notification for the same alert key within
- * this window, this tab skips it.
- */
-const NOTIFICATION_DEDUP_WINDOW_MS = 5000;
-const NOTIFICATION_DEDUP_PREFIX = "climon.notified:";
-
-/**
- * Attempts to claim a notification so only one tab fires it. Returns true if
- * this tab won the claim (i.e. should fire the notification).
- */
-function claimNotification(alertKey: string): boolean {
-  const storageKey = `${NOTIFICATION_DEDUP_PREFIX}${alertKey}`;
-  const now = Date.now();
-  try {
-    const storage = typeof localStorage !== "undefined" ? localStorage : null;
-    if (!storage) {
-      return true;
-    }
-    const existing = storage.getItem(storageKey);
-    if (existing) {
-      const claimedAt = Number(existing);
-      if (now - claimedAt < NOTIFICATION_DEDUP_WINDOW_MS) {
-        return false;
-      }
-    }
-    storage.setItem(storageKey, String(now));
-    return true;
-  } catch {
-    // Storage unavailable — fire anyway to avoid silent failure.
-    return true;
-  }
-}
-
-export function createBrowserNotificationAdapter(): NotificationAdapter {
-  return {
-    notify: async (alert) => {
-      const permission = browserNotificationPermission();
-      if (!notificationsEnabledFromState(permission, readBrowserNotificationsEnabled())) {
-        return;
-      }
-      if (!claimNotification(alert.key)) {
-        return;
-      }
-      new Notification(alert.title, { body: alert.body });
     }
   };
 }
