@@ -45,6 +45,27 @@ fn read_to_end(mut reader: Box<dyn Read + Send>) -> Vec<u8> {
     out
 }
 
+/// Spawns `opts`, drains all PTY output on a background thread, waits for the
+/// child to exit, then drops the master **before** joining the reader.
+///
+/// Dropping the master first is mandatory on Windows: ConPTY's pseudoconsole
+/// (and conhost, which holds the output pipe) only closes that pipe once the
+/// `Pty` master is dropped, so a `read_to_end` reader never EOFs while the
+/// master is alive and joining it deadlocks. Unix PTYs EOF on child exit
+/// regardless, which is why the bug was Windows-only (see #38). Encapsulating
+/// the order here keeps new tests from reintroducing that hang — reach for this
+/// helper instead of hand-rolling the spawn→read→wait→join dance.
+fn spawn_wait_capture(opts: &PtyOptions) -> (i32, Vec<u8>) {
+    let mut pty = Pty::spawn(opts).expect("spawn");
+    let reader = pty.try_clone_reader().expect("reader");
+    let handle = std::thread::spawn(move || read_to_end(reader));
+    let code = pty.wait().expect("wait");
+    // Must precede `join`; see the doc comment above.
+    drop(pty);
+    let out = handle.join().expect("join");
+    (code, out)
+}
+
 /// Some sandboxed CI environments (notably GitHub-hosted Ubuntu runners) forbid
 /// a process from claiming a controlling terminal, so the `setsid -c` wrapper
 /// `climon-pty` applies on Unix fails with EPERM and the spawned program never
@@ -72,11 +93,7 @@ fn no_controlling_terminal(out: &[u8]) -> bool {
 /// on macOS, and these tests exercise the real PTY path.
 #[test]
 fn spawns_and_reads_output() {
-    let mut pty = Pty::spawn(&sh("printf hi")).expect("spawn");
-    let reader = pty.try_clone_reader().expect("reader");
-    let handle = std::thread::spawn(move || read_to_end(reader));
-    let code = pty.wait().expect("wait");
-    let out = handle.join().expect("join");
+    let (code, out) = spawn_wait_capture(&sh("printf hi"));
     if no_controlling_terminal(&out) {
         return;
     }
@@ -90,12 +107,7 @@ fn spawns_and_reads_output() {
 
 #[test]
 fn propagates_nonzero_exit_code() {
-    let mut pty = Pty::spawn(&sh("exit 7")).expect("spawn");
-    // Drain output so the child can exit cleanly.
-    let reader = pty.try_clone_reader().expect("reader");
-    let handle = std::thread::spawn(move || read_to_end(reader));
-    let code = pty.wait().expect("wait");
-    let out = handle.join().expect("join");
+    let (code, out) = spawn_wait_capture(&sh("exit 7"));
     if no_controlling_terminal(&out) {
         return;
     }
@@ -133,6 +145,11 @@ fn resize_dedupes_and_does_not_panic() {
     assert_eq!(pty.size(), (120, 50));
 
     let code = pty.wait().expect("wait");
+    // This test interleaves resizes between spawn and wait, so it can't use
+    // `spawn_wait_capture`, but it must follow the same rule: drop the master
+    // before joining the reader (see that helper's doc comment) or the join
+    // deadlocks on Windows.
+    drop(pty);
     let _ = handle.join();
     let _ = code;
 }
@@ -197,11 +214,7 @@ fn provided_env_is_applied() {
         rows: 24,
         env: Some(env),
     };
-    let mut pty = Pty::spawn(&opts).expect("spawn");
-    let reader = pty.try_clone_reader().expect("reader");
-    let handle = std::thread::spawn(move || read_to_end(reader));
-    let _ = pty.wait().expect("wait");
-    let out = handle.join().expect("join");
+    let (_code, out) = spawn_wait_capture(&opts);
     if no_controlling_terminal(&out) {
         return;
     }

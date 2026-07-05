@@ -100,13 +100,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
-    path: "terminal.setTitle",
-    type: "boolean",
-    defaultValue: true,
-    purpose: "When true (default), climon sets the attached local terminal's title to the session name and updates it live on rename. Disables the whole title feature when false.",
-    scope: ["client"]
-  },
-  {
     path: "hotKeys.focusTopSession",
     type: "string",
     defaultValue: "Alt+J",
@@ -143,7 +136,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
   {
     path: "dashboard.keyBarPinned",
     type: "boolean",
-    defaultValue: false,
+    defaultValue: true,
     purpose: "Whether the web dashboard key bar is pinned open.",
     scope: ["server", "browser"],
     acceptInput: true,
@@ -370,14 +363,6 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
         throw new Error(`logging.level must be one of: ${levels.join(", ")}`);
       }
     }
-  },
-  {
-    path: "logging.appInsights.connectionString",
-    type: "string",
-    purpose: "Azure Application Insights connection string. When set, the dashboard server also forwards structured logs to Application Insights. Leave unset to disable (the default). Can also be supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING environment variable.",
-    scope: ["server"],
-    sensitive: true,
-    acceptInput: true
   },
   ...featureConfigSettings(),
   {

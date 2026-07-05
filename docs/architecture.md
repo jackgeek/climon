@@ -259,32 +259,60 @@ under `src/server/push/`:
 - `subscriptions.ts` persists browser push subscriptions atomically at
   `$CLIMON_HOME/push/subscriptions.json` (deduped by endpoint).
 - `attention.ts` is a pure tracker that flags sessions newly entering
-  `needs-attention` (seed-then-detect, deduped by `id:attentionMatchedAt`).
+  `needs-attention` (seed-then-detect, deduped by `id:attentionMatchedAt`), and
+  `buildPushPayload` sets the notification title to `<label>` (the session
+  label) with the session's terminal title as the body.
+- `presence.ts` is an in-memory registry of which push-subscription endpoints
+  are currently foreground (TTL-expired, default 30s) so the server can skip
+  devices that are actively viewing the dashboard.
 - `send.ts` fans a payload out to all subscriptions via `web-push` and prunes
-  any subscription that returns HTTP 404/410.
+  any subscription that returns HTTP 404/410; an optional `skip(endpoint)`
+  predicate omits endpoints (used to skip foreground devices).
 - `service.ts` wires these together; the server calls `notifyAttention(sessions)`
   from `publishSessions()` on the same debounced sessions-dir watch signal that
-  drives SSE.
+  drives SSE, passing a skip predicate backed by the presence registry.
+  `recordPresence(endpoint, foreground)` is fed by the `POST /api/push/presence`
+  route.
 
 The browser side registers `src/web/sw.ts` (served at `/sw.js`), subscribes via
-`PushManager` using the server's VAPID public key, and shows a notification on
-`push`. The notification is non-silent with a vibration pattern so the device
-plays its alert sound/haptics, and tapping it focuses (or opens) the dashboard
-deep-linked to the session that needs attention (`/?session=<id>` plus an
-`open-session` postMessage to an already-open tab). Push is only offered over a
-dev-tunnel origin (`*.devtunnels.ms` + HTTPS); desktop/localhost keeps the
-foreground `Notification` API. SSE (`/api/events`) remains the live in-app update
-channel; Web Push is only for background attention alerts.
+`PushManager` using the server's VAPID public key, and shows a notification for
+every `push` it receives (`handlePush` in `src/web/pwa/swPush.ts` always calls
+`showNotification` — iOS/WebKit revokes the subscription if a service worker
+silently swallows a push, so foreground suppression must happen server-side, not
+in the worker). The notification is non-silent with a vibration pattern so the
+device plays its alert sound/haptics, and tapping it focuses (or opens) the
+dashboard deep-linked to the session that needs attention (`/?session=<id>` plus
+an `open-session` postMessage to an already-open tab). Push is only offered over
+a dev-tunnel origin (`*.devtunnels.ms` + HTTPS). SSE (`/api/events`) remains the
+live in-app update channel; Web Push is only for background attention alerts.
+The service worker also
+precaches the app shell (`/`, `/assets/app.js`, `/assets/xterm.css`) and serves
+navigations cache-first (the app bundle network-first, via
+`src/web/pwa/swCache.ts`), so an installed PWA boots on cold launch even when a
+dev tunnel would return the Microsoft auth redirect; a startup `probeTunnelAuth`
+in `App.tsx` then surfaces the "Sign in again" overlay. Cache writes reject
+dev-tunnel login responses so an expired session cannot poison the cached shell.
 
-Notifications for the session the user is actively viewing are suppressed. The
-client computes a single "viewed session" (mirroring `TerminalView`'s
-`terminalVisible` rule). The in-app alert manager (`src/web/attentionAlerts.ts`)
-excludes it from the title count and alerts, and `App.tsx` auto-acknowledges it
-so the daemon clears the attention state. For background push, `sw.ts` asks open
-window clients which session they are viewing (via a `MessageChannel` reply) and
-suppresses the OS notification when any client reports viewing the pushed session
-(`shouldSuppressPush` in `src/web/pwa/pushData.ts`); it defaults to showing the
-notification on no/late reply.
+Attention alerting splits by foreground vs. background. While the dashboard is
+open in the foreground, the in-app alert manager
+(`src/web/attentionAlerts.ts`) raises a subtle Fluent **toast** at the top of
+the viewport (`<session name> needs attention` with the terminal title as a
+second line, `src/web/attentionToast.ts`) with sound and `navigator.vibrate`,
+and tapping it opens the session via
+`popSession`. Toasts are suppressed for the session the user is actively viewing
+(the client's single "viewed session", mirroring `TerminalView`'s
+`terminalVisible` rule — `App.tsx` also auto-acknowledges it so the daemon
+clears attention) and on the mobile session list, where the attention badge is
+already visible (`alertsVisible = pageVisible && (!isMobile || maximized)`).
+Background OS-push suppression is done **per device on the server**, not in the
+service worker: while notifications are on, each open page runs a presence
+reporter (`src/web/pwa/presence.ts`) that POSTs `/api/push/presence`
+(`{endpoint, foreground}`) on start, on a ~15s heartbeat, and on every
+`visibilitychange` (best-effort `sendBeacon`). The server records the endpoint's
+foreground state (`presence.ts`, ~30s TTL) and skips it when sending, so a
+device viewing the dashboard gets the toast while other devices still get the OS
+push. This keys suppression to the push subscription rather than "any window is
+visible", which iOS cannot honour in the worker.
 
 ## Remote clients (dev-tunnel uplink)
 

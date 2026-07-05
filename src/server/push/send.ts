@@ -18,11 +18,13 @@ export async function sendPushToAll(
   climonHome: string,
   client: WebPushClient,
   payload: unknown,
+  skip?: (endpoint: string) => boolean,
 ): Promise<void> {
   const subs = await listSubscriptions(climonHome);
+  const targets = skip ? subs.filter((subscription) => !skip(subscription.endpoint)) : subs;
   const body = JSON.stringify(payload);
   await Promise.all(
-    subs.map(async (subscription) => {
+    targets.map(async (subscription) => {
       try {
         await client.sendNotification(subscription, body);
       } catch (error) {

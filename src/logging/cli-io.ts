@@ -38,7 +38,46 @@ export function writeStderr(text: string, options: { log?: boolean } = {}): void
   if (options.log !== false) mirror("stderr", text);
 }
 
-/** Records a CLI command invocation at debug level. */
-export function logCliCommand(command: string): void {
-  logMsg(child("cli"), "debug", "cli.command_invocation", { command });
+/**
+ * The closed set of climon subcommand names. `logCliCommand` records only which
+ * of these was invoked — never the user-supplied command that a session runs.
+ * Mirrors the canonical Rust `command_name` set and `CLIMON_SUBCOMMANDS` in
+ * `rust/climon-logging/src/cli_io.rs`; keep the two in sync.
+ */
+export const CLIMON_SUBCOMMANDS = [
+  "help",
+  "version",
+  "server",
+  "shell",
+  "ls",
+  "kill",
+  "kill-all",
+  "run",
+  "spawn",
+  "config",
+  "cleanup",
+  "remotes",
+  "link",
+  "uplink",
+  "session",
+  "update",
+  "setup",
+  "update-check",
+  "ingest",
+  "license",
+] as const;
+
+/** A climon subcommand name — never a user-supplied command line. */
+export type ClimonSubcommand = (typeof CLIMON_SUBCOMMANDS)[number];
+
+/**
+ * Records which climon subcommand was invoked at debug level.
+ *
+ * Only the fixed subcommand keyword is logged (e.g. `run`, `server`); the
+ * user-supplied command a session executes is deliberately never recorded here.
+ * The parameter type is constrained to {@link ClimonSubcommand} so a full
+ * command line can never be passed in by mistake.
+ */
+export function logCliCommand(subcommand: ClimonSubcommand): void {
+  logMsg(child("cli"), "debug", "cli.command_invocation", { subcommand });
 }

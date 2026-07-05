@@ -83,7 +83,7 @@ fn run() -> Result<i32, String> {
     }
 
     match parsed {
-        ParsedCommand::Help => {
+        ParsedCommand::Help { implicit } => {
             let cfg_env = ConfigEnv::real();
             let experimental = climon_config::config::load_config(&cfg_env)
                 .map(|cfg| climon_cli::args::ExperimentalHelp {
@@ -92,6 +92,12 @@ fn run() -> Result<i32, String> {
                     wsl_bridge: climon_config::features::is_feature_enabled(&cfg, "wslBridge"),
                 })
                 .unwrap_or_default();
+            if implicit {
+                write_stderr(
+                    "climon on its own no longer starts a session — showing help instead.\nUse `climon shell` to start a monitored shell, or `climon <command>` to run a command.\n\n",
+                    false,
+                );
+            }
             write_stdout(&help_text(experimental), false);
             Ok(0)
         }
@@ -417,7 +423,7 @@ fn run_ingest_entry() -> i32 {
 /// strings used for logging).
 fn command_name(parsed: &ParsedCommand) -> &'static str {
     match parsed {
-        ParsedCommand::Help => "help",
+        ParsedCommand::Help { .. } => "help",
         ParsedCommand::Version => "version",
         ParsedCommand::Server { .. } => "server",
         ParsedCommand::Shell { .. } => "shell",
@@ -454,5 +460,36 @@ fn strip_exe(s: &str) -> &str {
         &s[..s.len() - 4]
     } else {
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_name;
+    use climon_cli::args::ParsedCommand;
+    use climon_logging::cli_io::CLIMON_SUBCOMMANDS;
+
+    /// Every subcommand keyword `command_name` can emit must be covered by the
+    /// telemetry allowlist, so `log_cli_command` never trips its debug assert and
+    /// only ever records a known keyword — never a user-supplied command.
+    #[test]
+    fn command_name_outputs_are_allowlisted() {
+        let zero_field = [
+            command_name(&ParsedCommand::Help { implicit: false }),
+            command_name(&ParsedCommand::Version),
+            command_name(&ParsedCommand::Ls),
+            command_name(&ParsedCommand::KillAll),
+            command_name(&ParsedCommand::Uplink),
+            command_name(&ParsedCommand::Cleanup),
+            command_name(&ParsedCommand::UpdateCheck),
+            command_name(&ParsedCommand::Ingest),
+            command_name(&ParsedCommand::License),
+        ];
+        for name in zero_field {
+            assert!(
+                CLIMON_SUBCOMMANDS.contains(&name),
+                "command_name returned {name:?}, not in CLIMON_SUBCOMMANDS"
+            );
+        }
     }
 }

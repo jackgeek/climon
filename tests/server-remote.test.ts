@@ -121,7 +121,7 @@ describe("buildHealthPayload", () => {
   const baseConfig = {
     version: 1 as const,
     server: { host: "127.0.0.1", port: 3131 },
-    terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+    terminal: { clampBrowserToHost: true, detachPrefix: 28 },
     attention: { idleSeconds: 30 },
     hotKeys: { focusTopSession: "Alt+J" },
     feature: { remotes: "enabled" as const }
@@ -538,7 +538,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" }
     };
@@ -566,7 +566,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" },
       remote: { enabled: true, tunnelId: "uplink", ingestHost: "localhost" }
@@ -598,7 +598,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" }
     };
@@ -623,7 +623,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28, setTitle: true },
+      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" },
       remote: {

@@ -65,10 +65,6 @@ describe("config defaults", () => {
     expect(defaultConfig().terminal.clampBrowserToHost).toBe(false);
   });
 
-  test("sets the terminal title by default", () => {
-    expect(defaultConfig().terminal.setTitle).toBe(true);
-  });
-
   test("default config sets session color to auto", () => {
     expect(defaultConfig().session?.color).toBe("auto");
   });
@@ -92,24 +88,6 @@ describe("config migration", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  test("backfills a missing terminal.setTitle", async () => {
-    const home = await makeTestHome("climon-cfg-");
-    const migrationEnv = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
-    await mkdir(home, { recursive: true });
-    await writeFile(
-      join(home, "config.json"),
-      JSON.stringify({
-        version: 1,
-        server: { host: "127.0.0.1", port: 3131 },
-        terminal: { clampBrowserToHost: true },
-        attention: { idleSeconds: 10 }
-      })
-    );
-    const config = await loadConfig(migrationEnv);
-    expect(config.terminal.setTitle).toBe(true);
-    await rm(home, { recursive: true, force: true });
-  });
-
   test("loadConfig backfills missing session.color to auto", async () => {
     const home = await makeTestHome("climon-color-auto-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
@@ -119,7 +97,7 @@ describe("config migration", () => {
       JSON.stringify({
         version: 1,
         server: { host: "127.0.0.1", port: 3131 },
-        terminal: { clampBrowserToHost: true, setTitle: true },
+        terminal: { clampBrowserToHost: true },
         attention: { idleSeconds: 10 }
       })
     );
@@ -137,7 +115,7 @@ describe("config migration", () => {
       JSON.stringify({
         version: 1,
         server: { host: "127.0.0.1", port: 3131 },
-        terminal: { clampBrowserToHost: true, setTitle: true },
+        terminal: { clampBrowserToHost: true },
         attention: { idleSeconds: 10 }
       })
     );
@@ -155,7 +133,7 @@ describe("config migration", () => {
       JSON.stringify({
         version: 1,
         server: { host: "127.0.0.1", port: 3131 },
-        terminal: { clampBrowserToHost: true, setTitle: true },
+        terminal: { clampBrowserToHost: true },
         attention: { idleSeconds: 10 },
         hotKeys: { focusTopSession: "Ctrl+Shift+J" }
       })
@@ -174,7 +152,7 @@ describe("config migration", () => {
       JSON.stringify({
         version: 1,
         server: { host: "127.0.0.1", port: 3131 },
-        terminal: { clampBrowserToHost: true, setTitle: true },
+        terminal: { clampBrowserToHost: true },
         attention: { idleSeconds: 10 },
         session: { color: "orange" }
       })
@@ -309,7 +287,7 @@ describe("config jsonc paths and migration", () => {
       JSON.stringify({
         version: 1,
         server: { host: "127.0.0.1", port: 7777 },
-        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        terminal: { clampBrowserToHost: true, detachPrefix: 0x1c },
         attention: { idleSeconds: 10 },
         session: { color: "green" }
       })
@@ -335,7 +313,7 @@ describe("config jsonc paths and migration", () => {
       JSON.stringify({
         version: 1,
         server: { host: "127.0.0.1", port: 3131 },
-        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        terminal: { clampBrowserToHost: true, detachPrefix: 0x1c },
         attention: { idleSeconds: 10 },
         session: { color: "auto" }
       })
@@ -374,7 +352,7 @@ describe("config jsonc paths and migration", () => {
       JSON.stringify({
         version: 1,
         server: { host: "127.0.0.1", port: 3131 },
-        terminal: { clampBrowserToHost: true, setTitle: true, detachPrefix: 0x1c },
+        terminal: { clampBrowserToHost: true, detachPrefix: 0x1c },
         attention: { idleSeconds: 10 },
         session: { color: "auto" }
       })
@@ -416,9 +394,10 @@ describe("logging config settings", () => {
     expect(() => coerceConfigValueFromSettings("logging.level", "loud")).toThrow();
   });
 
-  test("logging.appInsights.connectionString is sensitive and unset by default", () => {
-    const setting = findConfigSetting("logging.appInsights.connectionString");
-    expect(setting?.sensitive).toBe(true);
-    expect(setting?.defaultValue).toBeUndefined();
+  test("logging.appInsights.connectionString is not a configurable setting", () => {
+    // The App Insights connection string is a secret and must not live in
+    // climon config; it is supplied via the APPLICATIONINSIGHTS_CONNECTION_STRING
+    // environment variable or the build-time embedded constant instead.
+    expect(findConfigSetting("logging.appInsights.connectionString")).toBeUndefined();
   });
 });
