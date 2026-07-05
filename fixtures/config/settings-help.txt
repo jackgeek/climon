@@ -40,6 +40,12 @@
     Type: boolean; Default: true; Scope: server, browser
     Whether the web dashboard key bar is pinned open.
 
+  dashboard.stateIconNoMotion
+    Type: boolean; Default: false; Scope: server, browser
+    When true, the web dashboard freezes the animated terminal-progress indicator (OSC
+    9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences.
+    Defaults to false (animated).
+
   attention.idleSeconds
     Type: number; Default: 10; Scope: daemon
     Number of seconds the rendered terminal grid must remain unchanged before the

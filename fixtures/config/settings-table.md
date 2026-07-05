@@ -8,6 +8,7 @@
 | `hotKeys.focusTopSession` | string | `Alt+J` | server, browser | Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is "Mod+...+Key" (e.g. "Alt+T", "Ctrl+Shift+J"). Set to an empty string to disable. |
 | `dashboard.theme` | string | `Default` | server, browser | Default web dashboard terminal colour theme (by display name, e.g. "Dracula"). Sessions without their own theme inherit this. Choose from the dashboard "Default theme" picker; defaults to "Default". |
 | `dashboard.keyBarPinned` | boolean | `true` | server, browser | Whether the web dashboard key bar is pinned open. |
+| `dashboard.stateIconNoMotion` | boolean | `false` | server, browser | When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated). |
 | `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |
 | `remote.enabled` | boolean | unset | client | Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection. |
 | `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
