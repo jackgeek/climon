@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
@@ -170,6 +171,31 @@ impl Pty {
     pub fn wait(&mut self) -> PtyResult<i32> {
         let status = self.child.wait().map_err(backend)?;
         Ok(status.exit_code() as i32)
+    }
+
+    /// Waits up to `timeout` for the child to exit, polling `try_wait`
+    /// periodically. Returns `Ok(Some(code))` if the child exits in time, or
+    /// `Ok(None)` if it is still running when the timeout elapses.
+    ///
+    /// Unlike [`wait`](Pty::wait), this never blocks indefinitely. It exists for
+    /// callers that must stay responsive when a child may not self-terminate —
+    /// notably on Windows, where a process attached to a headless ConPTY
+    /// pseudoconsole (e.g. a CI runner) can produce all its output yet never
+    /// reach its own `ExitProcess`, so a plain `wait` blocks until the master is
+    /// torn down. On `Ok(None)` the caller can [`kill`](Pty::kill) the child and
+    /// drop the PTY.
+    pub fn wait_timeout(&mut self, timeout: Duration) -> PtyResult<Option<i32>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.child.try_wait().map_err(backend)? {
+                return Ok(Some(status.exit_code() as i32));
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep((deadline - now).min(Duration::from_millis(20)));
+        }
     }
 
     /// Kills the child process.
