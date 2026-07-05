@@ -1,4 +1,5 @@
 import type { SessionMeta } from "../../types.js";
+import { notificationBody, notificationTitle } from "../../notification-content.js";
 
 export interface PushPayload {
   title: string;
@@ -15,23 +16,12 @@ function attentionStateKey(session: Pick<SessionMeta, "id" | "attentionMatchedAt
   return `${session.id}:${session.attentionMatchedAt ?? "attention"}`;
 }
 
-function attentionLabel(
-  session: Pick<SessionMeta, "name" | "displayCommand" | "command">,
-): string {
-  const name = session.name?.trim();
-  if (name) return name;
-  const display = session.displayCommand.trim();
-  if (display) return display;
-  return session.command.join(" ");
-}
-
 export function buildPushPayload(session: SessionMeta): PushPayload {
-  const label = attentionLabel(session);
   return {
-    title: label,
-    body: session.terminalTitle?.trim() ?? "",
+    title: notificationTitle(session),
+    body: notificationBody(session),
     sessionId: session.id,
-    key: attentionStateKey(session),
+    key: attentionStateKey(session)
   };
 }
 

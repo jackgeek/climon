@@ -1,5 +1,6 @@
 import type { SessionMeta } from "../types.js";
 import { attentionStateKey, sessionAttentionLabel } from "./attentionAlerts.js";
+import { notificationBody } from "../notification-content.js";
 
 /** A subtle in-app attention toast shown while the dashboard is in the foreground. */
 export interface AttentionToast {
@@ -19,11 +20,11 @@ export interface AttentionToast {
  * terse. The body mirrors the push body: the session's terminal title.
  */
 export function buildAttentionToast(session: SessionMeta): AttentionToast {
-  const terminalTitle = session.terminalTitle?.trim();
+  const body = notificationBody(session);
   return {
     toastId: attentionStateKey(session),
     message: `${sessionAttentionLabel(session)} needs attention`,
-    body: terminalTitle ? terminalTitle : undefined,
+    body: body ? body : undefined,
     sessionId: session.id
   };
 }
