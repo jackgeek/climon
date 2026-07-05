@@ -529,6 +529,22 @@ export function TunnelReauthOverlay({ onReauth }: { onReauth: () => void }) {
   );
 }
 
+/**
+ * Removes the `reauth=1` marker from the address bar once the dashboard has
+ * reconnected, so the one-shot re-auth navigation param does not linger (a
+ * bookmarked/relaunched `?reauth=1` would otherwise keep bypassing the SW cache).
+ */
+function stripReauthParam(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const url = new URL(window.location.href);
+  if (url.searchParams.has("reauth")) {
+    url.searchParams.delete("reauth");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+}
+
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -865,6 +881,7 @@ export function App() {
       setServerConnectionState("connected");
       disarmReconnectOverlay();
       setTunnelAuthRequired(false);
+      stripReauthParam();
       return wasReconnecting;
     };
     async function refreshSessionsAfterReconnect(): Promise<void> {
@@ -1664,9 +1681,7 @@ export function App() {
         <TunnelReauthOverlay
           onReauth={() =>
             reauthenticateTunnel({
-              isStandalone,
-              href: window.location.href,
-              openBrowser: (url) => window.open(url, "_blank", "noopener"),
+              origin: window.location.origin,
               navigate: (url) => window.location.assign(url),
             })
           }
