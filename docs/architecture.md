@@ -320,8 +320,9 @@ and tapping it opens the session via
 `popSession`. Toasts are suppressed for the session the user is actively viewing
 (the client's single "viewed session", mirroring `TerminalView`'s
 `terminalVisible` rule — `App.tsx` also auto-acknowledges it so the daemon
-clears attention) and on the mobile session list, where the attention badge is
-already visible (`alertsVisible = pageVisible && (!isMobile || maximized)`).
+clears attention). Otherwise the toast fires whenever the dashboard tab is in the
+foreground — including the mobile session list — so an attention event is never
+missed (`alertsVisible = pageVisible`).
 Background OS-push suppression is done **per device on the server**, not in the
 service worker: while notifications are on, each open page runs a presence
 reporter (`src/web/pwa/presence.ts`) that POSTs `/api/push/presence`
