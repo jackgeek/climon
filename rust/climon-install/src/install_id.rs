@@ -27,7 +27,7 @@ pub fn ensure_install_id(env: &Env) -> Result<String, String> {
 /// Generates a random RFC-4122 version-4 UUID string.
 fn random_uuid_v4() -> String {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).expect("getrandom for install id");
+    getrandom::fill(&mut bytes).expect("getrandom for install id");
     bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
     bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
     format!(
