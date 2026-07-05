@@ -40,7 +40,7 @@ use crate::resize::{clamp_resize, revert_size, Dimensions, ResizeRequest};
 use crate::socket::{
     cleanup_session_socket, listen_on_session_socket, SessionListener, SessionStream,
 };
-use crate::title_capture::capture_terminal_title_from_output;
+use crate::title_capture::capture_terminal_output;
 
 const SESSION_ENV_VAR: &str = "CLIMON_SESSION_ID";
 const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
@@ -1127,8 +1127,14 @@ fn spawn_reader_thread(
                 );
                 let title_remainder = std::mem::take(&mut s.terminal_title_remainder);
                 let mut captured = s.captured_terminal_title.take();
-                s.terminal_title_remainder =
-                    capture_terminal_title_from_output(&mut captured, data, &title_remainder);
+                // Progress arg wired up in Task 4
+                let mut captured_progress_unused = None;
+                s.terminal_title_remainder = capture_terminal_output(
+                    &mut captured,
+                    &mut captured_progress_unused,
+                    data,
+                    &title_remainder,
+                );
                 s.captured_terminal_title = captured;
                 s.scrollback.append(data);
                 s.grid.write(data);
