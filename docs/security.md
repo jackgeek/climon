@@ -256,11 +256,13 @@ color, command label) it advertises. It cannot inject into another client's PTY
 (per-connection sockets) or read its keystrokes. Revoke access by deleting
 the tunnel or removing the user's identity from its ACL.
 
-When the browser's dev-tunnel sign-in expires, the dashboard PWA detects the
-relay's auth redirect (a manual-redirect probe of `/health`) and shows an
-in-app "Sign in again" prompt instead of spinning on "Reconnecting". The prompt
-performs a user-initiated top-level navigation to re-run the Microsoft sign-in;
-it never auto-navigates and stores no tunnel credentials in the browser.
+When the dev-tunnel sign-in expires, the dashboard PWA detects the relay's auth
+redirect (a manual-redirect probe of `/health`) and shows an in-app "Sign in
+again" prompt instead of spinning on "Reconnecting". The prompt performs a
+user-initiated top-level navigation **inside the PWA window** to re-run the
+Microsoft sign-in (an installed iOS PWA has a cookie jar isolated from Safari, so
+the sign-in must complete in-context for the resulting cookie to be usable). It
+never auto-navigates and stores no tunnel credentials itself.
 
 ## Dashboard server: loopback only
 

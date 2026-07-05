@@ -30,12 +30,12 @@ Manual checks for the in-app dev-tunnel sign-in recovery flow.
 
 **Expected:** After steps 3-4 the PWA shows the **"Session expired"** overlay
 with a **"Sign in again"** button (it appears promptly, without waiting out the
-~60s reconnect timer). Tapping the button opens the tunnel URL in the **system
-browser** (a real Safari/Chrome tab), not inside the standalone PWA window — so
-the Microsoft sign-in loads normally instead of downloading an empty file.
-Complete the sign-in there, then return to the PWA: its live connection
-reconnects, the overlay is gone, and the sessions list/terminal come back — no
-need to manually copy the tunnel URL into a browser.
+~60s reconnect timer). Tapping the button navigates **inside the PWA window** to
+the tunnel sign-in (it does **not** jump out to Safari and does **not** download
+an empty file); the Microsoft sign-in page renders in the PWA. Complete the
+sign-in there and the PWA's live connection reconnects, the overlay is gone, and
+the sessions list/terminal come back — no need to manually copy the tunnel URL
+into a browser.
 
 **Result-tracking row:**
 
@@ -138,10 +138,11 @@ JavaScript console error.
 **Expected:** The PWA **boots** (the dashboard shell renders from the service-worker
 cache) instead of showing a blank page or downloading an empty file. It then shows the
 **"Session expired"** overlay with a **"Sign in again"** button. Tapping the button
-opens the tunnel URL in the **system browser** (a real tab), where the Microsoft
-sign-in loads normally. Complete the sign-in there, then return to the PWA: its live
-connection reconnects, the overlay disappears, and the sessions list/terminal load —
-no need to manually copy the tunnel URL into a browser.
+navigates **inside the PWA window** to the tunnel sign-in (not out to Safari), where
+the Microsoft sign-in renders and the fresh cookie is stored in the PWA's own jar.
+Complete the sign-in and the PWA's live connection reconnects, the overlay disappears,
+and the sessions list/terminal load — no need to manually copy the tunnel URL into a
+browser.
 
 **Result-tracking row:**
 
