@@ -104,6 +104,29 @@ impl HeadlessGrid {
         }
         out
     }
+
+    /// Returns the current visible screen as one trailing-trimmed string per
+    /// row (top to bottom), with no dimension header. Used by the smart-
+    /// notification snippet extractor.
+    pub fn visible_lines(&self) -> Vec<String> {
+        let screen = self.parser.screen();
+        let mut out = Vec::with_capacity(self.rows as usize);
+        for row in 0..self.rows {
+            let mut line = String::new();
+            for col in 0..self.cols {
+                if let Some(cell) = screen.cell(row, col) {
+                    let contents = cell.contents();
+                    if contents.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(contents);
+                    }
+                }
+            }
+            out.push(line.trim_end().to_string());
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +217,16 @@ mod tests {
                 "repaint must not use absolute row positioning, found: {seq:?}"
             );
         }
+    }
+
+    #[test]
+    fn visible_lines_returns_one_trimmed_string_per_row() {
+        let mut grid = HeadlessGrid::new(20, 3);
+        grid.write(b"hello world\r\nsecond line");
+        let rows = grid.visible_lines();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], "hello world");
+        assert_eq!(rows[1], "second line");
+        assert_eq!(rows[2], "");
     }
 }
