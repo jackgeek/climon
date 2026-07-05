@@ -1433,7 +1433,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       const asset = await getStaticAsset(url.pathname);
       if (asset) {
-        return new Response(new Uint8Array(asset.body), { headers: { "content-type": asset.contentType } });
+        const headers: Record<string, string> = { "content-type": asset.contentType };
+        if (asset.cacheControl) {
+          headers["cache-control"] = asset.cacheControl;
+        }
+        return new Response(new Uint8Array(asset.body), { headers });
       }
 
       if (!authorize(request, srv)) {
@@ -1441,7 +1445,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       }
 
       if (url.pathname === "/") {
-        return new Response(renderDashboard(), { headers: { "content-type": "text/html; charset=utf-8" } });
+        return new Response(renderDashboard(), {
+          headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }
+        });
       }
 
       if (url.pathname === "/api/sessions" && request.method === "POST") {
@@ -1785,6 +1791,33 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           return new Response("Invalid endpoint", { status: 400 });
         }
         await pushService.unsubscribe(body.endpoint);
+        return new Response(null, { status: 204 });
+      }
+
+      if (url.pathname === "/api/push/presence" && request.method === "POST") {
+        if (!pushService) {
+          return new Response("Push unavailable", { status: 503 });
+        }
+        if (!isSameOriginRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        let body: { endpoint?: unknown; foreground?: unknown };
+        try {
+          body = (await request.json()) as { endpoint?: unknown; foreground?: unknown };
+        } catch {
+          return new Response("Invalid JSON body", { status: 400 });
+        }
+        if (typeof body.endpoint !== "string" || body.endpoint.length === 0) {
+          return new Response("Invalid endpoint", { status: 400 });
+        }
+        if (typeof body.foreground !== "boolean") {
+          return new Response("Invalid foreground", { status: 400 });
+        }
+        pushService.recordPresence(body.endpoint, body.foreground);
         return new Response(null, { status: 204 });
       }
 

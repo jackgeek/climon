@@ -56,3 +56,20 @@ centralised mobile-view detection it relies on.
   no chooser bar is pinned in the desktop layout.
 - **Platforms:** Desktop Chrome, Firefox, Safari.
 - **Result:** _date / tester / platform / pass-fail / notes_
+
+## PKB-5 — Key bar is pinned by default on a fresh install
+
+- **Feature:** Pin key bar
+- **Preconditions:** No prior `dashboard.keyBarPinned` value set (fresh
+  `$CLIMON_HOME` config and cleared browser localStorage). Mobile viewport
+  (≤ 768px wide). At least one live session.
+- **Config-matrix cell:** Browser = mobile; viewport ≤ 768px; default config.
+- **Steps:**
+  1. Ensure `dashboard.keyBarPinned` is unset in config (default applies).
+  2. Open the dashboard and maximize a live session.
+  3. Open the hamburger (☰) menu.
+- **Expected result:** The chooser bar is pinned/visible without any prior
+  action, and the menu item reads **Unpin key bar** (i.e. pinning is on by
+  default).
+- **Platforms:** iOS Safari, Android Chrome.
+- **Result:** _date / tester / platform / pass-fail / notes_

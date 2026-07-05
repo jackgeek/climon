@@ -98,6 +98,9 @@ pub fn merge_patch(base: &SessionMeta, patch: &SessionMetaPatch) -> SessionMeta 
     if let Some(v) = patch.user_paused {
         out.user_paused = Some(v);
     }
+    if let Some(v) = patch.terminal_title.clone() {
+        out.terminal_title = Some(v);
+    }
     out
 }
 
@@ -222,6 +225,7 @@ mod tests {
             color: None,
             user_paused: None,
             theme: None,
+            terminal_title: None,
         }
     }
 
@@ -394,6 +398,23 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(merge_patch(&themed, &clear).theme, None);
+    }
+
+    #[test]
+    fn merge_patch_sets_terminal_title() {
+        let mut base = base_meta("s1");
+        let patched = merge_patch(
+            &base,
+            &SessionMetaPatch {
+                terminal_title: Some("vim README.md".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(patched.terminal_title.as_deref(), Some("vim README.md"));
+        // Absent patch field leaves the existing value untouched.
+        base.terminal_title = Some("keep".into());
+        let unchanged = merge_patch(&base, &SessionMetaPatch::default());
+        assert_eq!(unchanged.terminal_title.as_deref(), Some("keep"));
     }
 
     #[test]

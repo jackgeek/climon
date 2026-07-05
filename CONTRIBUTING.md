@@ -46,12 +46,21 @@ The shipped `climon` binary is built from `rust/climon-cli` and packaged by
 From the repo root (the project uses Bun and TypeScript ESM):
 
 ```bash
-bun install            # install dependencies
-bun run build:all      # build the dashboard bundle and server entrypoint
+bun install            # install dependencies (checks for the Rust toolchain)
+bun run build            # build the dashboard bundle, server entrypoint, and Rust client
 bun test tests         # run the full Bun suite
 bun run lint           # typecheck + message-catalog check
 bun run typecheck      # tsc --noEmit only
 ```
+
+`bun run build` also builds the Rust `climon` client. If `cargo` is missing,
+the `build:rust` step installs a minimal Rust toolchain via
+[rustup](https://rustup.rs) on demand, so first-time setup is just `bun install`
+followed by `bun run build`. Set `CLIMON_SKIP_RUST_INSTALL=1` to opt out of
+the automatic install (then provision Rust yourself). On **Windows**, building
+the client also requires the Visual Studio C++ Build Tools (for `link.exe`);
+rustup cannot install those, so install them separately if `bun run build`
+reports a missing linker.
 
 Run a single test file with `bun test tests/config.test.ts`, or one test by name
 with `bun test tests/config.test.ts -t "name"`.

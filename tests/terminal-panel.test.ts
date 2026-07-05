@@ -9,12 +9,17 @@ function renderPanel(overrides: Partial<Parameters<typeof TerminalPanel>[0]> = {
     view: "compose" as TerminalPanelView,
     fontSize: 14,
     composeText: "hello world",
+    selectionText: "",
+    stripDecorations: false,
     showLabels: true,
+    showSelect: false,
     onSelect: () => undefined,
     onAdjustFont: () => undefined,
     onComposeTextChange: () => undefined,
     onComposeInsert: () => undefined,
     onComposeCancel: () => undefined,
+    onToggleStripDecorations: () => undefined,
+    onSelectionClose: () => undefined,
     onSend: () => undefined,
     ...overrides
   };
@@ -67,6 +72,38 @@ describe("TerminalPanel", () => {
     // Accessible names are still present via aria-label for the icon-only state.
     expect(markup).toContain('aria-label="Keyboard"');
     expect(markup).toContain('aria-label="Compose text"');
+  });
+
+  test("chooser shows the Select button only when showSelect is set", () => {
+    const withSelect = renderPanel({ view: "chooser", showSelect: true });
+    const withoutSelect = renderPanel({ view: "chooser", showSelect: false });
+
+    expect(withSelect).toContain('aria-label="Select text"');
+    expect(withoutSelect).not.toContain('aria-label="Select text"');
+  });
+
+  test("selection view renders captured text in a read-only textarea with a strip toggle", () => {
+    const markup = renderPanel({
+      view: "selection",
+      selectionText: "captured line one\ncaptured line two",
+      stripDecorations: false
+    });
+
+    expect(markup).toContain("captured line one");
+    expect(markup).toContain('aria-label="Captured terminal text"');
+    expect(markup).toContain("readOnly");
+    expect(markup).toContain("Strip scrollbars &amp; decorations");
+    expect(markup).toContain("Select all");
+    expect(markup).toContain("Close");
+  });
+
+  test("selection view reflects the checked strip-decorations state", () => {
+    const checked = renderPanel({ view: "selection", selectionText: "x", stripDecorations: true });
+    const unchecked = renderPanel({ view: "selection", selectionText: "x", stripDecorations: false });
+
+    expect(checked).toContain('type="checkbox"');
+    expect(checked).toContain('checked=""');
+    expect(unchecked).not.toContain('checked=""');
   });
 
   test("compose view renders textarea, staged text, and actions", () => {
