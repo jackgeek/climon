@@ -169,6 +169,14 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     scope: ["daemon"]
   },
   {
+    path: "notifications.smartSnippet",
+    type: "boolean",
+    defaultValue: true,
+    purpose:
+      "When true (default), attention notifications include a fuzzy-extracted snippet of the last relevant terminal output as the notification body. Set false to send only the session name / terminal title.",
+    scope: ["daemon"]
+  },
+  {
     path: "remote.enabled",
     type: "boolean",
     purpose: "Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection.",

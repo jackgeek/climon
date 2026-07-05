@@ -355,6 +355,13 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         )
         .default(Value::from(10)),
         ConfigSetting::new(
+            "notifications.smartSnippet",
+            Boolean,
+            "When true (default), attention notifications include a fuzzy-extracted snippet of the last relevant terminal output as the notification body. Set false to send only the session name / terminal title.",
+            vec![Daemon],
+        )
+        .default(Value::from(true)),
+        ConfigSetting::new(
             "remote.enabled",
             Boolean,
             "Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection.",
@@ -826,6 +833,7 @@ mod tests {
                 "dashboard.keyBarPinned",
                 "dashboard.stateIconNoMotion",
                 "attention.idleSeconds",
+                "notifications.smartSnippet",
                 "remote.enabled",
                 "remote.host",
                 "remote.ingestHost",
@@ -862,7 +870,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 40);
+        assert_eq!(all_config_keys().len(), 41);
     }
 
     #[test]
@@ -889,6 +897,7 @@ mod tests {
                 "hotKeys": { "focusTopSession": "Alt+J" },
                 "dashboard": { "theme": "Default", "keyBarPinned": true, "stateIconNoMotion": false },
                 "attention": { "idleSeconds": 10 },
+                "notifications": { "smartSnippet": true },
                 "remote": { "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },
                 "tunnelLink": { "keepAlive": 60 },

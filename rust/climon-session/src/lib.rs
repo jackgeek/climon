@@ -34,6 +34,7 @@ pub mod host;
 pub mod idle;
 pub mod replay;
 pub mod resize;
+pub mod snippet;
 pub mod socket;
 pub mod title_capture;
 

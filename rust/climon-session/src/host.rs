@@ -212,6 +212,9 @@ struct HostState {
     captured_terminal_title: Option<String>,
     /// Trailing incomplete OSC bytes carried across reader chunks.
     terminal_title_remainder: String,
+    /// Whether smart-notification snippet extraction is enabled
+    /// (`notifications.smartSnippet`, default true).
+    snippet_enabled: bool,
     /// Latest progress parsed from the PTY output stream (`OSC 9;4`).
     /// `None` = never observed; `Some(None)` = cleared; `Some(Some(p))` = active.
     captured_progress: Option<Option<TerminalProgress>>,
@@ -639,6 +642,7 @@ impl HostState {
                         priority_reason: Some(PriorityReason::Running),
                         attention_matched_at: Some(None),
                         attention_reason: Some(None),
+                        attention_snippet: Some(None),
                         last_activity_at: Some(now.clone()),
                         ..Default::default()
                     })
@@ -651,6 +655,11 @@ impl HostState {
         }
         let now = now_iso();
         let reason = payload.reason.clone();
+        let attention_snippet = if self.snippet_enabled {
+            crate::snippet::extract_snippet(&self.grid.visible_lines())
+        } else {
+            None
+        };
         let mut applied = false;
         let _ =
             climon_store::patch::patch_session_meta_from_current(&self.env, &self.id, |current| {
@@ -664,6 +673,7 @@ impl HostState {
                     attention_matched_at: Some(Some(now.clone())),
                     attention_reason: Some(reason.clone()),
                     last_activity_at: Some(now.clone()),
+                    attention_snippet: Some(attention_snippet.clone()),
                     ..Default::default()
                 })
             });
@@ -804,6 +814,7 @@ pub fn run_session_host(
     let clamp_browser_to_host = cfg_bool(&config, "terminal", "clampBrowserToHost", false);
     let idle_seconds = cfg_i64(&config, "attention", "idleSeconds", 10);
     let idle_enabled = idle_seconds > 0;
+    let snippet_enabled = cfg_bool(&config, "notifications", "smartSnippet", true);
     let headless = options.headless;
 
     let initial_mode = if clamp_browser_to_host {
@@ -876,6 +887,7 @@ pub fn run_session_host(
         mouse_mode_remainder: String::new(),
         captured_terminal_title: None,
         terminal_title_remainder: String::new(),
+        snippet_enabled,
         captured_progress: None,
     }));
 

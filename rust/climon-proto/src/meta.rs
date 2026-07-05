@@ -154,6 +154,8 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_snippet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<TerminalProgress>,
 }
 
@@ -212,6 +214,12 @@ pub struct SessionMetaPatch {
     pub user_paused: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_title: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "double_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub attention_snippet: Option<Option<String>>,
     #[serde(
         default,
         deserialize_with = "double_option::deserialize",
@@ -363,6 +371,22 @@ mod tests {
     }
 
     #[test]
+    fn session_meta_attention_snippet_round_trips() {
+        let mut meta: SessionMeta = serde_json::from_str(minimal_json()).unwrap();
+        assert_eq!(meta.attention_snippet, None);
+        meta.attention_snippet = Some("all 12 tests pass. Update integration tests?".into());
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            json.contains("\"attentionSnippet\":\"all 12 tests pass. Update integration tests?\"")
+        );
+        let back: SessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.attention_snippet.as_deref(),
+            Some("all 12 tests pass. Update integration tests?")
+        );
+    }
+
+    #[test]
     fn session_meta_progress_round_trips() {
         let mut meta: SessionMeta = serde_json::from_str(minimal_json()).unwrap();
         assert_eq!(meta.progress, None);
@@ -380,6 +404,33 @@ mod tests {
                 value: Some(40)
             })
         );
+    }
+
+    #[test]
+    fn patch_attention_snippet_serializes_camel_case() {
+        let patch = SessionMetaPatch {
+            attention_snippet: Some(Some("done".into())),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&patch).unwrap(),
+            r#"{"attentionSnippet":"done"}"#
+        );
+
+        // A cleared snippet (Some(None)) serializes to "attentionSnippet":null.
+        let cleared = SessionMetaPatch {
+            attention_snippet: Some(None),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&cleared).unwrap(),
+            r#"{"attentionSnippet":null}"#
+        );
+
+        // A default patch (None) omits the key entirely.
+        let default = SessionMetaPatch::default();
+        let json = serde_json::to_string(&default).unwrap();
+        assert!(!json.contains("attentionSnippet"), "json: {json}");
     }
 
     #[test]

@@ -86,6 +86,7 @@ function sanitizeRemotePatch(patch: SessionMetaPatch): SessionMetaPatch {
   if (input.color === null || ANSI_COLORS.has(input.color as AnsiColor)) clean.color = input.color as AnsiColor | null;
   if (typeof input.theme === "string") clean.theme = boundedString(input.theme);
   if (typeof input.terminalTitle === "string") clean.terminalTitle = boundedString(input.terminalTitle);
+  if (typeof input.attentionSnippet === "string") clean.attentionSnippet = boundedString(input.attentionSnippet);
   return clean;
 }
 
@@ -128,6 +129,10 @@ export function toLocalMeta(
     terminalTitle:
       typeof input.terminalTitle === "string" && input.terminalTitle
         ? boundedString(input.terminalTitle as string)
+        : undefined,
+    attentionSnippet:
+      typeof input.attentionSnippet === "string" && input.attentionSnippet
+        ? boundedString(input.attentionSnippet as string)
         : undefined,
     origin: "remote",
     clientLabel: label

@@ -52,6 +52,12 @@
     session is flagged as needing attention. Set to 0 or negative to disable
     static-screen detection.
 
+  notifications.smartSnippet
+    Type: boolean; Default: true; Scope: daemon
+    When true (default), attention notifications include a fuzzy-extracted snippet of
+    the last relevant terminal output as the notification body. Set false to send only
+    the session name / terminal title.
+
   remote.enabled
     Type: boolean; Default: unset; Scope: client
     Enables remote uplink so the local devbox forwards session metadata and I/O to a

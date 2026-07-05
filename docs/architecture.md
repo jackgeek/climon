@@ -253,6 +253,18 @@ Because only cell contents are fingerprinted (not the cursor position), a
 blinking cursor is treated as static. Detection runs only while a local client is
 attached, and setting `attention.idleSeconds` to `0` or less disables it.
 
+When the daemon transitions a session to `needs-attention`, it also extracts a
+fuzzy "smart snippet" of the last relevant terminal output from its live
+`HeadlessGrid` (`rust/climon-session/src/snippet.rs`). The pure extractor runs
+a deterministic heuristic: it reads the visible lines, filters noise (borders,
+spinners, progress bars), and captures the last meaningful paragraph (capped at
+160 chars). The daemon writes this as `attentionSnippet` in the same metadata
+patch that flags `needs-attention`. The dashboard server then composes the
+notification title and body from a shared helper (`src/notification-content.ts`):
+title = session name → terminal title → command; body = snippet → terminal title
+(if not promoted to title) → "". This is gated by the `notifications.smartSnippet`
+config setting (boolean, default true, scope daemon).
+
 ## Web Push pipeline (mobile PWA)
 
 The dashboard server (`climon-server`) gains an additive, fail-safe push pipeline

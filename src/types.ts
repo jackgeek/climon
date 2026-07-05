@@ -162,6 +162,15 @@ export interface AttentionConfig {
   idleSeconds: number;
 }
 
+export interface NotificationsConfig {
+  /**
+   * When true (default), attention notifications include a fuzzy-extracted
+   * snippet of the last relevant terminal output as the notification body.
+   * Set false to send only the session name / terminal title.
+   */
+  smartSnippet: boolean;
+}
+
 export interface ClimonConfig {
   version: 1;
   server: ServerConfig;
@@ -169,6 +178,7 @@ export interface ClimonConfig {
   hotKeys: HotKeysConfig;
   dashboard?: DashboardConfig;
   attention: AttentionConfig;
+  notifications?: NotificationsConfig;
   remote?: RemoteConfig;
   session?: SessionDefaultsConfig;
   tunnelLink?: TunnelLinkConfig;
@@ -226,6 +236,8 @@ export interface SessionMeta {
   userPaused?: boolean;
   /** Latest terminal title emitted by a program inside the PTY (OSC 0/2), shown as a subtitle. */
   terminalTitle?: string;
+  /** Fuzzy-extracted last relevant terminal output at attention time; the smart-notification body. */
+  attentionSnippet?: string;
   /** Latest terminal progress (OSC 9;4) reported by a program inside the PTY; absent/null = none. */
   progress?: TerminalProgress | null;
 }
@@ -249,6 +261,7 @@ export interface SessionMetaPatch {
   theme?: string;
   userPaused?: boolean;
   terminalTitle?: string;
+  attentionSnippet?: string;
   /** Progress patch: a value sets it, `null` clears it (state 0), absent leaves it unchanged. */
   progress?: TerminalProgress | null;
 }

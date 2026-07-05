@@ -40,6 +40,15 @@ not telemetry is enabled:
   any other secret. These are additionally redacted from all local logs.
 - Any other information that identifies you, your organization, or your machines.
 
+**Exception: optional attention notifications.** When `notifications.smartSnippet`
+is enabled (the default), attention notifications include a fuzzy-extracted snippet
+of terminal output (≤160 chars) as the notification body. This means that terminal
+content leaves your machine in push notification payloads (for mobile PWA
+notifications) and in remote-session metadata when a session on a remote devbox
+flags attention (the snippet is synced to the dashboard host along with the session
+status). The snippet never appears in telemetry; it is gated by the
+`notifications.smartSnippet` setting and can be disabled by setting it to `false`.
+
 There are **no advertising, profiling, tracking, or data-broker integrations**
 of any kind, and climon does not sell or share data for such purposes.
 
