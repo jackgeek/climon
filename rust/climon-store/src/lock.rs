@@ -173,7 +173,7 @@ fn process_start_time(pid: i64) -> Option<String> {
 
 fn random_token() -> String {
     let mut buf = [0u8; 16];
-    getrandom::getrandom(&mut buf).expect("getrandom for lock token");
+    getrandom::fill(&mut buf).expect("getrandom for lock token");
     let mut s = String::with_capacity(32);
     for b in buf {
         s.push_str(&format!("{b:02x}"));
@@ -991,5 +991,17 @@ mod tests {
         missing.as_mut().unwrap().token = None;
         assert!(!is_complete_owner(&missing));
         assert!(!is_complete_owner(&None));
+    }
+
+    #[test]
+    fn random_token_is_32_hex_chars_and_varies() {
+        let a = random_token();
+        let b = random_token();
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        // getrandom::fill must supply entropy, so two tokens must differ
+        // (and never be the all-zero string it would produce if left unfilled).
+        assert_ne!(a, b);
+        assert_ne!(a, "0".repeat(32));
     }
 }
