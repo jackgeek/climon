@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildTunnelReauthUrl,
   canInstallPwa,
   computeIsStandalone,
   computeIsTunnelOrigin,
@@ -28,18 +27,12 @@ describe("pwa context", () => {
     expect(canInstallPwa({ isTunnelOrigin: false, isStandalone: false })).toBe(false);
   });
 
-  test("buildTunnelReauthUrl builds a clean reauth url without the anti-phishing skip param", () => {
-    const url = buildTunnelReauthUrl("https://abc-3131.usw2.devtunnels.ms");
-    expect(url).toBe("https://abc-3131.usw2.devtunnels.ms/?reauth=1");
-    expect(url).not.toContain("X-Tunnel-Skip-AntiPhishing-Page");
-  });
-
-  test("reauthenticateTunnel navigates the current window in place to the reauth url", () => {
+  test("reauthenticateTunnel navigates the current window in place to the origin root", () => {
     const calls: string[] = [];
     reauthenticateTunnel({
       origin: "https://abc-3131.usw2.devtunnels.ms",
       navigate: (url) => calls.push(url),
     });
-    expect(calls).toEqual(["https://abc-3131.usw2.devtunnels.ms/?reauth=1"]);
+    expect(calls).toEqual(["https://abc-3131.usw2.devtunnels.ms/"]);
   });
 });
