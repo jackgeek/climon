@@ -1,8 +1,10 @@
 import { Button, Checkbox, Text, Textarea, makeStyles, tokens } from "@fluentui/react-components";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowEnterLeft24Regular,
   ChevronDown24Regular,
+  ChevronLeft24Regular,
+  ChevronRight24Regular,
   ChevronUp24Regular,
   Compose24Regular,
   Dismiss24Regular,
@@ -22,6 +24,7 @@ interface Props {
   view: TerminalPanelView;
   fontSize: number;
   composeText: string;
+  composeHistory: string[];
   selectionText: string;
   stripDecorations: boolean;
   showLabels: boolean;
@@ -115,6 +118,7 @@ export function TerminalPanel({
   view,
   fontSize,
   composeText,
+  composeHistory,
   selectionText,
   stripDecorations,
   showLabels,
@@ -131,6 +135,50 @@ export function TerminalPanel({
   const styles = useStyles();
   const composeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const selectionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // History cursor for the composer. `null` means the user is editing a fresh
+  // draft (not currently browsing history); otherwise it indexes composeHistory
+  // (oldest→newest). The draft is stashed so "forward" past the newest entry can
+  // restore whatever the user had typed before they started browsing.
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const composeDraftRef = useRef<string>("");
+
+  // A freshly opened composer always starts detached from history.
+  useEffect(() => {
+    if (view === "compose") {
+      setHistoryIndex(null);
+    }
+  }, [view]);
+
+  function goBackInHistory(): void {
+    if (composeHistory.length === 0) {
+      return;
+    }
+    if (historyIndex === null) {
+      composeDraftRef.current = composeText;
+      const idx = composeHistory.length - 1;
+      setHistoryIndex(idx);
+      onComposeTextChange(composeHistory[idx]);
+    } else if (historyIndex > 0) {
+      const idx = historyIndex - 1;
+      setHistoryIndex(idx);
+      onComposeTextChange(composeHistory[idx]);
+    }
+  }
+
+  function goForwardInHistory(): void {
+    if (historyIndex === null) {
+      return;
+    }
+    if (historyIndex < composeHistory.length - 1) {
+      const idx = historyIndex + 1;
+      setHistoryIndex(idx);
+      onComposeTextChange(composeHistory[idx]);
+    } else {
+      setHistoryIndex(null);
+      onComposeTextChange(composeDraftRef.current);
+    }
+  }
 
   // When the composer opens with pre-existing text, select it so the user can
   // immediately replace, delete, or reuse it. Deferred to the next frame so it
@@ -175,6 +223,8 @@ export function TerminalPanel({
 
   if (view === "compose") {
     const empty = composeText.length === 0;
+    const backDisabled = composeHistory.length === 0 || historyIndex === 0;
+    const forwardDisabled = historyIndex === null;
     return (
       <div className={styles.composeOverlay} role="group" aria-label="Compose text">
         <Textarea
@@ -185,9 +235,32 @@ export function TerminalPanel({
           autoFocus
           resize="none"
           textarea={{ ref: composeTextareaRef, style: { height: "100%" } }}
-          onChange={(_e, data) => onComposeTextChange(data.value)}
+          onChange={(_e, data) => {
+            if (historyIndex !== null) {
+              setHistoryIndex(null);
+            }
+            onComposeTextChange(data.value);
+          }}
         />
         <div className={styles.composeActions}>
+          <Button
+            appearance="outline"
+            icon={<ChevronLeft24Regular />}
+            aria-label="Previous compose entry"
+            disabled={backDisabled}
+            onClick={() => goBackInHistory()}
+          >
+            {showLabels ? "Back" : undefined}
+          </Button>
+          <Button
+            appearance="outline"
+            icon={<ChevronRight24Regular />}
+            aria-label="Next compose entry"
+            disabled={forwardDisabled}
+            onClick={() => goForwardInHistory()}
+          >
+            {showLabels ? "Forward" : undefined}
+          </Button>
           <Button
             appearance="outline"
             icon={<Dismiss24Regular />}
