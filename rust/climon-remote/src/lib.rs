@@ -36,6 +36,7 @@ pub mod singleton;
 pub mod spawn_auth;
 pub mod teardown;
 pub mod time;
+pub mod target_set;
 pub mod tunnel;
 pub mod uplink;
 pub mod uplink_status;
