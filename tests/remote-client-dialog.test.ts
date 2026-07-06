@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { applyRemoteStatusToDraft, type RemoteClientDraftState } from "../src/web/components/remoteClientState.js";
+import { RemoteTunnelStatusSection } from "../src/web/components/RemoteClientDialog.js";
 
 const baseState: RemoteClientDraftState = {
   status: null,
@@ -27,5 +30,23 @@ describe("applyRemoteStatusToDraft", () => {
     });
 
     expect(result.tunnelInput).toBe("my-tunnel");
+  });
+});
+
+describe("RemoteClientDialog auto-managed tunnel status", () => {
+  test("shows auto-managed tunnel status without create/recreate buttons", () => {
+    const markup = renderToStaticMarkup(createElement(RemoteTunnelStatusSection, {
+      status: {
+        devtunnelAvailable: true,
+        ingestPort: 7070,
+        tunnel: { id: "climon-ingest-f6466583e8b34a25d74d.eun1" },
+        canHost: true
+      }
+    }));
+
+    expect(markup).toContain("Ingest tunnel (auto-managed)");
+    expect(markup).toContain("climon-ingest-f6466583e8b34a25d74d");
+    expect(markup).not.toMatch(/create tunnel/i);
+    expect(markup).not.toMatch(/recreate/i);
   });
 });

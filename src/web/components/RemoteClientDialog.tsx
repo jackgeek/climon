@@ -11,7 +11,6 @@ import {
   Field,
   Input,
   Option,
-  Spinner,
   Text,
   makeStyles,
   tokens
@@ -22,10 +21,7 @@ import { sessionColorDropdownOptions } from "../session-color-options.js";
 import {
   buildSetupScript,
   copyToClipboard,
-  createRemoteTunnel,
-  deleteRemoteTunnel,
   fetchRemoteStatus,
-  recordManualTunnel,
   type RemoteStatus
 } from "../api.js";
 import { applyRemoteStatusToDraft, type RemoteClientDraftState } from "./remoteClientState.js";
@@ -63,6 +59,34 @@ interface Props {
   onOpenChange: (open: boolean) => void;
 }
 
+export function RemoteTunnelStatusSection({ status }: { status: RemoteStatus | null }) {
+  const styles = useStyles();
+  const tunnelId = status?.tunnel?.id;
+
+  if (tunnelId) {
+    return (
+      <div className={styles.section}>
+        <Text weight="semibold" style={{ display: "block" }}>Ingest tunnel (auto-managed)</Text>
+        <Text>{tunnelId}</Text>
+        <Text className={styles.hint}>
+          Climon creates and reuses this labeled dev tunnel when host remotes are enabled.
+        </Text>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.section}>
+      <Text weight="semibold" style={{ display: "block" }}>Ingest tunnel (auto-managed)</Text>
+      <Text className={styles.hint}>
+        {status?.devtunnelAvailable
+          ? "No ingest tunnel is recorded yet. Enable host remotes to let Climon create it automatically."
+          : "The devtunnel CLI was not found on this machine, so Climon cannot auto-manage the ingest tunnel."}
+      </Text>
+    </div>
+  );
+}
+
 export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const styles = useStyles();
   const [draft, setDraft] = useState<RemoteClientDraftState>({
@@ -73,9 +97,8 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const [priority, setPriority] = useState("");
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const { status, tunnelInput } = draft;
+  const { status } = draft;
 
   function applyStatus(s: RemoteStatus): void {
     setDraft((prev) => applyRemoteStatusToDraft(prev, s));
@@ -93,7 +116,6 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     if (open) {
       setError("");
       setCopied(false);
-      setBusy(false);
       void refresh();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -118,47 +140,6 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     spawnSecret: status?.spawnSecret
   });
 
-  async function autoCreate(): Promise<void> {
-    setBusy(true);
-    setError("");
-    setCopied(false);
-    try {
-      applyStatus(await createRemoteTunnel());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create tunnel.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function recordManual(): Promise<void> {
-    if (!tunnelInput.trim()) {
-      setError("Enter a dev tunnel id or URL.");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setCopied(false);
-    try {
-      applyStatus(await recordManualTunnel(tunnelInput.trim()));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to record tunnel.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function teardown(): Promise<void> {
-    setBusy(true);
-    try {
-      await deleteRemoteTunnel();
-      setDraft((prev) => ({ ...prev, tunnelInput: "" }));
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const hasTunnel = Boolean(status?.tunnel?.id);
 
   return (
@@ -171,41 +152,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
               Connect Climon sessions from remote machines via a Microsoft dev tunnel. 
             </Text>
 
-            {status?.devtunnelAvailable ? (
-              <div className={styles.section}>
-                <Button appearance="primary" disabled={busy} onClick={() => void autoCreate()}>
-                  {busy ? <Spinner size="tiny" /> : hasTunnel ? "Recreate tunnel automatically" : "Create tunnel automatically"}
-                </Button>
-                <Text className={styles.hint}>
-                  Uses the devtunnel CLI on this machine to create and host a tunnel.
-                </Text>
-              </div>
-            ) : (
-              <Text className={styles.hint}>
-                The devtunnel CLI was not found on this machine. Create a tunnel
-                manually and paste its id/URL and connect token below.
-              </Text>
-            )}
-
-            <div className={styles.section}>
-              <Field label="Dev tunnel id or URL">
-                <Input
-                  value={tunnelInput}
-                  placeholder="abc123  or  https://abc123-3132.uks1.devtunnels.ms/"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(_, d) => setDraft((prev) => ({ ...prev, tunnelInput: d.value }))}
-                />
-              </Field>
-              <Button
-                appearance="secondary"
-                style={{ marginTop: "8px" }}
-                disabled={busy}
-                onClick={() => void recordManual()}
-              >
-                Use this tunnel
-              </Button>
-            </div>
+            <RemoteTunnelStatusSection status={status} />
 
             <div className={styles.row}>
               <Field
@@ -271,11 +218,6 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
             </Button>
           </DialogContent>
           <DialogActions>
-            {hasTunnel && (
-              <Button appearance="subtle" disabled={busy} onClick={() => void teardown()}>
-                Remove tunnel
-              </Button>
-            )}
             <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
           </DialogActions>
         </DialogBody>
