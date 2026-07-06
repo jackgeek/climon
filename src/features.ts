@@ -50,7 +50,7 @@ export const FEATURE_FLAGS = defineFeatureFlags([
   {
     name: "wslBridge",
     default: "disabled",
-    status: "experimental",
+    status: "untested",
     description:
       "Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard."
   },
