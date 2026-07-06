@@ -126,6 +126,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "climon-dll"
+version = "0.1.0"
+dependencies = [
+ "climon-cli",
+]
+
+[[package]]
 name = "climon-install"
 version = "0.1.0"
 dependencies = [
@@ -215,6 +222,13 @@ dependencies = [
  "serde",
  "serde_json",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "climon-stub"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

@@ -114,7 +114,9 @@ mod tests {
         let result = reap_superseded(dir);
         assert!(dir.join("climon-3.2.1.dll").exists());
         assert!(dir.join("climon-server-3.2.1.exe").exists());
-        assert!(result.removed.contains(&"climon-server-3.1.0.exe".to_string()));
+        assert!(result
+            .removed
+            .contains(&"climon-server-3.1.0.exe".to_string()));
     }
 
     #[test]

@@ -165,7 +165,10 @@ mod tests {
         fs::write(dir.join("climon.version"), "   \n").unwrap();
         touch(dir, "climon-1.0.0.dll");
         assert_eq!(read_pointer(dir, CLIENT), None);
-        assert_eq!(resolve_artifact(dir, CLIENT).unwrap(), dir.join("climon-1.0.0.dll"));
+        assert_eq!(
+            resolve_artifact(dir, CLIENT).unwrap(),
+            dir.join("climon-1.0.0.dll")
+        );
     }
 
     #[test]
