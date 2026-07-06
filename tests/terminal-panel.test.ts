@@ -9,6 +9,7 @@ function renderPanel(overrides: Partial<Parameters<typeof TerminalPanel>[0]> = {
     view: "compose" as TerminalPanelView,
     fontSize: 14,
     composeText: "hello world",
+    composeHistory: [] as string[],
     selectionText: "",
     stripDecorations: false,
     showLabels: true,
@@ -136,5 +137,53 @@ describe("TerminalPanel", () => {
 
     expect(source).toContain("onClick={() => onComposeInsert(composeText)}");
     expect(source).toContain("onClick={() => onComposeCancel()}");
+  });
+});
+
+describe("TerminalPanel compose history", () => {
+  test("renders Back and Forward buttons with accessible names", () => {
+    const markup = renderPanel({ composeHistory: ["prev"] });
+
+    expect(markup).toContain('aria-label="Previous compose entry"');
+    expect(markup).toContain('aria-label="Next compose entry"');
+  });
+
+  test("both history buttons are disabled when history is empty", () => {
+    // composeText is non-empty so Insert is enabled; the only disabled
+    // buttons are the two navigation buttons.
+    const markup = renderPanel({ composeText: "hello world", composeHistory: [] });
+
+    const disabledCount = (markup.match(/disabled=""/g) ?? []).length;
+    expect(disabledCount).toBe(2);
+  });
+
+  test("Back is enabled and Forward disabled at the live draft with history", () => {
+    // Initial render: historyIndex is null (live draft). With one history
+    // entry, Back is enabled and only Forward is disabled.
+    const markup = renderPanel({ composeText: "hello world", composeHistory: ["prev"] });
+
+    const disabledCount = (markup.match(/disabled=""/g) ?? []).length;
+    expect(disabledCount).toBe(1);
+  });
+
+  test("history buttons show text labels only when showLabels is true", () => {
+    const withLabels = renderPanel({ composeHistory: ["prev"], showLabels: true });
+    const withoutLabels = renderPanel({ composeHistory: ["prev"], showLabels: false });
+
+    expect(withLabels).toContain(">Back<");
+    expect(withLabels).toContain(">Forward<");
+    expect(withoutLabels).not.toContain(">Back<");
+    expect(withoutLabels).not.toContain(">Forward<");
+  });
+
+  test("navigation and reset handlers are wired in source", () => {
+    const source = readFileSync("src/web/components/TerminalPanel.tsx", "utf8");
+
+    expect(source).toContain("function goBackInHistory()");
+    expect(source).toContain("function goForwardInHistory()");
+    expect(source).toContain("onClick={() => goBackInHistory()}");
+    expect(source).toContain("onClick={() => goForwardInHistory()}");
+    // Typing detaches from history navigation.
+    expect(source).toContain("setHistoryIndex(null)");
   });
 });
