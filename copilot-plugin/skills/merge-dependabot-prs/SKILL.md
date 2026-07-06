@@ -110,16 +110,31 @@ For Rust deps:
 cd rust && cargo test
 ```
 
-**Two known-flaky Bun tests time out at 30s locally and fail on `dev` too**
+**Distinguish PR-caused failures from pre-existing base failures.** A test that
+also fails on the target branch (`dev`) without the PR is NOT a regression from
+the dependency bump — do not let it block the merge. When the suite fails:
+
+1. Note exactly which tests failed.
+2. Check out clean `dev` (`git checkout dev && git reset --hard origin/dev`),
+   reinstall/rebuild, and run the same failing test(s) — for Bun,
+   `bun test tests -t "<test name>"`; for Rust, `cargo test <name>`.
+   (You only need to run the specific failing tests, not the whole suite.)
+3. Any test that also fails on clean `dev` is **pre-existing** — ignore it for
+   merge purposes (but mention it in the summary as a base-branch issue).
+4. If, after excluding pre-existing failures, no failures caused by the PR
+   remain, treat the suite as **passing**.
+
+As a shortcut, two Bun tests are known to fail on `dev` regardless
 (`tests/health-version.test.ts` "reports remotes enabled" and
-`tests/server-remote.test.ts` ingest-shutdown). If the ONLY failures are these
-two environmental timeouts, treat the suite as passing. Any other failure is a
-real failure.
+`tests/server-remote.test.ts` ingest-shutdown timeouts), but always apply the
+general rule above rather than relying only on this list.
 
 Interpret the result:
-- All relevant tests pass → PR is a **merge candidate**.
-- Any real test failure → record **not mergeable — tests failed**, and capture
-  which test(s) failed and the key error line(s) for the summary.
+- No PR-caused failures remain (all failures are pre-existing on `dev`) → PR is
+  a **merge candidate**.
+- Any failure that does NOT reproduce on clean `dev` → record **not mergeable —
+  tests failed**, and capture which test(s) failed and the key error line(s) for
+  the summary.
 
 ## Step 5: Merge passing PRs
 
@@ -183,9 +198,10 @@ Give the user a one-line closing note on how many merged vs. need attention.
   you may trigger a release.
 - **Assuming the branch prefix without checking a mixed diff.** Confirm with the
   file list when unsure.
-- **Counting the known-flaky Bun timeouts as real failures** — or, conversely,
-  using them as cover to ignore a genuine failure. Only the two named tests are
-  exempt.
+- **Treating a pre-existing base failure as a PR regression** — or, conversely,
+  using "it's probably pre-existing" as cover to skip verification. Always
+  reproduce a failure on clean `dev` before deciding: fails on `dev` too =
+  pre-existing (don't block); passes on `dev` = caused by the PR (block).
 - **Skipping the summary** when everything merged, or lumping all skips into one
   vague line. Each unmerged PR needs its own explicit reason.
 - **Leaving the repo on a Dependabot branch.** Always `git checkout` back to the
