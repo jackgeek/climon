@@ -80,3 +80,23 @@ describe("devtunnelEnv", () => {
     }
   });
 });
+
+describe("CLIMON_DISABLE_DEVTUNNEL guard", () => {
+  test("CLIMON_DISABLE_DEVTUNNEL isDevtunnelDisabled reads the env flag", () => {
+    expect(tunnel.isDevtunnelDisabled({ CLIMON_DISABLE_DEVTUNNEL: "1" } as NodeJS.ProcessEnv)).toBe(true);
+    expect(tunnel.isDevtunnelDisabled({ CLIMON_DISABLE_DEVTUNNEL: "true" } as NodeJS.ProcessEnv)).toBe(true);
+    expect(tunnel.isDevtunnelDisabled({} as NodeJS.ProcessEnv)).toBe(false);
+  });
+
+  test("CLIMON_DISABLE_DEVTUNNEL detectDevtunnel reports unavailable when disabled (no spawn)", async () => {
+    const prev = process.env.CLIMON_DISABLE_DEVTUNNEL;
+    process.env.CLIMON_DISABLE_DEVTUNNEL = "1";
+    try {
+      const res = await tunnel.detectDevtunnel();
+      expect(res.available).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.CLIMON_DISABLE_DEVTUNNEL;
+      else process.env.CLIMON_DISABLE_DEVTUNNEL = prev;
+    }
+  });
+});

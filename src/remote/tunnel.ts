@@ -33,8 +33,18 @@ export function devtunnelEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proce
   return existsSync(icuLib) ? { ...env, LD_LIBRARY_PATH: icuLib } : env;
 }
 
+/** True when the CLIMON_DISABLE_DEVTUNNEL env flag disables all devtunnel interaction. */
+export function isDevtunnelDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const v = env.CLIMON_DISABLE_DEVTUNNEL;
+  return v === "1" || v === "true";
+}
+
 const defaultRunner: Runner = (cmd, args) =>
   new Promise((resolve) => {
+    if (cmd === "devtunnel" && isDevtunnelDisabled()) {
+      resolve({ status: 127, stdout: "", stderr: "devtunnel disabled" });
+      return;
+    }
     const child = spawn(cmd, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: cmd === "devtunnel" ? devtunnelEnv() : process.env,
@@ -64,6 +74,7 @@ export interface DetectResult {
 
 /** Confirms the `devtunnel` CLI is present and runnable. */
 export async function detectDevtunnel(runner: Runner = defaultRunner): Promise<DetectResult> {
+  if (isDevtunnelDisabled()) return { available: false };
   const res = await runner("devtunnel", ["--version"]);
   if (res.status !== 0) return { available: false };
   return { available: true, version: res.stdout.trim() || undefined };
@@ -209,4 +220,3 @@ function parseTunnelId(stdout: string): string | undefined {
     return m?.[1];
   }
 }
-
