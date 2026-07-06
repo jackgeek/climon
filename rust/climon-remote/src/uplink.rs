@@ -505,6 +505,27 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
     }));
     reconcile(&mut bridge).await;
 
+    // Sessions-dir watcher: re-advertise local sessions whenever the metadata on
+    // disk changes so sessions created (or updated) AFTER the channel connects
+    // reach the remote dashboard without waiting for a reconnect. Mirrors the TS
+    // `watch(getSessionsDir(env), () => reconcile(bridge))`; this port uses the
+    // workspace's polling primitive (`shutdown_watch::spawn_poll`) as the fs.watch
+    // equivalent and only fires when the set of `*.json` files or their
+    // mtime/size changes, so a quiet channel does not re-send frames.
+    let reconcile_signal = Arc::new(tokio::sync::Notify::new());
+    let _sessions_watcher = {
+        let sessions_dir = bridge.store_env.sessions_dir();
+        let signal = reconcile_signal.clone();
+        let mut last = sessions_signature(&sessions_dir);
+        crate::shutdown_watch::spawn_poll(crate::shutdown_watch::DEFAULT_POLL_MS, move || {
+            let current = sessions_signature(&sessions_dir);
+            if current != last {
+                last = current;
+                signal.notify_one();
+            }
+        })
+    };
+
     let last_activity = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
 
     // Keepalive ping timer.
@@ -577,6 +598,11 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
     loop {
         tokio::select! {
             _ = shutdown.notified() => break,
+            _ = reconcile_signal.notified() => {
+                // Sessions dir changed: re-advertise so new/updated local sessions
+                // (and any that disappeared) are pushed to the remote dashboard.
+                reconcile(&mut bridge).await;
+            }
             read = read_half.read(&mut buf) => {
                 let n = match read {
                     Ok(0) | Err(_) => break,
@@ -854,6 +880,41 @@ fn build_uplink_target(
         tunnel_id: tunnel_id.map(String::from),
         url: None,
     }
+}
+
+/// Computes a cheap change signature for the sessions directory from the set of
+/// `*.json` metadata files and their (size, mtime). Used by the sessions-dir
+/// watcher to trigger a re-advertise only when session metadata actually changes.
+fn sessions_signature(sessions_dir: &Path) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut entries: Vec<(String, u64, u128)> = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(sessions_dir) {
+        for entry in read_dir.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".json") {
+                continue;
+            }
+            let (len, mtime) = entry
+                .metadata()
+                .map(|m| {
+                    let mtime = m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0);
+                    (m.len(), mtime)
+                })
+                .unwrap_or((0, 0));
+            entries.push((name, len, mtime));
+        }
+    }
+    entries.sort();
+    let mut hasher = DefaultHasher::new();
+    entries.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Counts local (non-remote) sessions advertised by this uplink.
@@ -1283,6 +1344,78 @@ mod tests {
         let kinds = received.lock().unwrap().clone();
         assert_eq!(kinds.first().map(String::as_str), Some("hello"));
         assert!(kinds.iter().any(|k| k == "session-added"));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn sessions_signature_changes_when_a_session_appears() {
+        let home = temp_home();
+        let sessions_dir = home.join("sessions");
+        let empty = sessions_signature(&sessions_dir);
+        // Stable for an unchanged directory.
+        assert_eq!(empty, sessions_signature(&sessions_dir));
+        // Non-`.json` files (locks, scrollback, tmp) do not affect the signature.
+        std::fs::write(sessions_dir.join("s1.json.lock"), "").unwrap();
+        std::fs::write(sessions_dir.join("s1.scrollback"), "x").unwrap();
+        assert_eq!(empty, sessions_signature(&sessions_dir));
+        // A new metadata file changes the signature.
+        std::fs::write(sessions_dir.join("s1.json"), "{}").unwrap();
+        assert_ne!(empty, sessions_signature(&sessions_dir));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[tokio::test]
+    async fn bridge_advertises_sessions_created_after_connect() {
+        let home = temp_home();
+        let store_env = store_env_for(&home);
+        // No sessions exist at connect time.
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let server = tokio::spawn(collect_control_kinds(listener, received.clone()));
+
+        let client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let bridge = tokio::spawn(run_uplink_bridge(
+            client,
+            UplinkBridgeOptions {
+                store_env: store_env_for(&home),
+                client_id: "dev1".into(),
+                keep_alive_seconds: Some(0.0),
+                peer: false,
+                target: None,
+                connected_at: None,
+                config_env: config_env_for(&home),
+            },
+        ));
+
+        // Initial reconcile has no sessions to advertise.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !received
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|k| k == "session-added"),
+            "no session should be advertised before one is created"
+        );
+
+        // Create a session after the channel connected; the sessions-dir watcher
+        // must re-advertise it without waiting for a reconnect.
+        write_session_meta(&store_env, &sample_meta(&home, "late", None)).unwrap();
+        tokio::time::sleep(Duration::from_millis(1600)).await;
+        assert!(
+            received
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|k| k == "session-added"),
+            "session created after connect should be advertised by the watcher"
+        );
+
+        bridge.abort();
+        let _ = bridge.await;
+        let _ = server.await;
         std::fs::remove_dir_all(&home).ok();
     }
 
