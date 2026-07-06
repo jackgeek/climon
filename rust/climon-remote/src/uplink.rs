@@ -707,9 +707,14 @@ fn auth_rejected_in(text: &str) -> bool {
     AUTH_REJECT_PATTERNS.iter().any(|p| lower.contains(p))
 }
 
-fn devtunnel_command(args: &[&str]) -> tokio::process::Command {
+pub(crate) fn devtunnel_command(args: &[&str]) -> tokio::process::Command {
     let env: HashMap<String, String> = std::env::vars().collect();
-    let mut cmd = tokio::process::Command::new("devtunnel");
+    let program = if crate::discovery::devtunnel_disabled() {
+        "climon-devtunnel-disabled"
+    } else {
+        "devtunnel"
+    };
+    let mut cmd = tokio::process::Command::new(program);
     cmd.args(args);
     for (k, v) in crate::tunnel::devtunnel_env(&env) {
         cmd.env(k, v);
