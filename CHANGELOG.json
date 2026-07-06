@@ -2,7 +2,8 @@
   {
     "version": "3.2.0",
     "changes": [
-      "Make Windows self-updates safe while climon is running by using stable stubs, versioned payloads, and a dedicated installer"
+      "Make Windows self-updates safe while climon is running by using stable stubs, versioned payloads, and a dedicated installer",
+      "Roll out the Windows stub layout through a bridge release before the first stub release so existing installs can migrate safely"
     ]
   },
   {

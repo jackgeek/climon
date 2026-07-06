@@ -230,6 +230,41 @@ On **Unix**, the client remains the `climon` executable built from `climon-cli`.
 Updates continue to use the existing rename-over swap model because POSIX allows
 replacing an executable while old processes keep their inode.
 
+
+### Migrating existing Windows installs (bridge release)
+
+Legacy Windows installs are a single `climon.exe` with no `climon.version`
+pointer. Shipping the stub model directly would brick them, so migration happens
+over two releases:
+
+1. **Bridge release (legacy packaging + migration-aware updater).** Cut this tag
+   from a state that still packages the legacy layout: `scripts/compile.ts` and
+   `.github/workflows/release.yml` must still emit `install.exe` as the legacy
+   client, before the stub-model packaging flip is part of the tagged commit. Old
+   installs auto-update to it exactly as before. Its only new content is the
+   migration branch in `climon-update` and installer `--migrate` mode. It does
+   not ship `climon.dll` or the dedicated installer layout.
+2. **First stub release ("C") — full stub model.** Cut this tag after the
+   packaging flip: the zip carries `install.exe` as the dedicated installer plus
+   `climon.dll` and `climon-server.exe`. When a bridge install updates to C, the
+   bridge updater sees `climon.dll` in the release, recognizes that the install
+   is still legacy because no pointer file exists, and runs
+   `install.exe --migrate` to convert it in place.
+
+Do not publish C until the bridge has had time to roll out. A very old install
+that never received the bridge and jumps straight to C will brick because its
+pre-migration updater copies C's dedicated installer over `climon.exe`; such
+installs must re-run `install.ps1`, whose installer legacy-upgrade path restores
+a working stub layout.
+
+For release engineering, the migration code must be present in the bridge tag,
+but the packaging flip must not be. In practice, tag the bridge from a commit
+that includes the migration-aware updater/installer changes but reverts or
+excludes the Phase 5 packaging changes, then land the packaging flip and tag C.
+Alternatively, land everything on `dev`, cut the bridge from a branch where
+`scripts/compile.ts` still emits the legacy layout, then merge the packaging flip
+for C.
+
 ## Data locations (`$CLIMON_HOME`, default `~/.climon`)
 
 | Path | Purpose |
