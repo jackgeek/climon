@@ -78,8 +78,9 @@ All cases isolate state with a temp `CLIMON_HOME` so they never touch a real
 4. `diff` against `fixtures/cli/help.txt`.
 
 **Expected:** Both outputs are byte-identical to the fixtures. `climon license`
-and `climon run [flags] <command>` (the documented explicit alias of the bare
-`climon <command>` form) both appear in `--help`.
+and `climon run [flags] <command>` (the primary documented form; the bare
+`climon <command>` is a shorthand and `climon command` an alias) both appear in
+`--help`.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
