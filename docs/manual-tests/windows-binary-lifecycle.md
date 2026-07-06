@@ -2,8 +2,8 @@
 
 These checks cover the dedicated `install[.exe]` crate, Windows stub +
 versioned-artifact layout, Windows-safe updates while binaries are locked, Unix
-copy/update parity, and removal of the old `climon-alpha` sentinel self-install
-path.
+copy/update parity, removal of the old `climon-alpha` sentinel self-install
+path, and bridge `--migrate` conversion.
 
 No configuration matrix applies beyond platform coverage.
 
@@ -208,6 +208,140 @@ No configuration matrix applies beyond platform coverage.
   setup behaves as before.
 - Unix updates continue to use the existing rename-over swap behavior; no Windows
   stub, DLL, or pointer files are created.
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---
+
+## MT-WBL-07 — Legacy Windows install auto-updates to the bridge release
+
+- **ID:** MT-WBL-07
+- **Feature / phase:** Windows binary lifecycle — bridge rollout migration
+- **Preconditions:** A real or scratch legacy Windows install with a single
+  installed `climon.exe`, no `climon.version` pointer, auto-update or manual
+  update configured to use a bridge manifest, and the bridge release still using
+  legacy packaging.
+- **Config-matrix cell:** n/a
+- **Platforms:** Windows
+
+**Steps:**
+1. Confirm the install directory has no `climon.version` and no
+   `climon-<version>.dll`.
+2. Point the updater at the bridge release manifest.
+3. Run `climon update`.
+4. Open several terminals and run monitored `climon` sessions.
+5. List the install directory after the update.
+
+**Expected result:**
+- The update succeeds through the existing legacy update path.
+- The install is still a working legacy layout with a single bridge
+  `climon.exe`; no stub, `climon.dll`, or pointer file is installed yet.
+- Multiple monitored terminals continue to work and appear in the dashboard.
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---
+
+## MT-WBL-08 — Bridge install migrates to the first stub release C
+
+- **ID:** MT-WBL-08
+- **Feature / phase:** Windows binary lifecycle — bridge-to-stub migration
+- **Preconditions:** The bridge install produced by MT-WBL-07; a signed manifest
+  for the first stub release C whose zip contains `install.exe`, `climon.dll`,
+  and `climon-server.exe`.
+- **Config-matrix cell:** n/a
+- **Platforms:** Windows
+
+**Steps:**
+1. Point the updater at C's manifest.
+2. Run `climon update` from the bridge install.
+3. Capture the update output.
+4. List the install directory and inspect `climon.version` and
+   `climon-server.version`.
+5. Start a new monitored terminal and open the dashboard.
+
+**Expected result:**
+- `climon update` reports that it is migrating the install to the new binary
+  layout (the message may include the target version).
+- The install dir gains `climon.exe` stub, `climon-<C>.dll`,
+  `climon-server.exe` stub, `climon-server-<C>.exe`, `climon.version`, and
+  `climon-server.version`.
+- The old client is moved to `climon.exe.old`.
+- PATH remains pointed at the same install directory.
+- New terminals run through the stub and monitor correctly.
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---
+
+## MT-WBL-09 — Legacy install that skips the bridge has the documented recovery path
+
+- **ID:** MT-WBL-09
+- **Feature / phase:** Windows binary lifecycle — documented bridge skip case
+- **Preconditions:** A legacy Windows install that never received the bridge
+  release; an update path pointed straight at the first stub release C; access to
+  the current `install.ps1` installer.
+- **Config-matrix cell:** n/a
+- **Platforms:** Windows
+
+**Steps:**
+1. Confirm the install directory is legacy: single `climon.exe`, no
+   `climon.version` pointer.
+2. Run the pre-bridge `climon update` path directly to C.
+3. Attempt `climon --version` from a fresh shell and record the failure.
+4. Re-run `install.ps1` for the same release/install directory.
+5. Run `climon --version` and start a simple monitored command.
+
+**Expected result:**
+- The direct legacy-to-C update is a documented failure: the old updater copies
+  C's dedicated installer over `climon.exe`, so normal `climon` launches are
+  bricked.
+- Re-running `install.ps1` restores a working stub layout via the installer's
+  legacy-upgrade path.
+- After reinstall, the layout matches MT-WBL-01 and monitored sessions work.
+
+**Result-tracking row:**
+
+| Date | Tester | Platform | Version | Pass/Fail | Notes |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+---
+
+## MT-WBL-10 — `install.exe --migrate` is idempotent
+
+- **ID:** MT-WBL-10
+- **Feature / phase:** Windows binary lifecycle — `install.exe --migrate`
+- **Preconditions:** A scratch Windows install dir containing a legacy or already
+  migrated install; a staged C directory containing `install.exe`, `climon.dll`,
+  and `climon-server.exe`.
+- **Config-matrix cell:** n/a
+- **Platforms:** Windows
+
+**Steps:**
+1. Run `install.exe --migrate --dir <install-dir> --source <staged-C>`.
+2. List `<install-dir>` and record pointer-file contents.
+3. Run the same command a second time.
+4. List `<install-dir>` and compare with the first run.
+
+**Expected result:**
+- Each command exits 0 without onboarding prompts or changelog paging.
+- The first run creates or refreshes the same stub/versioned layout as MT-WBL-01.
+- The second run re-places the same version without error, leaves pointer files
+  on the staged C version, and does not disturb PATH.
+- The layout is unchanged except for expected replacement timestamps.
 
 **Result-tracking row:**
 
