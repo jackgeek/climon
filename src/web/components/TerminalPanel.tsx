@@ -143,12 +143,17 @@ export function TerminalPanel({
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const composeDraftRef = useRef<string>("");
 
-  // A freshly opened composer always starts detached from history.
+  // A freshly opened composer always starts detached from history. The active
+  // session's history array is also a dependency so that if it changes underneath
+  // an open composer (e.g. the viewed session switches), any stale cursor is
+  // dropped — otherwise an out-of-range index could read `undefined` from a
+  // shorter history. The parent passes a stable array reference per session, so
+  // this does not fire during history navigation (which only mutates composeText).
   useEffect(() => {
     if (view === "compose") {
       setHistoryIndex(null);
     }
-  }, [view]);
+  }, [view, composeHistory]);
 
   function goBackInHistory(): void {
     if (composeHistory.length === 0) {
