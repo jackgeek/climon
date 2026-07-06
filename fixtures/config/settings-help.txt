@@ -182,7 +182,7 @@
   feature.wslBridge
     Type: string; Default: disabled; Scope: client, daemon, server, browser
     Stream sessions between a same-machine WSL distro and Windows so they appear on one
-    shared dashboard. Set to "enabled" or "disabled". [status: experimental]
+    shared dashboard. Set to "enabled" or "disabled". [status: untested]
 
   feature.remotes
     Type: string; Default: disabled; Scope: client, daemon, server, browser

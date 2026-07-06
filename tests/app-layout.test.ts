@@ -225,15 +225,21 @@ describe("scheduleTerminalRefit", () => {
       expect(cancelBody).not.toContain('setComposeText("")');
     });
 
-    test("hides the exit-fullscreen button only while the compose overlay is visible", () => {
+    test("hides the exit-fullscreen button while a fullscreen overlay (compose or selection) is visible", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
-      // Tied to the overlay's own render condition so the user is never trapped
-      // in fullscreen if the session stops being live mid-compose.
+      // Tied to the overlays' own render condition so the user is never trapped
+      // in fullscreen if the session stops being live mid-compose/selection.
       expect(source).toContain(
         "const composeOverlayVisible = keyBarAvailable && panelView === \"compose\";"
       );
-      expect(source).toContain("{maximized && !composeOverlayVisible && (");
+      expect(source).toContain(
+        "const selectionOverlayVisible = keyBarAvailable && panelView === \"selection\";"
+      );
+      expect(source).toContain(
+        "const fullscreenOverlayVisible = composeOverlayVisible || selectionOverlayVisible;"
+      );
+      expect(source).toContain("{maximized && !fullscreenOverlayVisible && (");
     });
   });
 
