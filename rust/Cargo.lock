@@ -198,6 +198,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "climon-setup"
+version = "0.1.0"
+dependencies = [
+ "climon-install",
+]
+
+[[package]]
 name = "climon-store"
 version = "0.1.0"
 dependencies = [
