@@ -1,17 +1,30 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureClimonHome, getRemoteHostPath } from "../src/config.js";
+import { deriveIngestTunnelId } from "../src/remote/ingest-tunnel-id.js";
 import * as tunnel from "../src/remote/tunnel.js";
 
 const { parseTunnelInput, useManualTunnel, deleteTunnel } = tunnel;
+const TEST_TMP_ROOT = join(process.cwd(), ".test-tmp");
+
+function makeTestHome(prefix: string): string {
+  mkdirSync(TEST_TMP_ROOT, { recursive: true });
+  return mkdtempSync(join(TEST_TMP_ROOT, prefix));
+}
+
+function tempHome(installId: string): NodeJS.ProcessEnv {
+  const home = makeTestHome("climon-tun-");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "config.jsonc"), JSON.stringify({ install: { id: installId } }));
+  return { ...process.env, CLIMON_HOME: home };
+}
 
 let home: string;
 let env: NodeJS.ProcessEnv;
 
 beforeEach(async () => {
-  home = mkdtempSync(join(tmpdir(), "climon-tunnel-"));
+  home = makeTestHome("climon-tunnel-");
   env = { CLIMON_HOME: home };
   await ensureClimonHome(env);
 });
@@ -65,7 +78,7 @@ describe("useManualTunnel", () => {
 
 describe("devtunnelEnv", () => {
   test("adds the user-local ICU library path when LD_LIBRARY_PATH is missing", () => {
-    const fakeHome = mkdtempSync(join(tmpdir(), "climon-icu-"));
+    const fakeHome = makeTestHome("climon-icu-");
     try {
       const icuLib = join(fakeHome, ".local", "icu", "usr", "lib", "x86_64-linux-gnu");
       mkdirSync(icuLib, { recursive: true });
@@ -78,6 +91,38 @@ describe("devtunnelEnv", () => {
     } finally {
       rmSync(fakeHome, { recursive: true, force: true });
     }
+  });
+});
+
+describe("createTunnel labeling", () => {
+  test("creates a stable-id tunnel with the label and non-secret description", async () => {
+    const installId = "00000000-0000-4000-8000-000000000000";
+    const localEnv = tempHome(installId);
+    const calls: string[][] = [];
+    const runner = async (_cmd: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "create") {
+        return { status: 0, stdout: JSON.stringify({ tunnelId: `${args[1]}.eun1` }), stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const state = await tunnel.createTunnel(7070, { env: localEnv, runner });
+
+    const expectedId = deriveIngestTunnelId(installId);
+    const createArgs = calls.find((a) => a[0] === "create");
+    expect(createArgs).toBeDefined();
+    expect(createArgs).toContain(expectedId);
+    expect(createArgs).toContain("--labels");
+    expect(createArgs).toContain("climon-ingest");
+    const descIdx = createArgs?.indexOf("--description") ?? -1;
+    expect(descIdx).toBeGreaterThan(-1);
+    const desc = JSON.parse(createArgs![descIdx + 1]);
+    expect(desc.app).toBe("climon");
+    expect(desc.role).toBe("ingest");
+    expect(JSON.stringify(desc)).not.toContain("secret");
+    expect(state.tunnelId).toBe(`${expectedId}.eun1`);
+    expect(state.ingestPort).toBe(7070);
+    rmSync(localEnv.CLIMON_HOME!, { recursive: true, force: true });
   });
 });
 

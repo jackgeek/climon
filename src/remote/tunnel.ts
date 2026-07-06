@@ -12,10 +12,18 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { rm, writeFile, chmod, rename } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { getRemoteHostPath } from "../config.js";
+import { ensureInstallId } from "../setup/install-id.js";
+import { VERSION } from "../version.js";
 import type { RemoteHostState } from "./ingest.js";
+import {
+  INGEST_TUNNEL_LABEL,
+  deriveIngestTunnelId,
+  buildIngestDescription,
+  sanitizeHostForDescription
+} from "./ingest-tunnel-id.js";
 
 const TUNNEL_ID = /^[a-z0-9][a-z0-9-]{1,47}[a-z0-9]$/;
 
@@ -123,13 +131,27 @@ export async function createTunnel(
   ingestPort: number,
   options: { env?: NodeJS.ProcessEnv; runner?: Runner } = {}
 ): Promise<RemoteHostState> {
+  const env = options.env ?? process.env;
   const runner = options.runner ?? defaultRunner;
-  const create = await runner("devtunnel", ["create", "--json"]);
+
+  const installId = ensureInstallId(env);
+  const desiredId = deriveIngestTunnelId(installId);
+  const host = sanitizeHostForDescription(hostname());
+  const description = buildIngestDescription({ clientId: host, hostname: host, version: VERSION });
+
+  const create = await runner("devtunnel", [
+    "create",
+    desiredId,
+    "--labels",
+    INGEST_TUNNEL_LABEL,
+    "--description",
+    description,
+    "--json"
+  ]);
   if (create.status !== 0) {
     throw new Error(`devtunnel create failed: ${create.stderr.trim() || create.status}`);
   }
-  const tunnelId = parseTunnelId(create.stdout);
-  if (!tunnelId) throw new Error("Could not parse tunnel id from `devtunnel create` output.");
+  const tunnelId = parseTunnelId(create.stdout) ?? desiredId;
 
   const portRes = await runner("devtunnel", ["port", "create", tunnelId, "-p", String(ingestPort)]);
   if (portRes.status !== 0) {
@@ -141,7 +163,7 @@ export async function createTunnel(
     ingestPort,
     canHost: true
   };
-  await writeRemoteHostState(state, options.env);
+  await writeRemoteHostState(state, env);
   return state;
 }
 
