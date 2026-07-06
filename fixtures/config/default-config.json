@@ -23,6 +23,7 @@
     "smartSnippet": true
   },
   "remote": {
+    "discover": true,
     "ingestPortRetryAttempts": 100,
     "keepAlive": 60,
     "autoLink": true

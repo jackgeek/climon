@@ -78,6 +78,13 @@
     Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward
     local climon traffic to a remote dashboard.
 
+  remote.discover
+    Type: boolean; Default: true; Scope: client
+    When true (default), an enabled devbox (remote.enabled) auto-discovers live climon
+    dashboard hosts by scanning your dev tunnels for the climon-ingest label and uplinks
+    to all of them, in addition to any explicit remote.tunnelId/remote.host. Set false
+    to disable discovery and only use explicitly configured targets.
+
   remote.dashboardTunnelId
     Type: string; Default: unset; Scope: server; internal
     Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel
