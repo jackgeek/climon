@@ -10,6 +10,7 @@ use std::path::Path;
 use crate::download::{download_text, download_to_file, MAX_ARTIFACT_BYTES, MAX_TEXT_BYTES};
 use crate::install_manifest::install_files_for_platform;
 use crate::manifest::{artifact_key, is_newer, Manifest};
+use crate::pointer::{client_dll_name, server_exe_name, write_pointer};
 use crate::swap::{cleanup_old_files, remove_orphan_files, replace_file_atomic};
 use crate::verify::verify_signature;
 
@@ -91,6 +92,37 @@ pub fn run_update_command(
 
     let unzipped = unzip(&zip_bytes)?;
     let files = install_files_for_platform(opts.platform);
+    let new_version = &opts.manifest.version;
+
+    if opts.platform == "win32" {
+        // Windows: write additive versioned files, fsync, then flip pointers.
+        // Never touches the stubs, so an update is never Deferred by a lock.
+        for f in &files {
+            let data = match unzipped.get(&f.source) {
+                Some(d) => d,
+                None => continue,
+            };
+            let (dest_name, base) = if f.source == "climon.dll" {
+                (client_dll_name(new_version), "climon")
+            } else if f.source == "climon-server.exe" {
+                (server_exe_name(new_version), "climon-server")
+            } else {
+                continue;
+            };
+            write_versioned_file(opts.install_dir, &dest_name, data)?;
+            write_pointer(opts.install_dir, base, new_version)?;
+        }
+        crate::reaper::reap_superseded(opts.install_dir);
+        print(&format!(
+            "Update applied. Restart terminals (or the server) to use {new_version}.\n"
+        ));
+        return Ok(UpdateResult {
+            status: UpdateStatus::Updated,
+            version: Some(new_version.clone()),
+        });
+    }
+
+    // Unix: existing rename-over swap.
     let mut deferred = false;
     for f in &files {
         let data = match unzipped.get(&f.source) {
@@ -109,7 +141,7 @@ pub fn run_update_command(
         print(&format!("{MSG_DEFERRED}\n"));
         return Ok(UpdateResult {
             status: UpdateStatus::Deferred,
-            version: Some(opts.manifest.version.clone()),
+            version: Some(new_version.clone()),
         });
     }
     remove_orphan_files(opts.install_dir, REMOVED_FILES);
@@ -120,6 +152,32 @@ pub fn run_update_command(
     Ok(UpdateResult {
         status: UpdateStatus::Updated,
         version: Some(opts.manifest.version.clone()),
+    })
+}
+
+/// Writes `bytes` to `dir/name` via temp + fsync + rename. Skips if the target
+/// already exists with identical bytes (idempotent re-apply).
+fn write_versioned_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    let target = dir.join(name);
+    if let Ok(existing) = std::fs::read(&target) {
+        if existing == bytes {
+            return Ok(());
+        }
+    }
+    let pid = std::process::id();
+    let now = crate::clock::now_ms();
+    let tmp = dir.join(format!("{name}.tmp-{pid}-{now}"));
+    let mut file =
+        std::fs::File::create(&tmp).map_err(|e| format!("create {} failed: {e}", tmp.display()))?;
+    file.write_all(bytes)
+        .map_err(|e| format!("write {} failed: {e}", tmp.display()))?;
+    file.sync_all()
+        .map_err(|e| format!("fsync {} failed: {e}", tmp.display()))?;
+    drop(file);
+    std::fs::rename(&tmp, &target).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("rename to {} failed: {e}", target.display())
     })
 }
 
@@ -165,7 +223,7 @@ mod tests {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             let opts =
                 SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            for (name, data) in [("install", "new-binary"), ("climon-server", "new-server")] {
+            for (name, data) in [("climon", "new-binary"), ("climon-server", "new-server")] {
                 w.start_file(name, opts).unwrap();
                 w.write_all(data.as_bytes()).unwrap();
             }
@@ -314,5 +372,15 @@ mod tests {
         };
         let res = run_update_command(&opts, &mut |_| {}).unwrap();
         assert_eq!(res.status, UpdateStatus::UpToDate);
+    }
+
+    #[test]
+    fn windows_versioned_write_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_versioned_file(dir, "climon-3.2.1.dll", b"AAA").unwrap();
+        // Second identical write is a no-op (does not error, keeps content).
+        write_versioned_file(dir, "climon-3.2.1.dll", b"AAA").unwrap();
+        assert_eq!(std::fs::read(dir.join("climon-3.2.1.dll")).unwrap(), b"AAA");
     }
 }

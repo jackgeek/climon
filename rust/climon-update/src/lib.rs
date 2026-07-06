@@ -18,6 +18,7 @@ pub mod launch_hooks;
 pub mod manifest;
 pub mod pointer;
 pub mod pubkey;
+pub mod reaper;
 pub mod state;
 pub mod swap;
 pub mod update_cli;
