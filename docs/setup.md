@@ -33,9 +33,10 @@ This fetches `@xterm/xterm` and `@xterm/addon-fit` (vendored for the dashboard).
 
 The easiest path is the install one-liner from the
 [README](../README.md#install), which downloads the release for your platform and
-runs the bundled self-installer (it places `climon` and `climon-server` and sets
-up your `PATH`). To install by hand, unzip a release archive and run its `install`
-binary.
+runs the bundled dedicated installer (it places `climon` and `climon-server` and
+sets up your `PATH`). To install by hand, unzip a release archive and run its
+`install` binary (`install.exe` on Windows). User-facing install-script behavior
+is unchanged.
 
 For local development from a source checkout, run the Rust client straight from
 source via the `dev` script (from the repo root):

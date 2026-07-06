@@ -181,15 +181,16 @@ self-updates:
 
 - **`rust/climon-cli`** — `climon setup`, telemetry/auto-update onboarding,
   server delegation, launch hooks, and CLI entrypoints.
-- **`rust/climon-install`** — native self-install from release archives. A
-  release zip's `install`/`install.exe` is the Rust client, and the tiny
-  `climon-alpha` sentinel marker triggers the native self-install when the
-  client runs beside it.
+- **`rust/climon-install`** — the dedicated cross-platform installer shipped as
+  `install`/`install.exe` in release archives. It is separate from the `climon`
+  client, places the client and server binaries, sets up PATH/onboarding state,
+  and replaces the older `install`→`climon` rename plus `climon-alpha` sentinel
+  self-install path.
 - **`rust/climon-update`** — manifest fetch, update-state throttling,
-  downloads, detached-signature verification, atomic non-destructive binary
-  swap, background checks, and the `climon update` command. Its build script
-  reads `src/update/pubkey.ts`, which remains the shared Ed25519 public-key
-  source of truth for the Bun release tooling and Rust updater.
+  downloads, detached-signature verification, non-destructive binary swaps,
+  background checks, and the `climon update` command. Its build script reads
+  `src/update/pubkey.ts`, which remains the shared Ed25519 public-key source of
+  truth for the Bun release tooling and Rust updater.
 
 **Data flow.** Installer/onboarding writes config state (`telemetry.enabled`,
 `update.auto`, `install.id`). On `shell`/`run` launches,
@@ -200,6 +201,34 @@ artifact + detached signature, verifies the signature against the embedded
 public key, and only then performs the atomic swap — never killing running
 processes. Signing tooling lives in `scripts/gen-update-keys.ts` and
 `scripts/sign-release.ts`, wired into `.github/workflows/release.yml`.
+
+
+### Binary lifecycle and release layout
+
+Release archives now contain exactly the platform installer, client payload, and
+server payload: `install[.exe]`, `climon` on Unix or `climon.dll` on Windows, and
+`climon-server[.exe]`. The installer is a dedicated Rust binary; it is not the
+client renamed to `install`, and no `climon-alpha` sentinel is used.
+
+On **Windows**, the installed `climon.exe` is a tiny stable stub embedded in and
+placed by `install.exe`. The stub reads `climon.version`, loads
+`climon-<version>.dll` in-process, and calls the exported `climon_main` ABI. The
+server side mirrors the layout with `climon-server.exe` as the stable stub,
+`climon-server-<version>.exe` as the versioned server payload, and
+`climon-server.version` as its pointer. If a pointer is missing or corrupt, the
+stub falls back to the highest-semver matching versioned artifact in the install
+directory.
+
+This avoids overwriting a locked `climon.exe` during self-update. Windows updates
+write fresh versioned payload names, flip the pointer files atomically, and leave
+already-running terminals on the old DLL until they exit; new launches pick up the
+new pointer. The reaper, run opportunistically on interactive launch and from
+`climon cleanup`, deletes superseded versioned artifacts once Windows releases
+the file locks and skips anything still in use.
+
+On **Unix**, the client remains the `climon` executable built from `climon-cli`.
+Updates continue to use the existing rename-over swap model because POSIX allows
+replacing an executable while old processes keep their inode.
 
 ## Data locations (`$CLIMON_HOME`, default `~/.climon`)
 

@@ -83,9 +83,10 @@ irm https://raw.githubusercontent.com/jackgeek/climon/main/install.ps1 | iex
 
 Prefer to install by hand? Download the archive for your platform from the
 [latest release](https://github.com/jackgeek/climon/releases/latest)
-(`climon-<platform>.zip`), unzip it, and run the bundled `install` (`install.exe`
-on Windows). See [Build from source](#build-from-source) to build the binaries
-yourself.
+(`climon-<platform>.zip`), unzip it, and run the bundled dedicated installer
+`install` (`install.exe` on Windows). The install scripts still behave the same;
+they just download and run that installer for you. See [Build from source](#build-from-source)
+to build the binaries yourself.
 
 > climon's release binaries aren't code-signed or notarized yet. The install
 > scripts clear the OS "downloaded from the internet" mark (macOS quarantine /
@@ -102,8 +103,11 @@ yourself.
 > this from happening. In the meantime, if your security software blocks climon,
 > you may need to add exceptions for these installed files:
 >
-> - `climon` (`climon.exe` on Windows) — the CLI client
-> - `climon-server` (`climon-server.exe` on Windows) — the dashboard server
+> - `climon` (`climon.exe` on Windows) — the CLI client / stable stub
+> - `climon-server` (`climon-server.exe` on Windows) — the dashboard server /
+>   stable stub
+> - On Windows, the versioned payloads in the same directory, such as
+>   `climon-<version>.dll` and `climon-server-<version>.exe`
 >
 > They are installed to:
 >
@@ -464,10 +468,12 @@ downloads):
 bun run compile        # packages the host platform's dist/climon-<host>.zip
 ```
 
-Each archive contains the Rust `install` binary, `climon-server`, and a
-`climon-alpha` sentinel; running `install` self-installs `climon` and
-`climon-server` side by side. See [docs/deployment.md](docs/deployment.md) for
-the full release and signing pipeline.
+Each archive contains the dedicated `install` binary, the client payload
+(`climon` on Unix, `climon.dll` on Windows), and `climon-server`. On Windows the
+installer also places stable `climon.exe`/`climon-server.exe` stubs that load or
+launch versioned payloads selected by pointer files, so updates do not overwrite
+locked executables. See [docs/deployment.md](docs/deployment.md) for the full
+release and signing pipeline.
 
 ## Contributing
 
