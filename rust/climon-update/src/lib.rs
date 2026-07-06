@@ -16,6 +16,7 @@ pub mod download;
 pub mod install_manifest;
 pub mod launch_hooks;
 pub mod manifest;
+pub mod pointer;
 pub mod pubkey;
 pub mod state;
 pub mod swap;
