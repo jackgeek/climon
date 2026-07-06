@@ -36,6 +36,49 @@ const runDir = join(rustWorkspace, "target", "dev-run");
  * exits with cargo's (on build failure) or the client's exit code.
  */
 
+/**
+ * Windows-only: kill any process still executing `target/debug/climon.exe`.
+ *
+ * cargo relinks that exact path on every build, and Windows locks a running
+ * executable against overwrite, so a leftover process there makes the link step
+ * fail with `Access is denied (os error 5)`. Nothing *should* run from that path
+ * anymore — `bun dev` runs the staged copy in `runDir`, and daemons re-exec via
+ * `current_exe()` (so they inherit the copy) — so any process found here is a
+ * stale pre-fix leftover safe to terminate. Installed climon (in AppData) and
+ * the staged copies run from different paths and are never touched.
+ */
+function killStaleBuildBinaryProcesses(): void {
+  if (!isWindows) return;
+
+  const script =
+    `Get-CimInstance Win32_Process -Filter "Name='${binName}'" | ` +
+    `Where-Object { $_.ExecutablePath -ieq '${builtBin.replace(/'/g, "''")}' } | ` +
+    `ForEach-Object { $_.ProcessId }`;
+
+  const result = spawnSync(
+    "powershell",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0 || !result.stdout) return;
+
+  const pids = result.stdout
+    .split(/\r?\n/)
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((pid) => Number.isInteger(pid) && pid > 0);
+
+  for (const pid of pids) {
+    try {
+      process.kill(pid);
+      process.stderr.write(
+        `[dev] killed stale process ${pid} locking ${binName} (pre-fix leftover)\n`,
+      );
+    } catch {
+      // Already gone or not killable; the build will surface any real lock.
+    }
+  }
+}
+
 /** Builds the client, showing cargo output. Returns the process exit code. */
 function build(): number {
   const result = spawnSync(
@@ -121,6 +164,7 @@ function run(runBin: string): Promise<number> {
 }
 
 async function main(): Promise<number> {
+  killStaleBuildBinaryProcesses();
   const buildCode = build();
   if (buildCode !== 0) {
     return buildCode;
