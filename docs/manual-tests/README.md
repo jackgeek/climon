@@ -81,6 +81,7 @@ result-tracking row.
 | — | Smart Notifications — attention notification body from fuzzy-extracted terminal output snippet | [smart-notifications.md](smart-notifications.md) |
 | — | Remote uplink/ingest singleton — OS advisory lock immune to PID recycling (fixes silent uplink exit) | [singleton-lock-pid-recycle.md](singleton-lock-pid-recycle.md) |
 | — | Uplink advertises sessions created after it connects (sessions-dir watcher re-reconcile) | [uplink-advertise-new-sessions.md](uplink-advertise-new-sessions.md) |
+| — | Remote host self-managed ingest tunnel — stable `climon-ingest` dev tunnel id, label, non-secret description, restart reuse | [phase18-remote-host-tunnel.md](phase18-remote-host-tunnel.md) |
 
 ## Recording results
 

@@ -394,45 +394,6 @@ export async function fetchRemotes(): Promise<RemotesResponse> {
   return (await res.json()) as RemotesResponse;
 }
 
-/** Auto-creates a dev tunnel on the home machine (requires the devtunnel CLI). */
-export async function createRemoteTunnel(): Promise<RemoteStatus> {
-  const res = await fetch(withQuery("/api/remote/tunnel"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode: "auto" })
-  });
-  if (!res.ok) {
-    throw new Error((await res.text()) || `Failed to create tunnel (${res.status})`);
-  }
-  return (await res.json()) as RemoteStatus;
-}
-
-/** Records a manually-created tunnel (id or devtunnels.ms URL). */
-export async function recordManualTunnel(
-  tunnelInput: string
-): Promise<RemoteStatus> {
-  const res = await fetch(withQuery("/api/remote/tunnel"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode: "manual", tunnelInput })
-  });
-  if (!res.ok) {
-    throw new Error((await res.text()) || `Failed to record tunnel (${res.status})`);
-  }
-  return (await res.json()) as RemoteStatus;
-}
-
-export async function deleteRemoteTunnel(): Promise<void> {
-  try {
-    await fetch(withQuery("/api/remote/tunnel"), {
-      method: "DELETE",
-      headers: { "content-type": "application/json" }
-    });
-  } catch {
-    // Best effort.
-  }
-}
-
 export interface SetupScriptParams {
   tunnelId: string;
   ingestPort: number;
@@ -465,7 +426,7 @@ function arg(value: string): string {
  */
 export function buildSetupScript(params: SetupScriptParams): string {
   if (!params.tunnelId) {
-    return "# Create or paste a dev tunnel above to generate the devbox config script.";
+    return "# Enable host remotes to generate the devbox config script.";
   }
   const lines = [
     "climon config remote.enabled true",
