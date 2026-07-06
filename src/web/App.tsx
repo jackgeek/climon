@@ -54,6 +54,7 @@ import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPane
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
+import { addComposeEntry } from "./composeHistory.js";
 import { getTheme } from "./themes.js";
 import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED, PREF_STATE_ICON_NO_MOTION } from "../dashboard-preference-keys.js";
 import {
@@ -543,6 +544,7 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
   const [composeText, setComposeText] = useState("");
+  const [composeHistory, setComposeHistory] = useState<Record<string, string[]>>({});
   const [selectionCaptureText, setSelectionCaptureText] = useState("");
   const [stripDecorations, setStripDecorations] = useState(false);
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
@@ -1568,6 +1570,7 @@ export function App() {
                 view={panelView}
                 fontSize={fontSize}
                 composeText={composeText}
+                composeHistory={activeId ? composeHistory[activeId] ?? [] : []}
                 selectionText={stripDecorations ? stripTerminalDecorations(selectionCaptureText) : selectionCaptureText}
                 stripDecorations={stripDecorations}
                 showLabels={!isMobile}
@@ -1582,6 +1585,12 @@ export function App() {
                 onComposeTextChange={setComposeText}
                 onComposeInsert={(text) => {
                   terminalRef.current?.sendInput(text);
+                  if (activeId) {
+                    setComposeHistory((prev) => ({
+                      ...prev,
+                      [activeId]: addComposeEntry(prev[activeId] ?? [], text)
+                    }));
+                  }
                   setComposeText("");
                   setPanelView(keyBarPinned ? "chooser" : "closed");
                 }}
