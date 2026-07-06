@@ -567,6 +567,7 @@ git commit -m "feat: record per-session compose history and pass it to the panel
 **Files:**
 - Create: `docs/manual-tests/compose-history.md`
 - Modify: `docs/manual-tests/README.md`
+- Modify: `docs/features.md`
 
 - [ ] **Step 1: Create the manual-test file**
 
@@ -672,11 +673,25 @@ Add a new row immediately after it:
 | — | Compose history — per-session in-memory recall with Back/Forward buttons in the composer | [compose-history.md](compose-history.md) |
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Add the feature to the catalogue**
+
+In `docs/features.md`, find the last row of the **Dashboard — in development** table:
+
+```markdown
+| dash-20 | Terminal scroll-wheel + icon-only chooser bar | An edge-on scroll-wheel component (shown when maximized) with momentum, plus an icon-only chooser bar. | Scroll long terminal output smoothly on touch devices that have no physical wheel. | [manual-tests/](manual-tests/); `src/web`; **in-flight branch `terminal-scroll-wheel`** |
+```
+
+Add a new row immediately after it (dash-21 is the next unused dashboard ID):
+
+```markdown
+| dash-21 | Composer history (Back/Forward recall) | The compose overlay remembers text you Insert, per session and in-memory, and adds Back/Forward buttons that cycle the textarea through previous entries with live-draft restore; history clears on reload. | Quickly recall and re-send something you typed before, without retyping it. | [manual-tests/compose-history.md](manual-tests/compose-history.md); `src/web/composeHistory.ts`, `src/web/components/TerminalPanel.tsx`, `src/web/App.tsx`; **dev branch** |
+```
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add docs/manual-tests/compose-history.md docs/manual-tests/README.md
-git commit -m "docs: add compose history manual tests" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git add docs/manual-tests/compose-history.md docs/manual-tests/README.md docs/features.md
+git commit -m "docs: add compose history manual tests and catalogue entry" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
 ---
