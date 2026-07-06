@@ -56,9 +56,14 @@ connect:
   identity that has access to the tunnel. The uplink stops retrying once the
   host rejects the connection (auth failure is terminal, not retried as a
   transient network error).
-- When climon auto-creates the tunnel, it also opens a keep-alive TCP port so
-  the tunnel stays up and never presents an interactive confirmation page to a
-  browser.
+- Host-side dev-tunnel management is gated by `feature.remotes`. When enabled,
+  climon derives an opaque stable id from the non-secret `install.id`
+  (`climon-ingest-<hash>`), so the public tunnel URL never contains the
+  hostname. The `climon-ingest` label and description JSON contain only
+  display metadata (`app`, `role`, `clientId`, `hostname`, `version`) and never
+  include `remote.spawnSecret`, tokens, or credentials.
+- `CLIMON_DISABLE_DEVTUNNEL=1` or `true` disables all server-side devtunnel
+  probing and tunnel creation, even if remotes are enabled.
 
 ## Direct same-machine bridge
 
@@ -172,7 +177,9 @@ sends an *imperative command* to a client, so it is gated and authenticated:
 
 - `~/.climon/remote-host.json` — the home machine's tunnel-host state. Written
   atomically (temp file + `rename`, so the ingest watcher never observes a torn
-  or empty file) with `0600` permissions inside a `0700` directory.
+  or empty file) with `0600` permissions inside a `0700` directory. For
+  auto-managed remotes this records the stable `climon-ingest-…` tunnel id and
+  current ingest port; it does not store devtunnel credentials.
 - `remote.spawnSecret` (in `config.jsonc`) — the pre-shared HMAC key for the
   remote spawn command channel. Generated only when `feature.remoteSpawn` is
   enabled, stored in the `0700` config directory, and redacted from logs and

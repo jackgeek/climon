@@ -260,9 +260,9 @@ dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port �
    the dashboard: `climon config feature.remotes enabled` followed by
    `climon server`.
 2. Open the dashboard, click the hamburger menu, and choose **Remotes…**.
-3. If the `devtunnel` CLI is installed on the server machine, let climon create
-   and host the tunnel for you. Otherwise create a dev tunnel manually and paste
-   its id or URL into the dialog.
+3. If the `devtunnel` CLI is installed and logged in on the server machine,
+   climon creates or reuses a stable `climon-ingest-…` tunnel automatically and
+   hosts it for you.
 4. Optionally choose the default color and priority for that devbox's sessions,
    then copy the generated config script.
 5. Run the script on the devbox. It records `remote.tunnelId`,
@@ -384,22 +384,24 @@ enabled.
 
 ### Creating the dev tunnel manually
 
-Use this path if you do not want the Remotes dialog to create the tunnel for you.
-Run these commands on the **home** machine where the dashboard is listening:
+Use this path for cross-account setups, or when you do not want climon to manage
+the host tunnel. Run these commands on the **home** machine where the dashboard
+ingest is listening:
 
 ```bash
 devtunnel user login
 
 # Use any valid lowercase tunnel id, or omit the id argument and copy the generated id.
 devtunnel create climon-tunnel
-devtunnel port create climon-tunnel -p 8080
+devtunnel port create climon-tunnel -p 3132
+devtunnel host climon-tunnel
 ```
 
-Paste the tunnel id (or the printed `devtunnels.ms` URL) into **Remotes…**.
-climon will host the recorded tunnel if the `devtunnel` CLI is available on the
-home machine; otherwise keep `devtunnel host climon-tunnel` running yourself.
-Then copy the generated climon config script from the dialog and run it on the
-devbox. Ensure the devbox is also logged in (`devtunnel user login`).
+Then configure the devbox explicitly with `climon config remote.enabled true`
+and `climon config remote.tunnelId climon-tunnel`. Ensure the devbox is also
+logged in (`devtunnel user login`). Existing devboxes that already have
+`remote.tunnelId` configured keep working; the auto-managed host tunnel does not
+remove the manual devbox path.
 
 ### Feature flags
 

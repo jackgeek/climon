@@ -340,8 +340,11 @@ the home machine through a Microsoft dev tunnel. The home machine runs a
 loopback-only **ingest** daemon (`climon __ingest` — the Rust client binary,
 resolved by the dashboard server; a dev source run requires the Rust binary to
 be built and never falls back to the Bun ingest) when `feature.remotes` is
-enabled and either hosts the tunnel automatically via the `devtunnel` CLI or
-records a manually-created tunnel in `~/.climon/remote-host.json`. `climon
+enabled. At startup the server derives a stable tunnel id from the anonymous
+global `install.id` (`climon-ingest-<sha256("climon-ingest"+install.id)[:20]>`),
+ensures that dev tunnel exists, labels it `climon-ingest`, records it in
+`~/.climon/remote-host.json`, and lets the ingest daemon host it. Existing
+manually-created tunnel state remains readable for compatibility. `climon
 server` no longer accepts a remotes startup flag; config is the only switch. The
 ingest also serves a loopback-only **remote-spawn control socket** (advertised
 as `controlSocket` in `ingest.json`), dual-listens on `127.0.0.1` when bound to
