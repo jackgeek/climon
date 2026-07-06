@@ -1,5 +1,11 @@
 [
   {
+    "version": "3.2.0",
+    "changes": [
+      "Make Windows self-updates safe while climon is running by using stable stubs, versioned payloads, and a dedicated installer"
+    ]
+  },
+  {
     "version": "3.1.2",
     "changes": [
       "Fix the installed iOS PWA (Chrome) failing to re-authenticate a dev tunnel after the sign-in expires; relaunching the PWA now completes the tunnel sign-in"
