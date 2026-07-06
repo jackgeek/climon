@@ -208,7 +208,7 @@ describe("buildSetupScript", () => {
 
   test("returns guidance when the tunnel id is missing", () => {
     const script = buildSetupScript({ ...BASE, tunnelId: "" });
-    expect(script).toContain("# Create or paste a dev tunnel");
+    expect(script).toContain("# Enable host remotes to generate the devbox config script.");
     expect(script).not.toContain("remote.enabled true");
   });
 
