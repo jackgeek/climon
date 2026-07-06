@@ -262,8 +262,9 @@ spinners, progress bars), and captures the last meaningful paragraph (capped at
 patch that flags `needs-attention`. The dashboard server then composes the
 notification title and body from a shared helper (`src/notification-content.ts`):
 title = session name → terminal title → command; body = snippet → terminal title
-(if not promoted to title) → "". This is gated by the `notifications.smartSnippet`
-config setting (boolean, default true, scope daemon).
+(if not promoted to title) → "". This is gated by the `feature.smartNotifications`
+feature flag (default disabled, status experimental, scope daemon); when disabled
+the body falls back to the terminal title.
 
 ## Web Push pipeline (mobile PWA)
 

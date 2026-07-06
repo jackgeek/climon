@@ -25,7 +25,6 @@ describe("config settings registry", () => {
       "dashboard.keyBarPinned",
       "dashboard.stateIconNoMotion",
       "attention.idleSeconds",
-      "notifications.smartSnippet",
       "remote.enabled",
       "remote.host",
       "remote.ingestHost",
@@ -51,6 +50,7 @@ describe("config settings registry", () => {
       "feature.remoteSpawn",
       "feature.wslBridge",
       "feature.remotes",
+      "feature.smartNotifications",
       "telemetry.enabled",
       "update.auto",
       "update.lastCheck",
@@ -101,12 +101,11 @@ describe("config settings registry", () => {
       hotKeys: { focusTopSession: "Alt+J" },
       dashboard: { theme: "Default", keyBarPinned: true, stateIconNoMotion: false },
       attention: { idleSeconds: 10 },
-      notifications: { smartSnippet: true },
       remote: { discover: true, ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
       tunnelLink: { keepAlive: 60 },
       logging: { level: "trace" },
-      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled" },
+      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled", smartNotifications: "disabled" },
       telemetry: { enabled: false },
       update: { auto: false }
     });
@@ -171,6 +170,7 @@ describe("config settings registry", () => {
       "feature.remoteSpawn",
       "feature.wslBridge",
       "feature.remotes",
+      "feature.smartNotifications",
       "telemetry.enabled",
       "update.auto"
     ]);

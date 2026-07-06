@@ -448,7 +448,6 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `dashboard.keyBarPinned` | boolean | `true` | server, browser | Whether the web dashboard key bar is pinned open. |
 | `dashboard.stateIconNoMotion` | boolean | `false` | server, browser | When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated). |
 | `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |
-| `notifications.smartSnippet` | boolean | `true` | daemon | When true (default), attention notifications include a fuzzy-extracted snippet of the last relevant terminal output as the notification body. Set false to send only the session name / terminal title. |
 | `remote.enabled` | boolean | unset | client | Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection. |
 | `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
 | `remote.ingestHost` | string | unset | client | Host address where the dashboard-side ingest daemon should listen for incoming remote session connections. |
@@ -474,6 +473,7 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `feature.remoteSpawn` | string | `disabled` | client, daemon, server, browser | Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel. Set to "enabled" or "disabled". [status: experimental] |
 | `feature.wslBridge` | string | `disabled` | client, daemon, server, browser | Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard. Set to "enabled" or "disabled". [status: untested] |
 | `feature.remotes` | string | `disabled` | client, daemon, server, browser | Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge. Set to "enabled" or "disabled". [status: experimental] |
+| `feature.smartNotifications` | string | `disabled` | client, daemon, server, browser | Include a fuzzy-extracted snippet of the last relevant terminal output as the body of attention notifications, instead of a generic message. Set to "enabled" or "disabled". [status: experimental] |
 | `telemetry.enabled` | boolean | `false` | client, server | When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default. |
 | `update.auto` | boolean | `false` | client | When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`. |
 | `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |

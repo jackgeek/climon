@@ -213,7 +213,7 @@ struct HostState {
     /// Trailing incomplete OSC bytes carried across reader chunks.
     terminal_title_remainder: String,
     /// Whether smart-notification snippet extraction is enabled
-    /// (`notifications.smartSnippet`, default true).
+    /// (`feature.smartNotifications`, default disabled).
     snippet_enabled: bool,
     /// Latest progress parsed from the PTY output stream (`OSC 9;4`).
     /// `None` = never observed; `Some(None)` = cleared; `Some(Some(p))` = active.
@@ -817,7 +817,8 @@ pub fn run_session_host(
     let clamp_browser_to_host = cfg_bool(&config, "terminal", "clampBrowserToHost", false);
     let idle_seconds = cfg_i64(&config, "attention", "idleSeconds", 10);
     let idle_enabled = idle_seconds > 0;
-    let snippet_enabled = cfg_bool(&config, "notifications", "smartSnippet", true);
+    let snippet_enabled =
+        climon_config::features::is_feature_enabled(&config, "smartNotifications");
     let headless = options.headless;
 
     let initial_mode = if clamp_browser_to_host {

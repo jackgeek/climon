@@ -4,15 +4,15 @@
 | --- | --- |
 | ID | smart-notifications-01 |
 | Feature | Smart attention-notification body from terminal output |
-| Preconditions | A CLI session (e.g. `copilot`, `claude`) that renders a response then idles; dashboard open with notifications enabled; `notifications.smartSnippet` unset (defaults on). |
-| Config matrix | Default config (snippet on); then `notifications.smartSnippet = false`. |
+| Preconditions | A CLI session (e.g. `copilot`, `claude`) that renders a response then idles; dashboard open with notifications enabled; `feature.smartNotifications = enabled` (off by default). |
+| Config matrix | `feature.smartNotifications = enabled` (snippet body); then default config (`disabled`, plain body). |
 
 ## Steps
 
 1. Start a session: `climon run -- copilot` (or any agentic CLI).
 2. Send a prompt so the CLI prints a multi-line answer ending in a question, then let it sit idle past `attention.idleSeconds`.
 3. Observe the OS push notification and the in-app toast when the session flags `needs-attention`.
-4. Set `notifications.smartSnippet = false` (`climon config set notifications.smartSnippet false`), restart the session, and repeat steps 2–3.
+4. Set `feature.smartNotifications = disabled` (`climon config set feature.smartNotifications disabled`), restart the session, and repeat steps 2–3.
 5. In an agentic TUI with a persistent bottom hint bar (e.g. Copilot CLI's `⌃T show reasoning · <model>` / `/ commands  ? help` line and its input composer box), send a prompt, let the answer render above the empty input box, and let it idle.
 
 ## Expected result
