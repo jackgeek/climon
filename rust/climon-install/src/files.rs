@@ -159,26 +159,12 @@ fn copy_required_binaries(
     Ok(())
 }
 
-/// Copies the manifest binaries into `install_dir`, with an opt-in locked-file
-/// kill-and-retry path. Mirrors `installBinaries` in `src/install/files.ts`.
-pub fn install_binaries(
-    source_dir: &Path,
-    install_dir: &Path,
-    options: InstallBinariesOptions<'_>,
+fn with_locked_retry(
+    mut place_once: impl FnMut() -> Result<(), InstallError>,
+    mut confirm_kill_and_retry: Option<ConfirmKillAndRetry<'_>>,
+    mut kill_running_climon_processes: Option<KillRunning<'_>>,
 ) -> Result<(), InstallError> {
-    let InstallBinariesOptions {
-        copy_file,
-        mut confirm_kill_and_retry,
-        mut kill_running_climon_processes,
-    } = options;
-
-    let mut default = default_copy;
-    let copy: &mut dyn FnMut(&Path, &Path) -> Result<(), InstallError> = match copy_file {
-        Some(c) => c,
-        None => &mut default,
-    };
-
-    match copy_required_binaries(source_dir, install_dir, copy) {
+    match place_once() {
         Ok(()) => Ok(()),
         Err(error) => {
             let (Some(confirm), Some(kill)) = (
@@ -194,9 +180,161 @@ pub fn install_binaries(
                 return Err(error);
             }
             kill();
-            copy_required_binaries(source_dir, install_dir, copy)
+            place_once()
         }
     }
+}
+
+/// Copies the manifest binaries into `install_dir`, with an opt-in locked-file
+/// kill-and-retry path. Mirrors `installBinaries` in `src/install/files.ts`.
+pub fn install_binaries(
+    source_dir: &Path,
+    install_dir: &Path,
+    options: InstallBinariesOptions<'_>,
+) -> Result<(), InstallError> {
+    let InstallBinariesOptions {
+        copy_file,
+        confirm_kill_and_retry,
+        kill_running_climon_processes,
+    } = options;
+
+    let mut default = default_copy;
+    let copy: &mut dyn FnMut(&Path, &Path) -> Result<(), InstallError> = match copy_file {
+        Some(c) => c,
+        None => &mut default,
+    };
+
+    with_locked_retry(
+        || copy_required_binaries(source_dir, install_dir, copy),
+        confirm_kill_and_retry,
+        kill_running_climon_processes,
+    )
+}
+
+/// The Windows install-dir filenames for `version`, in placement order.
+pub fn windows_layout_files(version: &str) -> Vec<String> {
+    vec![
+        format!("climon-{version}.dll"),
+        format!("climon-server-{version}.exe"),
+        "climon.version".to_string(),
+        "climon-server.version".to_string(),
+        "climon.exe".to_string(),
+        "climon-server.exe".to_string(),
+    ]
+}
+
+#[cfg(target_os = "windows")]
+fn write_file(install_dir: &Path, name: &str, contents: &[u8]) -> Result<(), InstallError> {
+    fs::create_dir_all(install_dir).map_err(|e| InstallError {
+        code: errno_code(&e),
+        message: e.to_string(),
+    })?;
+    fs::write(install_dir.join(name), contents).map_err(|e| InstallError {
+        code: errno_code(&e),
+        message: e.to_string(),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn write_text(install_dir: &Path, name: &str, contents: &str) -> Result<(), InstallError> {
+    write_file(install_dir, name, contents.as_bytes())
+}
+
+#[cfg(target_os = "windows")]
+fn place_stub(install_dir: &Path, name: &str, contents: &[u8]) -> Result<(), InstallError> {
+    fs::create_dir_all(install_dir).map_err(|e| InstallError {
+        code: errno_code(&e),
+        message: e.to_string(),
+    })?;
+    let dest_path = install_dir.join(name);
+    displace_existing(&dest_path);
+    fs::write(dest_path, contents).map_err(|e| InstallError {
+        code: errno_code(&e),
+        message: e.to_string(),
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn place_windows_layout_once(
+    install_dir: &Path,
+    version: &str,
+    stub_client: &[u8],
+    stub_server: &[u8],
+    client_dll: &[u8],
+    server_exe: &[u8],
+) -> Result<(), InstallError> {
+    write_file(install_dir, &format!("climon-{version}.dll"), client_dll)?;
+    write_file(
+        install_dir,
+        &format!("climon-server-{version}.exe"),
+        server_exe,
+    )?;
+    write_text(install_dir, "climon.version", &format!("{version}\n"))?;
+    write_text(
+        install_dir,
+        "climon-server.version",
+        &format!("{version}\n"),
+    )?;
+    place_stub(install_dir, "climon.exe", stub_client)?;
+    place_stub(install_dir, "climon-server.exe", stub_server)?;
+    Ok(())
+}
+
+/// Places the Windows binary layout with the same opt-in locked-file kill/retry
+/// path as [`install_binaries`].
+#[cfg(target_os = "windows")]
+pub fn place_windows_layout_with_options(
+    install_dir: &Path,
+    version: &str,
+    stub_client: &[u8],
+    stub_server: &[u8],
+    client_dll: &[u8],
+    server_exe: &[u8],
+    options: InstallBinariesOptions<'_>,
+) -> Result<(), InstallError> {
+    let InstallBinariesOptions {
+        copy_file: _,
+        confirm_kill_and_retry,
+        kill_running_climon_processes,
+    } = options;
+    with_locked_retry(
+        || {
+            place_windows_layout_once(
+                install_dir,
+                version,
+                stub_client,
+                stub_server,
+                client_dll,
+                server_exe,
+            )
+        },
+        confirm_kill_and_retry,
+        kill_running_climon_processes,
+    )
+}
+
+/// Places the Windows binary layout: two stubs, two versioned artifacts, and
+/// two pointer files. `stub_client`/`stub_server` are the stub bytes; the
+/// versioned artifacts come from the extracted zip (`climon.dll`,
+/// `climon-server.exe`).
+#[cfg(target_os = "windows")]
+pub fn place_windows_layout(
+    install_dir: &Path,
+    version: &str,
+    stub_client: &[u8],
+    stub_server: &[u8],
+    client_dll: &[u8],
+    server_exe: &[u8],
+) -> Result<(), InstallError> {
+    place_windows_layout_with_options(
+        install_dir,
+        version,
+        stub_client,
+        stub_server,
+        client_dll,
+        server_exe,
+        InstallBinariesOptions::default(),
+    )
 }
 
 /// Writes the currently-installed version to a `.version` file so the next
@@ -225,18 +363,38 @@ mod tests {
     }
 
     #[test]
-    fn copies_install_exe_as_climon_and_siblings() {
+    fn layout_lists_versioned_stubs_and_pointers() {
+        let f = windows_layout_files("3.2.1");
+        assert!(f.contains(&"climon-3.2.1.dll".to_string()));
+        assert!(f.contains(&"climon-server-3.2.1.exe".to_string()));
+        assert!(f.contains(&"climon.version".to_string()));
+        assert!(f.contains(&"climon.exe".to_string()));
+        assert_eq!(
+            f,
+            vec![
+                "climon-3.2.1.dll".to_string(),
+                "climon-server-3.2.1.exe".to_string(),
+                "climon.version".to_string(),
+                "climon-server.version".to_string(),
+                "climon.exe".to_string(),
+                "climon-server.exe".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn copies_windows_manifest_artifacts() {
         let root = temp_root();
         let source_dir = root.join("src");
         let install_dir = root.join("Programs").join("climon");
         fs::create_dir_all(&source_dir).unwrap();
-        fs::write(source_dir.join("install.exe"), "client").unwrap();
+        fs::write(source_dir.join("climon.dll"), "client").unwrap();
         fs::write(source_dir.join("climon-server.exe"), "server").unwrap();
 
         install_binaries(&source_dir, &install_dir, InstallBinariesOptions::default()).unwrap();
 
         assert_eq!(
-            fs::read_to_string(install_dir.join("climon.exe")).unwrap(),
+            fs::read_to_string(install_dir.join("climon.dll")).unwrap(),
             "client"
         );
         assert_eq!(
@@ -252,7 +410,7 @@ mod tests {
         let source_dir = root.join("src");
         let install_dir = root.join("Programs").join("climon");
         fs::create_dir_all(&source_dir).unwrap();
-        fs::write(source_dir.join("install.exe"), "client").unwrap();
+        fs::write(source_dir.join("climon.dll"), "client").unwrap();
 
         let err = install_binaries(&source_dir, &install_dir, InstallBinariesOptions::default())
             .unwrap_err();
@@ -286,7 +444,7 @@ mod tests {
         let source_dir = root.join("src");
         let install_dir = root.join("Programs").join("climon");
         fs::create_dir_all(&source_dir).unwrap();
-        fs::write(source_dir.join("install.exe"), "client").unwrap();
+        fs::write(source_dir.join("climon.dll"), "client").unwrap();
         fs::write(source_dir.join("climon-server.exe"), "server").unwrap();
 
         let climon_attempts = Cell::new(0);
@@ -294,7 +452,7 @@ mod tests {
         let killed = Cell::new(0);
 
         let mut copy = |source: &Path, dest: &Path| -> Result<(), InstallError> {
-            if dest.file_name().and_then(|n| n.to_str()) == Some("climon.exe")
+            if dest.file_name().and_then(|n| n.to_str()) == Some("climon.dll")
                 && climon_attempts.replace(climon_attempts.get() + 1) == 0
             {
                 return Err(InstallError::with_code("EBUSY", "locked"));
@@ -323,7 +481,7 @@ mod tests {
         assert_eq!(prompted.get(), 1);
         assert_eq!(killed.get(), 1);
         assert_eq!(
-            fs::read_to_string(install_dir.join("climon.exe")).unwrap(),
+            fs::read_to_string(install_dir.join("climon.dll")).unwrap(),
             "client"
         );
         assert_eq!(
@@ -339,7 +497,8 @@ mod tests {
         let source_dir = root.join("src");
         let install_dir = root.join("Programs").join("climon");
         fs::create_dir_all(&source_dir).unwrap();
-        fs::write(source_dir.join("install.exe"), "client").unwrap();
+        fs::write(source_dir.join("climon.dll"), "client").unwrap();
+        fs::write(source_dir.join("climon-server.exe"), "server").unwrap();
 
         let killed = Cell::new(0);
         let mut copy = |_s: &Path, _d: &Path| -> Result<(), InstallError> {
