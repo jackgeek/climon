@@ -131,7 +131,7 @@ version = "0.1.0"
 dependencies = [
  "climon-config",
  "climon-store",
- "getrandom 0.1.16",
+ "getrandom 0.4.3",
  "libc",
  "serde",
  "serde_json",
@@ -170,7 +170,7 @@ dependencies = [
  "climon-proto",
  "climon-session",
  "climon-store",
- "getrandom 0.1.16",
+ "getrandom 0.4.3",
  "hex",
  "hmac",
  "libc",
@@ -202,7 +202,7 @@ name = "climon-store"
 version = "0.1.0"
 dependencies = [
  "climon-proto",
- "getrandom 0.1.16",
+ "getrandom 0.4.3",
  "human_id",
  "libc",
  "serde",
