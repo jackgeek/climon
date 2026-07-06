@@ -754,15 +754,19 @@ mod tests {
         use std::cell::Cell;
         use std::fs;
 
-        let root = std::env::temp_dir().join(format!(
-            "climon-installer-retry-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let root = std::env::current_dir()
+            .unwrap()
+            .join(".copilot-tmp")
+            .join("installer-retry-test")
+            .join(format!(
+                "{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
         let source_dir = root.join("src");
         let install_dir = root.join("bin");
         fs::create_dir_all(&source_dir).unwrap();
-        for name in ["install", "climon-server"] {
+        for name in ["climon", "climon-server"] {
             fs::write(source_dir.join(name), name).unwrap();
         }
 
@@ -834,7 +838,7 @@ mod tests {
         assert_eq!(killed.get(), 1);
         assert_eq!(
             fs::read_to_string(install_dir.join("climon")).unwrap(),
-            "install"
+            "climon"
         );
         assert!(rec
             .events()
