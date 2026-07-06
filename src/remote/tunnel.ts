@@ -167,6 +167,34 @@ export async function createTunnel(
   return state;
 }
 
+/**
+ * Idempotently ensures the host's stable-id ingest tunnel exists and is recorded
+ * as the desired hosting state. Reuses the tunnel if `devtunnel show` finds it;
+ * otherwise creates it (with label + description). Safe to call on every startup.
+ */
+export async function ensureIngestTunnel(
+  ingestPort: number,
+  options: { env?: NodeJS.ProcessEnv; runner?: Runner } = {}
+): Promise<RemoteHostState> {
+  const env = options.env ?? process.env;
+  const runner = options.runner ?? defaultRunner;
+
+  const installId = ensureInstallId(env);
+  const desiredId = deriveIngestTunnelId(installId);
+
+  const show = await runner("devtunnel", ["show", desiredId, "--json"]);
+  if (show.status !== 0) {
+    return createTunnel(ingestPort, { env, runner });
+  }
+  const existingId = parseTunnelId(show.stdout) ?? desiredId;
+
+  await runner("devtunnel", ["port", "create", existingId, "-p", String(ingestPort)]);
+
+  const state: RemoteHostState = { tunnelId: existingId, ingestPort, canHost: true };
+  await writeRemoteHostState(state, env);
+  return state;
+}
+
 /** Tears down the recorded tunnel and removes the desired-state file. */
 export async function deleteTunnel(
   options: { env?: NodeJS.ProcessEnv; runner?: Runner } = {}

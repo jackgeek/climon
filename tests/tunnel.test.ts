@@ -126,6 +126,41 @@ describe("createTunnel labeling", () => {
   });
 });
 
+describe("ensureIngestTunnel", () => {
+  test("reuses an existing stable-id tunnel (show hit -> no create)", async () => {
+    const installId = "00000000-0000-4000-8000-000000000000";
+    const localEnv = tempHome(installId);
+    const id = deriveIngestTunnelId(installId);
+    const calls: string[][] = [];
+    const runner = async (_cmd: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "show") return { status: 0, stdout: JSON.stringify({ tunnel: { tunnelId: `${id}.eun1` } }), stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const state = await tunnel.ensureIngestTunnel(7071, { env: localEnv, runner });
+    expect(calls.some((a) => a[0] === "create")).toBe(false);
+    expect(state.tunnelId).toBe(`${id}.eun1`);
+    expect(state.ingestPort).toBe(7071);
+    rmSync(localEnv.CLIMON_HOME!, { recursive: true, force: true });
+  });
+
+  test("creates when the tunnel is absent (show miss -> create)", async () => {
+    const installId = "11111111-2222-4333-8444-555555555555";
+    const localEnv = tempHome(installId);
+    const calls: string[][] = [];
+    const runner = async (_cmd: string, args: string[]) => {
+      calls.push(args);
+      if (args[0] === "show") return { status: 1, stdout: "", stderr: "not found" };
+      if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: `${args[1]}.eun1` }), stderr: "" };
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const state = await tunnel.ensureIngestTunnel(7072, { env: localEnv, runner });
+    expect(calls.some((a) => a[0] === "create")).toBe(true);
+    expect(state.ingestPort).toBe(7072);
+    rmSync(localEnv.CLIMON_HOME!, { recursive: true, force: true });
+  });
+});
+
 describe("CLIMON_DISABLE_DEVTUNNEL guard", () => {
   test("CLIMON_DISABLE_DEVTUNNEL isDevtunnelDisabled reads the env flag", () => {
     expect(tunnel.isDevtunnelDisabled({ CLIMON_DISABLE_DEVTUNNEL: "1" } as NodeJS.ProcessEnv)).toBe(true);

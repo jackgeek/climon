@@ -39,7 +39,7 @@ import { ensureSpawnSecret } from "../remote/spawn-secret.js";
 import { requestRemoteSpawn } from "./remote-spawn-client.js";
 import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
-import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
+import { detectDevtunnel, ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
@@ -1241,6 +1241,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   startupLog("cleaning up stale sessions");
   await cleanupStaleSessions();
   if (remotesActive) {
+    if ((await detectDevtunnel()).available) {
+      try {
+        const ingestPort = await resolveIngestPort();
+        const ensured = await ensureIngestTunnel(ingestPort);
+        startupLog(`ensured ingest tunnel ${ensured.tunnelId} (port ${ensured.ingestPort})`);
+      } catch (error) {
+        startupLog(`ingest tunnel ensure failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else {
+      startupLog("devtunnel unavailable; skipping ingest tunnel ensure");
+    }
     startupLog("ensuring ingest daemon is running");
     await ensureIngestDaemon();
     const exposureWarning = buildInterimWslExposureWarning({
@@ -1699,7 +1710,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             if (!detect.available) {
               return new Response("devtunnel CLI not available on this machine.", { status: 400 });
             }
-            await createTunnel(ingestPort);
+            await ensureIngestTunnel(ingestPort);
           } else {
             const tunnelId = parseTunnelInput(typeof body.tunnelInput === "string" ? body.tunnelInput : "");
             if (!tunnelId) return new Response("Invalid tunnel id or URL.", { status: 400 });
