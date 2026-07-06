@@ -330,7 +330,7 @@ mod windows_main {
             .join("climon"))
     }
 
-    fn setup_path(install_dir: &Path) -> Result<PathSetup, String> {
+    pub(super) fn setup_path(install_dir: &Path) -> Result<PathSetup, String> {
         let install_dir_str = install_dir.to_string_lossy().into_owned();
         let mut read = || crate::windows::read_user_path().unwrap_or_default();
         let mut write = |value: &str| {
@@ -486,6 +486,9 @@ fn platform_installer_main(
 /// `installer-bundle-entry.ts` + `index.ts`'s `tryRunInstaller`.
 pub fn run_installer(version: &str, client_stub: &[u8], server_stub: &[u8]) -> i32 {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(migrate) = parse_migrate_args(&argv) {
+        return run_migrate(version, client_stub, server_stub, &migrate);
+    }
     let mut main = || platform_installer_main(&argv, version, client_stub, server_stub);
     let mut write_error = |message: &str| eprintln!("{message}");
     let mut pause = real_pause_for_exit;
@@ -497,6 +500,82 @@ pub fn run_installer(version: &str, client_stub: &[u8], server_stub: &[u8]) -> i
         exit: &mut exit,
     });
     0
+}
+
+/// Parsed migrate-mode invocation: `--migrate --dir <path> --source <path>`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MigrateArgs {
+    pub dir: PathBuf,
+    pub source: PathBuf,
+}
+
+/// Returns `Some(MigrateArgs)` when argv requests headless migration, else None
+/// (normal interactive install). `argv` excludes the program name.
+pub fn parse_migrate_args(argv: &[String]) -> Option<MigrateArgs> {
+    if !argv.iter().any(|a| a == "--migrate") {
+        return None;
+    }
+    let mut dir = None;
+    let mut source = None;
+    let mut it = argv.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => dir = it.next().map(PathBuf::from),
+            "--source" => source = it.next().map(PathBuf::from),
+            _ => {}
+        }
+    }
+    Some(MigrateArgs {
+        dir: dir?,
+        source: source?,
+    })
+}
+
+/// Headless migration entrypoint. Reads the versioned artifacts from
+/// `args.source`, places the full Windows stub layout into `args.dir`, ensures
+/// PATH, and returns 0 on success. Unix has no legacy stub layout to migrate.
+fn run_migrate(version: &str, client_stub: &[u8], server_stub: &[u8], args: &MigrateArgs) -> i32 {
+    #[cfg(target_os = "windows")]
+    {
+        let client_dll = match std::fs::read(args.source.join("climon.dll")) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("migrate: read climon.dll: {e}");
+                return 1;
+            }
+        };
+        let server_exe = match std::fs::read(args.source.join("climon-server.exe")) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("migrate: read climon-server.exe: {e}");
+                return 1;
+            }
+        };
+        if let Err(e) = crate::files::place_windows_layout(
+            &args.dir,
+            version,
+            client_stub,
+            server_stub,
+            &client_dll,
+            &server_exe,
+        ) {
+            eprintln!("migrate: place layout: {e}");
+            return 1;
+        }
+        if let Err(e) = windows_main::setup_path(&args.dir) {
+            eprintln!("migrate: PATH update: {e}");
+        }
+        eprintln!(
+            "migrate: converted {} to stub layout {version}",
+            args.dir.display()
+        );
+        0
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (version, client_stub, server_stub, args);
+        0
+    }
 }
 
 #[cfg(test)]
@@ -528,6 +607,30 @@ mod tests {
             telemetry: None,
             auto_update: None,
         }
+    }
+
+    #[test]
+    fn parse_migrate_parses_dir_and_source() {
+        let argv = vec![
+            "--migrate".to_string(),
+            "--dir".to_string(),
+            "C:/climon/bin".to_string(),
+            "--source".to_string(),
+            "C:/stage".to_string(),
+        ];
+        let migrate = parse_migrate_args(&argv).unwrap();
+        assert_eq!(migrate.dir, PathBuf::from("C:/climon/bin"));
+        assert_eq!(migrate.source, PathBuf::from("C:/stage"));
+    }
+
+    #[test]
+    fn parse_migrate_no_flag_returns_none() {
+        assert!(parse_migrate_args(&["--dir".to_string(), "x".to_string()]).is_none());
+    }
+
+    #[test]
+    fn parse_migrate_without_required_paths_returns_none() {
+        assert!(parse_migrate_args(&["--migrate".to_string()]).is_none());
     }
 
     #[test]
