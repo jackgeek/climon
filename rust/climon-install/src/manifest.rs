@@ -73,14 +73,15 @@ impl InstallFile {
 /// Returns the ordered list of files to install for a platform. Add future
 /// locale resource files here and they are installed and swapped automatically.
 pub fn install_files_for_platform(platform: Platform) -> Vec<InstallFile> {
-    let exe = if platform == Platform::Windows {
-        ".exe"
-    } else {
-        ""
-    };
+    if platform == Platform::Windows {
+        return vec![
+            InstallFile::new("climon.dll", "climon.dll"),
+            InstallFile::new("climon-server.exe", "climon-server.exe"),
+        ];
+    }
     vec![
-        InstallFile::new(format!("install{exe}"), format!("climon{exe}")),
-        InstallFile::new(format!("climon-server{exe}"), format!("climon-server{exe}")),
+        InstallFile::new("climon", "climon"),
+        InstallFile::new("climon-server", "climon-server"),
     ]
 }
 
@@ -93,7 +94,7 @@ mod tests {
         assert_eq!(
             install_files_for_platform(Platform::Linux),
             vec![
-                InstallFile::new("install", "climon"),
+                InstallFile::new("climon", "climon"),
                 InstallFile::new("climon-server", "climon-server"),
             ]
         );
@@ -104,7 +105,7 @@ mod tests {
         assert_eq!(
             install_files_for_platform(Platform::Windows),
             vec![
-                InstallFile::new("install.exe", "climon.exe"),
+                InstallFile::new("climon.dll", "climon.dll"),
                 InstallFile::new("climon-server.exe", "climon-server.exe"),
             ]
         );
