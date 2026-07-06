@@ -77,8 +77,10 @@ All cases isolate state with a temp `CLIMON_HOME` so they never touch a real
 3. `climon --help` → capture stdout.
 4. `diff` against `fixtures/cli/help.txt`.
 
-**Expected:** Both outputs are byte-identical to the fixtures (which are
-generated from the TS client). `climon license` appears in `--help`.
+**Expected:** Both outputs are byte-identical to the fixtures. `climon license`
+and `climon run [flags] <command>` (the primary documented form; the bare
+`climon <command>` is a shorthand and `climon command` an alias) both appear in
+`--help`.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
