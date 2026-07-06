@@ -57,6 +57,18 @@ fn dispatch(argv: &[String]) -> Result<i32, String> {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "climon".to_string());
         maybe_spawn_background_check(&exec_path, &cfg_env);
+
+        // Best-effort reaper of superseded versioned binaries on the interactive
+        // launch paths only (Windows). Skipped on scripted commands so it never
+        // adds latency; deletions of locked files silently no-op.
+        #[cfg(windows)]
+        {
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    let _ = climon_update::reaper::reap_superseded(dir);
+                }
+            }
+        }
     }
 
     let name = command_name(&parsed);
