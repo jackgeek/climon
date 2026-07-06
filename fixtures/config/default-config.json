@@ -19,9 +19,6 @@
   "attention": {
     "idleSeconds": 10
   },
-  "notifications": {
-    "smartSnippet": true
-  },
   "remote": {
     "discover": true,
     "ingestPortRetryAttempts": 100,
@@ -42,7 +39,8 @@
     "sessionSpawning": "disabled",
     "remoteSpawn": "disabled",
     "wslBridge": "disabled",
-    "remotes": "disabled"
+    "remotes": "disabled",
+    "smartNotifications": "disabled"
   },
   "telemetry": {
     "enabled": false

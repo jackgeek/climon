@@ -72,6 +72,13 @@ pub const FEATURE_FLAGS: &[FeatureFlag] = &[
         description: "Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge.",
         override_value: None,
     },
+    FeatureFlag {
+        name: "smartNotifications",
+        default: "disabled",
+        status: FeatureStatus::Experimental,
+        description: "Include a fuzzy-extracted snippet of the last relevant terminal output as the body of attention notifications, instead of a generic message.",
+        override_value: None,
+    },
 ];
 
 /// Config key prefix for feature flags.
@@ -221,6 +228,20 @@ mod tests {
         assert!(is_feature_enabled(
             &json!({ "feature": { "remotes": "enabled" } }),
             "remotes"
+        ));
+    }
+
+    #[test]
+    fn registry_contains_smart_notifications_disabled_by_default() {
+        let flag = find_flag("smartNotifications").expect("smartNotifications flag exists");
+        assert_eq!(flag.default, "disabled");
+        assert_eq!(flag.status, FeatureStatus::Experimental);
+        assert_eq!(flag.override_value, None);
+
+        assert!(!is_feature_enabled(&json!({}), "smartNotifications"));
+        assert!(is_feature_enabled(
+            &json!({ "feature": { "smartNotifications": "enabled" } }),
+            "smartNotifications"
         ));
     }
 }
