@@ -95,6 +95,18 @@ pub fn run_update_command(
     let new_version = &opts.manifest.version;
 
     if opts.platform == "win32" {
+        if should_migrate_legacy(opts.install_dir, &unzipped) {
+            // Bridge migration: extract the release to a temp dir and run the
+            // bundled dedicated installer headless. It displaces the legacy
+            // climon.exe -> .old (renaming a running exe is permitted on
+            // Windows, even the self-image when `climon update` is the caller),
+            // writes the client/server stubs, versioned .dll/.exe, and pointers.
+            migrate_via_bundled_installer(opts.install_dir, &unzipped, new_version, print)?;
+            return Ok(UpdateResult {
+                status: UpdateStatus::Updated,
+                version: Some(new_version.clone()),
+            });
+        }
         // Windows: write additive versioned files, fsync, then flip pointers.
         // Never touches the stubs, so an update is never Deferred by a lock.
         for f in &files {
@@ -153,6 +165,68 @@ pub fn run_update_command(
         status: UpdateStatus::Updated,
         version: Some(opts.manifest.version.clone()),
     })
+}
+
+/// True when the current install is the legacy layout (no `climon.version`
+/// pointer) AND the downloaded release is stub-model (carries `climon.dll`) and
+/// bundles the dedicated installer (`install.exe`). Windows-only in practice;
+/// harmless elsewhere. Gates the one-time bridge migration.
+fn should_migrate_legacy(install_dir: &Path, unzipped: &HashMap<String, Vec<u8>>) -> bool {
+    !install_dir.join("climon.version").exists()
+        && unzipped.contains_key("climon.dll")
+        && unzipped.contains_key("install.exe")
+}
+
+/// Extracts every unzipped release entry into a temp dir and runs
+/// `install.exe --migrate --dir <install_dir> --source <temp_dir>` to convert a
+/// legacy install to the stub layout. The temp dir is created inside
+/// `install_dir` so the installer reads local files. Errors propagate; on
+/// installer non-zero exit, returns Err (the caller reports failure and the
+/// legacy install is left untouched because the installer only mutates on
+/// success).
+fn migrate_via_bundled_installer(
+    install_dir: &Path,
+    unzipped: &HashMap<String, Vec<u8>>,
+    new_version: &str,
+    print: &mut dyn FnMut(&str),
+) -> Result<(), String> {
+    let pid = std::process::id();
+    let now = crate::clock::now_ms();
+    let staging = install_dir.join(format!(".climon-migrate-{pid}-{now}"));
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| format!("create staging {} failed: {e}", staging.display()))?;
+    for (name, bytes) in unzipped {
+        let dest = staging.join(name);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&dest, bytes)
+            .map_err(|e| format!("stage {} failed: {e}", dest.display()))?;
+    }
+    let installer = staging.join("install.exe");
+    print(&format!(
+        "Migrating this install to the new binary layout for {new_version}...\n"
+    ));
+    let status = std::process::Command::new(&installer)
+        .arg("--migrate")
+        .arg("--dir")
+        .arg(install_dir)
+        .arg("--source")
+        .arg(&staging)
+        .status()
+        .map_err(|e| format!("run migrate installer failed: {e}"))?;
+    // Best-effort cleanup of staging (installer already copied what it needs).
+    let _ = std::fs::remove_dir_all(&staging);
+    if !status.success() {
+        return Err(format!(
+            "migration installer exited with {:?}",
+            status.code()
+        ));
+    }
+    print(&format!(
+        "Migration complete. Restart terminals to use {new_version}.\n"
+    ));
+    Ok(())
 }
 
 /// Writes `bytes` to `dir/name` via temp + fsync + rename. Skips if the target
@@ -382,5 +456,23 @@ mod tests {
         // Second identical write is a no-op (does not error, keeps content).
         write_versioned_file(dir, "climon-3.2.1.dll", b"AAA").unwrap();
         assert_eq!(std::fs::read(dir.join("climon-3.2.1.dll")).unwrap(), b"AAA");
+    }
+
+    #[test]
+    fn detects_legacy_install_receiving_stub_model_release() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Legacy install: single climon.exe, no climon.version pointer.
+        std::fs::write(dir.join("climon.exe"), b"legacy-client").unwrap();
+
+        let mut unzipped = std::collections::HashMap::new();
+        unzipped.insert("climon.dll".to_string(), b"new-client".to_vec());
+        unzipped.insert("install.exe".to_string(), b"installer".to_vec());
+
+        assert!(should_migrate_legacy(dir, &unzipped));
+
+        // A stub install (pointer present) is NOT migrated.
+        std::fs::write(dir.join("climon.version"), b"3.2.1\n").unwrap();
+        assert!(!should_migrate_legacy(dir, &unzipped));
     }
 }
