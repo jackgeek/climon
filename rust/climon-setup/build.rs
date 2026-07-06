@@ -30,8 +30,17 @@ fn main() {
     println!("cargo:rustc-env=CLIMON_VERSION={version}");
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    stage_stub("CLIMON_CLIENT_STUB", out_dir.join("client_stub.bin"));
-    stage_stub("CLIMON_SERVER_STUB", out_dir.join("server_stub.bin"));
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    stage_stub(
+        "CLIMON_CLIENT_STUB",
+        out_dir.join("client_stub.bin"),
+        &target_os,
+    );
+    stage_stub(
+        "CLIMON_SERVER_STUB",
+        out_dir.join("server_stub.bin"),
+        &target_os,
+    );
     println!("cargo:rerun-if-env-changed=CLIMON_CLIENT_STUB");
     println!("cargo:rerun-if-env-changed=CLIMON_SERVER_STUB");
 }
@@ -59,11 +68,14 @@ fn extract_version(json: &str) -> Option<String> {
 
 /// Copies the file named by `env_var` into `dest`, or writes an empty file when
 /// the env var is unset (host dev builds that never place stubs).
-fn stage_stub(env_var: &str, dest: PathBuf) {
+fn stage_stub(env_var: &str, dest: PathBuf, target_os: &str) {
     match std::env::var(env_var) {
         Ok(src) if !src.is_empty() => {
             std::fs::copy(&src, &dest)
                 .unwrap_or_else(|e| panic!("copy {src} -> {}: {e}", dest.display()));
+        }
+        _ if target_os == "windows" => {
+            panic!("{env_var} must point at a built stub when building the Windows installer")
         }
         _ => {
             std::fs::write(&dest, b"").expect("write empty stub placeholder");
