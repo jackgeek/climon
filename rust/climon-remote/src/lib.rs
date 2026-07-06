@@ -22,6 +22,7 @@ pub mod ingest;
 pub mod ingest_bind_host;
 pub mod ingest_port;
 pub mod ingest_state;
+pub mod ingest_tunnel_id;
 pub mod ingest_status;
 pub mod keepalive;
 pub mod link;
