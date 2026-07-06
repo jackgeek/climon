@@ -394,6 +394,15 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .accept_input()
         .global_only(),
         ConfigSetting::new(
+            "remote.discover",
+            Boolean,
+            "When true (default), an enabled devbox (remote.enabled) auto-discovers live climon dashboard hosts by scanning your dev tunnels for the climon-ingest label and uplinks to all of them, in addition to any explicit remote.tunnelId/remote.host. Set false to disable discovery and only use explicitly configured targets.",
+            vec![Client],
+        )
+        .default(Value::from(true))
+        .accept_input()
+        .global_only(),
+        ConfigSetting::new(
             "remote.dashboardTunnelId",
             String,
             "Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions.",
@@ -838,6 +847,7 @@ mod tests {
                 "remote.host",
                 "remote.ingestHost",
                 "remote.tunnelId",
+                "remote.discover",
                 "remote.dashboardTunnelId",
                 "remote.dashboardTunnelCluster",
                 "remote.dashboardTunnelEnabled",
@@ -870,7 +880,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 41);
+        assert_eq!(all_config_keys().len(), 42);
     }
 
     #[test]
@@ -898,7 +908,7 @@ mod tests {
                 "dashboard": { "theme": "Default", "keyBarPinned": true, "stateIconNoMotion": false },
                 "attention": { "idleSeconds": 10 },
                 "notifications": { "smartSnippet": true },
-                "remote": { "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
+                "remote": { "discover": true, "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },
                 "tunnelLink": { "keepAlive": 60 },
                 "logging": { "level": "trace" },
@@ -937,6 +947,16 @@ mod tests {
     }
 
     #[test]
+    fn remote_discover_is_boolean_client_setting() {
+        let s = find_config_setting("remote.discover").expect("setting exists");
+        assert_eq!(s.kind, ConfigType::Boolean);
+        assert_eq!(s.default_value, Some(Value::from(true)));
+        assert!(s.accept_input);
+        assert!(s.global_only);
+        assert_eq!(s.scope, vec![ConfigProcessScope::Client]);
+    }
+
+    #[test]
     fn accepted_keys_exclude_internal_and_default_only() {
         assert_eq!(
             accepted_config_keys(),
@@ -949,6 +969,7 @@ mod tests {
                 "remote.host",
                 "remote.ingestHost",
                 "remote.tunnelId",
+                "remote.discover",
                 "remote.port",
                 "remote.clientId",
                 "remote.spawnSecret",

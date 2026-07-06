@@ -62,8 +62,18 @@ connect:
   hostname. The `climon-ingest` label and description JSON contain only
   display metadata (`app`, `role`, `clientId`, `hostname`, `version`) and never
   include `remote.spawnSecret`, tokens, or credentials.
-- `CLIMON_DISABLE_DEVTUNNEL=1` or `true` disables all server-side devtunnel
-  probing and tunnel creation, even if remotes are enabled.
+- When climon auto-creates the tunnel, it also opens a keep-alive TCP port so
+  the tunnel stays up and never presents an interactive confirmation page to a
+  browser.
+- Devbox auto-discovery is scoped to the authenticated dev tunnel identity:
+  `devtunnel list --labels climon-ingest --json` returns only that user's own
+  tunnels, and climon treats a discovered host as live only when
+  `hostConnections >= 1`. Fan-out only opens outbound uplinks to those already
+  authorized tunnels plus any explicit target the user configured.
+- `remote.discover false` disables devbox discovery while preserving explicit
+  `remote.tunnelId` / `remote.host` setups. `CLIMON_DISABLE_DEVTUNNEL=1` (or
+  `true`) disables all devtunnel interaction on both host and devbox — probing,
+  tunnel creation, and list/connect/show/port calls.
 
 ## Direct same-machine bridge
 

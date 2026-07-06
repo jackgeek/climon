@@ -368,6 +368,17 @@ the ingest can garbage-collect ghost sessions deleted on the source (including
 those left on disk by a previous connection), while preserving still-present
 disconnected sessions and never re-materializing dismissed ones.
 
+When `remote.enabled` is true, the devbox uplink auto-discovers dashboard hosts
+by running `devtunnel list --labels climon-ingest --json` every 30 seconds. It
+keeps only tunnels whose `hostConnections >= 1`, derives this machine's own
+stable ingest id from `install.id` (`climon-ingest-<sha256(...)[:20]>`) to avoid
+self-loops, and unions the discovered tunnel ids with any explicit
+`remote.tunnelId` or direct `remote.host` target. The multi-target supervisor
+fans out concurrently: each desired target owns an independent bridge task using
+the existing `devtunnel connect` → `devtunnel port list` → `run_uplink_bridge`
+path, and the poll reconciles additions/removals without disturbing other live
+targets.
+
 ## Remote visibility (`ingest-status.json`, `uplink-status.json`, `climon remotes`)
 
 Two single-writer status beacons under `$CLIMON_HOME` make the live remote

@@ -15,6 +15,7 @@
 | `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
 | `remote.ingestHost` | string | unset | client | Host address where the dashboard-side ingest daemon should listen for incoming remote session connections. |
 | `remote.tunnelId` | string | unset | client | Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward local climon traffic to a remote dashboard. |
+| `remote.discover` | boolean | `true` | client | When true (default), an enabled devbox (remote.enabled) auto-discovers live climon dashboard hosts by scanning your dev tunnels for the climon-ingest label and uplinks to all of them, in addition to any explicit remote.tunnelId/remote.host. Set false to disable discovery and only use explicitly configured targets. |
 | `remote.dashboardTunnelId` | string | unset | server | Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions. (**internal**) |
 | `remote.dashboardTunnelCluster` | string | unset | server | Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions. (**internal**) |
 | `remote.dashboardTunnelEnabled` | boolean | unset | server | Server-owned flag recording whether the Tunnel Link is enabled, so the server re-establishes the dashboard tunnel automatically on startup. (**internal**) |

@@ -256,20 +256,21 @@ You can monitor sessions that run on another machine (a "devbox") from your loca
 dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port — see
 [security.md](./security.md) for the full threat model.
 
-1. On the home machine, enable the ingest/uplink bridge, then start or restart
-   the dashboard: `climon config feature.remotes enabled` followed by
+1. On each home/dashboard machine, enable the ingest/uplink bridge, then start or
+   restart the dashboard: `climon config feature.remotes enabled` followed by
    `climon server`.
-2. Open the dashboard, click the hamburger menu, and choose **Remotes…**.
-3. If the `devtunnel` CLI is installed and logged in on the server machine,
-   climon creates or reuses a stable `climon-ingest-…` tunnel automatically and
-   hosts it for you.
-4. Optionally choose the default color and priority for that devbox's sessions,
-   then copy the generated config script.
-5. Run the script on the devbox. It records `remote.tunnelId`,
-   `remote.port`, and any chosen session defaults with
-   `climon config`.
-6. Run any command on the devbox with `climon <cmd>`. The session appears on your
-   dashboard under the devbox's stable client id.
+2. On the devbox, log in to the same dev tunnel account and enable remote mode:
+   `climon config remote.enabled true`.
+3. Run any command on the devbox with `climon <cmd>`. The uplink scans
+   `devtunnel list --labels climon-ingest --json`, keeps live hosts
+   (`hostConnections >= 1`), excludes its own stable ingest tunnel, and connects
+   to every discovered host. The session appears on each dashboard under the
+   devbox's stable client id.
+
+To opt out of discovery, run `climon config remote.discover false` on the
+devbox and configure an explicit `remote.tunnelId` (or direct `remote.host` +
+`remote.port`) instead. Explicit targets are still honored and are unioned with
+discovered hosts while discovery is enabled.
 
 Revoke a devbox by deleting the dev tunnel or removing its identity from the
 tunnel's access list.
@@ -452,6 +453,7 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
 | `remote.ingestHost` | string | unset | client | Host address where the dashboard-side ingest daemon should listen for incoming remote session connections. |
 | `remote.tunnelId` | string | unset | client | Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward local climon traffic to a remote dashboard. |
+| `remote.discover` | boolean | `true` | client | When true (default), an enabled devbox (remote.enabled) auto-discovers live climon dashboard hosts by scanning your dev tunnels for the climon-ingest label and uplinks to all of them, in addition to any explicit remote.tunnelId/remote.host. Set false to disable discovery and only use explicitly configured targets. |
 | `remote.dashboardTunnelId` | string | unset | server | Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions. (**internal**) |
 | `remote.dashboardTunnelCluster` | string | unset | server | Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions. (**internal**) |
 | `remote.dashboardTunnelEnabled` | boolean | unset | server | Server-owned flag recording whether the Tunnel Link is enabled, so the server re-establishes the dashboard tunnel automatically on startup. (**internal**) |

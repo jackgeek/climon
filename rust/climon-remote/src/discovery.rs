@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use climon_config::config::{get_climon_home, resolve_config_setting, Env as ConfigEnv};
 use climon_store::server_state::read_server_state_from_dir;
+use serde_json::Value;
 
 use crate::ingest_state::{read_ingest_state_from_dir, resolve_ingest_port};
 use crate::peer::{peer_host_candidates, Env as PeerEnv};
@@ -38,6 +39,90 @@ pub struct DashboardTarget {
 pub enum DashboardLocation {
     Local,
     Peer,
+}
+
+/// True when the CLIMON_DISABLE_DEVTUNNEL env flag disables all devtunnel interaction.
+pub fn devtunnel_disabled() -> bool {
+    matches!(
+        std::env::var("CLIMON_DISABLE_DEVTUNNEL").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+/// A live climon ingest tunnel discovered on the authenticated user's account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredHost {
+    pub tunnel_id: String,
+    pub host_connections: u64,
+    pub hostname: Option<String>,
+    pub client_id: Option<String>,
+}
+
+/// Parses `devtunnel list --json` output, keeping only live hosts
+/// (`hostConnections >= 1`) and best-effort-parsing the JSON description.
+pub fn parse_devtunnel_list(json: &str) -> Vec<DiscoveredHost> {
+    let root: Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let tunnels = match root.get("tunnels").and_then(|t| t.as_array()) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for t in tunnels {
+        let host_connections = t
+            .get("hostConnections")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if host_connections < 1 {
+            continue;
+        }
+        let Some(tunnel_id) = t.get("tunnelId").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let (hostname, client_id) = t
+            .get("description")
+            .and_then(|v| v.as_str())
+            .and_then(|d| serde_json::from_str::<Value>(d).ok())
+            .map(|d| {
+                (
+                    d.get("hostname")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    d.get("clientId")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                )
+            })
+            .unwrap_or((None, None));
+        out.push(DiscoveredHost {
+            tunnel_id: tunnel_id.to_string(),
+            host_connections,
+            hostname,
+            client_id,
+        });
+    }
+    out
+}
+
+/// Runs `devtunnel list --labels climon-ingest --json` and returns the live hosts.
+/// Returns an empty vec when devtunnel is disabled, missing, unauthenticated, or errors.
+pub async fn list_climon_ingest_tunnels() -> Vec<DiscoveredHost> {
+    if devtunnel_disabled() {
+        return Vec::new();
+    }
+    let mut cmd = crate::uplink::devtunnel_command(&[
+        "list",
+        "--labels",
+        crate::ingest_tunnel_id::INGEST_TUNNEL_LABEL,
+        "--json",
+    ]);
+    let output = match cmd.output().await {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    parse_devtunnel_list(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Probe function for [`DiscoveryDeps`].
@@ -144,6 +229,46 @@ fn process_env() -> PeerEnv {
 mod tests {
     use super::*;
     use climon_store::server_state::{serialize_server_state, ServerState};
+
+    const LIST_JSON: &str = r#"{
+      "tunnels": [
+        {"tunnelId":"climon-ingest-aaaa000011112222aaaa.eun1","labels":["climon-ingest"],"hostConnections":1,"portCount":1,"description":"{\"app\":\"climon\",\"role\":\"ingest\",\"clientId\":\"boxA\",\"hostname\":\"boxA\",\"version\":\"1.0.0\"}"},
+        {"tunnelId":"climon-ingest-bbbb000011112222bbbb.eun1","labels":["climon-ingest"],"hostConnections":0,"portCount":1,"description":""},
+        {"tunnelId":"climon-ingest-cccc000011112222cccc.eun1","labels":["climon-ingest"],"hostConnections":2,"portCount":1,"description":"not-json"}
+      ]
+    }"#;
+
+    #[test]
+    fn keeps_only_live_hosts() {
+        let hosts = parse_devtunnel_list(LIST_JSON);
+        let ids: Vec<&str> = hosts.iter().map(|h| h.tunnel_id.as_str()).collect();
+        assert!(ids.contains(&"climon-ingest-aaaa000011112222aaaa.eun1"));
+        assert!(ids.contains(&"climon-ingest-cccc000011112222cccc.eun1"));
+        assert!(!ids.contains(&"climon-ingest-bbbb000011112222bbbb.eun1"));
+        assert_eq!(hosts.len(), 2);
+    }
+
+    #[test]
+    fn parses_description_when_present_and_tolerates_bad_json() {
+        let hosts = parse_devtunnel_list(LIST_JSON);
+        let a = hosts
+            .iter()
+            .find(|h| h.tunnel_id.starts_with("climon-ingest-aaaa"))
+            .unwrap();
+        assert_eq!(a.hostname.as_deref(), Some("boxA"));
+        let c = hosts
+            .iter()
+            .find(|h| h.tunnel_id.starts_with("climon-ingest-cccc"))
+            .unwrap();
+        assert_eq!(c.hostname, None);
+    }
+
+    #[test]
+    fn empty_or_garbage_input_yields_no_hosts() {
+        assert!(parse_devtunnel_list("").is_empty());
+        assert!(parse_devtunnel_list("{}").is_empty());
+        assert!(parse_devtunnel_list(r#"{"tunnels":[]}"#).is_empty());
+    }
 
     fn tmp(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(

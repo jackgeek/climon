@@ -209,6 +209,16 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     globalOnly: true
   },
   {
+    path: "remote.discover",
+    type: "boolean",
+    defaultValue: true,
+    purpose:
+      "When true (default), an enabled devbox (remote.enabled) auto-discovers live climon dashboard hosts by scanning your dev tunnels for the climon-ingest label and uplinks to all of them, in addition to any explicit remote.tunnelId/remote.host. Set false to disable discovery and only use explicitly configured targets.",
+    scope: ["client"],
+    acceptInput: true,
+    globalOnly: true
+  },
+  {
     path: "remote.dashboardTunnelId",
     type: "string",
     purpose: "Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions.",
