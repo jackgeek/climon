@@ -30,6 +30,7 @@ describe("config settings registry", () => {
       "remote.host",
       "remote.ingestHost",
       "remote.tunnelId",
+      "remote.discover",
       "remote.dashboardTunnelId",
       "remote.dashboardTunnelCluster",
       "remote.dashboardTunnelEnabled",
@@ -101,7 +102,7 @@ describe("config settings registry", () => {
       dashboard: { theme: "Default", keyBarPinned: true, stateIconNoMotion: false },
       attention: { idleSeconds: 10 },
       notifications: { smartSnippet: true },
-      remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
+      remote: { discover: true, ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
       tunnelLink: { keepAlive: 60 },
       logging: { level: "trace" },
@@ -120,6 +121,12 @@ describe("config settings registry", () => {
 
     expect(clientId?.internal).not.toBe(true);
     expect(clientId?.acceptInput).toBe(true);
+  });
+
+  test("remote.discover is registered as a boolean client setting", () => {
+    const setting = CONFIG_SETTINGS.find((s) => s.path === "remote.discover");
+    expect(setting).toBeDefined();
+    expect(setting?.type).toBe("boolean");
   });
 
   test("config registry includes internal dashboard tunnel persistence fields", () => {
@@ -147,6 +154,7 @@ describe("config settings registry", () => {
       "remote.host",
       "remote.ingestHost",
       "remote.tunnelId",
+      "remote.discover",
       "remote.port",
       "remote.clientId",
       "remote.spawnSecret",
@@ -170,7 +178,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(41);
+    expect(allConfigKeys().length).toBe(42);
   });
 
   test("coerces values through registry validators", () => {
