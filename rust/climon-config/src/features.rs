@@ -61,7 +61,7 @@ pub const FEATURE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag {
         name: "wslBridge",
         default: "disabled",
-        status: FeatureStatus::Experimental,
+        status: FeatureStatus::Untested,
         description: "Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard.",
         override_value: None,
     },
@@ -204,7 +204,7 @@ mod tests {
     fn registry_contains_wsl_bridge_and_remotes_defaults() {
         let wsl = find_flag("wslBridge").expect("wslBridge flag exists");
         assert_eq!(wsl.default, "disabled");
-        assert_eq!(wsl.status, FeatureStatus::Experimental);
+        assert_eq!(wsl.status, FeatureStatus::Untested);
         assert_eq!(wsl.override_value, None);
 
         let remotes = find_flag("remotes").expect("remotes flag exists");
