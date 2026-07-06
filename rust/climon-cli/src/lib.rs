@@ -23,7 +23,6 @@ pub mod client;
 pub mod config_cmd;
 pub mod detach_key;
 pub mod detect_shell;
-pub mod installer;
 pub mod launcher;
 pub mod link_cmd;
 pub mod pathenv;
