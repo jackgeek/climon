@@ -27,6 +27,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::client_id::default_client_id;
 use crate::discovery::{discover_dashboard, DashboardLocation, DiscoveryDeps};
@@ -37,6 +38,7 @@ use crate::singleton::{acquire_singleton_detailed, SingletonResult};
 use crate::spawn_auth::{
     sign_now, verify_signed_control, RejectReason, ReplayGuard, DEFAULT_FRESHNESS_WINDOW_MS,
 };
+use crate::target_set::UplinkTargetSpec;
 use climon_session::socket::{parse_session_socket_ref, ParsedRef};
 
 /// Default keepalive interval in seconds. Mirrors `DEFAULT_KEEPALIVE_SECONDS`.
@@ -701,6 +703,7 @@ const AUTH_REJECT_PATTERNS: &[&str] = &[
     "401",
     "403",
 ];
+const DISCOVERY_POLL_SECS: u64 = 30;
 
 fn auth_rejected_in(text: &str) -> bool {
     let lower = text.to_lowercase();
@@ -933,10 +936,317 @@ fn live_session_count(store_env: &StoreEnv) -> u32 {
         .unwrap_or(0)
 }
 
+fn write_supervisor_status(
+    config_env: &ConfigEnv,
+    state: &str,
+    target: Option<crate::uplink_status::UplinkTarget>,
+    connected_at: Option<u64>,
+    session_count: u32,
+    last_error: Option<String>,
+) {
+    let status = crate::uplink_status::UplinkStatus {
+        pid: std::process::id(),
+        updated_at: crate::time::now_ms(),
+        target,
+        state: state.to_string(),
+        connected_at,
+        session_count,
+        last_error,
+    };
+    let _ = crate::uplink_status::write_uplink_status(&status, config_env);
+}
+
+pub fn target_key(spec: &UplinkTargetSpec) -> String {
+    match spec {
+        UplinkTargetSpec::Tunnel { tunnel_id } => format!("tunnel:{tunnel_id}"),
+        UplinkTargetSpec::Direct { host, port } => format!("direct:{host}:{port}"),
+    }
+}
+
+pub struct TargetHandle {
+    cancel: CancellationToken,
+    task: Option<tokio::task::JoinHandle<()>>,
+    #[cfg(test)]
+    fake: Option<(String, std::rc::Rc<std::cell::RefCell<Vec<String>>>)>,
+}
+
+#[derive(Default)]
+pub struct TargetSupervisor {
+    pub active: std::collections::HashMap<String, TargetHandle>,
+}
+
+impl TargetHandle {
+    pub fn new(cancel: CancellationToken, task: tokio::task::JoinHandle<()>) -> Self {
+        Self {
+            cancel,
+            task: Some(task),
+            #[cfg(test)]
+            fake: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn fake(key: String, cancelled: std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> Self {
+        Self {
+            cancel: CancellationToken::new(),
+            task: None,
+            fake: Some((key, cancelled)),
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancel.cancel();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+        #[cfg(test)]
+        if let Some((key, log)) = &self.fake {
+            log.borrow_mut().push(key.clone());
+        }
+    }
+}
+
+/// Spawns bridge tasks for newly-desired targets and cancels tasks for targets no
+/// longer desired. Pure w.r.t. the injected `spawn`; no async here.
+pub fn reconcile_targets(
+    active: &mut std::collections::HashMap<String, TargetHandle>,
+    desired: &[UplinkTargetSpec],
+    spawn: &mut dyn FnMut(&UplinkTargetSpec) -> TargetHandle,
+) {
+    let desired_keys: std::collections::HashSet<String> = desired.iter().map(target_key).collect();
+    let stale: Vec<String> = active
+        .keys()
+        .filter(|k| !desired_keys.contains(*k))
+        .cloned()
+        .collect();
+    for key in stale {
+        if let Some(handle) = active.remove(&key) {
+            handle.cancel();
+        }
+    }
+    for spec in desired {
+        let key = target_key(spec);
+        if let std::collections::hash_map::Entry::Vacant(entry) = active.entry(key) {
+            entry.insert(spawn(spec));
+        }
+    }
+}
+
+fn remote_enabled(config_env: &ConfigEnv, cwd: &Path) -> bool {
+    resolve_config_setting("remote.enabled", config_env, cwd) == Some(Value::Bool(true))
+}
+
+async fn sleep_backoff_or_cancel(cancel: &CancellationToken, backoff_ms: u64) -> bool {
+    tokio::select! {
+        _ = cancel.cancelled() => true,
+        _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => false,
+    }
+}
+
+async fn run_target_bridge(
+    spec: UplinkTargetSpec,
+    config_env: ConfigEnv,
+    store_env: StoreEnv,
+    client_id: String,
+    cwd: std::path::PathBuf,
+    cancel: CancellationToken,
+) {
+    let mut backoff_ms: u64 = 1000;
+    loop {
+        if cancel.is_cancelled() {
+            return;
+        }
+        let started_at = std::time::Instant::now();
+        let mut conn: Option<ConnectChild> = None;
+
+        let (host, port, tunnel_id, is_peer_connection) = match &spec {
+            UplinkTargetSpec::Direct { host, port } => {
+                let is_peer = resolve_peer_uplink_target(&config_env, &cwd)
+                    .map(|(peer_host, peer_port)| peer_host == *host && peer_port == *port)
+                    .unwrap_or(false);
+                (host.clone(), *port, None, is_peer)
+            }
+            UplinkTargetSpec::Tunnel { tunnel_id } => {
+                let config = resolve_uplink_config(&config_env, &cwd);
+                let configured_port = if config.tunnel_id.as_deref() == Some(tunnel_id.as_str()) {
+                    config.port
+                } else {
+                    None
+                };
+                let tunnel_port = match configured_port {
+                    Some(p) => Some(p),
+                    None => {
+                        tokio::select! {
+                            _ = cancel.cancelled() => return,
+                            p = discover_tunnel_port(tunnel_id) => p,
+                        }
+                    }
+                };
+                let Some(tunnel_port) = tunnel_port else {
+                    write_supervisor_status(&config_env, "reconnecting", None, None, 0, None);
+                    if sleep_backoff_or_cancel(&cancel, backoff_ms).await {
+                        return;
+                    }
+                    backoff_ms = (backoff_ms * 2).min(30_000);
+                    continue;
+                };
+                match spawn_connect(tunnel_id) {
+                    Ok(c) => {
+                        conn = Some(c);
+                        (
+                            "127.0.0.1".to_string(),
+                            tunnel_port,
+                            Some(tunnel_id.clone()),
+                            false,
+                        )
+                    }
+                    Err(_) => {
+                        write_supervisor_status(&config_env, "reconnecting", None, None, 0, None);
+                        if sleep_backoff_or_cancel(&cancel, backoff_ms).await {
+                            return;
+                        }
+                        backoff_ms = (backoff_ms * 2).min(30_000);
+                        continue;
+                    }
+                }
+            }
+        };
+
+        let target = build_uplink_target(is_peer_connection, &host, port, tunnel_id.as_deref());
+        write_supervisor_status(
+            &config_env,
+            "connecting",
+            Some(target.clone()),
+            None,
+            0,
+            None,
+        );
+
+        let reachable = tokio::select! {
+            _ = cancel.cancelled() => {
+                if let Some(mut c) = conn {
+                    c.kill().await;
+                }
+                return;
+            }
+            reachable = wait_for_port(port, &host, 15_000) => reachable,
+        };
+        if !reachable {
+            if let Some(c) = &conn {
+                if c.auth_rejected() {
+                    eprintln!(
+                        "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
+                    );
+                    if let Some(mut c) = conn {
+                        c.kill().await;
+                    }
+                    write_supervisor_status(
+                        &config_env,
+                        "disconnected",
+                        None,
+                        None,
+                        0,
+                        Some("dev tunnel auth rejected".to_string()),
+                    );
+                    return;
+                }
+            }
+            if let Some(mut c) = conn {
+                c.kill().await;
+            }
+            write_supervisor_status(
+                &config_env,
+                "reconnecting",
+                Some(target.clone()),
+                None,
+                0,
+                None,
+            );
+            if started_at.elapsed() > Duration::from_secs(30) {
+                backoff_ms = 1000;
+            }
+            if sleep_backoff_or_cancel(&cancel, backoff_ms).await {
+                return;
+            }
+            backoff_ms = (backoff_ms * 2).min(30_000);
+            continue;
+        }
+
+        match TcpStream::connect((host.as_str(), port)).await {
+            Ok(channel) => {
+                let connected_at = crate::time::now_ms();
+                write_supervisor_status(
+                    &config_env,
+                    "connected",
+                    Some(target.clone()),
+                    Some(connected_at),
+                    live_session_count(&store_env),
+                    None,
+                );
+                let bridge = run_uplink_bridge(
+                    channel,
+                    UplinkBridgeOptions {
+                        store_env: store_env.clone(),
+                        client_id: client_id.clone(),
+                        keep_alive_seconds: Some(resolve_keep_alive(&config_env, &cwd)),
+                        peer: is_peer_connection,
+                        target: Some(target.clone()),
+                        connected_at: Some(connected_at),
+                        config_env: config_env.clone(),
+                    },
+                );
+                tokio::select! {
+                    _ = cancel.cancelled() => {}
+                    _ = bridge => {}
+                }
+            }
+            Err(_) => {
+                // transient connect error: fall through to backoff
+            }
+        }
+
+        write_supervisor_status(
+            &config_env,
+            "reconnecting",
+            Some(target.clone()),
+            None,
+            0,
+            None,
+        );
+        let auth_rejected_after = conn.as_ref().map(|c| c.auth_rejected()).unwrap_or(false);
+        if let Some(mut c) = conn {
+            c.kill().await;
+        }
+        if auth_rejected_after {
+            eprintln!(
+                "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
+            );
+            write_supervisor_status(
+                &config_env,
+                "disconnected",
+                None,
+                None,
+                0,
+                Some("dev tunnel auth rejected".to_string()),
+            );
+            return;
+        }
+        if cancel.is_cancelled() {
+            return;
+        }
+        if started_at.elapsed() > Duration::from_secs(30) {
+            backoff_ms = 1000;
+        }
+        if sleep_backoff_or_cancel(&cancel, backoff_ms).await {
+            return;
+        }
+        backoff_ms = (backoff_ms * 2).min(30_000);
+    }
+}
+
 pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) -> i32 {
     let peer_home = as_string(resolve_config_setting("remote.peerHome", &config_env, cwd));
-    let initial_legacy = resolve_uplink_config(&config_env, cwd);
-    if peer_home.is_none() && !initial_legacy.enabled {
+    if peer_home.is_none() && !remote_enabled(&config_env, cwd) {
         return 0;
     }
 
@@ -954,167 +1264,75 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
     };
 
     let client_id = ensure_client_id(&config_env, cwd);
-    let mut backoff_ms: u64 = 1000;
-
-    let write_uplink = |state: &str,
-                        target: Option<crate::uplink_status::UplinkTarget>,
-                        connected_at: Option<u64>,
-                        session_count: u32,
-                        last_error: Option<String>| {
-        let status = crate::uplink_status::UplinkStatus {
-            pid: std::process::id(),
-            updated_at: crate::time::now_ms(),
-            target,
-            state: state.to_string(),
-            connected_at,
-            session_count,
-            last_error,
-        };
-        let _ = crate::uplink_status::write_uplink_status(&status, &config_env);
-    };
+    let mut supervisor = TargetSupervisor::default();
 
     loop {
-        let started_at = std::time::Instant::now();
-
+        let enabled = remote_enabled(&config_env, cwd);
         let peer_target = if peer_home.is_some() {
             resolve_peer_uplink_target(&config_env, cwd)
         } else {
             None
         };
-        let is_peer_connection = peer_target.is_some();
         let config = resolve_uplink_config(&config_env, cwd);
-
-        let mut host: Option<String> = None;
-        let mut port: Option<u16> = None;
-        let mut conn: Option<ConnectChild> = None;
-
-        if let Some((peer_host, peer_port)) = peer_target {
-            host = Some(peer_host);
-            port = Some(peer_port);
-        } else if config.enabled {
-            if let (Some(h), Some(p)) = (config.host.clone(), config.port) {
-                host = Some(h);
-                port = Some(p);
-            } else if let Some(tunnel_id) = config.tunnel_id.clone() {
-                let tunnel_port = match config.port {
-                    Some(p) => Some(p),
-                    None => discover_tunnel_port(&tunnel_id).await,
-                };
-                if let Some(tp) = tunnel_port {
-                    if let Ok(c) = spawn_connect(&tunnel_id) {
-                        conn = Some(c);
-                        host = Some("127.0.0.1".to_string());
-                        port = Some(tp);
-                    }
-                }
-            }
+        if !enabled && peer_home.is_none() {
+            reconcile_targets(&mut supervisor.active, &[], &mut |_| unreachable!());
+            write_supervisor_status(&config_env, "disconnected", None, None, 0, None);
+            return 0;
         }
 
-        let (host, port) = match (host, port) {
-            (Some(h), Some(p)) => (h, p),
-            _ => {
-                if let Some(mut c) = conn {
-                    c.kill().await;
-                }
-                if peer_home.is_none() {
-                    write_uplink("disconnected", None, None, 0, None);
-                    return 0;
-                }
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                backoff_ms = (backoff_ms * 2).min(30_000);
-                continue;
-            }
+        let discover_enabled =
+            resolve_config_setting("remote.discover", &config_env, cwd) != Some(Value::Bool(false));
+        let own_install_id = as_string(resolve_config_setting("install.id", &config_env, cwd));
+        let discovered = if enabled && discover_enabled {
+            crate::discovery::list_climon_ingest_tunnels().await
+        } else {
+            Vec::new()
         };
+        let explicit_host = if config.enabled {
+            config.host.clone().zip(config.port)
+        } else {
+            None
+        };
+        let explicit_tunnel_id = if config.enabled {
+            config.tunnel_id.clone()
+        } else {
+            None
+        };
+        let mut desired = Vec::new();
+        if let Some((host, port)) = peer_target {
+            desired.push(UplinkTargetSpec::Direct { host, port });
+        }
+        desired.extend(crate::target_set::compute_targets(
+            crate::target_set::ComputeTargetsInput {
+                discover_enabled,
+                own_install_id,
+                explicit_host,
+                explicit_tunnel_id,
+                discovered,
+            },
+        ));
 
-        let target =
-            build_uplink_target(is_peer_connection, &host, port, config.tunnel_id.as_deref());
-        write_uplink("connecting", Some(target.clone()), None, 0, None);
-
-        let reachable = wait_for_port(port, &host, 15_000).await;
-        if !reachable {
-            if let Some(c) = &conn {
-                if c.auth_rejected() {
-                    eprintln!(
-                        "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
-                    );
-                    if let Some(mut c) = conn {
-                        c.kill().await;
-                    }
-                    write_uplink(
-                        "disconnected",
-                        None,
-                        None,
-                        0,
-                        Some("dev tunnel auth rejected".to_string()),
-                    );
-                    return 1;
-                }
-            }
-            if let Some(mut c) = conn {
-                c.kill().await;
-            }
-            // transient: fall through to backoff
-            write_uplink("reconnecting", Some(target.clone()), None, 0, None);
-            if started_at.elapsed() > Duration::from_secs(30) {
-                backoff_ms = 1000;
-            }
-            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-            backoff_ms = (backoff_ms * 2).min(30_000);
-            continue;
+        let ce = config_env.clone();
+        let se = store_env.clone();
+        let cid = client_id.clone();
+        let cwd_buf = cwd.to_path_buf();
+        let mut spawn = |spec: &UplinkTargetSpec| {
+            let cancel = CancellationToken::new();
+            let task = tokio::spawn(run_target_bridge(
+                spec.clone(),
+                ce.clone(),
+                se.clone(),
+                cid.clone(),
+                cwd_buf.clone(),
+                cancel.clone(),
+            ));
+            TargetHandle::new(cancel, task)
+        };
+        reconcile_targets(&mut supervisor.active, &desired, &mut spawn);
+        if supervisor.active.is_empty() {
+            write_supervisor_status(&config_env, "disconnected", None, None, 0, None);
         }
-
-        match TcpStream::connect((host.as_str(), port)).await {
-            Ok(channel) => {
-                let connected_at = crate::time::now_ms();
-                write_uplink(
-                    "connected",
-                    Some(target.clone()),
-                    Some(connected_at),
-                    live_session_count(&store_env),
-                    None,
-                );
-                run_uplink_bridge(
-                    channel,
-                    UplinkBridgeOptions {
-                        store_env: store_env.clone(),
-                        client_id: client_id.clone(),
-                        keep_alive_seconds: Some(resolve_keep_alive(&config_env, cwd)),
-                        peer: is_peer_connection,
-                        target: Some(target.clone()),
-                        connected_at: Some(connected_at),
-                        config_env: config_env.clone(),
-                    },
-                )
-                .await;
-            }
-            Err(_) => {
-                // transient connect error: fall through to backoff
-            }
-        }
-
-        write_uplink("reconnecting", Some(target.clone()), None, 0, None);
-        let auth_rejected_after = conn.as_ref().map(|c| c.auth_rejected()).unwrap_or(false);
-        if let Some(mut c) = conn {
-            c.kill().await;
-        }
-        if auth_rejected_after {
-            eprintln!(
-                "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
-            );
-            write_uplink(
-                "disconnected",
-                None,
-                None,
-                0,
-                Some("dev tunnel auth rejected".to_string()),
-            );
-            return 1;
-        }
-        if started_at.elapsed() > Duration::from_secs(30) {
-            backoff_ms = 1000;
-        }
-        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-        backoff_ms = (backoff_ms * 2).min(30_000);
+        tokio::time::sleep(Duration::from_secs(DISCOVERY_POLL_SECS)).await;
     }
 }
 
@@ -1531,6 +1749,65 @@ mod spawn_dispatch_tests {
             priority: Some(700),
             color: Some("red".into()),
             headless: true,
+        }
+    }
+
+    #[cfg(test)]
+    mod fanout_tests {
+        use super::*;
+        use crate::target_set::UplinkTargetSpec;
+        use std::collections::HashMap;
+
+        #[test]
+        fn target_key_is_stable_and_distinct() {
+            assert_eq!(
+                target_key(&UplinkTargetSpec::Tunnel {
+                    tunnel_id: "t1".into()
+                }),
+                "tunnel:t1"
+            );
+            assert_eq!(
+                target_key(&UplinkTargetSpec::Direct {
+                    host: "h".into(),
+                    port: 9
+                }),
+                "direct:h:9"
+            );
+        }
+
+        #[test]
+        fn reconcile_adds_new_and_removes_stale() {
+            let spawned = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+            let cancelled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+
+            let mut active: HashMap<String, TargetHandle> = HashMap::new();
+
+            let s2 = spawned.clone();
+            let c2 = cancelled.clone();
+            let mut spawn = move |spec: &UplinkTargetSpec| {
+                s2.borrow_mut().push(target_key(spec));
+                TargetHandle::fake(target_key(spec), c2.clone())
+            };
+
+            let a = UplinkTargetSpec::Tunnel {
+                tunnel_id: "A".into(),
+            };
+            let b = UplinkTargetSpec::Tunnel {
+                tunnel_id: "B".into(),
+            };
+            reconcile_targets(&mut active, &[a.clone(), b.clone()], &mut spawn);
+            assert_eq!(*spawned.borrow(), vec!["tunnel:A", "tunnel:B"]);
+            assert_eq!(active.len(), 2);
+
+            let c = UplinkTargetSpec::Tunnel {
+                tunnel_id: "C".into(),
+            };
+            reconcile_targets(&mut active, &[b.clone(), c.clone()], &mut spawn);
+            assert!(cancelled.borrow().contains(&"tunnel:A".to_string()));
+            assert!(spawned.borrow().contains(&"tunnel:C".to_string()));
+            assert!(active.contains_key("tunnel:B"));
+            assert!(active.contains_key("tunnel:C"));
+            assert!(!active.contains_key("tunnel:A"));
         }
     }
 
