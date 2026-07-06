@@ -1,0 +1,14 @@
+[package]
+name = "climon-dll"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Windows cdylib client (climon.dll) exposing the frozen climon_main C ABI entrypoint"
+
+[lib]
+name = "climon"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+climon-cli = { path = "../climon-cli", version = "0.1.0" }
