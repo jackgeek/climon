@@ -211,15 +211,16 @@ pub fn install_binaries(
     )
 }
 
-/// The Windows install-dir filenames for `version`, in placement order.
+/// The Windows install-dir filenames for `version`, in placement order
+/// (versioned payloads, then stubs, then the pointer files last).
 pub fn windows_layout_files(version: &str) -> Vec<String> {
     vec![
         format!("climon-{version}.dll"),
         format!("climon-server-{version}.exe"),
-        "climon.version".to_string(),
-        "climon-server.version".to_string(),
         "climon.exe".to_string(),
         "climon-server.exe".to_string(),
+        "climon.version".to_string(),
+        "climon-server.version".to_string(),
     ]
 }
 
@@ -263,20 +264,26 @@ fn place_windows_layout_once(
     client_dll: &[u8],
     server_exe: &[u8],
 ) -> Result<(), InstallError> {
+    // Order matters for crash-safety. The pointer files (`*.version`) are both
+    // the runtime resolution target AND the migration-complete signal
+    // (`should_migrate_legacy` re-runs only while `climon.version` is absent).
+    // Write the versioned payloads and the stubs FIRST, then the pointers LAST,
+    // so a failure partway through leaves no pointer — the next update re-runs
+    // migration and the install is never stranded without a client entrypoint.
     write_file(install_dir, &format!("climon-{version}.dll"), client_dll)?;
     write_file(
         install_dir,
         &format!("climon-server-{version}.exe"),
         server_exe,
     )?;
+    place_stub(install_dir, "climon.exe", stub_client)?;
+    place_stub(install_dir, "climon-server.exe", stub_server)?;
     write_text(install_dir, "climon.version", &format!("{version}\n"))?;
     write_text(
         install_dir,
         "climon-server.version",
         &format!("{version}\n"),
     )?;
-    place_stub(install_dir, "climon.exe", stub_client)?;
-    place_stub(install_dir, "climon-server.exe", stub_server)?;
     Ok(())
 }
 
@@ -374,10 +381,10 @@ mod tests {
             vec![
                 "climon-3.2.1.dll".to_string(),
                 "climon-server-3.2.1.exe".to_string(),
-                "climon.version".to_string(),
-                "climon-server.version".to_string(),
                 "climon.exe".to_string(),
                 "climon-server.exe".to_string(),
+                "climon.version".to_string(),
+                "climon-server.version".to_string(),
             ]
         );
     }
