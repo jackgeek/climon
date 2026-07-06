@@ -551,13 +551,22 @@ fn run_migrate(version: &str, client_stub: &[u8], server_stub: &[u8], args: &Mig
                 return 1;
             }
         };
-        if let Err(e) = crate::files::place_windows_layout(
+        let mut confirm = |_error: &crate::files::InstallError| true;
+        let mut kill = || {
+            let _ = crate::processes::kill_running_climon_processes();
+        };
+        if let Err(e) = crate::files::place_windows_layout_with_options(
             &args.dir,
             version,
             client_stub,
             server_stub,
             &client_dll,
             &server_exe,
+            crate::files::InstallBinariesOptions {
+                copy_file: None,
+                confirm_kill_and_retry: Some(&mut confirm),
+                kill_running_climon_processes: Some(&mut kill),
+            },
         ) {
             eprintln!("migrate: place layout: {e}");
             return 1;
