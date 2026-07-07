@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 
+/** IPC frame type tags mirrored from rust/climon-proto/src/frame.rs. */
 export enum FrameType {
   Output = 1,
   Input = 2,
@@ -10,10 +11,15 @@ export enum FrameType {
   Attention = 7,
   Title = 8,
   TerminalMode = 9,
-  TerminalWarning = 10
+  TerminalWarning = 10,
+  Control = 11,
+  TakeControl = 12
 }
 
 export type TerminalResizeMode = "clamped" | "fill";
+
+/** Surface categories that can participate in terminal control handoff. */
+export type SurfaceKind = "terminal" | "dashboard" | "pwa";
 
 export interface ResizePayload {
   cols: number;
@@ -31,6 +37,17 @@ export interface ResizePayload {
    * Omitted values preserve the session's current mode.
    */
   mode?: TerminalResizeMode;
+  /** Kind of surface requesting or reporting the resize. */
+  kind?: SurfaceKind;
+  /** Stable viewer identity for dashboard/PWA surfaces. */
+  viewerId?: string;
+}
+
+/** Announces the active terminal controller and its current size. */
+export interface ControlPayload {
+  controllerId: string;
+  cols: number;
+  rows: number;
 }
 
 export interface PtySizePayload {

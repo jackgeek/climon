@@ -100,4 +100,17 @@ describe("frame codec", () => {
       hostRows: 24
     });
   });
+
+  test("round-trips a Control frame", () => {
+    const frame = encodeJsonFrame(FrameType.Control, { controllerId: "local", cols: 80, rows: 24 });
+    const [decoded] = new FrameDecoder().push(frame);
+    expect(decoded.type).toBe(FrameType.Control);
+    expect(JSON.parse(decoded.payload.toString())).toEqual({ controllerId: "local", cols: 80, rows: 24 });
+  });
+
+  test("resize payload carries surface identity", () => {
+    const frame = encodeJsonFrame(FrameType.Resize, { cols: 120, rows: 40, kind: "dashboard", viewerId: "abc" });
+    const [decoded] = new FrameDecoder().push(frame);
+    expect(JSON.parse(decoded.payload.toString())).toEqual({ cols: 120, rows: 40, kind: "dashboard", viewerId: "abc" });
+  });
 });
