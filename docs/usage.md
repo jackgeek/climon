@@ -76,9 +76,18 @@ stderr so you're aware you're stacking sessions, but it does not block or exit.
 
 ### Terminal size while attached
 
-If the dashboard is in Fill window mode and the browser grows the shared PTY
-beyond your attached local terminal, press **Ctrl-\\** then **c** in the local
-climon client to restore Clamp to remote terminal size mode.
+climon shares one live terminal between every surface viewing a session — your
+attached local terminal, the browser dashboard, and the installed PWA. Exactly
+one surface is the **controller** at a time, and the shared terminal is sized to
+the controller's viewport. Your local terminal is the controller the moment you
+attach.
+
+If another surface takes control and it is **larger** than your local terminal,
+your terminal can't render the bigger grid, so it blanks and shows *"This session
+is being viewed on a climon dashboard."* Press **Ctrl+T** to take control back —
+the shared terminal resizes down to your terminal and it becomes interactive
+again. While your terminal is at least as large as the controller it keeps
+rendering the grid normally and stays interactive.
 
 ## Manage sessions
 
@@ -148,17 +157,22 @@ newer version is available instead of applying it automatically.
     drives the same scrolling as a mouse wheel — moving through scrollback for
     normal output, or scrolling within apps that track the mouse. The swipe does
     not trigger the browser's pull-to-refresh while you are over the terminal.
-- **View mode**: each session row shows a **lock icon** next to the pause button
-  on the active session. A closed lock means **clamped** — the browser and the
-  attached climon client stay on the same terminal grid. An open lock means
-  **fill** — the browser terminal resizes the PTY to the available browser space.
-  Click the lock to toggle. On a narrow (mobile) viewport the active session is
-  forced to clamped and the lock is disabled; the previous mode is restored when
-  you return to a wider viewport. While the browser terminal is focused,
+- **Sharing control between viewers**: several browsers, PWAs, and an attached
+  local terminal can view the same session at once, but only one — the
+  **controller** — sets the shared terminal size at any moment. A viewer that is
+  at least as large as the controller's grid follows along and stays fully
+  interactive. A viewer that is **too small** to show the controller's grid is
+  blanked behind a centered *"This session is being viewed at a larger size
+  elsewhere"* message with a **Take control** button, and is non-interactive
+  until you take control. To take control from the dashboard, click the
+  **maximize** button on the session — the shared terminal resizes to fit your
+  view. Whoever takes control keeps it until another viewer takes control or the
+  current controller disconnects; on disconnect control falls back to the
+  highest-priority remaining viewer (PWA, then dashboard, then local terminal,
+  ties broken by most recently connected). In a displaced *local* terminal, press
+  **Ctrl+T** to take control instead. While the browser terminal is focused,
   **Ctrl-+** and **Ctrl--** change the terminal font size instead of zooming the
-  browser. If an unclamped browser size makes the PTY too large for an attached
-  climon client terminal, that local terminal shows a warning and the restore
-  shortcut.
+  browser.
   - On a maximized mobile session, swipe in from the right edge to open the
     terminal panel. Choose **Keyboard** for the special-key bar (Esc, Tab,
     arrows, F-keys, modifiers) or **Font size** to step the terminal font up or

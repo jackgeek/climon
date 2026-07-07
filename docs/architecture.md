@@ -76,15 +76,28 @@ Because the daemon owns the PTY, the dashboard server can come and go freely.
 
 A length-prefixed binary protocol over the socket:
 `[4-byte BE length][1-byte type][payload]`. Types: `Output`, `Input`, `Resize`,
-`Exit`, `Replay`, `PtySize`, `Attention`. `FrameDecoder`
-reassembles frames split across
-chunks. `Resize` payloads carry a `source` (`host` for the local terminal,
-`viewer` for a browser); the daemon clamps `viewer` resizes to the host
-terminal's size (configurable, on by default) and broadcasts the resulting
-`PtySize` so browsers render the same grid as the terminal. When the last
-browser viewer disconnects, the daemon reverts the PTY to the host terminal's
-size so a still-attached host terminal is not left rendering into a shrunken
-grid.
+`Exit`, `Replay`, `PtySize`, `Attention`, `Control`, `TakeControl`.
+`FrameDecoder` reassembles frames split across chunks. Every surface — the local
+terminal, a browser dashboard, or an installed PWA — attaches with a stable
+`viewerId` and a `kind` (`terminal`, `dashboard`, or `pwa`) and reports its own
+viewport with `Resize` frames.
+
+The daemon tracks exactly **one controller** at a time, and the shared PTY grid
+always matches the controller's size — there is no clamping, so whoever holds
+control sets the true dimensions. On attach the local terminal is the default
+controller. Any surface can seize control by sending a `TakeControl` frame, and
+that manual choice sticks until another `TakeControl` or a disconnect. When the
+controller disconnects the daemon falls back to the highest-priority remaining
+surface — `pwa` (3) > `dashboard` (2) > `terminal` (1), ties broken by
+most-recently-connected. On every change the daemon broadcasts a `Control` frame
+`{controllerId, cols, rows}`.
+
+A surface whose own viewport is at least as large as the controller grid in both
+dimensions **follows**: it renders the (possibly smaller) grid normally and stays
+fully interactive. A surface smaller than the controller grid in either dimension
+is **displaced**: it blanks its terminal behind a centered "being viewed
+elsewhere" notice with a **Take control** affordance, sends no input, and
+swallows every keystroke except the take-control action.
 
 ### Local client (`rust/climon-cli/src/client.rs`)
 
