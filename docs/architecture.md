@@ -61,7 +61,13 @@ Launched as `climon __session <id>`, detached from the launcher. It:
    broadcasts it to connected clients, and applies attention transitions
    reported by the attached client (it is the single writer of session
    metadata).
-6. On PTY exit: persists final scrollback, patches metadata to
+6. Scans PTY output for terminal titles (`OSC 0`/`OSC 2`) and progress
+   (`OSC 9;4`, the ConEmu/Windows-Terminal taskbar-progress sequence),
+   debounces them, and persists the latest `terminalTitle`/`progress` to
+   metadata. Both are passthrough — the bytes are forwarded to the client
+   untouched. The dashboard renders `progress` per session (a determinate bar,
+   spinner, or error/warning icon).
+7. On PTY exit: persists final scrollback, patches metadata to
    `completed`/`failed` with the exit code, notifies clients, and shuts down.
 
 Because the daemon owns the PTY, the dashboard server can come and go freely.
@@ -311,6 +317,19 @@ Because only cell contents are fingerprinted (not the cursor position), a
 blinking cursor is treated as static. Detection runs only while a local client is
 attached, and setting `attention.idleSeconds` to `0` or less disables it.
 
+When the daemon transitions a session to `needs-attention`, it also extracts a
+fuzzy "smart snippet" of the last relevant terminal output from its live
+`HeadlessGrid` (`rust/climon-session/src/snippet.rs`). The pure extractor runs
+a deterministic heuristic: it reads the visible lines, filters noise (borders,
+spinners, progress bars), and captures the last meaningful paragraph (capped at
+160 chars). The daemon writes this as `attentionSnippet` in the same metadata
+patch that flags `needs-attention`. The dashboard server then composes the
+notification title and body from a shared helper (`src/notification-content.ts`):
+title = session name → terminal title → command; body = snippet → terminal title
+(if not promoted to title) → "". This is gated by the `feature.smartNotifications`
+feature flag (default disabled, status experimental, scope daemon); when disabled
+the body falls back to the terminal title.
+
 ## Web Push pipeline (mobile PWA)
 
 The dashboard server (`climon-server`) gains an additive, fail-safe push pipeline
@@ -324,8 +343,8 @@ under `src/server/push/`:
   `$CLIMON_HOME/push/subscriptions.json` (deduped by endpoint).
 - `attention.ts` is a pure tracker that flags sessions newly entering
   `needs-attention` (seed-then-detect, deduped by `id:attentionMatchedAt`), and
-  `buildPushPayload` sets the notification title to `<label> needs attention`
-  with the session's terminal title as the body.
+  `buildPushPayload` sets the notification title to `<label>` (the session
+  label) with the session's terminal title as the body.
 - `presence.ts` is an in-memory registry of which push-subscription endpoints
   are currently foreground (TTL-expired, default 30s) so the server can skip
   devices that are actively viewing the dashboard.
@@ -366,8 +385,9 @@ and tapping it opens the session via
 `popSession`. Toasts are suppressed for the session the user is actively viewing
 (the client's single "viewed session", mirroring `TerminalView`'s
 `terminalVisible` rule — `App.tsx` also auto-acknowledges it so the daemon
-clears attention) and on the mobile session list, where the attention badge is
-already visible (`alertsVisible = pageVisible && (!isMobile || maximized)`).
+clears attention). Otherwise the toast fires whenever the dashboard tab is in the
+foreground — including the mobile session list — so an attention event is never
+missed (`alertsVisible = pageVisible`).
 Background OS-push suppression is done **per device on the server**, not in the
 service worker: while notifications are on, each open page runs a presence
 reporter (`src/web/pwa/presence.ts`) that POSTs `/api/push/presence`
@@ -385,8 +405,11 @@ the home machine through a Microsoft dev tunnel. The home machine runs a
 loopback-only **ingest** daemon (`climon __ingest` — the Rust client binary,
 resolved by the dashboard server; a dev source run requires the Rust binary to
 be built and never falls back to the Bun ingest) when `feature.remotes` is
-enabled and either hosts the tunnel automatically via the `devtunnel` CLI or
-records a manually-created tunnel in `~/.climon/remote-host.json`. `climon
+enabled. At startup the server derives a stable tunnel id from the anonymous
+global `install.id` (`climon-ingest-<sha256("climon-ingest"+install.id)[:20]>`),
+ensures that dev tunnel exists, labels it `climon-ingest`, records it in
+`~/.climon/remote-host.json`, and lets the ingest daemon host it. Existing
+manually-created tunnel state remains readable for compatibility. `climon
 server` no longer accepts a remotes startup flag; config is the only switch. The
 ingest also serves a loopback-only **remote-spawn control socket** (advertised
 as `controlSocket` in `ingest.json`), dual-listens on `127.0.0.1` when bound to
@@ -409,6 +432,17 @@ The uplink also emits an authoritative `session-list` snapshot each reconcile so
 the ingest can garbage-collect ghost sessions deleted on the source (including
 those left on disk by a previous connection), while preserving still-present
 disconnected sessions and never re-materializing dismissed ones.
+
+When `remote.enabled` is true, the devbox uplink auto-discovers dashboard hosts
+by running `devtunnel list --labels climon-ingest --json` every 30 seconds. It
+keeps only tunnels whose `hostConnections >= 1`, derives this machine's own
+stable ingest id from `install.id` (`climon-ingest-<sha256(...)[:20]>`) to avoid
+self-loops, and unions the discovered tunnel ids with any explicit
+`remote.tunnelId` or direct `remote.host` target. The multi-target supervisor
+fans out concurrently: each desired target owns an independent bridge task using
+the existing `devtunnel connect` → `devtunnel port list` → `run_uplink_bridge`
+path, and the poll reconciles additions/removals without disturbing other live
+targets.
 
 ## Remote visibility (`ingest-status.json`, `uplink-status.json`, `climon remotes`)
 

@@ -3,11 +3,17 @@ climon v3.1.2 — web-based monitor for interactive CLI sessions
 Usage:
   climon shell [--priority N] [--color C] [--name S] [--theme T]
                                Start a monitored session for the current shell
-  climon [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
+  climon run [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
                                Run a command in a monitored PTY session
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white;
                                theme: a dashboard theme name, e.g. "Dracula")
+  climon [flags] <command> [args...]
+                               Shorthand for `climon run` — the `run` is optional
+  climon command <command> [args...]
+                               Alias for `climon run`; use it when the command
+                               name clashes with a climon subcommand
+                               (e.g. `climon command shell`)
   climon server [--port N] [--no-takeover]
                                Start the dashboard web server (loopback only)
                                (--no-takeover: never terminate an existing

@@ -29,7 +29,7 @@ pub fn sanitize_client_id(raw: &str) -> String {
     let cleaned: String = trimmed.chars().take(64).collect();
     if cleaned.is_empty() {
         let mut bytes = [0u8; 5];
-        getrandom::getrandom(&mut bytes).expect("getrandom");
+        getrandom::fill(&mut bytes).expect("getrandom");
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         format!("dev-{hex}")
     } else {

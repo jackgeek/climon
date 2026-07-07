@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::mux::ControlMessage;
@@ -60,7 +60,7 @@ fn verify_hmac(secret: &str, message: &str, sig_hex: &str) -> bool {
 /// A random 16-byte nonce, lowercase hex. Uses `getrandom` (already a dep).
 pub fn new_nonce() -> String {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).expect("getrandom fills the nonce buffer");
+    getrandom::fill(&mut bytes).expect("getrandom fills the nonce buffer");
     hex::encode(bytes)
 }
 

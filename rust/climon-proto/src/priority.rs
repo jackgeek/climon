@@ -121,6 +121,8 @@ mod tests {
             user_paused: None,
             theme: None,
             terminal_title: None,
+            attention_snippet: None,
+            progress: None,
         }
     }
 

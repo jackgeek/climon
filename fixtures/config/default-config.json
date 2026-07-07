@@ -13,12 +13,14 @@
   },
   "dashboard": {
     "theme": "Default",
-    "keyBarPinned": true
+    "keyBarPinned": true,
+    "stateIconNoMotion": false
   },
   "attention": {
     "idleSeconds": 10
   },
   "remote": {
+    "discover": true,
     "ingestPortRetryAttempts": 100,
     "keepAlive": 60,
     "autoLink": true
@@ -37,7 +39,8 @@
     "sessionSpawning": "disabled",
     "remoteSpawn": "disabled",
     "wslBridge": "disabled",
-    "remotes": "disabled"
+    "remotes": "disabled",
+    "smartNotifications": "disabled"
   },
   "telemetry": {
     "enabled": false

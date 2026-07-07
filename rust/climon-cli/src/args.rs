@@ -154,11 +154,17 @@ pub fn help_text(experimental: ExperimentalHelp) -> String {
 Usage:
   climon shell [--priority N] [--color C] [--name S] [--theme T]
                                Start a monitored session for the current shell
-  climon [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
+  climon run [--priority N] [--color C] [--name S] [--theme T] <command> [args...]
                                Run a command in a monitored PTY session
                                (priority 0-1000; color: auto|none|black|red|
                                green|yellow|blue|magenta|cyan|white;
                                theme: a dashboard theme name, e.g. \"Dracula\")
+  climon [flags] <command> [args...]
+                               Shorthand for `climon run` — the `run` is optional
+  climon command <command> [args...]
+                               Alias for `climon run`; use it when the command
+                               name clashes with a climon subcommand
+                               (e.g. `climon command shell`)
   climon server [--port N] [--no-takeover]
                                Start the dashboard web server (loopback only)
                                (--no-takeover: never terminate an existing
@@ -396,6 +402,13 @@ pub fn parse_args(argv: &[String]) -> Result<ParsedCommand, String> {
                 return Err("Provide a command to run, e.g. `climon run npm test`.".to_string());
             }
             Ok(run_from_flags(run_argv, headless, flags))
+        }
+        "command" => {
+            let (flags, run_argv) = parse_session_flags(&rest)?;
+            if run_argv.is_empty() {
+                return Err("Provide a command to run, e.g. `climon command shell`.".to_string());
+            }
+            Ok(run_from_flags(run_argv, false, flags))
         }
         "__spawn" => {
             let mut headless = false;
@@ -978,6 +991,64 @@ mod tests {
         let h = help_text(ExperimentalHelp::default());
         assert!(h.contains("climon shell [--priority N]"));
         assert!(h.contains("Start a monitored session for the current shell"));
+    }
+
+    #[test]
+    fn command_disambiguates_a_reserved_word_into_a_run() {
+        assert_eq!(
+            parse(&["command", "shell"]),
+            ParsedCommand::Run {
+                argv: v(&["shell"]),
+                headless: false,
+                priority: None,
+                color: None,
+                name: None,
+                theme: None,
+            }
+        );
+    }
+
+    #[test]
+    fn command_passes_through_arguments() {
+        assert_eq!(
+            parse(&["command", "ls", "-la"]),
+            ParsedCommand::Run {
+                argv: v(&["ls", "-la"]),
+                headless: false,
+                priority: None,
+                color: None,
+                name: None,
+                theme: None,
+            }
+        );
+    }
+
+    #[test]
+    fn command_honors_leading_session_flags() {
+        assert_eq!(
+            parse(&["command", "--priority", "5", "--name", "dev", "kill"]),
+            ParsedCommand::Run {
+                argv: v(&["kill"]),
+                headless: false,
+                priority: Some(5),
+                color: None,
+                name: Some("dev".to_string()),
+                theme: None,
+            }
+        );
+    }
+
+    #[test]
+    fn command_without_a_command_errors() {
+        let err = parse_args(&v(&["command"])).unwrap_err();
+        assert!(err.contains("Provide a command to run"), "got: {err}");
+    }
+
+    #[test]
+    fn help_text_documents_command_disambiguator() {
+        let h = help_text(ExperimentalHelp::default());
+        assert!(h.contains("climon command <command> [args...]"));
+        assert!(h.contains("clashes with a climon"));
     }
 
     // ---- update / setup ----

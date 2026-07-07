@@ -173,6 +173,20 @@ climon copilot               # monitor a coding agent session
 climon npm run dev           # monitor a dev server
 ```
 
+### `climon command <command> [args...]`
+
+Disambiguation prefix for running a command whose name clashes with a climon
+subcommand. For example, `climon shell` starts a monitored shell session rather
+than running a program called `shell`; use `climon command shell` to run the
+`shell` program instead. Anything after `command` is treated as the program and
+its arguments (leading session flags such as `--priority`/`--name` still apply).
+
+```sh
+climon command shell         # run a program named "shell", not `climon shell`
+climon command ls -la        # run the `ls` program, not `climon ls`
+climon command --name web server   # run a `server` program with a friendly name
+```
+
 ### `climon shell`
 
 Start a monitored session running your current shell (PowerShell on Windows).
@@ -384,11 +398,16 @@ paths are opt-in.
 
 ### Remote devbox over a dev tunnel
 
-Enable `feature.remotes`, start a local server, then open **Remotes…** from the
-dashboard menu to create (or paste) a Microsoft
-[dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/) and copy a
-config script to run on the devbox. The transport exposes a loopback-only ingest
-port on the home machine — there is no SSH and no network-exposed dashboard.
+Enable `feature.remotes` and start a local server on each dashboard host — climon
+creates or reuses a stable, labeled Microsoft
+[dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/) for the
+ingest port automatically. On the devbox, run `climon config remote.enabled true`;
+climon auto-discovers live dashboard hosts by scanning your dev tunnels for the
+`climon-ingest` label and uplinks to all of them. Set `remote.discover false` to
+opt out and use an explicit `remote.tunnelId` or `remote.host` instead. The
+transport exposes a loopback-only ingest port on the home machine — there is no
+SSH and no
+network-exposed dashboard.
 
 > **Requires the `devtunnel` CLI** on both the home machine (to host the tunnel)
 > and the devbox (to connect through it), each logged in with the same identity

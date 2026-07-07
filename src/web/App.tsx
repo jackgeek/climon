@@ -54,8 +54,9 @@ import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPane
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
+import { addComposeEntry } from "./composeHistory.js";
 import { getTheme } from "./themes.js";
-import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED } from "../dashboard-preference-keys.js";
+import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED, PREF_STATE_ICON_NO_MOTION } from "../dashboard-preference-keys.js";
 import {
   readCachedPreference,
   setDashboardPreference,
@@ -543,10 +544,14 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
   const [composeText, setComposeText] = useState("");
+  const [composeHistory, setComposeHistory] = useState<Record<string, string[]>>({});
   const [selectionCaptureText, setSelectionCaptureText] = useState("");
   const [stripDecorations, setStripDecorations] = useState(false);
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
+  );
+  const [stateIconNoMotion, setStateIconNoMotion] = useState<boolean>(
+    () => readCachedPreference(PREF_STATE_ICON_NO_MOTION) === true
   );
   const [themeId, setThemeId] = useState<string>(
     () => (readCachedPreference(PREF_THEME) as string) ?? DEFAULT_THEME_NAME
@@ -796,10 +801,11 @@ export function App() {
   const attentionToasterId = useId("attention-toaster");
   const { dispatchToast, dismissToast } = useToastController(attentionToasterId);
 
-  // In-app alerts (toast/sound/vibration) are shown while the dashboard is in
-  // the foreground, except on the mobile session list, where the attention
-  // badge is already visible.
-  const alertsVisible = pageVisible && (!isMobile || maximized);
+  // In-app alerts (toast/sound/vibration) fire whenever the dashboard is in the
+  // foreground — including the mobile session list — so an attention event is
+  // never missed. The actively viewed session is excluded separately via
+  // viewedSessionId, and alerts are still suppressed while the tab is hidden.
+  const alertsVisible = pageVisible;
 
   const dispatchAttentionToast = useCallback(
     (session: SessionMeta): void => {
@@ -962,6 +968,10 @@ export function App() {
         const serverPin = preferences[PREF_KEY_BAR_PINNED];
         if (typeof serverPin === "boolean") {
           setKeyBarPinned(serverPin);
+        }
+        const serverNoMotion = preferences[PREF_STATE_ICON_NO_MOTION];
+        if (typeof serverNoMotion === "boolean") {
+          setStateIconNoMotion(serverNoMotion);
         }
       }
     );
@@ -1499,6 +1509,7 @@ export function App() {
           isMobile={isMobile}
           keyBarPinned={keyBarPinned}
           onToggleKeyBarPinned={handleToggleKeyBarPinned}
+          stateIconNoMotion={stateIconNoMotion}
           currentTheme={themeId}
           onSelectTheme={handleSelectTheme}
           viewMode={authoritativeViewMode ?? "fill"}
@@ -1559,6 +1570,7 @@ export function App() {
                 view={panelView}
                 fontSize={fontSize}
                 composeText={composeText}
+                composeHistory={activeId ? composeHistory[activeId] ?? [] : []}
                 selectionText={stripDecorations ? stripTerminalDecorations(selectionCaptureText) : selectionCaptureText}
                 stripDecorations={stripDecorations}
                 showLabels={!isMobile}
@@ -1573,6 +1585,12 @@ export function App() {
                 onComposeTextChange={setComposeText}
                 onComposeInsert={(text) => {
                   terminalRef.current?.sendInput(text);
+                  if (activeId) {
+                    setComposeHistory((prev) => ({
+                      ...prev,
+                      [activeId]: addComposeEntry(prev[activeId] ?? [], text)
+                    }));
+                  }
                   setComposeText("");
                   setPanelView(keyBarPinned ? "chooser" : "closed");
                 }}

@@ -181,10 +181,10 @@ describe("createAttentionAlertManager", () => {
     expect(h.title()).toBe("climon");
   });
 
-  test("does not fire when alerts are not visible (mobile session-list), but records it as seen", () => {
+  test("does not fire while the tab is hidden (alertsVisible=false), but records it as seen", () => {
     const h = createHarness();
     h.manager.update([session({ status: "running", name: "API server" })]);
-    // On the mobile session list: alertsVisible=false, so no toast/sound/vibration.
+    // Tab hidden/backgrounded: alertsVisible=false, so no toast/sound/vibration.
     h.manager.update(
       [session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })],
       { alertsVisible: false }
@@ -192,8 +192,8 @@ describe("createAttentionAlertManager", () => {
     expect(h.attentions).toEqual([]);
     expect(h.soundCalls).toEqual([]);
     expect(h.vibrations).toEqual([]);
-    // Navigating into a session (alertsVisible=true) must not retroactively toast
-    // the same attention episode.
+    // Returning to the foreground (alertsVisible=true) must not retroactively
+    // toast the same attention episode.
     h.manager.update(
       [session({ status: "needs-attention", attentionMatchedAt: "token-1", name: "API server" })],
       { alertsVisible: true }

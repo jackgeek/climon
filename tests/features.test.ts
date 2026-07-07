@@ -148,3 +148,16 @@ describe("wsl bridge + remotes feature flags", () => {
     expect(isFeatureEnabled(cfg, "remotes")).toBe(true);
   });
 });
+
+describe("smartNotifications feature flag", () => {
+  test("is registered, disabled by default, experimental", () => {
+    expect(FEATURE_FLAGS.map((f) => f.name)).toContain("smartNotifications");
+    expect(isFeatureEnabled({} as ClimonConfig, "smartNotifications")).toBe(false);
+    expect(getFeatureStatus("smartNotifications")).toBe("experimental");
+  });
+
+  test("enabling via config resolves to enabled", () => {
+    const cfg = { feature: { smartNotifications: "enabled" } } as unknown as ClimonConfig;
+    expect(isFeatureEnabled(cfg, "smartNotifications")).toBe(true);
+  });
+});

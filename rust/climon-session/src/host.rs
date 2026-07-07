@@ -21,7 +21,9 @@ use climon_proto::frame::{
     FrameDecoder, FrameType, PtySizePayload, ResizePayload, ResizeSource, TerminalModePayload,
     TerminalResizeMode, TerminalWarningPayload,
 };
-use climon_proto::meta::{PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus};
+use climon_proto::meta::{
+    PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus, TerminalProgress,
+};
 use climon_pty::pty::PtyResizer;
 use climon_pty::{resolve_command, Pty, PtyOptions};
 use climon_store::paths::now_iso;
@@ -40,7 +42,7 @@ use crate::resize::{clamp_resize, revert_size, Dimensions, ResizeRequest};
 use crate::socket::{
     cleanup_session_socket, listen_on_session_socket, SessionListener, SessionStream,
 };
-use crate::title_capture::capture_terminal_title_from_output;
+use crate::title_capture::capture_terminal_output;
 
 const SESSION_ENV_VAR: &str = "CLIMON_SESSION_ID";
 const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
@@ -210,6 +212,12 @@ struct HostState {
     captured_terminal_title: Option<String>,
     /// Trailing incomplete OSC bytes carried across reader chunks.
     terminal_title_remainder: String,
+    /// Whether smart-notification snippet extraction is enabled
+    /// (`feature.smartNotifications`, default disabled).
+    snippet_enabled: bool,
+    /// Latest progress parsed from the PTY output stream (`OSC 9;4`).
+    /// `None` = never observed; `Some(None)` = cleared; `Some(Some(p))` = active.
+    captured_progress: Option<Option<TerminalProgress>>,
 }
 
 type Shared = Arc<Mutex<HostState>>;
@@ -634,6 +642,7 @@ impl HostState {
                         priority_reason: Some(PriorityReason::Running),
                         attention_matched_at: Some(None),
                         attention_reason: Some(None),
+                        attention_snippet: Some(None),
                         last_activity_at: Some(now.clone()),
                         ..Default::default()
                     })
@@ -646,6 +655,14 @@ impl HostState {
         }
         let now = now_iso();
         let reason = payload.reason.clone();
+        let attention_snippet = if self.snippet_enabled {
+            crate::snippet::extract_snippet(
+                &self.grid.visible_lines(),
+                Some(self.grid.cursor_row() as usize),
+            )
+        } else {
+            None
+        };
         let mut applied = false;
         let _ =
             climon_store::patch::patch_session_meta_from_current(&self.env, &self.id, |current| {
@@ -659,6 +676,7 @@ impl HostState {
                     attention_matched_at: Some(Some(now.clone())),
                     attention_reason: Some(reason.clone()),
                     last_activity_at: Some(now.clone()),
+                    attention_snippet: Some(attention_snippet.clone()),
                     ..Default::default()
                 })
             });
@@ -799,6 +817,8 @@ pub fn run_session_host(
     let clamp_browser_to_host = cfg_bool(&config, "terminal", "clampBrowserToHost", false);
     let idle_seconds = cfg_i64(&config, "attention", "idleSeconds", 10);
     let idle_enabled = idle_seconds > 0;
+    let snippet_enabled =
+        climon_config::features::is_feature_enabled(&config, "smartNotifications");
     let headless = options.headless;
 
     let initial_mode = if clamp_browser_to_host {
@@ -871,6 +891,8 @@ pub fn run_session_host(
         mouse_mode_remainder: String::new(),
         captured_terminal_title: None,
         terminal_title_remainder: String::new(),
+        snippet_enabled,
+        captured_progress: None,
     }));
 
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -1126,10 +1148,16 @@ fn spawn_reader_thread(
                     TRACKED_MOUSE_PRIVATE_MODES,
                 );
                 let title_remainder = std::mem::take(&mut s.terminal_title_remainder);
-                let mut captured = s.captured_terminal_title.take();
-                s.terminal_title_remainder =
-                    capture_terminal_title_from_output(&mut captured, data, &title_remainder);
-                s.captured_terminal_title = captured;
+                let mut captured_title = s.captured_terminal_title.take();
+                let mut captured_progress = s.captured_progress.take();
+                s.terminal_title_remainder = capture_terminal_output(
+                    &mut captured_title,
+                    &mut captured_progress,
+                    data,
+                    &title_remainder,
+                );
+                s.captured_terminal_title = captured_title;
+                s.captured_progress = captured_progress;
                 s.scrollback.append(data);
                 s.grid.write(data);
                 s.broadcast(&frame);
@@ -1507,35 +1535,42 @@ fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()>
     })
 }
 
-/// Polls the reader-thread-captured terminal title and persists it to session
-/// metadata, debounced: it wakes every 300ms and writes only when the value
-/// actually changed, coalescing bursts of title updates to the latest value.
+/// Polls the reader-thread-captured terminal title and progress, persisting them
+/// to session metadata, debounced: it wakes every 300ms and writes only when a
+/// value actually changed, coalescing bursts of updates to the latest values.
 fn spawn_title_capture_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
         let (env, id) = {
             let s = state.lock().unwrap();
             (s.env.clone(), s.id.clone())
         };
-        let mut last_written: Option<String> = None;
+        let mut last_title: Option<String> = None;
+        let mut last_progress: Option<Option<TerminalProgress>> = None;
         loop {
             thread::sleep(Duration::from_millis(300));
             let stop = shutdown.load(Ordering::SeqCst);
-            let captured = {
+            let (captured_title, captured_progress) = {
                 let s = state.lock().unwrap();
-                s.captured_terminal_title.clone()
+                (s.captured_terminal_title.clone(), s.captured_progress)
             };
-            if let Some(title) = captured {
-                if last_written.as_deref() != Some(title.as_str()) {
-                    let _ = climon_store::patch::patch_session_meta(
-                        &env,
-                        &id,
-                        SessionMetaPatch {
-                            terminal_title: Some(title.clone()),
-                            ..Default::default()
-                        },
-                    );
-                    last_written = Some(title);
+            let mut patch = SessionMetaPatch::default();
+            let mut dirty = false;
+            if let Some(title) = &captured_title {
+                if last_title.as_deref() != Some(title.as_str()) {
+                    patch.terminal_title = Some(title.clone());
+                    last_title = Some(title.clone());
+                    dirty = true;
                 }
+            }
+            if let Some(progress) = captured_progress {
+                if last_progress != Some(progress) {
+                    patch.progress = Some(progress);
+                    last_progress = Some(progress);
+                    dirty = true;
+                }
+            }
+            if dirty {
+                let _ = climon_store::patch::patch_session_meta(&env, &id, patch);
             }
             if stop {
                 break;

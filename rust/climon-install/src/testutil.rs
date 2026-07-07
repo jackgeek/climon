@@ -9,7 +9,7 @@ pub(crate) mod tempdir {
     impl TempHome {
         pub fn new() -> TempHome {
             let mut buf = [0u8; 8];
-            getrandom::getrandom(&mut buf).expect("getrandom for temp dir");
+            getrandom::fill(&mut buf).expect("getrandom for temp dir");
             let suffix: String = buf.iter().map(|b| format!("{b:02x}")).collect();
             let path = std::env::temp_dir().join(format!("climon-install-{suffix}"));
             std::fs::create_dir_all(&path).unwrap();

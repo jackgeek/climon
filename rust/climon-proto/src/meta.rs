@@ -68,6 +68,23 @@ impl AnsiColor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgressState {
+    Normal,
+    Error,
+    Indeterminate,
+    Warning,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalProgress {
+    pub state: ProgressState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PriorityReason {
     Attention,
@@ -136,6 +153,10 @@ pub struct SessionMeta {
     pub user_paused: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_snippet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<TerminalProgress>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,6 +214,18 @@ pub struct SessionMetaPatch {
     pub user_paused: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_title: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "double_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub attention_snippet: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "double_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub progress: Option<Option<TerminalProgress>>,
 }
 
 /// serde helper that distinguishes an absent field (`None`) from an explicit
@@ -335,5 +368,95 @@ mod tests {
             serde_json::to_string(&patch).unwrap(),
             r#"{"terminalTitle":"build ok"}"#
         );
+    }
+
+    #[test]
+    fn session_meta_attention_snippet_round_trips() {
+        let mut meta: SessionMeta = serde_json::from_str(minimal_json()).unwrap();
+        assert_eq!(meta.attention_snippet, None);
+        meta.attention_snippet = Some("all 12 tests pass. Update integration tests?".into());
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            json.contains("\"attentionSnippet\":\"all 12 tests pass. Update integration tests?\"")
+        );
+        let back: SessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.attention_snippet.as_deref(),
+            Some("all 12 tests pass. Update integration tests?")
+        );
+    }
+
+    #[test]
+    fn session_meta_progress_round_trips() {
+        let mut meta: SessionMeta = serde_json::from_str(minimal_json()).unwrap();
+        assert_eq!(meta.progress, None);
+        meta.progress = Some(TerminalProgress {
+            state: ProgressState::Normal,
+            value: Some(40),
+        });
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains(r#""progress":{"state":"normal","value":40}"#));
+        let back: SessionMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.progress,
+            Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(40)
+            })
+        );
+    }
+
+    #[test]
+    fn patch_attention_snippet_serializes_camel_case() {
+        let patch = SessionMetaPatch {
+            attention_snippet: Some(Some("done".into())),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&patch).unwrap(),
+            r#"{"attentionSnippet":"done"}"#
+        );
+
+        // A cleared snippet (Some(None)) serializes to "attentionSnippet":null.
+        let cleared = SessionMetaPatch {
+            attention_snippet: Some(None),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&cleared).unwrap(),
+            r#"{"attentionSnippet":null}"#
+        );
+
+        // A default patch (None) omits the key entirely.
+        let default = SessionMetaPatch::default();
+        let json = serde_json::to_string(&default).unwrap();
+        assert!(!json.contains("attentionSnippet"), "json: {json}");
+    }
+
+    #[test]
+    fn progress_indeterminate_omits_value() {
+        let p = TerminalProgress {
+            state: ProgressState::Indeterminate,
+            value: None,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert_eq!(json, r#"{"state":"indeterminate"}"#);
+    }
+
+    #[test]
+    fn patch_progress_clear_serializes_null() {
+        let patch = SessionMetaPatch {
+            progress: Some(None),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&patch).unwrap();
+        assert!(json.contains(r#""progress":null"#));
+    }
+
+    #[test]
+    fn patch_progress_absent_is_omitted() {
+        let patch = SessionMetaPatch::default();
+        let json = serde_json::to_string(&patch).unwrap();
+        assert!(!json.contains("progress"));
     }
 }

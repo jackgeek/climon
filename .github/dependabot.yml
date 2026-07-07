@@ -3,11 +3,15 @@ updates:
   # Bun (JavaScript/TypeScript) dependencies from the root package.json/bun.lock
   - package-ecosystem: "bun"
     directory: "/"
+    # Feature work lands on dev; targeting dev avoids conflicts and prevents
+    # merges into main (which triggers the Release workflow).
+    target-branch: "dev"
     schedule:
       interval: "daily"
 
   # Rust (Cargo) dependencies for the client workspace under rust/
   - package-ecosystem: "cargo"
     directory: "/rust"
+    target-branch: "dev"
     schedule:
       interval: "daily"

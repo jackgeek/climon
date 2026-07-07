@@ -148,6 +148,20 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "dashboard.stateIconNoMotion",
+    type: "boolean",
+    defaultValue: false,
+    purpose: "When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated).",
+    scope: ["server", "browser"],
+    acceptInput: true,
+    dashboardWritable: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "boolean") {
+        throw new Error("dashboard.stateIconNoMotion must be a boolean");
+      }
+    }
+  },
+  {
     path: "attention.idleSeconds",
     type: "number",
     defaultValue: 10,
@@ -182,6 +196,16 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "remote.tunnelId",
     type: "string",
     purpose: "Dev tunnel id (e.g. \"happy-tree-abc123\") used by `devtunnel connect` to forward local climon traffic to a remote dashboard.",
+    scope: ["client"],
+    acceptInput: true,
+    globalOnly: true
+  },
+  {
+    path: "remote.discover",
+    type: "boolean",
+    defaultValue: true,
+    purpose:
+      "When true (default), an enabled devbox (remote.enabled) auto-discovers live climon dashboard hosts by scanning your dev tunnels for the climon-ingest label and uplinks to all of them, in addition to any explicit remote.tunnelId/remote.host. Set false to disable discovery and only use explicitly configured targets.",
     scope: ["client"],
     acceptInput: true,
     globalOnly: true

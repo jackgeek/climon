@@ -104,6 +104,37 @@ impl HeadlessGrid {
         }
         out
     }
+
+    /// Returns the current visible screen as one trailing-trimmed string per
+    /// row (top to bottom), with no dimension header. Used by the smart-
+    /// notification snippet extractor.
+    pub fn visible_lines(&self) -> Vec<String> {
+        let screen = self.parser.screen();
+        let mut out = Vec::with_capacity(self.rows as usize);
+        for row in 0..self.rows {
+            let mut line = String::new();
+            for col in 0..self.cols {
+                if let Some(cell) = screen.cell(row, col) {
+                    let contents = cell.contents();
+                    if contents.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(contents);
+                    }
+                }
+            }
+            out.push(line.trim_end().to_string());
+        }
+        out
+    }
+
+    /// Row index (0-based, top of the visible grid) the cursor currently sits on.
+    /// The smart-notification extractor uses this to ignore the input composer and
+    /// any help/status bar rendered at or below it, since the agent's response
+    /// sits above the cursor.
+    pub fn cursor_row(&self) -> u16 {
+        self.parser.screen().cursor_position().0
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +225,25 @@ mod tests {
                 "repaint must not use absolute row positioning, found: {seq:?}"
             );
         }
+    }
+
+    #[test]
+    fn visible_lines_returns_one_trimmed_string_per_row() {
+        let mut grid = HeadlessGrid::new(20, 3);
+        grid.write(b"hello world\r\nsecond line");
+        let rows = grid.visible_lines();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], "hello world");
+        assert_eq!(rows[1], "second line");
+        assert_eq!(rows[2], "");
+    }
+
+    #[test]
+    fn cursor_row_tracks_the_current_output_row() {
+        let mut grid = HeadlessGrid::new(20, 4);
+        assert_eq!(grid.cursor_row(), 0);
+        // Two newlines advance the cursor to the third row (index 2).
+        grid.write(b"line one\r\nline two\r\n> ");
+        assert_eq!(grid.cursor_row(), 2);
     }
 }

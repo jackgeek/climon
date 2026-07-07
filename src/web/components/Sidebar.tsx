@@ -173,6 +173,7 @@ interface Props {
   isMobile: boolean;
   keyBarPinned: boolean;
   onToggleKeyBarPinned: () => void;
+  stateIconNoMotion?: boolean;
   currentTheme?: string;
   onSelectTheme?: (id: string) => void;
 }
@@ -208,6 +209,7 @@ export function Sidebar({
   isMobile,
   keyBarPinned,
   onToggleKeyBarPinned,
+  stateIconNoMotion = false,
   currentTheme = DEFAULT_THEME_NAME,
   onSelectTheme,
 }: Props) {
@@ -374,6 +376,7 @@ export function Sidebar({
                   viewMode={viewMode}
                   viewModeLocked={viewModeLocked}
                   onViewModeToggle={onViewModeToggle}
+                  stateIconNoMotion={stateIconNoMotion}
                 />
               </div>
             );
