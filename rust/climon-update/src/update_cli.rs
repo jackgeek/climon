@@ -11,6 +11,26 @@ use crate::state::clear_available_version;
 use crate::update_cmd::{run_update_command, UpdateCommandOptions, UpdateStatus};
 use crate::version::VERSION;
 
+/// Resolves the manifest URL for `climon update`.
+///
+/// Production always returns [`DEFAULT_MANIFEST_URL`]. When the crate is compiled
+/// with the dev-only `test-update-endpoint` feature, a non-empty
+/// `CLIMON_TEST_MANIFEST_URL` env var overrides it so the upgrade-test harness can
+/// point a scratch client at a local signed manifest. The override code is
+/// physically absent from release builds (the feature is never enabled there).
+pub(crate) fn resolve_manifest_url() -> &'static str {
+    #[cfg(feature = "test-update-endpoint")]
+    {
+        if let Ok(url) = std::env::var("CLIMON_TEST_MANIFEST_URL") {
+            if !url.trim().is_empty() {
+                // Leak is fine: the process makes at most one update call.
+                return Box::leak(url.into_boxed_str());
+            }
+        }
+    }
+    DEFAULT_MANIFEST_URL
+}
+
 /// `climon update` entrypoint: resolves the install dir and applies an update.
 /// Returns the process exit code (0 success/up-to-date/deferred; 1 on failure).
 pub fn run_update_cli(_argv: &[String], env: &Env) -> i32 {
@@ -23,7 +43,7 @@ pub fn run_update_cli(_argv: &[String], env: &Env) -> i32 {
     };
     let install_dir = exe.parent().unwrap_or(Path::new(".")).to_path_buf();
 
-    let manifest = match fetch_manifest(DEFAULT_MANIFEST_URL) {
+    let manifest = match fetch_manifest(resolve_manifest_url()) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("climon update failed: {e}");
@@ -55,5 +75,31 @@ pub fn run_update_cli(_argv: &[String], env: &Env) -> i32 {
     match result.status {
         UpdateStatus::VerifyFailed | UpdateStatus::NoArtifact => 1,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_manifest_url;
+    use crate::check::DEFAULT_MANIFEST_URL;
+
+    #[test]
+    fn resolves_to_default_manifest_url_by_default() {
+        // Without the test feature (or with the env unset) the resolver must
+        // return the hardcoded production manifest URL.
+        assert_eq!(resolve_manifest_url(), DEFAULT_MANIFEST_URL);
+    }
+
+    #[cfg(feature = "test-update-endpoint")]
+    #[test]
+    fn honors_test_manifest_url_env_when_feature_enabled() {
+        // SAFETY: single-threaded test; we set and clear the var within it.
+        std::env::set_var(
+            "CLIMON_TEST_MANIFEST_URL",
+            "http://127.0.0.1:9/manifest.json",
+        );
+        assert_eq!(resolve_manifest_url(), "http://127.0.0.1:9/manifest.json");
+        std::env::remove_var("CLIMON_TEST_MANIFEST_URL");
+        assert_eq!(resolve_manifest_url(), DEFAULT_MANIFEST_URL);
     }
 }
