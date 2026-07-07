@@ -2,7 +2,7 @@
 //! Port of `src/client/connect.ts`.
 //!
 //! The pure pieces ([`InputProcessor`], [`LocalTerminalOutputGate`],
-//! [`render_terminal_warning`]) are unit-tested exactly like the TS. The socket
+//! [`render_local_displaced`]) are unit-tested exactly like the TS. The socket
 //! loop in [`connect_to_session`] forwards keystrokes and renders PTY output,
 //! and supports detaching with the configured prefix then `d`.
 
@@ -11,18 +11,16 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
 use climon_proto::frame::{
-    encode_frame, encode_json_frame, parse_json_payload, ExitPayload, FrameDecoder, FrameType,
-    ResizePayload, ResizeSource, TerminalModePayload, TerminalResizeMode, TerminalWarningPayload,
+    encode_frame, encode_json_frame, parse_json_payload, ControlPayload, ExitPayload, FrameDecoder,
+    FrameType, ResizePayload, ResizeSource, SurfaceKind,
 };
 use climon_session::socket::connect_session_socket;
-
-use crate::detach_key::describe_detach_key;
 
 /// Default detach prefix (Ctrl-\\). Matches `connectToSession`'s default.
 pub const DEFAULT_DETACH_PREFIX: u8 = 0x1c;
 
 const DETACH_KEY: u8 = 0x64; // 'd'
-const RESTORE_CLAMPED_KEY: u8 = 0x63; // 'c'
+const TAKE_CONTROL_KEY: u8 = 0x14; // Ctrl+T
 
 /// The action requested by a processed input chord. Mirrors the TS
 /// `InputAction`.
@@ -30,7 +28,7 @@ const RESTORE_CLAMPED_KEY: u8 = 0x63; // 'c'
 pub enum InputAction {
     None,
     Detach,
-    RestoreClamped,
+    TakeControl,
 }
 
 /// Result of [`InputProcessor::process`]. Mirrors `ProcessedInput`.
@@ -47,11 +45,12 @@ pub struct AttachResult {
     pub exit_code: i32,
 }
 
-/// Suppresses local PTY rendering while the browser terminal is overgrown.
-/// Mirrors `LocalTerminalOutputGate`.
+/// Suppresses local PTY rendering while this terminal is displaced (the shared
+/// grid is larger than the local console, so a bigger surface controls it).
 #[derive(Default)]
 pub struct LocalTerminalOutputGate {
-    suppress_pty_output: bool,
+    displaced: bool,
+    just_restored: bool,
 }
 
 impl LocalTerminalOutputGate {
@@ -59,13 +58,27 @@ impl LocalTerminalOutputGate {
         Self::default()
     }
 
-    pub fn apply_warning(&mut self, warning: &TerminalWarningPayload) {
-        self.suppress_pty_output = matches!(warning, TerminalWarningPayload::Overgrown { .. });
+    /// Updates displaced state from a `Control` frame. Records a
+    /// displaced→not-displaced edge so the caller can request a repaint.
+    pub fn set_displaced(&mut self, displaced: bool) {
+        if self.displaced && !displaced {
+            self.just_restored = true;
+        }
+        self.displaced = displaced;
     }
 
-    /// Returns the payload to write, or `None` while output is suppressed.
+    pub fn is_displaced(&self) -> bool {
+        self.displaced
+    }
+
+    /// Consumes the "just became un-displaced" edge (one-shot).
+    pub fn take_just_restored(&mut self) -> bool {
+        std::mem::take(&mut self.just_restored)
+    }
+
+    /// Returns the payload to write, or `None` while displaced (output paused).
     pub fn write_pty_output(&self, payload: &[u8]) -> Option<Vec<u8>> {
-        if self.suppress_pty_output {
+        if self.displaced {
             None
         } else {
             Some(payload.to_vec())
@@ -88,7 +101,7 @@ impl InputProcessor {
         }
     }
 
-    pub fn process(&mut self, chunk: &[u8]) -> ProcessedInput {
+    pub fn process(&mut self, chunk: &[u8], displaced: bool) -> ProcessedInput {
         let mut out: Vec<u8> = Vec::new();
         for &byte in chunk {
             if self.armed {
@@ -99,16 +112,23 @@ impl InputProcessor {
                         action: InputAction::Detach,
                     };
                 }
-                if byte == RESTORE_CLAMPED_KEY {
-                    return ProcessedInput {
-                        forward: out,
-                        action: InputAction::RestoreClamped,
-                    };
+                // Incomplete detach chord: only replay the prefix+byte when
+                // interactive; while displaced the command is non-interactive.
+                if !displaced {
+                    out.push(self.prefix);
+                    out.push(byte);
                 }
-                out.push(self.prefix);
-                out.push(byte);
             } else if byte == self.prefix {
                 self.armed = true;
+            } else if displaced {
+                // Non-interactive: only Ctrl+T (take control) is accepted; all
+                // other input is swallowed.
+                if byte == TAKE_CONTROL_KEY {
+                    return ProcessedInput {
+                        forward: out,
+                        action: InputAction::TakeControl,
+                    };
+                }
             } else {
                 out.push(byte);
             }
@@ -120,27 +140,21 @@ impl InputProcessor {
     }
 }
 
-/// Renders the host-side overgrown / restored terminal warning. Mirrors
-/// `renderTerminalWarning`.
-pub fn render_terminal_warning(warning: &TerminalWarningPayload, detach_prefix: u8) -> String {
-    match warning {
-        TerminalWarningPayload::Restored => {
-            "\r\n\x1b[32m[climon] Local terminal rendering restored; browser terminal is clamped again.\x1b[0m\r\n".to_string()
-        }
-        TerminalWarningPayload::Overgrown {
-            cols,
-            rows,
-            host_cols,
-            host_rows,
-        } => format!(
-            "\r\n\x1b[33m[climon] The browser terminal is not clamped ({cols}x{rows}), \
-which is larger than this local terminal ({host_cols}x{host_rows}). \
-Local PTY output is paused here to avoid corrupt rendering. Press {} then c \
-to restore clamp mode, click the lock icon on the active session in the web dashboard, \
-or stop viewing the terminal in the web server.\x1b[0m\r\n",
-            describe_detach_key(detach_prefix)
-        ),
+/// The centered notice shown on the local terminal when it is displaced (the
+/// shared PTY is larger than this console). Clears the screen and centers a
+/// friendly message + take-control hint. Mirrors the daemon's
+/// `render_local_displaced`.
+pub fn render_local_displaced(cols: u16, rows: u16) -> String {
+    let (w, h) = (cols.max(1), rows.max(1));
+    let mut out = String::from("\x1b[2J\x1b[H");
+    let msg = "This session is being viewed on a climon dashboard.";
+    let hint = "Press Ctrl+T to take control and resize it to this terminal.";
+    let row = (h / 2).max(1);
+    for (i, line) in [msg, hint].iter().enumerate() {
+        let col = ((w as usize).saturating_sub(line.len()) / 2 + 1).max(1);
+        out.push_str(&format!("\x1b[{};{}H{}", row as usize + i, col, line));
     }
+    out
 }
 
 /// Processes a single decoded frame from the daemon, writing PTY output to
@@ -151,7 +165,6 @@ pub fn consume_frame<W: Write>(
     payload: &[u8],
     gate: &mut LocalTerminalOutputGate,
     out: &mut W,
-    detach_prefix: u8,
     exit_code: &mut i32,
 ) {
     match frame_type {
@@ -166,11 +179,19 @@ pub fn consume_frame<W: Write>(
                 *exit_code = p.exit_code;
             }
         }
-        FrameType::TerminalWarning => {
-            if let Ok(warning) = parse_json_payload::<TerminalWarningPayload>(payload) {
-                gate.apply_warning(&warning);
-                let _ = out.write_all(render_terminal_warning(&warning, detach_prefix).as_bytes());
-                let _ = out.flush();
+        FrameType::Control => {
+            if let Ok(ctrl) = parse_json_payload::<ControlPayload>(payload) {
+                let (tcols, trows) = local_terminal_size();
+                let displaced = tcols < ctrl.cols || trows < ctrl.rows;
+                gate.set_displaced(displaced);
+                if displaced {
+                    let _ = out.write_all(render_local_displaced(tcols, trows).as_bytes());
+                    let _ = out.flush();
+                } else if gate.take_just_restored() {
+                    // Fits again: clear the notice; the next Output/Replay repaints.
+                    let _ = out.write_all(b"\x1b[2J\x1b[H");
+                    let _ = out.flush();
+                }
             }
         }
         _ => {}
@@ -366,8 +387,8 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                 rows,
                 source: Some(ResizeSource::Host),
                 mode: None,
-                kind: None,
-                viewer_id: None,
+                kind: Some(SurfaceKind::Terminal),
+                viewer_id: Some("local".to_string()),
             },
         ));
         let _ = w.flush();
@@ -381,6 +402,8 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
     let exit_code = Arc::new(AtomicI32::new(0));
     let detached = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
+    let displaced = Arc::new(AtomicBool::new(false));
+    let reader_displaced = Arc::clone(&displaced);
 
     // Reader thread: decode daemon frames → stdout / exit.
     let reader_stream = stream.try_clone_box()?;
@@ -403,11 +426,11 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                             &frame.payload,
                             &mut gate,
                             &mut out,
-                            detach_prefix,
                             &mut code,
                         );
                     }
                     reader_exit.store(code, Ordering::SeqCst);
+                    reader_displaced.store(gate.is_displaced(), Ordering::SeqCst);
                 }
             }
         }
@@ -436,8 +459,8 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                     rows,
                     source: Some(ResizeSource::Host),
                     mode: None,
-                    kind: None,
-                    viewer_id: None,
+                    kind: Some(SurfaceKind::Terminal),
+                    viewer_id: Some("local".to_string()),
                 },
             ));
             let _ = w.flush();
@@ -467,21 +490,17 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                 Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
             };
-            let processed = input.process(&buf[..n]);
+            let is_displaced = displaced.load(Ordering::SeqCst);
+            let processed = input.process(&buf[..n], is_displaced);
             if !processed.forward.is_empty() {
                 let mut w = writer.lock().unwrap();
                 let _ = w.write_all(&encode_frame(FrameType::Input, &processed.forward));
                 let _ = w.flush();
             }
             match processed.action {
-                InputAction::RestoreClamped => {
+                InputAction::TakeControl => {
                     let mut w = writer.lock().unwrap();
-                    let _ = w.write_all(&encode_json_frame(
-                        FrameType::TerminalMode,
-                        &TerminalModePayload {
-                            mode: TerminalResizeMode::Clamped,
-                        },
-                    ));
+                    let _ = w.write_all(&encode_frame(FrameType::TakeControl, &[]));
                     let _ = w.flush();
                 }
                 InputAction::Detach => {
@@ -505,21 +524,17 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                 Ok(n) => n,
                 Err(_) => break,
             };
-            let processed = input.process(&buf[..n]);
+            let is_displaced = displaced.load(Ordering::SeqCst);
+            let processed = input.process(&buf[..n], is_displaced);
             if !processed.forward.is_empty() {
                 let mut w = writer.lock().unwrap();
                 let _ = w.write_all(&encode_frame(FrameType::Input, &processed.forward));
                 let _ = w.flush();
             }
             match processed.action {
-                InputAction::RestoreClamped => {
+                InputAction::TakeControl => {
                     let mut w = writer.lock().unwrap();
-                    let _ = w.write_all(&encode_json_frame(
-                        FrameType::TerminalMode,
-                        &TerminalModePayload {
-                            mode: TerminalResizeMode::Clamped,
-                        },
-                    ));
+                    let _ = w.write_all(&encode_frame(FrameType::TakeControl, &[]));
                     let _ = w.flush();
                 }
                 InputAction::Detach => {
@@ -549,7 +564,7 @@ mod tests {
     fn detach_chord_requests_detach_without_forwarding() {
         let mut p = InputProcessor::new(0x1c);
         assert_eq!(
-            p.process(&[0x1c, 0x64]),
+            p.process(&[0x1c, 0x64], false),
             ProcessedInput {
                 forward: vec![],
                 action: InputAction::Detach
@@ -558,22 +573,10 @@ mod tests {
     }
 
     #[test]
-    fn restore_clamped_chord_requests_restore_without_forwarding() {
-        let mut p = InputProcessor::new(0x1c);
-        assert_eq!(
-            p.process(&[0x1c, 0x63]),
-            ProcessedInput {
-                forward: vec![],
-                action: InputAction::RestoreClamped
-            }
-        );
-    }
-
-    #[test]
     fn non_command_prefixed_input_is_forwarded_unchanged() {
         let mut p = InputProcessor::new(0x1c);
         assert_eq!(
-            p.process(&[0x1c, 0x78]),
+            p.process(&[0x1c, 0x78], false),
             ProcessedInput {
                 forward: vec![0x1c, 0x78],
                 action: InputAction::None
@@ -582,35 +585,44 @@ mod tests {
     }
 
     #[test]
-    fn overgrown_warning_explains_restore() {
-        let message = render_terminal_warning(
-            &TerminalWarningPayload::Overgrown {
-                cols: 140,
-                rows: 40,
-                host_cols: 80,
-                host_rows: 24,
-            },
-            0x1c,
+    fn ctrl_t_takes_control_only_while_displaced() {
+        let mut p = InputProcessor::new(0x1c);
+        // While displaced: Ctrl+T -> TakeControl, swallowed (no forward).
+        assert_eq!(
+            p.process(&[0x14], true),
+            ProcessedInput {
+                forward: vec![],
+                action: InputAction::TakeControl
+            }
         );
-        assert!(message.contains("not clamped"));
-        assert!(message.contains("Ctrl-\\ then c"));
-        assert!(message.contains("lock icon"));
-        assert!(message.contains("stop viewing"));
+        // While displaced: other input is swallowed.
+        assert_eq!(
+            p.process(&[b'a', b'b'], true),
+            ProcessedInput {
+                forward: vec![],
+                action: InputAction::None
+            }
+        );
+        // While NOT displaced: Ctrl+T forwards as a normal byte.
+        assert_eq!(
+            p.process(&[0x14], false),
+            ProcessedInput {
+                forward: vec![0x14],
+                action: InputAction::None
+            }
+        );
     }
 
     #[test]
-    fn gate_suppresses_while_overgrown_and_resumes_after_restore() {
+    fn gate_suppresses_while_displaced_and_resumes_after_restore() {
         let mut gate = LocalTerminalOutputGate::new();
-        let overgrown = TerminalWarningPayload::Overgrown {
-            cols: 140,
-            rows: 40,
-            host_cols: 80,
-            host_rows: 24,
-        };
         assert_eq!(gate.write_pty_output(b"before"), Some(b"before".to_vec()));
-        gate.apply_warning(&overgrown);
+        gate.set_displaced(true);
         assert_eq!(gate.write_pty_output(b"hidden"), None);
-        gate.apply_warning(&TerminalWarningPayload::Restored);
+        assert!(!gate.take_just_restored());
+        gate.set_displaced(false);
+        assert!(gate.take_just_restored());
+        assert!(!gate.take_just_restored());
         assert_eq!(gate.write_pty_output(b"after"), Some(b"after".to_vec()));
     }
 }
