@@ -76,8 +76,6 @@ On first run, climon writes `~/.climon/config.jsonc`:
     "port": 3131
   },
   "terminal": {
-    // When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling.
-    "clampBrowserToHost": true,
     // Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255].
     "detachPrefix": 28
   },

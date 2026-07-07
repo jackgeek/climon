@@ -314,7 +314,6 @@ Common settings:
 | `server.host`                 | `127.0.0.1` | Dashboard bind address. **Never change this** — see the security warning below. |
 | `server.port`                 | `3131`      | Dashboard port.                                         |
 | `attention.idleSeconds`       | `10`        | Idle seconds before a session is flagged for attention. |
-| `terminal.clampBrowserToHost` | `false`     | Clamp browser viewer resizes to the host terminal size. |
 | `dashboard.theme`             | `Default`   | Terminal colour theme (also settable from the ☰ menu). |
 | `session.color`               | `auto`      | Default accent colour for new sessions.                 |
 | `session.priority`            | `500`       | Default sort priority for new sessions.                 |
