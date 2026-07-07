@@ -61,7 +61,7 @@
     "xterm-theme": "^1.1.0"
   },
   "devDependencies": {
-    "@types/node": "^20.14.12",
+    "@types/node": "^26.1.0",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "@types/web-push": "^3.6.4",
