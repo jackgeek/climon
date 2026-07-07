@@ -6,12 +6,6 @@
     "hex": "00000015067b22636f6c73223a38302c22726f7773223a32347d"
   },
   {
-    "name": "terminal-mode-fill",
-    "type": 9,
-    "payloadJson": "{\"mode\":\"fill\"}",
-    "hex": "0000000f097b226d6f6465223a2266696c6c227d"
-  },
-  {
     "name": "output",
     "type": 1,
     "payloadHex": "68656c6c6f0d0a",
@@ -34,17 +28,5 @@
     "type": 8,
     "payloadJson": "{\"name\":\"build\"}",
     "hex": "00000010087b226e616d65223a226275696c64227d"
-  },
-  {
-    "name": "warning-overgrown",
-    "type": 10,
-    "payloadJson": "{\"kind\":\"overgrown\",\"cols\":140,\"rows\":40,\"hostCols\":80,\"hostRows\":24}",
-    "hex": "000000450a7b226b696e64223a226f76657267726f776e222c22636f6c73223a3134302c22726f7773223a34302c22686f7374436f6c73223a38302c22686f7374526f7773223a32347d"
-  },
-  {
-    "name": "warning-restored",
-    "type": 10,
-    "payloadJson": "{\"kind\":\"restored\"}",
-    "hex": "000000130a7b226b696e64223a22726573746f726564227d"
   }
 ]

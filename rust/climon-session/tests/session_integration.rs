@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use climon_proto::frame::{
     encode_json_frame, parse_json_payload, ExitPayload, FrameDecoder, FrameType, PtySizePayload,
-    ResizePayload, ResizeSource, TerminalResizeMode,
+    ResizePayload,
 };
 use climon_proto::meta::{PriorityReason, SessionMeta, SessionStatus};
 use climon_session::socket::{
@@ -184,7 +184,6 @@ fn streams_initial_frames_and_completes() {
 
     // Expect PtySize as the first initial frame.
     let mut saw_pty_size = false;
-    let mut saw_mode = false;
     let mut saw_replay = false;
     let mut saw_output_hello = false;
     let mut saw_exit = false;
@@ -209,7 +208,6 @@ fn streams_initial_frames_and_completes() {
                     assert_eq!((p.cols, p.rows), (80, 24));
                     saw_pty_size = true;
                 }
-                FrameType::TerminalMode => saw_mode = true,
                 FrameType::Replay => {
                     saw_replay = true;
                     if String::from_utf8_lossy(&frame.payload).contains("hello") {
@@ -234,7 +232,6 @@ fn streams_initial_frames_and_completes() {
     let code = host.join().unwrap();
     assert_eq!(code, 0, "session exit code");
     assert!(saw_pty_size, "received PtySize");
-    assert!(saw_mode, "received TerminalMode");
     assert!(saw_replay, "received Replay");
     assert!(saw_output_hello, "received hello via Replay or Output");
     assert!(saw_exit, "received Exit");
@@ -296,14 +293,12 @@ fn viewer_resize_broadcasts_pty_size() {
         .set_write_timeout(Some(Duration::from_secs(2)))
         .unwrap();
 
-    // Send a viewer (Fill-mode) resize larger than the host; Fill keeps it.
+    // Send a viewer resize larger than the host; the PTY grows to fit it.
     let resize = encode_json_frame(
         FrameType::Resize,
         &ResizePayload {
             cols: 120,
             rows: 40,
-            source: Some(ResizeSource::Viewer),
-            mode: Some(TerminalResizeMode::Fill),
             kind: None,
             viewer_id: None,
         },
@@ -478,8 +473,6 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
         &ResizePayload {
             cols: 100,
             rows: 30,
-            source: Some(ResizeSource::Host),
-            mode: None,
             kind: None,
             viewer_id: None,
         },

@@ -10,13 +10,11 @@ export enum FrameType {
   PtySize = 6,
   Attention = 7,
   Title = 8,
-  TerminalMode = 9,
-  TerminalWarning = 10,
+  // Tags 9 and 10 are reserved (previously used) and intentionally left unused
+  // so existing tag numbers stay stable.
   Control = 11,
   TakeControl = 12
 }
-
-export type TerminalResizeMode = "clamped" | "fill";
 
 /** Surface categories that can participate in terminal control handoff. */
 export type SurfaceKind = "terminal" | "dashboard" | "pwa";
@@ -24,19 +22,6 @@ export type SurfaceKind = "terminal" | "dashboard" | "pwa";
 export interface ResizePayload {
   cols: number;
   rows: number;
-  /**
-   * Identifies the kind of client requesting the resize. "host" is the local
-   * terminal that owns the session (its rendering cannot reflow, so it caps the
-   * PTY size when clamping is enabled); "viewer" is a browser tab. Defaults to
-   * "viewer" when omitted.
-   */
-  source?: "host" | "viewer";
-  /**
-   * Browser-selected resize behavior. "clamped" keeps the PTY within the host
-   * terminal's grid; "fill" lets the browser grow the PTY to its fitted grid.
-   * Omitted values preserve the session's current mode.
-   */
-  mode?: TerminalResizeMode;
   /** Kind of surface requesting or reporting the resize. */
   kind?: SurfaceKind;
   /** Stable viewer identity for dashboard/PWA surfaces. */
@@ -69,22 +54,6 @@ export interface TitlePayload {
   /** The session name to show as the terminal title. Empty string clears it. */
   name: string;
 }
-
-export interface TerminalModePayload {
-  mode: TerminalResizeMode;
-}
-
-export type TerminalWarningPayload =
-  | {
-      kind: "overgrown";
-      cols: number;
-      rows: number;
-      hostCols: number;
-      hostRows: number;
-    }
-  | {
-      kind: "restored";
-    };
 
 const HEADER_SIZE = 5; // 4-byte length + 1-byte type
 

@@ -19,7 +19,6 @@ import {
   refreshTerminalRender,
   refreshTerminalForReplay,
   resetTerminalForSession,
-  shouldRequestReplayForAuthoritativeMode,
   shouldReconnectLiveAttachment,
   shouldHandleWheelAsScrollback,
   TerminalView,
@@ -102,13 +101,6 @@ describe("TerminalView", () => {
     expect(source).toContain("replayAfterNextResizeRef.current = true;");
     expect(source).toContain('ws.send(JSON.stringify({ type: "replay" }));');
     expect(source).toContain('} else if (msg.type === "replay") {\n            awaitingReplayRef.current = true;\n          }');
-  });
-
-  test("requests a replay for daemon-reported mode changes after initial replay", () => {
-    expect(shouldRequestReplayForAuthoritativeMode("clamped", "fill", true)).toBe(true);
-    expect(shouldRequestReplayForAuthoritativeMode("fill", "clamped", true)).toBe(true);
-    expect(shouldRequestReplayForAuthoritativeMode("fill", "fill", true)).toBe(false);
-    expect(shouldRequestReplayForAuthoritativeMode("clamped", "fill", false)).toBe(false);
   });
 
   test("refreshes the renderer when a hidden terminal becomes visible", () => {

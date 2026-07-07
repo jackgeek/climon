@@ -21,8 +21,8 @@ pub enum FrameType {
     PtySize = 6,
     Attention = 7,
     Title = 8,
-    TerminalMode = 9,
-    TerminalWarning = 10,
+    // Tags 9 and 10 are reserved (previously used) and intentionally left
+    // unmapped so existing tag numbers stay stable.
     Control = 11,
     TakeControl = 12,
 }
@@ -38,29 +38,11 @@ impl FrameType {
             6 => Some(FrameType::PtySize),
             7 => Some(FrameType::Attention),
             8 => Some(FrameType::Title),
-            9 => Some(FrameType::TerminalMode),
-            10 => Some(FrameType::TerminalWarning),
             11 => Some(FrameType::Control),
             12 => Some(FrameType::TakeControl),
             _ => None,
         }
     }
-}
-
-/// Browser-selected resize behavior. Mirrors `TerminalResizeMode`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TerminalResizeMode {
-    Clamped,
-    Fill,
-}
-
-/// Origin of a resize request. Mirrors `ResizePayload.source`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ResizeSource {
-    Host,
-    Viewer,
 }
 
 /// Surface class for control-priority ordering. Mirrors `SurfaceKind` in
@@ -88,10 +70,6 @@ impl SurfaceKind {
 pub struct ResizePayload {
     pub cols: u16,
     pub rows: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<ResizeSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<TerminalResizeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<SurfaceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,26 +111,6 @@ pub struct ExitPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TitlePayload {
     pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TerminalModePayload {
-    pub mode: TerminalResizeMode,
-}
-
-/// Host-only warning surfaced when a viewer overgrows the shared PTY. Mirrors
-/// the `TerminalWarningPayload` discriminated union (tagged by `kind`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub enum TerminalWarningPayload {
-    #[serde(rename_all = "camelCase")]
-    Overgrown {
-        cols: u16,
-        rows: u16,
-        host_cols: u16,
-        host_rows: u16,
-    },
-    Restored,
 }
 
 const HEADER_SIZE: usize = 5; // 4-byte length + 1-byte type
@@ -267,8 +225,6 @@ mod tests {
             &ResizePayload {
                 cols: 100,
                 rows: 40,
-                source: None,
-                mode: None,
                 kind: None,
                 viewer_id: None,
             },
@@ -282,8 +238,6 @@ mod tests {
             ResizePayload {
                 cols: 100,
                 rows: 40,
-                source: None,
-                mode: None,
                 kind: None,
                 viewer_id: None,
             }
@@ -297,8 +251,6 @@ mod tests {
             &ResizePayload {
                 cols: 120,
                 rows: 40,
-                source: None,
-                mode: None,
                 kind: Some(SurfaceKind::Dashboard),
                 viewer_id: Some("abc123".into()),
             },
@@ -393,48 +345,6 @@ mod tests {
         let decoded = FrameDecoder::new().push(&frame);
         let payload: TitlePayload = parse_json_payload(&decoded[0].payload).unwrap();
         assert_eq!(payload.name, "dev server");
-    }
-
-    #[test]
-    fn round_trips_a_terminal_mode_frame() {
-        let frame = encode_json_frame(
-            FrameType::TerminalMode,
-            &TerminalModePayload {
-                mode: TerminalResizeMode::Clamped,
-            },
-        );
-        assert_eq!(&frame[5..], br#"{"mode":"clamped"}"#);
-        let decoded = FrameDecoder::new().push(&frame);
-        let payload: TerminalModePayload = parse_json_payload(&decoded[0].payload).unwrap();
-        assert_eq!(payload.mode, TerminalResizeMode::Clamped);
-    }
-
-    #[test]
-    fn round_trips_a_host_only_terminal_warning_frame() {
-        let frame = encode_json_frame(
-            FrameType::TerminalWarning,
-            &TerminalWarningPayload::Overgrown {
-                cols: 140,
-                rows: 40,
-                host_cols: 80,
-                host_rows: 24,
-            },
-        );
-        assert_eq!(
-            &frame[5..],
-            br#"{"kind":"overgrown","cols":140,"rows":40,"hostCols":80,"hostRows":24}"#
-        );
-        let decoded = FrameDecoder::new().push(&frame);
-        let payload: TerminalWarningPayload = parse_json_payload(&decoded[0].payload).unwrap();
-        assert_eq!(
-            payload,
-            TerminalWarningPayload::Overgrown {
-                cols: 140,
-                rows: 40,
-                host_cols: 80,
-                host_rows: 24,
-            }
-        );
     }
 
     #[test]

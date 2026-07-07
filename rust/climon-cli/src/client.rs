@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use climon_proto::frame::{
     encode_frame, encode_json_frame, parse_json_payload, ControlPayload, ExitPayload, FrameDecoder,
-    FrameType, ResizePayload, ResizeSource, SurfaceKind,
+    FrameType, ResizePayload, SurfaceKind,
 };
 use climon_session::socket::connect_session_socket;
 
@@ -385,8 +385,6 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
             &ResizePayload {
                 cols,
                 rows,
-                source: Some(ResizeSource::Host),
-                mode: None,
                 kind: Some(SurfaceKind::Terminal),
                 viewer_id: Some("local".to_string()),
             },
@@ -457,8 +455,6 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                 &ResizePayload {
                     cols,
                     rows,
-                    source: Some(ResizeSource::Host),
-                    mode: None,
                     kind: Some(SurfaceKind::Terminal),
                     viewer_id: Some("local".to_string()),
                 },

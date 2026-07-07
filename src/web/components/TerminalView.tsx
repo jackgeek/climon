@@ -5,7 +5,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import type { SessionMeta } from "../../types.js";
-import type { TerminalResizeMode } from "../../ipc/frame.js";
 import {
   attachKey,
   attachSocketUrl,
@@ -189,21 +188,13 @@ export function resetTerminalForSession(term: ResettableTerminal, session: { col
   term.reset();
 }
 
-// A live refresh (e.g. after a clamp/fill toggle) rebuilds scrollback without a
-// full term.reset(), preserving xterm private modes such as mouse tracking. The
-// daemon's replay snapshot re-asserts the authoritative modes via its appended
-// suffix, so the screen ends up correct without clearing mouse state.
+// A live refresh (e.g. after a control handoff resize) rebuilds scrollback
+// without a full term.reset(), preserving xterm private modes such as mouse
+// tracking. The daemon's replay snapshot re-asserts the authoritative modes via
+// its appended suffix, so the screen ends up correct without clearing mouse state.
 export function refreshTerminalForReplay(term: ReplayRefreshableTerminal): void {
   term.clear();
   term.scrollToBottom();
-}
-
-export function shouldRequestReplayForAuthoritativeMode(
-  previousMode: TerminalResizeMode,
-  nextMode: TerminalResizeMode,
-  initialReplayComplete: boolean
-): boolean {
-  return initialReplayComplete && previousMode !== nextMode;
 }
 
 export function canRefitTerminalForSession(
