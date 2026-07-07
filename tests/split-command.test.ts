@@ -7,21 +7,24 @@ describe("splitCommand", () => {
   });
 
   describe("browserResizePayload", () => {
-    test("does not invent a mode for routine browser resize messages", () => {
+    test("carries only cols and rows for routine browser resize messages", () => {
       expect(browserResizePayload({ cols: 120, rows: 40 })).toEqual({
         cols: 120,
-        rows: 40,
-        source: "viewer"
+        rows: 40
       });
     });
 
-    test("preserves explicit browser resize mode changes", () => {
-      expect(browserResizePayload({ cols: 120, rows: 40, mode: "fill" })).toEqual({
+    test("preserves the surface kind and viewer id when present", () => {
+      expect(browserResizePayload({ cols: 120, rows: 40, kind: "dashboard", viewerId: "v1" })).toEqual({
         cols: 120,
         rows: 40,
-        source: "viewer",
-        mode: "fill"
+        kind: "dashboard",
+        viewerId: "v1"
       });
+    });
+
+    test("returns null for a zero-sized resize", () => {
+      expect(browserResizePayload({ cols: 0, rows: 40 })).toBeNull();
     });
   });
 
