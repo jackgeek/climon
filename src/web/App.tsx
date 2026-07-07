@@ -73,8 +73,6 @@ import {
   writeBrowserNotificationsEnabled
 } from "./attentionAlerts.js";
 import { StatusBadge } from "./components/StatusBadge.js";
-import type { TerminalResizeMode } from "../ipc/frame.js";
-import { toggleViewMode } from "./view-mode.js";
 import { InstallPwaDialog } from "./components/InstallPwaDialog.js";
 import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa, reauthenticateTunnel } from "./pwa/pwaContext.js";
 import {
@@ -572,10 +570,7 @@ export function App() {
   const [tunnelLinkError, setTunnelLinkError] = useState("");
   const [tunnelLinkCopied, setTunnelLinkCopied] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
-  const [activeViewMode, setActiveViewMode] = useState<{ sessionId: string | null; mode: TerminalResizeMode }>({
-    sessionId: null,
-    mode: "fill"
-  });
+  const [controlInfo, setControlInfo] = useState<{ controllerId: string | null; ownViewerId: string } | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const [pwaInstallOpen, setPwaInstallOpen] = useState(false);
@@ -1207,18 +1202,11 @@ export function App() {
     }
   }
 
-  // The active session's mode, tagged with the session it belongs to. It is
-  // `null` right after switching sessions (before the new session's daemon
-  // reports its mode) so callers never act on a stale value.
-  const authoritativeViewMode = activeViewMode.sessionId === activeId ? activeViewMode.mode : null;
-
-  const requestViewMode = useCallback(
-    (mode: TerminalResizeMode): void => {
-      setActiveViewMode({ sessionId: activeId, mode });
-      terminalRef.current?.setViewMode(mode);
-    },
-    [activeId]
-  );
+  // Whether THIS tab controls the active session's PTY grid. Control info is
+  // reported by the active session's TerminalView; when this tab is the
+  // controller the session-list Take-control button is hidden for it.
+  const isController =
+    controlInfo != null && controlInfo.controllerId != null && controlInfo.controllerId === controlInfo.ownViewerId;
 
   // Selecting a session on desktop moves keyboard focus into the terminal so
   // the user can start typing immediately. On mobile the terminal is offscreen
@@ -1490,9 +1478,8 @@ export function App() {
           stateIconNoMotion={stateIconNoMotion}
           currentTheme={themeId}
           onSelectTheme={handleSelectTheme}
-          viewMode={authoritativeViewMode ?? "fill"}
-          viewModeLocked={false}
-          onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "fill"))}
+          isController={isController}
+          onTakeControl={() => terminalRef.current?.takeControl()}
           onMaximize={(id) => {
             const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
@@ -1518,12 +1505,9 @@ export function App() {
           accentColor={activeSession?.color}
           maximized={maximized}
           visible={terminalVisible}
-          viewMode={authoritativeViewMode ?? "fill"}
-          onViewModeChange={(mode) => {
-            if (activeId) {
-              setActiveViewMode({ sessionId: activeId, mode });
-            }
-          }}
+          onControlStateChange={(info) =>
+            setControlInfo({ controllerId: info.controllerId, ownViewerId: info.ownViewerId })
+          }
           fontSize={fontSize}
           xtermTheme={activeTheme.xterm}
           onFontSizeChange={adjustFontSize}

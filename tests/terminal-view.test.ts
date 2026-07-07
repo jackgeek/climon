@@ -41,10 +41,8 @@ describe("TerminalView", () => {
       createElement(TerminalView, {
         accentColor: "blue",
         maximized: false,
-        onViewModeChange: () => {},
         session: null,
         visible: false,
-        viewMode: "clamped",
         fontSize: 13,
         xtermTheme: { background: "#0d1117" },
         onFontSizeChange: () => {},
@@ -60,7 +58,7 @@ describe("TerminalView", () => {
   test("refits when the selected session changes even if terminal chrome is unchanged", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
-    expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);");
+    expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible]);");
   });
 
   test("reattaches live sessions after the dashboard server reconnects", () => {
@@ -70,29 +68,17 @@ describe("TerminalView", () => {
     expect(source).toContain("}, [attachKey(session, visible), serverConnected, serverReconnectToken]);");
   });
 
-  test("fully resets and replays on server reconnect so mouse-tracking modes are restored", () => {
+  test("tracks the server reconnect token so a bumped token drives a fresh attach", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
-    expect(source).toContain(
-      "const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;"
-    );
     expect(source).toContain("lastServerReconnectTokenRef.current = serverReconnectToken;");
-    // A reconnect re-queues the user's clamp/fill mode so the full reset + replay
-    // path (the daemon's replay carries the authoritative mouse private-mode
-    // suffix) restores mouse tracking after the socket reopens.
-    expect(source).toContain(
-      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
-    );
   });
 
-  test("pauses reconnect retries while the server is unavailable and restores the selected mode afterward", () => {
+  test("pauses reconnect retries while the server is unavailable", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("serverConnected: boolean;");
     expect(source).toContain("if (!visible || !serverConnected) {\n        return;\n      }");
-    expect(source).toContain(
-      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
-    );
     expect(source).toContain("serverConnectedRef.current");
   });
 
@@ -110,11 +96,10 @@ describe("TerminalView", () => {
     );
   });
 
-  test("requests a replay after mode-change resize so scrollback is rebuilt for the new PTY size", () => {
+  test("requests a replay after a grid-change resize so scrollback is rebuilt for the new PTY size", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("replayAfterNextResizeRef.current = true;");
-    expect(source).toContain("message.mode = viewModeRef.current;");
     expect(source).toContain('ws.send(JSON.stringify({ type: "replay" }));');
     expect(source).toContain('} else if (msg.type === "replay") {\n            awaitingReplayRef.current = true;\n          }');
   });

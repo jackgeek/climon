@@ -23,7 +23,6 @@ import {
 } from "@fluentui/react-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionMeta } from "../../types.js";
-import type { TerminalResizeMode } from "../../ipc/frame.js";
 import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
 import { useFeature } from "../hooks/useFeature.js";
@@ -163,9 +162,8 @@ interface Props {
   onCloseTunnelLink: () => void;
   showRemotesMenu?: boolean;
   onRemoveDisconnected: () => void;
-  viewMode: TerminalResizeMode;
-  viewModeLocked?: boolean;
-  onViewModeToggle?: () => void;
+  isController?: boolean;
+  onTakeControl?: () => void;
   onMaximize: (id: string) => void;
   isMobile: boolean;
   keyBarPinned: boolean;
@@ -198,9 +196,8 @@ export function Sidebar({
   onCloseTunnelLink,
   showRemotesMenu = false,
   onRemoveDisconnected,
-  viewMode,
-  viewModeLocked = false,
-  onViewModeToggle,
+  isController,
+  onTakeControl,
   onMaximize,
   isMobile,
   keyBarPinned,
@@ -367,9 +364,8 @@ export function Sidebar({
                   onEdit={onEdit}
                   onPauseToggle={onPauseToggle}
                   onMaximize={onMaximize}
-                  viewMode={viewMode}
-                  viewModeLocked={viewModeLocked}
-                  onViewModeToggle={onViewModeToggle}
+                  isController={s.id === activeId ? isController : undefined}
+                  onTakeControl={s.id === activeId ? onTakeControl : undefined}
                   stateIconNoMotion={stateIconNoMotion}
                 />
               </div>

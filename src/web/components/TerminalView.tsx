@@ -1,5 +1,5 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { makeStyles } from "@fluentui/react-components";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { Button, Text, makeStyles, tokens } from "@fluentui/react-components";
 import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -14,7 +14,8 @@ import {
   fetchScrollback,
   isLiveStatus
 } from "../api.js";
-import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
+import { deriveControlState, surfaceKind, type ControlState } from "../control-state.js";
+import { readIsStandalone } from "../pwa/pwaContext.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { DEFAULT_FONT_SIZE } from "../fontSize.js";
@@ -355,13 +356,19 @@ export interface TerminalHandle {
   refit: () => void;
   refresh: () => void;
   sendInput: (data: string) => void;
-  setViewMode: (mode: TerminalResizeMode) => void;
+  takeControl: () => void;
   acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
   focus: () => void;
   captureText: () => string;
 }
 
 const useStyles = makeStyles({
+  wrapper: {
+    position: "relative",
+    display: "flex",
+    flex: "1 1 auto",
+    minHeight: 0
+  },
   root: {
     flex: "1 1 auto",
     minHeight: 0,
@@ -373,6 +380,27 @@ const useStyles = makeStyles({
     "& .xterm-viewport::-webkit-scrollbar": {
       display: "none"
     }
+  },
+  overlay: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: tokens.colorBackgroundOverlay,
+    zIndex: 1
+  },
+  overlayCard: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "16px",
+    maxWidth: "360px",
+    padding: "24px",
+    textAlign: "center",
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow16
   }
 });
 
@@ -381,8 +409,7 @@ interface Props {
   accentColor?: SessionMeta["color"];
   maximized: boolean;
   visible: boolean;
-  viewMode: TerminalResizeMode;
-  onViewModeChange: (mode: TerminalResizeMode) => void;
+  onControlStateChange?: (info: { controllerId: string | null; ownViewerId: string; state: ControlState }) => void;
   fontSize: number;
   xtermTheme: ITheme;
   onFontSizeChange: (delta: number) => void;
@@ -397,8 +424,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     accentColor,
     maximized,
     visible,
-    viewMode,
-    onViewModeChange,
+    onControlStateChange,
     fontSize,
     xtermTheme,
     onFontSizeChange,
@@ -414,12 +440,17 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const attachedSessionIdRef = useRef<string | null>(null);
-  const viewModeRef = useRef<TerminalResizeMode>(viewMode);
-  const onViewModeChangeRef = useRef(onViewModeChange);
+  const viewerIdRef = useRef<string>(crypto.randomUUID());
+  const kindRef = useRef(surfaceKind(readIsStandalone()));
+  const controllerIdRef = useRef<string | null>(null);
+  const ctrlColsRef = useRef(0);
+  const ctrlRowsRef = useRef(0);
+  const displacedRef = useRef(false);
+  const onControlStateChangeRef = useRef(onControlStateChange);
   const fontSizeRef = useRef(fontSize);
   const xtermThemeRef = useRef(xtermTheme);
   const onFontSizeChangeRef = useRef(onFontSizeChange);
-  const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
+  const [displayState, setDisplayState] = useState<ControlState>("controlling");
   const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
   const selectedSessionRef = useRef<SessionMeta | null>(session);
   const visibleRef = useRef(visible);
@@ -434,10 +465,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const onLiveInteractionRef = useRef(onLiveInteraction);
 
   useEffect(() => {
-    viewModeRef.current = viewMode;
-  }, [viewMode]);
-
-  useEffect(() => {
     selectedSessionRef.current = session;
     visibleRef.current = visible;
     serverConnectedRef.current = serverConnected;
@@ -445,8 +472,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }, [session, visible, serverConnected, onLiveInteraction]);
 
   useEffect(() => {
-    onViewModeChangeRef.current = onViewModeChange;
-  }, [onViewModeChange]);
+    onControlStateChangeRef.current = onControlStateChange;
+  }, [onControlStateChange]);
 
   useEffect(() => {
     onFontSizeChangeRef.current = onFontSizeChange;
@@ -475,28 +502,19 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
   }, [xtermTheme]);
 
-  // A queued view-mode request belongs to the session that was attached when it
-  // was queued. Drop it when the session changes so it can never flush to a
-  // different session's socket.
-  useEffect(() => {
-    queuedViewModeRef.current = null;
-  }, [session?.id]);
-
   function sendResize(): void {
     const term = termRef.current;
     const ws = wsRef.current;
     if (term && ws && ws.readyState === WebSocket.OPEN) {
+      // Report this tab's NATURAL fit dimensions (what its container can hold),
+      // not term.cols/rows -- when following, xterm is forced to the controller's
+      // grid, so its own size would be wrong. proposeDimensions() measures the
+      // container without resizing xterm.
+      const proposed = fitRef.current?.proposeDimensions();
+      const cols = proposed?.cols ?? term.cols;
+      const rows = proposed?.rows ?? term.rows;
       const requestReplay = replayAfterNextResizeRef.current;
-      const message: {
-        type: "resize";
-        cols: number;
-        rows: number;
-        mode?: TerminalResizeMode;
-      } = { type: "resize", cols: term.cols, rows: term.rows };
-      if (requestReplay) {
-        message.mode = viewModeRef.current;
-      }
-      ws.send(JSON.stringify(message));
+      ws.send(JSON.stringify({ type: "resize", cols, rows, kind: kindRef.current, viewerId: viewerIdRef.current }));
       if (requestReplay) {
         replayAfterNextResizeRef.current = false;
         ws.send(JSON.stringify({ type: "replay" }));
@@ -504,26 +522,16 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
   }
 
-  function sendMode(mode: TerminalResizeMode): void {
-    viewModeRef.current = mode;
-    replayAfterNextResizeRef.current = true;
-    sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
+  // Blank the terminal behind a "take control" overlay when displaced; restore it
+  // otherwise. Driven by the authoritative controller state from Control frames.
+  function applyDisplacedUi(state: ControlState): void {
+    setDisplayState(state);
   }
 
-  // The daemon reported its authoritative clamp/fill mode. When it differs from
-  // what this viewer last rendered, request a fresh replay on the next resize so
-  // xterm's scrollback is rebuilt for the new PTY grid.
-  function handleAuthoritativeViewMode(mode: TerminalResizeMode): void {
-    const requestReplay = shouldRequestReplayForAuthoritativeMode(
-      viewModeRef.current,
-      mode,
-      initialReplayCompleteRef.current
-    );
-    viewModeRef.current = mode;
-    onViewModeChangeRef.current(mode);
-    if (requestReplay) {
-      replayAfterNextResizeRef.current = true;
-      refit();
+  function takeControl(): void {
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "takeControl" }));
     }
   }
 
@@ -708,12 +716,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
         return;
       }
-      if (flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode)) {
-        // Restoring a queued mode (e.g. after a server reconnect) changes the PTY
-        // grid, so request a fresh replay on the following resize.
-        replayAfterNextResizeRef.current = true;
-        refit();
-      }
       flushAttentionAck();
     };
     ws.onmessage = (ev) => {
@@ -731,17 +733,47 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             exitCode?: number;
             cols?: number;
             rows?: number;
-            mode?: TerminalResizeMode;
+            controllerId?: string;
           };
           if (msg.type === "exit") {
             terminalExitReceived = true;
             term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
           } else if (msg.type === "size" && msg.cols && msg.rows) {
             // Authoritative PTY size from the daemon: match it so both the host
-            // terminal and this viewer render the same grid.
-            applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
-          } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
-            handleAuthoritativeViewMode(msg.mode);
+            // terminal and this viewer render the same grid -- unless displaced,
+            // where the grid is too large for this tab so we keep it blank.
+            if (!displacedRef.current) {
+              applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
+            }
+          } else if (msg.type === "control") {
+            const controllerId = typeof msg.controllerId === "string" ? msg.controllerId : null;
+            const ctrlCols = msg.cols ?? 0;
+            const ctrlRows = msg.rows ?? 0;
+            const gridChanged = ctrlCols !== ctrlColsRef.current || ctrlRows !== ctrlRowsRef.current;
+            controllerIdRef.current = controllerId;
+            ctrlColsRef.current = ctrlCols;
+            ctrlRowsRef.current = ctrlRows;
+            const proposed = fitRef.current?.proposeDimensions();
+            const ownCols = proposed?.cols ?? term.cols;
+            const ownRows = proposed?.rows ?? term.rows;
+            const state = deriveControlState({
+              ownViewerId: viewerIdRef.current,
+              controllerId,
+              ownCols,
+              ownRows,
+              ctrlCols,
+              ctrlRows
+            });
+            const wasDisplaced = displacedRef.current;
+            displacedRef.current = state === "displaced";
+            applyDisplacedUi(state);
+            onControlStateChangeRef.current?.({ controllerId, ownViewerId: viewerIdRef.current, state });
+            if (!displacedRef.current && (gridChanged || wasDisplaced)) {
+              // Grid changed (or we just stopped being displaced): rebuild
+              // scrollback for the new controller grid on the next resize.
+              replayAfterNextResizeRef.current = true;
+              refit();
+            }
           } else if (msg.type === "replay") {
             awaitingReplayRef.current = true;
           }
@@ -853,6 +885,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // Register input handling once and route to the current socket. Registering
     // this per-connection would duplicate every keystroke.
     const dataDisposable = term.onData((data) => {
+      // While displaced the terminal is blanked and non-interactive; the only
+      // control is the overlay's Take control button, so swallow all keystrokes.
+      if (displacedRef.current) {
+        return;
+      }
       const liveSession = selectedSessionRef.current;
       if (liveSession && isLiveStatus(liveSession.status)) {
         // Signal interaction even if the socket is closed: the user is actively
@@ -885,10 +922,17 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
     closeWs();
     initialReplayCompleteRef.current = true;
+    // Reset control state so a previous session's displaced overlay never lingers
+    // over a freshly attached session; the daemon re-announces control on attach.
+    controllerIdRef.current = null;
+    ctrlColsRef.current = 0;
+    ctrlRowsRef.current = 0;
+    displacedRef.current = false;
+    setDisplayState("controlling");
     applyTerminalScrollbackForSession(term, session);
     resetTerminalForSession(term, session);
-    // A dashboard server reconnect re-runs this effect with a bumped token.
-    const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;
+    // A dashboard server reconnect re-runs this effect with a bumped token; track
+    // it so a bumped token drives a fresh attach.
     lastServerReconnectTokenRef.current = serverReconnectToken;
     const attachmentGeneration = attachmentGenerationRef.current;
 
@@ -904,12 +948,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       // the reconnect overlay blocks interaction; we resume once it returns.
       if (!visible || !serverConnected) {
         return;
-      }
-      // Preserve the user's clamp/fill choice across an outage: the daemon may
-      // revert to its default mode when the last viewer disconnects, so queue the
-      // pre-outage mode and flush it once the socket reopens.
-      if (isServerReconnect) {
-        queuedViewModeRef.current = viewModeRef.current;
       }
       attachLiveSession(session, false);
     } else {
@@ -949,7 +987,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     if (canRefitTerminalForSession(session, initialReplayCompleteRef.current, visible)) {
       refit();
     }
-  }, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);
+  }, [attachKey(session, visible), accentColor, maximized, visible]);
 
   useImperativeHandle(ref, () => ({
     getDimensions: () => {
@@ -959,6 +997,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     refit,
     refresh: () => refreshTerminalRender(termRef.current),
     sendInput: (data: string) => {
+      if (displacedRef.current) {
+        return;
+      }
       const liveSession = selectedSessionRef.current;
       if (liveSession && isLiveStatus(liveSession.status)) {
         onLiveInteractionRef.current?.();
@@ -968,27 +1009,37 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         ws.send(JSON.stringify({ type: "input", data }));
       }
     },
-    setViewMode: (mode: TerminalResizeMode) => {
-      sendMode(mode);
-      refit();
-    },
+    takeControl,
     acknowledgeAttention: sendAttentionAck,
     focus: focusActiveTerminal,
     captureText: () => captureTerminalText(termRef.current)
   }));
 
   return (
-    <div
-      ref={containerRef}
-      className={styles.root}
-      style={{
-        backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
-        ...(accentColor
-          ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
-          : {})
-      }}
-      onClick={focusActiveTerminal}
-      onFocusCapture={refreshActiveTerminal}
-    />
+    <div className={styles.wrapper}>
+      <div
+        ref={containerRef}
+        className={styles.root}
+        style={{
+          backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
+          visibility: displayState === "displaced" ? "hidden" : "visible",
+          ...(accentColor
+            ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
+            : {})
+        }}
+        onClick={focusActiveTerminal}
+        onFocusCapture={refreshActiveTerminal}
+      />
+      {displayState === "displaced" && (
+        <div className={styles.overlay}>
+          <div className={styles.overlayCard}>
+            <Text>This session is being viewed at a larger size elsewhere.</Text>
+            <Button appearance="primary" onClick={takeControl}>
+              Take control
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 });

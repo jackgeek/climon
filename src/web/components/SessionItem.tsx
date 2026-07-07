@@ -2,21 +2,18 @@ import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-
 import {
   Dismiss16Regular,
   Add16Regular,
+  ArrowMaximize16Regular,
   FullScreenMaximize16Regular,
   Pause16Regular,
   Play16Regular,
   Settings16Regular,
-  LockClosed16Regular,
-  LockOpen16Regular,
   ErrorCircle16Filled,
   Warning16Filled,
   ArrowSync16Regular
 } from "@fluentui/react-icons";
 import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import type { SessionMeta, TerminalProgress } from "../../types.js";
-import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { isLiveStatus } from "../api.js";
-import { clampSizeMenuLabel } from "../view-mode.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { bottomRowRightOffsets } from "./session-item-layout.js";
@@ -34,7 +31,7 @@ const useStyles = makeStyles({
     ":hover .climon-new": { display: "inline-flex" },
     ":hover .climon-edit": { display: "inline-flex" },
     ":hover .climon-pause": { display: "inline-flex" },
-    ":hover .climon-lock": { display: "inline-flex" }
+    ":hover .climon-take-control": { display: "inline-flex" }
   },
   compactRoot: {
     minHeight: "54px",
@@ -211,9 +208,10 @@ interface Props {
   onEdit: (session: SessionMeta) => void;
   onPauseToggle: (session: SessionMeta) => void;
   onMaximize: (id: string) => void;
-  viewMode?: TerminalResizeMode;
-  viewModeLocked?: boolean;
-  onViewModeToggle?: () => void;
+  /** True when THIS tab controls the session's PTY grid. */
+  isController?: boolean;
+  /** Take control of this session (resize its grid to fit this view). */
+  onTakeControl?: () => void;
   stateIconNoMotion?: boolean;
 }
 
@@ -306,9 +304,8 @@ export function SessionItem({
   onEdit,
   onPauseToggle,
   onMaximize,
-  viewMode,
-  viewModeLocked = false,
-  onViewModeToggle,
+  isController,
+  onTakeControl,
   stateIconNoMotion = false
 }: Props) {
   const styles = useStyles();
@@ -388,18 +385,18 @@ export function SessionItem({
           }}
         />
       )}
-      {showLiveControls && (
+      {showLiveControls && !isController && onTakeControl && (
         <Button
-          className={mergeClasses("climon-lock", styles.lockBtn)}
+          className={mergeClasses("climon-take-control", styles.lockBtn)}
           style={{ right: `${rightOffsets.lock}px` }}
           appearance="subtle"
           size="small"
-          icon={viewMode === "fill" && !viewModeLocked ? <LockOpen16Regular /> : <LockClosed16Regular />}
-          title={clampSizeMenuLabel}
-          aria-label={clampSizeMenuLabel}
+          icon={<ArrowMaximize16Regular />}
+          title="Take control (resize this session to fit your view)"
+          aria-label="Take control"
           onClick={(e) => {
             e.stopPropagation();
-            onViewModeToggle?.();
+            onTakeControl();
           }}
         />
       )}
