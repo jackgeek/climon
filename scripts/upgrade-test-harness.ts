@@ -4,12 +4,11 @@
  *
  * Runs on a REAL Windows box (the migration paths are #[cfg(windows)]-only). It:
  *   1. generates a throwaway Ed25519 keypair,
- *   2. builds a scratch `climon` client with --features test-update-endpoint and the
- *      test public key embedded (CLIMON_UPDATE_PUBKEY_B64),
- *   3. packages a bridge zip (legacy layout) and a C zip (stub layout) at version V,
+ *   2. packages a bridge zip (legacy layout) and a C zip (stub layout) at version V,
  *      and a C+1 stub zip at version V2,
- *   4. signs them with the test private key via signReleaseDir + serves over loopback,
- *   5. drives: bridge->C migration, C->C+1 stub update, idempotent --migrate, and
+ *      with --features test-update-endpoint and the test public key embedded,
+ *   3. signs them with the test private key via signReleaseDir + serves over loopback,
+ *   4. drives: bridge->C migration, C->C+1 stub update, idempotent --migrate, and
  *      simulated-brick recovery, asserting on-disk layout after each.
  *
  * SECURITY: never reads the production signing key; the test feature/pubkey override are
@@ -39,7 +38,6 @@ if (process.platform !== "win32") {
 }
 
 const projectRoot = dirname(import.meta.dir);
-const rustDir = resolve(projectRoot, "rust");
 const V = "9.9.0"; // C release version (well above any real version)
 const V2 = "9.9.1"; // C+1 release version
 
@@ -58,13 +56,7 @@ async function main() {
   const workRoot = scratch("work");
   console.log(`harness work dir: ${workRoot}`);
 
-  // 1. Build the scratch test client (feature-gated override + test pubkey embedded).
-  console.log("→ Building scratch test client (climon-cli, test-update-endpoint)...");
-  await $`cargo build --release -p climon-cli --features test-update-endpoint`
-    .env({ ...process.env, CLIMON_UPDATE_PUBKEY_B64: kp.publicKeyRawB64, CLIMON_VERSION: V })
-    .cwd(rustDir);
-
-  // 2. Build the release zips: bridge (legacy) + C (stub) at V, plus C+1 (stub) at V2.
+  // 1. Build the release zips: bridge (legacy) + C (stub) at V, plus C+1 (stub) at V2.
   const releaseDir = join(workRoot, "release");
   mkdirSync(releaseDir, { recursive: true });
 
@@ -72,6 +64,7 @@ async function main() {
   await $`bun ${resolve(projectRoot, "scripts/compile.ts")}`.env({
     ...process.env,
     CLIMON_LEGACY_LAYOUT: "1",
+    CLIMON_TEST_UPDATE_ENDPOINT: "1",
     CLIMON_VERSION: V,
     CLIMON_UPDATE_PUBKEY_B64: kp.publicKeyRawB64,
   });
@@ -81,6 +74,7 @@ async function main() {
   console.log(`→ Packaging C (stub) zip at ${V}...`);
   await $`bun ${resolve(projectRoot, "scripts/compile.ts")}`.env({
     ...process.env,
+    CLIMON_TEST_UPDATE_ENDPOINT: "1",
     CLIMON_VERSION: V,
     CLIMON_UPDATE_PUBKEY_B64: kp.publicKeyRawB64,
   });
@@ -94,6 +88,7 @@ async function main() {
   console.log(`→ Packaging C+1 (stub) zip at ${V2}...`);
   await $`bun ${resolve(projectRoot, "scripts/compile.ts")}`.env({
     ...process.env,
+    CLIMON_TEST_UPDATE_ENDPOINT: "1",
     CLIMON_VERSION: V2,
     CLIMON_UPDATE_PUBKEY_B64: kp.publicKeyRawB64,
   });
@@ -104,7 +99,7 @@ async function main() {
     join(c1Dir, "climon-windows-x64.zip")
   );
 
-  // 3. Serve C first, signed for V.
+  // 2. Serve C first, signed for V.
   const { server: cServer, baseUrl: cBase } = await serveDir(cDir);
   await signReleaseDir({
     distDir: cDir,

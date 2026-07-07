@@ -12,3 +12,9 @@ path = "src/lib.rs"
 
 [dependencies]
 climon-cli = { path = "../climon-cli", version = "0.1.0" }
+
+[features]
+# Dev/test only: forwards climon-cli's test-update-endpoint so the Windows stub
+# payload (climon.dll) honors CLIMON_TEST_MANIFEST_URL in the upgrade-test harness.
+# Never enabled by scripts/compile.ts's default path or the release pipeline.
+test-update-endpoint = ["climon-cli/test-update-endpoint"]

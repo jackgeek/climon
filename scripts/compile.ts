@@ -50,6 +50,12 @@ const assembleMode = process.env.CLIMON_ASSEMBLE === "1";
 // climon[.exe] + climon-server[.exe], no installer, no DLL) for the upgrade-test
 // harness. Never set by the release pipeline. Ignored in assemble mode.
 const legacyLayoutMode = process.env.CLIMON_LEGACY_LAYOUT === "1" && !assembleMode;
+// Dev/test only: build the served clients with climon-update's test-update-endpoint
+// feature so `climon update` honors CLIMON_TEST_MANIFEST_URL. Set ONLY by the
+// upgrade-test harness (scripts/upgrade-test-harness.ts); never by the release
+// pipeline. Inert (no feature) unless CLIMON_TEST_UPDATE_ENDPOINT=1.
+const testUpdateEndpoint = process.env.CLIMON_TEST_UPDATE_ENDPOINT === "1";
+const clientFeatureArgs = testUpdateEndpoint ? ["--features", "test-update-endpoint"] : [];
 
 /**
  * `bun build` flags that activate the embedded-asset code path in
@@ -228,7 +234,7 @@ async function buildHostRustClient(platform: string): Promise<Uint8Array> {
   // including Windows (it carries the migration-aware updater via climon_cli::run).
   if (legacyLayoutMode) {
     console.log(`→ Building standalone Rust client (cargo, ${platform}, legacy layout)...`);
-    await $`cargo build --release -p climon-cli`.cwd(rustDir);
+    await $`cargo build --release -p climon-cli ${clientFeatureArgs}`.cwd(rustDir);
     const builtName = isWindows ? "climon.exe" : "climon";
     const built = resolve(rustDir, "target", "release", builtName);
     if (!existsSync(built)) {
@@ -238,14 +244,14 @@ async function buildHostRustClient(platform: string): Promise<Uint8Array> {
   }
   console.log(`→ Building Rust client (cargo, ${platform})...`);
   if (isWindows) {
-    await $`cargo build --release -p climon-dll`.cwd(rustDir);
+    await $`cargo build --release -p climon-dll ${clientFeatureArgs}`.cwd(rustDir);
     const built = resolve(rustDir, "target", "release", "climon.dll");
     if (!existsSync(built)) {
       throw new Error(`Expected cargo to produce ${built} but it was not found`);
     }
     return new Uint8Array(readFileSync(built));
   }
-  await $`cargo build --release -p climon-cli`.cwd(rustDir);
+  await $`cargo build --release -p climon-cli ${clientFeatureArgs}`.cwd(rustDir);
   const built = resolve(rustDir, "target", "release", "climon");
   if (!existsSync(built)) {
     throw new Error(`Expected cargo to produce ${built} but it was not found`);
