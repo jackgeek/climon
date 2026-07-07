@@ -22,11 +22,11 @@ import {
   FrameType,
   parseJsonPayload,
   type AttentionPayload,
+  type ControlPayload,
   type ExitPayload,
   type PtySizePayload,
-  type TerminalModePayload,
   type ResizePayload,
-  type TerminalResizeMode
+  type SurfaceKind
 } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { atomicWrite, listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
@@ -577,14 +577,18 @@ export function splitCommand(command: string): string[] {
 export function browserResizePayload(message: {
   cols?: number;
   rows?: number;
-  mode?: TerminalResizeMode;
+  kind?: SurfaceKind;
+  viewerId?: string;
 }): ResizePayload | null {
   if (!message.cols || !message.rows) {
     return null;
   }
-  const payload: ResizePayload = { cols: message.cols, rows: message.rows, source: "viewer" };
-  if (message.mode === "clamped" || message.mode === "fill") {
-    payload.mode = message.mode;
+  const payload: ResizePayload = { cols: message.cols, rows: message.rows };
+  if (message.kind === "terminal" || message.kind === "dashboard" || message.kind === "pwa") {
+    payload.kind = message.kind;
+  }
+  if (typeof message.viewerId === "string") {
+    payload.viewerId = message.viewerId;
   }
   return payload;
 }
@@ -2040,9 +2044,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             } else if (frame.type === FrameType.PtySize) {
               const size = parseJsonPayload<PtySizePayload>(frame.payload);
               ws.send(JSON.stringify({ type: "size", cols: size.cols, rows: size.rows }));
-            } else if (frame.type === FrameType.TerminalMode) {
-              const mode = parseJsonPayload<TerminalModePayload>(frame.payload);
-              ws.send(JSON.stringify({ type: "mode", mode: mode.mode }));
+            } else if (frame.type === FrameType.Control) {
+              const ctrl = parseJsonPayload<ControlPayload>(frame.payload);
+              ws.send(JSON.stringify({ type: "control", controllerId: ctrl.controllerId, cols: ctrl.cols, rows: ctrl.rows }));
             }
           }
         });
@@ -2063,7 +2067,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             data?: string;
             cols?: number;
             rows?: number;
-            mode?: TerminalResizeMode;
+            kind?: SurfaceKind;
+            viewerId?: string;
             needsAttention?: boolean;
             attentionMatchedAt?: string;
           };
@@ -2074,8 +2079,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             if (payload) {
               daemon.write(encodeJsonFrame(FrameType.Resize, payload));
             }
-          } else if (message.type === "mode" && (message.mode === "clamped" || message.mode === "fill")) {
-            daemon.write(encodeJsonFrame(FrameType.TerminalMode, { mode: message.mode }));
+          } else if (message.type === "takeControl") {
+            daemon.write(encodeFrame(FrameType.TakeControl));
           } else if (message.type === "attention") {
             const payload = browserAttentionPayload(message);
             if (payload) {

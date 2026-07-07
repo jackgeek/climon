@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
 import { readServerStateFromDir, getServerStatePath, serializeServerState } from "../src/server-state.js";
-import { computeRemotesActive } from "../src/server/server.js";
+import { browserResizePayload, computeRemotesActive } from "../src/server/server.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
@@ -17,6 +17,16 @@ test("remotes are active when wslBridge or remotes flag is enabled", () => {
   expect(computeRemotesActive({ feature: { wslBridge: "enabled" } } as never)).toBe(true);
   expect(computeRemotesActive({ feature: { remotes: "enabled" } } as never)).toBe(true);
   expect(computeRemotesActive({ feature: { remoteSpawn: "enabled" } } as never)).toBe(false);
+});
+
+test("browserResizePayload carries kind and viewerId, not source/mode", () => {
+  expect(browserResizePayload({ cols: 100, rows: 40, kind: "dashboard", viewerId: "v1" })).toEqual({
+    cols: 100,
+    rows: 40,
+    kind: "dashboard",
+    viewerId: "v1"
+  });
+  expect(browserResizePayload({ cols: 0, rows: 40 })).toBeNull();
 });
 
 describe("buildInterimWslExposureWarning", () => {
