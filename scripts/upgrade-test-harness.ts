@@ -138,10 +138,22 @@ async function main() {
     CLIMON_TEST_MANIFEST_URL: `${c1Base}/manifest.json`,
   });
   assertStubLayout(install, V2);
+  // The updater process loaded climon-<V>.dll to run, so the in-process reaper
+  // (update_cmd.rs:127) correctly SKIPS it as locked. A subsequent fresh
+  // invocation loads the new climon-<V2>.dll, freeing the old one; `climon
+  // cleanup` is the documented reaper entry point (cleanup_cmd.rs). Isolate
+  // CLIMON_HOME so teardown finds no beacons and never touches real state.
+  const cleanupHome = scratch("cleanup-home");
+  await $`${join(install, "climon.exe")} cleanup`.env({
+    ...process.env,
+    CLIMON_HOME: cleanupHome,
+  });
   if (readdirSync(install).includes(`climon-${V}.dll`)) {
-    throw new Error(`reaper failed: strictly-older climon-${V}.dll still present`);
+    throw new Error(
+      `reaper failed: strictly-older climon-${V}.dll still present after cleanup`
+    );
   }
-  console.log(`  updated to ${V2}; older payload reaped`);
+  console.log(`  updated to ${V2}; older payload reaped by fresh cleanup run`);
 
   // ---- Scenario 3: idempotent install.exe --migrate ----
   console.log("\n=== Scenario 3: idempotent --migrate ===");
