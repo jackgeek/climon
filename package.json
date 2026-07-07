@@ -44,7 +44,7 @@
   },
   "packageManager": "bun@1.3.10",
   "dependencies": {
-    "@fluentui/react-components": "^9.74.1",
+    "@fluentui/react-components": "^9.74.3",
     "@fluentui/react-icons": "^2.0.328",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-web-links": "^0.12.0",
