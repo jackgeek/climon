@@ -593,7 +593,7 @@ mod tests {
         );
         // While displaced: other input is swallowed.
         assert_eq!(
-            p.process(&[b'a', b'b'], true),
+            p.process(b"ab", true),
             ProcessedInput {
                 forward: vec![],
                 action: InputAction::None

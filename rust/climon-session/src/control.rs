@@ -24,9 +24,7 @@ pub struct Surface {
 /// Used at startup and whenever the current controller disconnects. Manual
 /// `TakeControl` is handled by the caller and is NOT overridden here.
 pub fn choose_controller(surfaces: &[Surface]) -> Option<&Surface> {
-    surfaces
-        .iter()
-        .max_by_key(|s| (s.kind.priority(), s.seq))
+    surfaces.iter().max_by_key(|s| (s.kind.priority(), s.seq))
 }
 
 /// Whether a surface of `(own_cols, own_rows)` cannot faithfully render a grid
@@ -40,7 +38,13 @@ mod tests {
     use super::*;
 
     fn s(id: &str, kind: SurfaceKind, cols: u16, rows: u16, seq: u64) -> Surface {
-        Surface { id: id.into(), kind, cols, rows, seq }
+        Surface {
+            id: id.into(),
+            kind,
+            cols,
+            rows,
+            seq,
+        }
     }
 
     #[test]
