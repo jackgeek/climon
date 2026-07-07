@@ -46,6 +46,10 @@ const serverEntrypoint = resolve(projectRoot, "src/server.ts");
 const embeddedAssetsPath = resolve(projectRoot, "src/server/embedded-assets.ts");
 
 const assembleMode = process.env.CLIMON_ASSEMBLE === "1";
+// Host-only, test-only: emit the pre-Feature-2 "bridge" layout (full standalone
+// climon[.exe] + climon-server[.exe], no installer, no DLL) for the upgrade-test
+// harness. Never set by the release pipeline. Ignored in assemble mode.
+const legacyLayoutMode = process.env.CLIMON_LEGACY_LAYOUT === "1" && !assembleMode;
 
 /**
  * `bun build` flags that activate the embedded-asset code path in
@@ -86,9 +90,26 @@ type ZipEntry = {
   data?: Uint8Array;
 };
 
-export function zipEntryNamesForPlatform(platform: string): string[] {
+/**
+ * The bare zip entry names for a platform.
+ *
+ * Default (stub model): `install[.exe]` + client (`climon.dll` on Windows / `climon`
+ * on Unix) + `climon-server[.exe]`.
+ *
+ * `legacy: true` returns the pre-Feature-2 bridge layout used ONLY by the upgrade-test
+ * harness: the full standalone client (`climon[.exe]`) + `climon-server[.exe]`, with no
+ * installer and no DLL. The absence of `install.exe`+`climon.dll` is what marks a release
+ * as non-stub-model to `should_migrate_legacy`.
+ */
+export function zipEntryNamesForPlatform(
+  platform: string,
+  opts: { legacy?: boolean } = {}
+): string[] {
   const isWindows = platform.startsWith("windows");
   const exe = isWindows ? ".exe" : "";
+  if (opts.legacy) {
+    return [`climon${exe}`, `climon-server${exe}`];
+  }
   const client = isWindows ? "climon.dll" : "climon";
   return [`install${exe}`, client, `climon-server${exe}`];
 }
@@ -203,6 +224,18 @@ function readStagedInstaller(platform: string): Uint8Array {
 /** Builds the host Rust client with cargo and returns its bytes (local mode). */
 async function buildHostRustClient(platform: string): Promise<Uint8Array> {
   const isWindows = platform.startsWith("windows");
+  // Legacy/bridge layout ships the full standalone client on every platform,
+  // including Windows (it carries the migration-aware updater via climon_cli::run).
+  if (legacyLayoutMode) {
+    console.log(`→ Building standalone Rust client (cargo, ${platform}, legacy layout)...`);
+    await $`cargo build --release -p climon-cli`.cwd(rustDir);
+    const builtName = isWindows ? "climon.exe" : "climon";
+    const built = resolve(rustDir, "target", "release", builtName);
+    if (!existsSync(built)) {
+      throw new Error(`Expected cargo to produce ${built} but it was not found`);
+    }
+    return new Uint8Array(readFileSync(built));
+  }
   console.log(`→ Building Rust client (cargo, ${platform})...`);
   if (isWindows) {
     await $`cargo build --release -p climon-dll`.cwd(rustDir);
@@ -274,7 +307,9 @@ async function main() {
   } else {
     const platform = targets[0].platform;
     rustClients.set(platform, await buildHostRustClient(platform));
-    rustInstallers.set(platform, await buildHostInstaller(platform));
+    if (!legacyLayoutMode) {
+      rustInstallers.set(platform, await buildHostInstaller(platform));
+    }
   }
 
   // Step 1: Embed assets so the server binary serves the dashboard bundle.
@@ -297,7 +332,9 @@ async function main() {
       const clientData = rustClients.get(platform);
       if (!clientData) throw new Error(`Missing Rust client for ${platform}`);
       const installerData = rustInstallers.get(platform);
-      if (!installerData) throw new Error(`Missing installer for ${platform}`);
+      if (!legacyLayoutMode && !installerData) {
+        throw new Error(`Missing installer for ${platform}`);
+      }
 
       const serverOut = resolve(stageDir, `climon-server${exe}`);
       console.log(`→ Compiling climon-server (${target})...`);
@@ -313,12 +350,16 @@ async function main() {
         ? { level: 6 }
         : { level: 6, os: 3, attrs: 0o755 << 16 };
 
-      const clientName = isWindows ? "climon.dll" : "climon";
-      const zipFiles: ZipEntry[] = [
-        { name: `install${exe}`, data: installerData },
-        { name: clientName, data: clientData },
-        { name: `climon-server${exe}`, path: serverOut },
-      ];
+      const zipFiles: ZipEntry[] = legacyLayoutMode
+        ? [
+            { name: `climon${exe}`, data: clientData },
+            { name: `climon-server${exe}`, path: serverOut },
+          ]
+        : [
+            { name: `install${exe}`, data: installerData },
+            { name: isWindows ? "climon.dll" : "climon", data: clientData },
+            { name: `climon-server${exe}`, path: serverOut },
+          ];
 
       const zipEntries: Record<string, [Uint8Array, ZipOptions]> = {};
 
