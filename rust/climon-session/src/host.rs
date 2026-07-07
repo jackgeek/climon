@@ -578,6 +578,22 @@ impl HostState {
         self.broadcast_control();
     }
 
+    /// Processes a chunk of in-process local-terminal stdin against the current
+    /// displaced state. While the local terminal is displaced (its output is
+    /// suppressed because a larger surface controls the grid), the monitored
+    /// command is non-interactive: all input is swallowed EXCEPT Ctrl+T (0x14),
+    /// which takes control back to the local terminal. Returns the bytes that
+    /// should be forwarded to the PTY (empty while displaced).
+    fn local_stdin(&mut self, buf: &[u8]) -> Vec<u8> {
+        if !self.local_output_suppressed {
+            return buf.to_vec();
+        }
+        if buf.contains(&0x14) {
+            self.take_control("local");
+        }
+        Vec::new()
+    }
+
     /// Re-picks a controller when the current one is gone. If the controller is
     /// still connected this is a no-op; otherwise it falls back to
     /// [`choose_controller`] (priority PWA > dashboard > terminal, ties by most
@@ -1428,7 +1444,10 @@ fn spawn_connection_reader(
                                 if let Some(kind) = size.kind {
                                     c.kind = kind;
                                 }
-                                if let Some(vid) = size.viewer_id.as_ref().filter(|v| !v.is_empty())
+                                if let Some(vid) = size
+                                    .viewer_id
+                                    .as_ref()
+                                    .filter(|v| !v.is_empty() && v.as_str() != "local")
                                 {
                                     c.viewer_id = vid.clone();
                                 }
@@ -1527,9 +1546,9 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
         match local_restore_decision(s.local_restore_at, Instant::now(), overgrown) {
             LocalRestoreDecision::NotDue => {}
             LocalRestoreDecision::SkipOvergrown => {
-                // A viewer re-grew the shared PTY during the delay (Fill mode).
+                // A surface re-grew the shared PTY during the delay.
                 // Stay suppressed; the next genuine restore transition reschedules
-                // via `update_overgrown_warning`.
+                // via `update_local_displaced`.
                 if debug_restore_enabled() {
                     debug_restore_log(
                         &s.env,
@@ -1741,6 +1760,7 @@ mod local_relay {
 
         // stdin -> pty
         let stdin_shutdown = Arc::clone(&shutdown);
+        let stdin_state = Arc::clone(&state);
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let stdin = std::io::stdin();
@@ -1754,11 +1774,17 @@ mod local_relay {
                     Ok(n) => n,
                 };
                 drop(lock);
-                let mut w = pty_writer.lock().unwrap();
-                if w.write_all(&buf[..n]).is_err() {
-                    break;
+                let forward = {
+                    let mut s = stdin_state.lock().unwrap();
+                    s.local_stdin(&buf[..n])
+                };
+                if !forward.is_empty() {
+                    let mut w = pty_writer.lock().unwrap();
+                    if w.write_all(&forward).is_err() {
+                        break;
+                    }
+                    let _ = w.flush();
                 }
-                let _ = w.flush();
             }
         });
 
@@ -1912,6 +1938,7 @@ mod local_relay {
 
         // stdin -> pty
         let stdin_shutdown = Arc::clone(&shutdown);
+        let stdin_state = Arc::clone(&state);
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let stdin = std::io::stdin();
@@ -1925,11 +1952,17 @@ mod local_relay {
                     Ok(n) => n,
                 };
                 drop(lock);
-                let mut w = pty_writer.lock().unwrap();
-                if w.write_all(&buf[..n]).is_err() {
-                    break;
+                let forward = {
+                    let mut s = stdin_state.lock().unwrap();
+                    s.local_stdin(&buf[..n])
+                };
+                if !forward.is_empty() {
+                    let mut w = pty_writer.lock().unwrap();
+                    if w.write_all(&forward).is_err() {
+                        break;
+                    }
+                    let _ = w.flush();
                 }
-                let _ = w.flush();
             }
         });
 
