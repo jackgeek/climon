@@ -18,7 +18,7 @@ use crate::version::VERSION;
 /// `CLIMON_TEST_MANIFEST_URL` env var overrides it so the upgrade-test harness can
 /// point a scratch client at a local signed manifest. The override code is
 /// physically absent from release builds (the feature is never enabled there).
-pub(crate) fn resolve_manifest_url() -> &'static str {
+fn resolve_manifest_url() -> &'static str {
     #[cfg(feature = "test-update-endpoint")]
     {
         if let Ok(url) = std::env::var("CLIMON_TEST_MANIFEST_URL") {
@@ -83,17 +83,21 @@ mod tests {
     use super::resolve_manifest_url;
     use crate::check::DEFAULT_MANIFEST_URL;
 
+    // Only compiled when the override is OFF, i.e. when resolve_manifest_url()
+    // unconditionally returns the default. This keeps it mutually exclusive with
+    // the feature-gated test below so no test observes CLIMON_TEST_MANIFEST_URL
+    // concurrently (cargo runs tests multithreaded).
+    #[cfg(not(feature = "test-update-endpoint"))]
     #[test]
     fn resolves_to_default_manifest_url_by_default() {
-        // Without the test feature (or with the env unset) the resolver must
-        // return the hardcoded production manifest URL.
         assert_eq!(resolve_manifest_url(), DEFAULT_MANIFEST_URL);
     }
 
+    // The only test compiled when the feature is enabled, so it is the sole reader
+    // of the process-global CLIMON_TEST_MANIFEST_URL — no concurrent-test race.
     #[cfg(feature = "test-update-endpoint")]
     #[test]
     fn honors_test_manifest_url_env_when_feature_enabled() {
-        // SAFETY: single-threaded test; we set and clear the var within it.
         std::env::set_var(
             "CLIMON_TEST_MANIFEST_URL",
             "http://127.0.0.1:9/manifest.json",
