@@ -236,6 +236,19 @@ On **Unix**, the client remains the `climon` executable built from `climon-cli`.
 Updates continue to use the existing rename-over swap model because POSIX allows
 replacing an executable while old processes keep their inode.
 
+For pre-release verification, `climon-update` carries a dev-only, compiled-out
+`test-update-endpoint` cargo feature: when enabled it lets `climon update` read
+its manifest URL from `CLIMON_TEST_MANIFEST_URL`, and `climon-update/build.rs`
+accepts a `CLIMON_UPDATE_PUBKEY_B64` build-time override so a test client can
+trust a throwaway signing key. `scripts/compile.ts` threads the feature into the
+served client builds (`climon-cli` and the Windows `climon-dll` stub payload)
+only when `CLIMON_TEST_UPDATE_ENDPOINT=1`; neither the feature nor any override
+is enabled by the default `compile.ts` path or `.github/workflows/release.yml`,
+so shipped binaries physically lack the override and always embed the real key.
+The `scripts/upgrade-test-harness.ts` end-to-end harness composes these to
+exercise the Windows migration/update paths (bridge→stub, stub→stub, idempotent
+`--migrate`, and brick recovery) on a real Windows box.
+
 
 ### Migrating existing Windows installs (bridge release)
 

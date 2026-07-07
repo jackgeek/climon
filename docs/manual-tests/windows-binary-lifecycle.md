@@ -7,6 +7,21 @@ path, and bridge `--migrate` conversion.
 
 No configuration matrix applies beyond platform coverage.
 
+> **Automated coverage:** `scripts/upgrade-test-harness.ts` automates the
+> migration/update paths on a real Windows box. It uses a throwaway Ed25519 key
+> and a loopback manifest via the dev-only `test-update-endpoint` feature; the
+> production signing key and release pipeline are never involved. Run it with
+> `bun scripts/upgrade-test-harness.ts` on Windows. The cases below remain the
+> manual source of truth; the harness scenarios map onto them as follows:
+>
+> - **Scenario 1** (bridge→C migration via `climon update`) → **MT-WBL-08**, and
+>   the migration half of **MT-WBL-07**.
+> - **Scenario 2** (C→C+1 stub update, then reaping via a fresh `climon cleanup`)
+>   → **MT-WBL-02** and **MT-WBL-03**.
+> - **Scenario 3** (idempotent `install.exe --migrate`) → **MT-WBL-10**.
+> - **Scenario 4** (simulated brick + recovery via `install.exe --migrate`) →
+>   **MT-WBL-09**.
+
 ---
 
 ## MT-WBL-01 — Fresh Windows install places stubs, versioned artifacts, and pointers
