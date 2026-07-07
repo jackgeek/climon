@@ -366,6 +366,8 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                 rows,
                 source: Some(ResizeSource::Host),
                 mode: None,
+                kind: None,
+                viewer_id: None,
             },
         ));
         let _ = w.flush();
@@ -434,6 +436,8 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                     rows,
                     source: Some(ResizeSource::Host),
                     mode: None,
+                    kind: None,
+                    viewer_id: None,
                 },
             ));
             let _ = w.flush();

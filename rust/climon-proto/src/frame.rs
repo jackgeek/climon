@@ -23,6 +23,8 @@ pub enum FrameType {
     Title = 8,
     TerminalMode = 9,
     TerminalWarning = 10,
+    Control = 11,
+    TakeControl = 12,
 }
 
 impl FrameType {
@@ -38,6 +40,8 @@ impl FrameType {
             8 => Some(FrameType::Title),
             9 => Some(FrameType::TerminalMode),
             10 => Some(FrameType::TerminalWarning),
+            11 => Some(FrameType::Control),
+            12 => Some(FrameType::TakeControl),
             _ => None,
         }
     }
@@ -59,6 +63,26 @@ pub enum ResizeSource {
     Viewer,
 }
 
+/// Surface class for control-priority ordering. Mirrors `SurfaceKind` in
+/// `src/ipc/frame.ts`. Priority: pwa > dashboard > terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SurfaceKind {
+    Terminal,
+    Dashboard,
+    Pwa,
+}
+
+impl SurfaceKind {
+    pub fn priority(self) -> u8 {
+        match self {
+            SurfaceKind::Terminal => 1,
+            SurfaceKind::Dashboard => 2,
+            SurfaceKind::Pwa => 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResizePayload {
@@ -68,6 +92,20 @@ pub struct ResizePayload {
     pub source: Option<ResizeSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<TerminalResizeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<SurfaceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewer_id: Option<String>,
+}
+
+/// Broadcast to every surface: who controls the shared PTY and its grid size.
+/// Mirrors `ControlPayload`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlPayload {
+    pub controller_id: String,
+    pub cols: u16,
+    pub rows: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,6 +269,8 @@ mod tests {
                 rows: 40,
                 source: None,
                 mode: None,
+                kind: None,
+                viewer_id: None,
             },
         );
         assert_eq!(&frame[5..], br#"{"cols":100,"rows":40}"#);
@@ -243,9 +283,68 @@ mod tests {
                 cols: 100,
                 rows: 40,
                 source: None,
-                mode: None
+                mode: None,
+                kind: None,
+                viewer_id: None,
             }
         );
+    }
+
+    #[test]
+    fn round_trips_a_resize_with_surface_identity() {
+        let frame = encode_json_frame(
+            FrameType::Resize,
+            &ResizePayload {
+                cols: 120,
+                rows: 40,
+                source: None,
+                mode: None,
+                kind: Some(SurfaceKind::Dashboard),
+                viewer_id: Some("abc123".into()),
+            },
+        );
+        assert_eq!(
+            &frame[5..],
+            br#"{"cols":120,"rows":40,"kind":"dashboard","viewerId":"abc123"}"#
+        );
+        let decoded = FrameDecoder::new().push(&frame);
+        let payload: ResizePayload = parse_json_payload(&decoded[0].payload).unwrap();
+        assert_eq!(payload.kind, Some(SurfaceKind::Dashboard));
+        assert_eq!(payload.viewer_id.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn round_trips_a_control_frame() {
+        let frame = encode_json_frame(
+            FrameType::Control,
+            &ControlPayload {
+                controller_id: "local".into(),
+                cols: 80,
+                rows: 24,
+            },
+        );
+        assert_eq!(
+            &frame[5..],
+            br#"{"controllerId":"local","cols":80,"rows":24}"#
+        );
+        let decoded = FrameDecoder::new().push(&frame);
+        assert_eq!(decoded[0].frame_type, FrameType::Control);
+        let payload: ControlPayload = parse_json_payload(&decoded[0].payload).unwrap();
+        assert_eq!(payload.controller_id, "local");
+    }
+
+    #[test]
+    fn encodes_a_take_control_frame_with_empty_payload() {
+        let frame = encode_frame(FrameType::TakeControl, &[]);
+        let decoded = FrameDecoder::new().push(&frame);
+        assert_eq!(decoded[0].frame_type, FrameType::TakeControl);
+        assert!(decoded[0].payload.is_empty());
+    }
+
+    #[test]
+    fn surface_kind_priority_orders_pwa_over_dashboard_over_terminal() {
+        assert!(SurfaceKind::Pwa.priority() > SurfaceKind::Dashboard.priority());
+        assert!(SurfaceKind::Dashboard.priority() > SurfaceKind::Terminal.priority());
     }
 
     #[test]

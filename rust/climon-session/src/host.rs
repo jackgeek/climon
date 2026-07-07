@@ -1680,6 +1680,8 @@ mod local_relay {
                     rows,
                     source: Some(ResizeSource::Host),
                     mode: None,
+                    kind: None,
+                    viewer_id: None,
                 });
             }
         });
@@ -1798,6 +1800,8 @@ mod local_relay {
                 rows,
                 source: Some(ResizeSource::Host),
                 mode: None,
+                kind: None,
+                viewer_id: None,
             });
         }
 
@@ -1846,6 +1850,8 @@ mod local_relay {
                         rows: next.1,
                         source: Some(ResizeSource::Host),
                         mode: None,
+                        kind: None,
+                        viewer_id: None,
                     });
                 }
             }

@@ -304,6 +304,8 @@ fn viewer_resize_broadcasts_pty_size() {
             rows: 40,
             source: Some(ResizeSource::Viewer),
             mode: Some(TerminalResizeMode::Fill),
+            kind: None,
+            viewer_id: None,
         },
     );
     stream.write_all(&resize).unwrap();
@@ -478,6 +480,8 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
             rows: 30,
             source: Some(ResizeSource::Host),
             mode: None,
+            kind: None,
+            viewer_id: None,
         },
     );
     stream.write_all(&resize).unwrap();
