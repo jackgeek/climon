@@ -272,6 +272,9 @@ async function buildHostInstaller(platform: string): Promise<Uint8Array> {
   if (isWindows) {
     await $`cargo build --release -p climon-stub`.cwd(rustDir);
     stubEnv = {
+      // Signals climon-setup/build.rs that this is a real installer build, so a
+      // missing stub is a hard error instead of an empty placeholder.
+      CLIMON_BUILDING_INSTALLER: "1",
       CLIMON_CLIENT_STUB: resolve(rustDir, "target", "release", "climon-stub.exe"),
       CLIMON_SERVER_STUB: resolve(
         rustDir,

@@ -43,6 +43,7 @@ fn main() {
     );
     println!("cargo:rerun-if-env-changed=CLIMON_CLIENT_STUB");
     println!("cargo:rerun-if-env-changed=CLIMON_SERVER_STUB");
+    println!("cargo:rerun-if-env-changed=CLIMON_BUILDING_INSTALLER");
 }
 
 fn package_version(pkg_path: &Path) -> String {
@@ -67,18 +68,38 @@ fn extract_version(json: &str) -> Option<String> {
 }
 
 /// Copies the file named by `env_var` into `dest`, or writes an empty file when
-/// the env var is unset (host dev builds that never place stubs).
+/// the env var is unset. Real Windows installer builds are driven by the build
+/// orchestrator (scripts/compile.ts / CI), which sets `CLIMON_BUILDING_INSTALLER`
+/// alongside the stub paths; in that mode a missing stub is a hard error so we
+/// never embed an empty stub into a shipped `install.exe`. Bare `cargo`
+/// build/clippy/test on Windows (no orchestrator env) instead stages a zero-byte
+/// placeholder — the crate compiles for linting/testing but is not a shippable
+/// installer.
 fn stage_stub(env_var: &str, dest: PathBuf, target_os: &str) {
     match std::env::var(env_var) {
         Ok(src) if !src.is_empty() => {
             std::fs::copy(&src, &dest)
                 .unwrap_or_else(|e| panic!("copy {src} -> {}: {e}", dest.display()));
         }
-        _ if target_os == "windows" => {
+        _ if target_os == "windows" && building_installer() => {
             panic!("{env_var} must point at a built stub when building the Windows installer")
         }
         _ => {
+            if target_os == "windows" {
+                println!(
+                    "cargo:warning={env_var} unset: staging an empty {} placeholder. \
+                     This installer will NOT be functional; build via scripts/compile.ts \
+                     to embed real stubs.",
+                    dest.file_name().and_then(|n| n.to_str()).unwrap_or("stub")
+                );
+            }
             std::fs::write(&dest, b"").expect("write empty stub placeholder");
         }
     }
+}
+
+/// True when the build orchestrator signals this is a real installer build
+/// (`CLIMON_BUILDING_INSTALLER=1`). Bare cargo/clippy/test leave it unset.
+fn building_installer() -> bool {
+    std::env::var("CLIMON_BUILDING_INSTALLER").as_deref() == Ok("1")
 }

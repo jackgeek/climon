@@ -86,8 +86,8 @@ mod win {
             );
             return 1;
         }
-        // "climon_main\0" as bytes for GetProcAddress.
-        let proc = unsafe { GetProcAddress(handle, b"climon_main\0".as_ptr()) };
+        // C string literal for GetProcAddress; cast to the *const u8 the binding expects.
+        let proc = unsafe { GetProcAddress(handle, c"climon_main".as_ptr().cast()) };
         if proc.is_null() {
             eprintln!(
                 "climon: {} does not export climon_main (error {})",

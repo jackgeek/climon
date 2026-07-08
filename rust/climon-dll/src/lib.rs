@@ -14,7 +14,7 @@ use std::os::raw::{c_int, c_ushort};
 /// valid for the duration of the call. The stub guarantees this.
 #[cfg(windows)]
 #[no_mangle]
-pub extern "C" fn climon_main(argc: c_int, argv: *const *const c_ushort) -> c_int {
+pub unsafe extern "C" fn climon_main(argc: c_int, argv: *const *const c_ushort) -> c_int {
     let args = unsafe { collect_args(argc, argv) };
     let rest: Vec<String> = args.into_iter().skip(1).collect();
     climon_cli::run(&rest) as c_int
