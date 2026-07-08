@@ -200,6 +200,10 @@ struct HostState {
     /// the local terminal blank. The grid is rendered at fire time, so it
     /// reflects the latest output.
     local_restore_at: Option<Instant>,
+    /// Size (`cols`, `rows`) the displaced-notice was last rendered at. Lets the
+    /// notice be re-centered when the local console is resized while displaced,
+    /// instead of being stranded off-centre or scrolled away. Cleared on restore.
+    local_notice_size: Option<(u16, u16)>,
     /// Diagnostics-only (`CLIMON_DEBUG_RESTORE`): while set, the reader thread
     /// logs every chunk it writes to the local terminal so a single Windows run
     /// captures the PTY's post-unsuppress live output (the suspected ConPTY
@@ -383,25 +387,41 @@ impl HostState {
             // Another surface controls the grid: pause local output and show the
             // notice. Cancel any pending restore.
             self.local_restore_at = None;
-            if !self.local_output_suppressed {
-                debug_restore_log(
-                    &self.env,
-                    &format!(
-                        "displace-suppress host={}x{} applied={}x{} controller={:?} real_console={:?}",
-                        self.host_cols,
-                        self.host_rows,
-                        self.applied_cols,
-                        self.applied_rows,
-                        self.controller_id,
-                        debug_console_size(),
-                    ),
-                );
+            let notice_size = (self.host_cols.max(1), self.host_rows.max(1));
+            // Render the notice on the displaced->suppressed transition and also
+            // whenever the local console is resized while still displaced, so the
+            // centered message follows the new terminal size instead of being
+            // stranded off-centre (or scrolled away).
+            let needs_render =
+                !self.local_output_suppressed || self.local_notice_size != Some(notice_size);
+            if needs_render {
+                if !self.local_output_suppressed {
+                    let grid_lines: Vec<String> = self
+                        .grid
+                        .visible_lines()
+                        .into_iter()
+                        .filter(|l| !l.trim().is_empty())
+                        .take(6)
+                        .collect();
+                    debug_restore_log(
+                        &self.env,
+                        &format!(
+                            "displace-suppress host={}x{} applied={}x{} controller={:?} real_console={:?} grid_nonempty_lines={:?}",
+                            self.host_cols,
+                            self.host_rows,
+                            self.applied_cols,
+                            self.applied_rows,
+                            self.controller_id,
+                            debug_console_size(),
+                            grid_lines,
+                        ),
+                    );
+                }
                 // Render the notice at the *real console* size so it is centered
                 // on what the user sees, not the (possibly larger) controller grid.
-                write_local_stdout(
-                    render_local_displaced(self.host_cols, self.host_rows).as_bytes(),
-                );
+                write_local_stdout(render_local_displaced(notice_size.0, notice_size.1).as_bytes());
                 self.local_output_suppressed = true;
+                self.local_notice_size = Some(notice_size);
             }
         } else if self.local_output_suppressed && self.local_restore_at.is_none() {
             // Controller grid now fits the local console: schedule the deferred
@@ -524,10 +544,21 @@ impl HostState {
     /// (including Space) is forwarded unchanged to the PTY. Returns the bytes to
     /// forward.
     fn local_stdin(&mut self, buf: &[u8]) -> Vec<u8> {
-        match local_stdin_action(
-            buf.contains(&LOCAL_TAKE_CONTROL_KEY),
-            self.local_output_suppressed,
-        ) {
+        let has_take_control = buf.contains(&LOCAL_TAKE_CONTROL_KEY);
+        let action = local_stdin_action(has_take_control, self.local_output_suppressed);
+        debug_restore_log(
+            &self.env,
+            &format!(
+                "local_stdin n={} first={:?} has_take_control={} suppressed={} controller={:?} action={:?}",
+                buf.len(),
+                &buf[..buf.len().min(16)],
+                has_take_control,
+                self.local_output_suppressed,
+                self.controller_id,
+                action,
+            ),
+        );
+        match action {
             LocalStdinAction::TakeControl => {
                 self.take_control("local");
                 Vec::new()
@@ -840,6 +871,7 @@ pub fn run_session_host(
         local_attached: false,
         local_output_suppressed: false,
         local_restore_at: None,
+        local_notice_size: None,
         local_debug_capture_until: None,
         exited: false,
         exit_code: None,
@@ -1475,15 +1507,23 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
                 // resuming output and the repaint landing.
                 let out = s.grid.render_screen();
                 if debug_restore_enabled() {
+                    let non_empty: Vec<String> = s
+                        .grid
+                        .visible_lines()
+                        .into_iter()
+                        .filter(|l| !l.trim().is_empty())
+                        .take(6)
+                        .collect();
                     debug_restore_log(
                         &s.env,
                         &format!(
-                            "restore-fire host={}x{} applied={}x{} real_console={:?} render(len={}): {}",
+                            "restore-fire host={}x{} applied={}x{} real_console={:?} grid_nonempty_lines={:?} render(len={}): {}",
                             s.host_cols,
                             s.host_rows,
                             s.applied_cols,
                             s.applied_rows,
                             debug_console_size(),
+                            non_empty,
                             out.len(),
                             debug_escape(&out, 4096),
                         ),
@@ -1495,6 +1535,7 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
                 write_local_stdout(&out);
                 s.local_output_suppressed = false;
                 s.local_restore_at = None;
+                s.local_notice_size = None;
             }
         }
     })

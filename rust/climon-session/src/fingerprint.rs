@@ -182,6 +182,27 @@ mod tests {
     }
 
     #[test]
+    fn content_survives_shrink_then_grow_resize() {
+        // Repro of the local take-control blank-screen bug: session starts large,
+        // a dashboard shrinks the PTY, then the local terminal reclaims and grows
+        // it back. render_screen() must still contain the prompt row -- if
+        // vt100::set_size drops content across the shrink/grow, the restore
+        // repaint is empty and the local terminal blanks.
+        let mut grid = HeadlessGrid::new(156, 47);
+        grid.write(b"PS C:\\> ");
+        assert!(grid.fingerprint().contains("PS C:\\>"));
+
+        grid.resize(154, 15); // dashboard takes control (smaller)
+        grid.resize(156, 47); // local reclaims (back to host size)
+
+        let repaint = String::from_utf8_lossy(&grid.render_screen()).to_string();
+        assert!(
+            repaint.contains("PS C:\\>"),
+            "prompt lost across shrink/grow resize; repaint={repaint:?}"
+        );
+    }
+
+    #[test]
     fn render_screen_reproduces_current_screen_when_reparsed() {
         // Drive the grid with output that uses absolute cursor moves (the kind
         // of sequence that, when replayed raw to a real console, stacks lines on
