@@ -374,8 +374,8 @@ impl HostState {
         // Identity-based, matching the dashboard/attach-client surfaces: the
         // local terminal is displaced whenever some *other* surface is the
         // controller, regardless of relative size. This keeps the model
-        // consistent everywhere (only the controller drives the grid) and makes
-        // Ctrl+T reliably reclaim control from any controller, large or small.
+        // consistent everywhere (only the controller drives the grid) and lets
+        // Space reliably reclaim control from any controller, large or small.
         // The Windows ConPTY overgrown-repaint guard is retained purely as a
         // restore-time safety (see `local_restore_decision`).
         let displaced = local_displaced_by_controller(self.controller_id.as_deref());
@@ -498,7 +498,7 @@ impl HostState {
     }
 
     /// Promotes the surface `vid` to controller and resizes the PTY to its last
-    /// reported size. Driven by a `TakeControl` frame or the local Ctrl+T chord.
+    /// reported size. Driven by a `TakeControl` frame or the local Space chord.
     fn take_control(&mut self, vid: &str) {
         let size = if vid == "local" {
             Some((self.host_cols.max(1), self.host_rows.max(1)))
@@ -516,14 +516,18 @@ impl HostState {
         self.broadcast_control();
     }
 
-    /// Processes a chunk of in-process local-terminal stdin. Ctrl+T (0x14) always
-    /// takes control back to the local terminal, regardless of displaced state,
-    /// and is swallowed. Otherwise, while the local terminal is displaced (its
-    /// output is suppressed because another surface controls the grid) the
-    /// monitored command is non-interactive and all input is swallowed; when not
-    /// displaced, input is forwarded to the PTY. Returns the bytes to forward.
+    /// Processes a chunk of in-process local-terminal stdin. While the local
+    /// terminal is displaced (its output is suppressed because another surface
+    /// controls the grid) the monitored command is non-interactive: pressing
+    /// Space (0x20) reclaims control back to the local terminal, and every other
+    /// key is swallowed. When the local terminal already holds control, all input
+    /// (including Space) is forwarded unchanged to the PTY. Returns the bytes to
+    /// forward.
     fn local_stdin(&mut self, buf: &[u8]) -> Vec<u8> {
-        match local_stdin_action(buf.contains(&0x14), self.local_output_suppressed) {
+        match local_stdin_action(
+            buf.contains(&LOCAL_TAKE_CONTROL_KEY),
+            self.local_output_suppressed,
+        ) {
             LocalStdinAction::TakeControl => {
                 self.take_control("local");
                 Vec::new()
@@ -1058,7 +1062,7 @@ fn render_local_displaced(_cols: u16, _rows: u16) -> String {
     let (w, h) = debug_console_size();
     let mut out = String::from("\x1b[2J\x1b[H");
     let msg = "This session is being viewed on a climon dashboard.";
-    let hint = "Press Ctrl+T to take control and resize it to this terminal.";
+    let hint = "Press Space to take control and resize it to this terminal.";
     let row = (h / 2).max(1);
     for (i, line) in [msg, hint].iter().enumerate() {
         let col = ((w as usize).saturating_sub(line.len()) / 2 + 1).max(1);
@@ -1379,28 +1383,40 @@ fn local_restore_decision(
 }
 
 /// What to do with a chunk of in-process local-terminal stdin. Extracted as a
-/// pure decision so the Ctrl+T-always-takes-control rule is unit-testable
+/// pure decision so the take-control-while-displaced rule is unit-testable
 /// without a live PTY/`HostState`.
 #[derive(Debug, PartialEq, Eq)]
 enum LocalStdinAction {
-    /// The chunk contained Ctrl+T (0x14): take control back to the local
-    /// terminal and swallow the input.
+    /// The local terminal is displaced and the chunk contained the take-control
+    /// key (Space): reclaim control back to the local terminal and swallow the
+    /// input.
     TakeControl,
     /// The local terminal is displaced (output suppressed by another
     /// controller): swallow the input so the command stays non-interactive.
     Swallow,
-    /// Forward the input unchanged to the PTY.
+    /// The local terminal holds control: forward the input unchanged to the PTY.
     Forward,
 }
 
-/// Pure decision for in-process local stdin. Ctrl+T always wins — it takes
-/// control regardless of displaced state — otherwise displaced input is
-/// swallowed and everything else is forwarded.
+/// The key that reclaims control to the in-process local terminal while it is
+/// displaced: the space bar (0x20). Ctrl+T was avoided because host terminal
+/// emulators and browsers commonly intercept it (new tab / "go to symbol") so it
+/// never reaches climon. Space is only treated as take-control while displaced;
+/// once the local terminal controls the grid, Space is ordinary input and is
+/// forwarded to the PTY (see [`local_stdin_action`]).
+const LOCAL_TAKE_CONTROL_KEY: u8 = 0x20;
+
+/// Pure decision for in-process local stdin. While displaced, the take-control
+/// key (Space) reclaims control and every other key is swallowed (the monitored
+/// command is non-interactive). While controlling, all input is forwarded --
+/// including Space, which must reach the shell as normal input.
 fn local_stdin_action(has_take_control: bool, suppressed: bool) -> LocalStdinAction {
-    if has_take_control {
-        LocalStdinAction::TakeControl
-    } else if suppressed {
-        LocalStdinAction::Swallow
+    if suppressed {
+        if has_take_control {
+            LocalStdinAction::TakeControl
+        } else {
+            LocalStdinAction::Swallow
+        }
     } else {
         LocalStdinAction::Forward
     }
@@ -1982,18 +1998,15 @@ mod local_stdin_tests {
     use super::{local_stdin_action, LocalStdinAction};
 
     #[test]
-    fn ctrl_t_takes_control_even_when_not_displaced() {
-        // Regression guard: previously, when the local terminal was NOT
-        // displaced, stdin was forwarded to the PTY before checking for Ctrl+T,
-        // so the terminal could never regain control with Ctrl+T.
-        assert_eq!(
-            local_stdin_action(true, false),
-            LocalStdinAction::TakeControl
-        );
+    fn space_is_forwarded_as_normal_input_when_controlling() {
+        // Critical: when the local terminal holds control, Space (the
+        // take-control key) is ordinary shell input and MUST be forwarded, not
+        // swallowed -- otherwise the user could never type a space.
+        assert_eq!(local_stdin_action(true, false), LocalStdinAction::Forward);
     }
 
     #[test]
-    fn ctrl_t_takes_control_when_displaced() {
+    fn space_takes_control_when_displaced() {
         assert_eq!(
             local_stdin_action(true, true),
             LocalStdinAction::TakeControl

@@ -626,4 +626,24 @@ describe("TerminalView control handoff", () => {
     // Skip reclaiming when we already hold control to avoid redundant churn.
     expect(source).toContain("if (controllerIdRef.current === viewerIdRef.current) {");
   });
+
+  test("controller does not refit on self-caused grid changes (no resize feedback loop)", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // The refit-on-control decision is gated on shouldRefitOnControlFrame, which
+    // only fires on the displaced->controlling transition -- never on the grid
+    // changes the controller itself causes. Regression guard for the mobile PWA
+    // resize storm where refitting on every control frame looped forever.
+    expect(source).toContain("if (shouldRefitOnControlFrame({ state, wasDisplaced })) {");
+    // The old size-diff trigger must be gone.
+    expect(source).not.toContain("const gridChanged =");
+    expect(source).not.toContain("(gridChanged || wasDisplaced)");
+  });
+
+  test("redundant resize reports are suppressed via shouldSendResize", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Viewport jitter must not spam identical PTY resizes; only real size
+    // changes (or a replay-carrying resize) are sent.
+    expect(source).toContain("if (!shouldSendResize({ last: lastSentSizeRef.current, next: { cols, rows }, requestReplay })) {");
+    expect(source).toContain("lastSentSizeRef.current = { cols, rows };");
+  });
 });

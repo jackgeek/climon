@@ -15,6 +15,34 @@ export function surfaceKind(isStandalone: boolean): SurfaceKind {
   return isStandalone ? "pwa" : "dashboard";
 }
 
+// The controller re-fits (and requests a scrollback replay at its new grid) ONLY
+// when it has just *taken* control -- i.e. transitioned from displaced to
+// controlling. A surface that is already the stable controller must NOT re-fit in
+// response to grid changes, because as the controller it is the one that caused
+// them: doing so forms a resize -> control-broadcast -> refit -> resize feedback
+// loop that never settles when the viewport fit is unstable (e.g. a mobile PWA
+// whose visual viewport or scrollbar jitters), spamming PTY resizes and replays
+// until the screen corrupts. Displaced surfaces never refit (they stay blank).
+export function shouldRefitOnControlFrame(args: { state: ControlState; wasDisplaced: boolean }): boolean {
+  return args.state === "controlling" && args.wasDisplaced;
+}
+
+// Dedupe redundant resize reports: only report a size when it actually changed
+// from the last size we sent, unless a replay must ride along (the take-control
+// handoff needs the resize+replay round-trip even when the size is unchanged).
+// This bounds any residual viewport jitter to at most one PTY resize per real
+// size change.
+export function shouldSendResize(args: {
+  last: { cols: number; rows: number } | null;
+  next: { cols: number; rows: number };
+  requestReplay: boolean;
+}): boolean {
+  if (args.requestReplay) {
+    return true;
+  }
+  return !args.last || args.last.cols !== args.next.cols || args.last.rows !== args.next.rows;
+}
+
 // A per-tab identity for this dashboard/PWA surface, sent with every resize so
 // the daemon can name exactly one controller and every other surface stays
 // displaced. `crypto.randomUUID()` only exists in secure contexts (https or

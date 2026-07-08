@@ -13,7 +13,7 @@ import {
   fetchScrollback,
   isLiveStatus
 } from "../api.js";
-import { deriveControlState, generateViewerId, surfaceKind, type ControlState } from "../control-state.js";
+import { deriveControlState, generateViewerId, surfaceKind, shouldRefitOnControlFrame, shouldSendResize, type ControlState } from "../control-state.js";
 import { readIsStandalone } from "../pwa/pwaContext.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
@@ -438,9 +438,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const viewerIdRef = useRef<string>(generateViewerId());
   const kindRef = useRef(surfaceKind(readIsStandalone()));
   const controllerIdRef = useRef<string | null>(null);
-  const ctrlColsRef = useRef(0);
-  const ctrlRowsRef = useRef(0);
   const displacedRef = useRef(false);
+  // The last grid size this surface reported to the daemon, used to suppress
+  // redundant resize reports (see shouldSendResize) so viewport jitter cannot
+  // spam PTY resizes.
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const pendingTakeControlSessionRef = useRef<string | null>(null);
   const displacedOverlayTimerRef = useRef<number | null>(null);
   const onControlStateChangeRef = useRef(onControlStateChange);
@@ -516,6 +518,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       const cols = proposed?.cols ?? term.cols;
       const rows = proposed?.rows ?? term.rows;
       const requestReplay = replayAfterNextResizeRef.current;
+      // Suppress redundant reports: viewport jitter (mobile URL bar/keyboard,
+      // scrollbar flips) can re-fit to the same grid many times. Only report a
+      // real size change -- unless a replay must ride along (take-control).
+      if (!shouldSendResize({ last: lastSentSizeRef.current, next: { cols, rows }, requestReplay })) {
+        return;
+      }
+      lastSentSizeRef.current = { cols, rows };
       ws.send(JSON.stringify({ type: "resize", cols, rows, kind: kindRef.current, viewerId: viewerIdRef.current }));
       if (requestReplay) {
         replayAfterNextResizeRef.current = false;
@@ -569,6 +578,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const proposed = fitRef.current?.proposeDimensions();
     const cols = proposed?.cols ?? term.cols;
     const rows = proposed?.rows ?? term.rows;
+    lastSentSizeRef.current = { cols, rows };
     ws.send(JSON.stringify({ type: "resize", cols, rows, kind: kindRef.current, viewerId: viewerIdRef.current }));
     ws.send(JSON.stringify({ type: "takeControl" }));
   }
@@ -815,12 +825,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             }
           } else if (msg.type === "control") {
             const controllerId = typeof msg.controllerId === "string" ? msg.controllerId : null;
-            const ctrlCols = msg.cols ?? 0;
-            const ctrlRows = msg.rows ?? 0;
-            const gridChanged = ctrlCols !== ctrlColsRef.current || ctrlRows !== ctrlRowsRef.current;
             controllerIdRef.current = controllerId;
-            ctrlColsRef.current = ctrlCols;
-            ctrlRowsRef.current = ctrlRows;
             const state = deriveControlState({ ownViewerId: viewerIdRef.current, controllerId });
             const wasDisplaced = displacedRef.current;
             displacedRef.current = state === "displaced";
@@ -835,9 +840,14 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
               applyDisplacedUi(state);
             }
             onControlStateChangeRef.current?.({ controllerId, ownViewerId: viewerIdRef.current, state });
-            if (!displacedRef.current && (gridChanged || wasDisplaced)) {
-              // We control the grid (or just took control): render it at our size
-              // and rebuild scrollback on the next resize.
+            if (shouldRefitOnControlFrame({ state, wasDisplaced })) {
+              // We JUST took control: render the grid at our size and rebuild
+              // scrollback on the next resize. We deliberately do NOT refit on
+              // grid changes while already the stable controller -- as the
+              // controller we caused them, and re-fitting would form a
+              // resize -> control -> refit -> resize feedback loop that never
+              // settles when the fit is unstable (mobile PWA), corrupting the
+              // screen with endless resizes and replays.
               replayAfterNextResizeRef.current = true;
               refit();
             }
@@ -1026,8 +1036,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // Reset control state so a previous session's displaced overlay never lingers
     // over a freshly attached session; the daemon re-announces control on attach.
     controllerIdRef.current = null;
-    ctrlColsRef.current = 0;
-    ctrlRowsRef.current = 0;
+    lastSentSizeRef.current = null;
     displacedRef.current = false;
     cancelDisplacedOverlay();
     setDisplayState("controlling");

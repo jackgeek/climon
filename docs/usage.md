@@ -82,12 +82,12 @@ one surface is the **controller** at a time, and the shared terminal is sized to
 the controller's viewport. Your local terminal is the controller the moment you
 attach.
 
-If another surface takes control and it is **larger** than your local terminal,
-your terminal can't render the bigger grid, so it blanks and shows *"This session
-is being viewed on a climon dashboard."* Press **Ctrl+T** to take control back —
-the shared terminal resizes down to your terminal and it becomes interactive
-again. While your terminal is at least as large as the controller it keeps
-rendering the grid normally and stays interactive.
+If another surface takes control, your local terminal blanks and shows *"This
+session is being viewed on a climon dashboard."* (displacement is decided by
+which surface is the controller, not by relative size). Press **Space** to take
+control back — the shared terminal resizes to your terminal and it becomes
+interactive again. Space reclaims control *only while displaced*; once your
+terminal is the controller, Space is ordinary shell input.
 
 ## Manage sessions
 
@@ -170,7 +170,7 @@ newer version is available instead of applying it automatically.
   current controller disconnects; on disconnect control falls back to the
   highest-priority remaining viewer (PWA, then dashboard, then local terminal,
   ties broken by most recently connected). In a displaced *local* terminal, press
-  **Ctrl+T** to take control instead. While the browser terminal is focused,
+  **Space** to take control instead. While the browser terminal is focused,
   **Ctrl-+** and **Ctrl--** change the terminal font size instead of zooming the
   browser.
   - On a maximized mobile session, swipe in from the right edge to open the

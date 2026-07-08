@@ -21,12 +21,16 @@ ConPTY overgrown-repaint deferral is only a restore-time rendering safety, not
 the displaced trigger.)
 
 - Local terminal (displaced) message: *"This session is being viewed on a climon
-  dashboard."* with *"Press Ctrl+T to take control and resize it to this
-  terminal."* Press **Ctrl+T** (`0x14`) to take control; the terminal repaints
+  dashboard."* with *"Press Space to take control and resize it to this
+  terminal."* Press **Space** (`0x20`) to take control; the terminal repaints
   immediately (it requests a fresh replay on regaining control, so an idle
-  screen is never left blank).
+  screen is never left blank). Space is the take-control key *only while
+  displaced* — once the local terminal controls the grid, Space is ordinary
+  shell input. (Ctrl+T is avoided because host terminals and browsers commonly
+  intercept it, e.g. "new tab" / "go to symbol", so it never reaches climon.)
 - Dashboard/PWA (displaced) overlay: *"This session is being viewed on another
-  dashboard."* with a **Take control** button.
+  dashboard."* with a **Take control** button (browsers cannot reliably capture
+  a keyboard chord like Ctrl+T, so the dashboard uses a button, not a key).
 
 **No session-list take-control/maximize button.** Control is taken by *actively
 choosing* a session: clicking a session in the desktop session list, or tapping
@@ -51,7 +55,7 @@ or button) cancels the pending overlay the moment control is (re)gained, so the
 > `(80, 24)` stub, so terminal-size-dependent *PTY sizing* of the **local**
 > terminal cannot be reliably exercised on Windows — verify the local-terminal
 > size cases (TCH-2, TCH-4 local hop) on **macOS/Linux**. Identity-based
-> displacement, Ctrl+T take-control, focus reclaim, the no-flash handoff, and the
+> displacement, Space take-control, focus reclaim, the no-flash handoff, and the
 > browser/PWA cases (TCH-3, TCH-5, TCH-6, TCH-7, TCH-8) work on all platforms.
 
 Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
@@ -75,9 +79,9 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
 - **Platforms:** macOS, Linux (authoritative); Windows.
 - **Result:** _(version / date / tester / pass|fail / notes)_
 
-## TCH-2 — Dashboard takes control; Ctrl+T reclaims, resizes, and repaints
+## TCH-2 — Dashboard takes control; Space reclaims, resizes, and repaints
 
-- **Feature:** dashboard auto-take-control → local terminal displaced → Ctrl+T
+- **Feature:** dashboard auto-take-control → local terminal displaced → Space
   take-control resizes PTY to the terminal and repaints
 - **Preconditions:** climon built; a running `climon server` dashboard.
 - **Config-matrix cell:** default config; browser cell.
@@ -89,16 +93,17 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
      the browser takes control.
   4. Observe the local terminal.
   5. In the local terminal, leave a static screen (e.g. an idle shell prompt),
-     then press **Ctrl+T**.
+     then press **Space**.
 - **Expected result:** After step 3 the browser becomes controller; the local
   terminal blanks and shows *"This session is being viewed on a climon
-  dashboard."* with the *"Press Ctrl+T to take control…"* hint, and typing in the
+  dashboard."* with the *"Press Space to take control…"* hint, and typing in the
   local terminal does nothing. After step 5 the local terminal takes control, the
   shared PTY resizes to the local terminal size, the local terminal **repaints
   immediately** (never left blank — even for an idle screen), and is interactive
-  again. The dashboard becomes displaced and shows its Take-control overlay.
+  again (verify a subsequent Space now types a normal space in the shell). The
+  dashboard becomes displaced and shows its Take-control overlay.
 - **Platforms:** macOS, Linux (local-terminal size behaviour authoritative here;
-  see the Windows caveat above). Ctrl+T reclaim + repaint verifiable on Windows.
+  see the Windows caveat above). Space reclaim + repaint verifiable on Windows.
 - **Result:** _(version / date / tester / pass|fail / notes)_
 
 ## TCH-3 — Non-controller dashboard/PWA is displaced with a Take control button
@@ -154,9 +159,10 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
   1. Make a surface displaced (e.g. a local terminal while a dashboard controls,
      per TCH-2; or a second dashboard that has not taken control, per TCH-3).
   2. On the displaced surface, type ordinary characters, Enter, arrow keys, and
-     Ctrl-C.
+     Ctrl-C (on a displaced local terminal, avoid Space for this step since Space
+     is the take-control key while displaced).
   3. Confirm none of that reaches the shell (the running command is unaffected).
-  4. Trigger take-control: **Ctrl+T** on a displaced local terminal, or the
+  4. Trigger take-control: **Space** on a displaced local terminal, or the
      **Take control** button on a displaced dashboard/PWA.
 - **Expected result:** While displaced, every keystroke is swallowed and nothing
   reaches the PTY — the session is fully non-interactive on that surface. Only the
@@ -201,7 +207,7 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
 - **Config-matrix cell:** browser cell; also exercise a phone PWA.
 - **Steps:**
   1. Open the session in surface A (local terminal or dashboard) and let it
-     control (e.g. press Ctrl+T in the terminal, or select it in A).
+     control (e.g. press Space in the displaced terminal, or select it in A).
   2. In window B, open the same session but leave B unfocused / in the
      background (switch to another window or tab; on a phone, lock or background
      the PWA). Confirm B is displaced (overlay).
@@ -236,4 +242,32 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
   If B genuinely stays displaced (e.g. another surface immediately grabs control),
   the overlay still appears after the short delay.
 - **Platforms:** macOS, Linux, Windows.
+- **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-9 — Controlling PWA does not resize-storm or corrupt
+
+- **Feature:** the controller only re-fits on the displaced→controlling
+  transition (`shouldRefitOnControlFrame`) and dedupes identical resize reports
+  (`shouldSendResize`), so it never re-fits in response to the grid changes it
+  itself caused — the fix for the mobile-PWA resize feedback loop
+- **Preconditions:** dashboard server running; a session controlled by the PWA
+  while the local terminal and any desktop dashboard sit displaced (showing their
+  notice / Take control button).
+- **Config-matrix cell:** mobile PWA cell (also verify a desktop browser).
+- **Steps:**
+  1. Start `climon bash` locally, then open the session in the phone PWA and let
+     the PWA take control (the local terminal shows its displaced notice).
+  2. Optionally also open the session in a desktop browser and confirm it sits
+     displaced with a **Take control** button (do not touch it).
+  3. With the PWA as sole controller, leave it idle for ~30s, then interact:
+     scroll, show/hide the on-screen keyboard, rotate the device.
+  4. Watch for repeated resizing / screen corruption on both the PWA and the
+     desktop dashboard.
+- **Expected result:** The PWA renders the terminal at its own size and stays
+  stable. There is **no** continuous stream of resizes and **no** screen
+  corruption while idle. Genuine viewport changes (keyboard, rotation) produce at
+  most one resize each and then settle; identical re-fits are suppressed. The
+  desktop dashboard and local terminal remain quietly displaced throughout (they
+  do not flicker or fight the PWA).
+- **Platforms:** phone PWA (authoritative); desktop browser.
 - **Result:** _(version / date / tester / pass|fail / notes)_

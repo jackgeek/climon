@@ -20,7 +20,7 @@ use climon_session::socket::connect_session_socket;
 pub const DEFAULT_DETACH_PREFIX: u8 = 0x1c;
 
 const DETACH_KEY: u8 = 0x64; // 'd'
-const TAKE_CONTROL_KEY: u8 = 0x14; // Ctrl+T
+const TAKE_CONTROL_KEY: u8 = 0x20; // Space (only while displaced)
 
 /// The action requested by a processed input chord. Mirrors the TS
 /// `InputAction`.
@@ -137,17 +137,19 @@ impl InputProcessor {
                 }
             } else if byte == self.prefix {
                 self.armed = true;
-            } else if byte == TAKE_CONTROL_KEY {
-                // Ctrl+T always seizes control for this terminal, regardless of
-                // whether it is currently displaced. The chord is never forwarded
-                // to the PTY.
-                return ProcessedInput {
-                    forward: out,
-                    action: InputAction::TakeControl,
-                };
             } else if displaced {
-                // Displaced and non-interactive: swallow all other input.
+                // Displaced and non-interactive: Space reclaims control for this
+                // terminal (never forwarded to the PTY); every other key is
+                // swallowed.
+                if byte == TAKE_CONTROL_KEY {
+                    return ProcessedInput {
+                        forward: out,
+                        action: InputAction::TakeControl,
+                    };
+                }
             } else {
+                // This terminal holds control: forward all input to the PTY,
+                // including Space (which is ordinary input, not the chord).
                 out.push(byte);
             }
         }
@@ -166,7 +168,7 @@ pub fn render_local_displaced(cols: u16, rows: u16) -> String {
     let (w, h) = (cols.max(1), rows.max(1));
     let mut out = String::from("\x1b[2J\x1b[H");
     let msg = "This session is being viewed on a climon dashboard.";
-    let hint = "Press Ctrl+T to take control and resize it to this terminal.";
+    let hint = "Press Space to take control and resize it to this terminal.";
     let row = (h / 2).max(1);
     for (i, line) in [msg, hint].iter().enumerate() {
         let col = ((w as usize).saturating_sub(line.len()) / 2 + 1).max(1);
@@ -625,11 +627,11 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_t_always_takes_control() {
+    fn space_takes_control_only_while_displaced() {
         let mut p = InputProcessor::new(0x1c);
-        // While displaced: Ctrl+T -> TakeControl, swallowed (no forward).
+        // While displaced: Space (0x20) -> TakeControl, swallowed (no forward).
         assert_eq!(
-            p.process(&[0x14], true),
+            p.process(&[0x20], true),
             ProcessedInput {
                 forward: vec![],
                 action: InputAction::TakeControl
@@ -643,13 +645,13 @@ mod tests {
                 action: InputAction::None
             }
         );
-        // While NOT displaced: Ctrl+T still takes control and is never forwarded
-        // to the PTY as a raw byte.
+        // While NOT displaced (this terminal controls): Space is ordinary input
+        // and MUST be forwarded to the PTY, never treated as a take-control chord.
         assert_eq!(
-            p.process(&[0x14], false),
+            p.process(&[0x20], false),
             ProcessedInput {
-                forward: vec![],
-                action: InputAction::TakeControl
+                forward: vec![0x20],
+                action: InputAction::None
             }
         );
     }

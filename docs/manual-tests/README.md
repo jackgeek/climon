@@ -77,7 +77,7 @@ result-tracking row.
 | — | App Insights connection string source — env var / embedded constant only, never climon config | [appinsights-connection-source.md](appinsights-connection-source.md) |
 | — | Terminal font-size repaint — viewport repaints cleanly on font-size change without waiting for focus | [terminal-font-size-repaint.md](terminal-font-size-repaint.md) |
 | — | Terminal title as session subtitle — capture PTY OSC 0/2 title, drop name→title | [terminal-title-subtitle.md](terminal-title-subtitle.md) |
-| — | Terminal control handoff — one shared PTY, single controller, follow/displaced surfaces, Ctrl+T / maximize Take control, priority fallback | [terminal-control-handoff.md](terminal-control-handoff.md) |
+| — | Terminal control handoff — one shared PTY, single controller, follow/displaced surfaces, Space / maximize Take control, priority fallback | [terminal-control-handoff.md](terminal-control-handoff.md) |
 | — | Terminal progress indicator — capture PTY OSC 9;4 progress, per-session bar/spinner/error/warning on the list (+ `dashboard.stateIconNoMotion`) | [terminal-progress-indicator.md](terminal-progress-indicator.md) |
 | — | Terminal selection / copy (touch) — Select button captures full scrollback into a monospaced textarea for native copy, with a strip-decorations toggle | [terminal-select-mode.md](terminal-select-mode.md) |
 | — | `bun run build` builds the Rust client + on-demand rustup bootstrap when cargo is missing | [build-all-rust-toolchain.md](build-all-rust-toolchain.md) |

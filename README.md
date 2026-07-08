@@ -379,7 +379,7 @@ desktop dashboard, and your phone — they share one live terminal and only one 
 **in control** of its size at a time. A viewer that's too small to show the
 controller's grid is blanked behind a *"being viewed on a climon dashboard"*
 screen with a **Take control** button; tap the session's **maximize** button (or
-press **Ctrl+T** in a displaced local terminal) to take control and resize the
+press **Space** in a displaced local terminal) to take control and resize the
 shared terminal to fit your view. See [docs/usage.md](docs/usage.md).
 
 > **PWA works best in Chrome or Edge on mobile.** On iOS, install and open the
