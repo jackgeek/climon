@@ -30,7 +30,7 @@ use climon_store::Env as StoreEnv;
 
 use crate::attention::fingerprint_body;
 use crate::attention::should_apply_user_attention_acknowledgement;
-use crate::control::{choose_controller, is_displaced, Surface};
+use crate::control::{choose_controller, Surface};
 use crate::error::{SessionError, SessionResult};
 use crate::fingerprint::HeadlessGrid;
 use crate::idle::ScreenIdleDetector;
@@ -371,28 +371,35 @@ impl HostState {
         if !self.local_attached {
             return;
         }
-        let displaced = self
-            .controller_size()
-            .map(|(cc, cr)| is_displaced(self.host_cols, self.host_rows, cc, cr))
-            .unwrap_or(false);
+        // Identity-based, matching the dashboard/attach-client surfaces: the
+        // local terminal is displaced whenever some *other* surface is the
+        // controller, regardless of relative size. This keeps the model
+        // consistent everywhere (only the controller drives the grid) and makes
+        // Ctrl+T reliably reclaim control from any controller, large or small.
+        // The Windows ConPTY overgrown-repaint guard is retained purely as a
+        // restore-time safety (see `local_restore_decision`).
+        let displaced = local_displaced_by_controller(self.controller_id.as_deref());
         if displaced {
-            // Controller grid larger than the local console: pause local output
-            // and show the notice. Cancel any pending restore.
+            // Another surface controls the grid: pause local output and show the
+            // notice. Cancel any pending restore.
             self.local_restore_at = None;
             if !self.local_output_suppressed {
                 debug_restore_log(
                     &self.env,
                     &format!(
-                        "displace-suppress host={}x{} applied={}x{} real_console={:?}",
+                        "displace-suppress host={}x{} applied={}x{} controller={:?} real_console={:?}",
                         self.host_cols,
                         self.host_rows,
                         self.applied_cols,
                         self.applied_rows,
+                        self.controller_id,
                         debug_console_size(),
                     ),
                 );
+                // Render the notice at the *real console* size so it is centered
+                // on what the user sees, not the (possibly larger) controller grid.
                 write_local_stdout(
-                    render_local_displaced(self.applied_cols, self.applied_rows).as_bytes(),
+                    render_local_displaced(self.host_cols, self.host_rows).as_bytes(),
                 );
                 self.local_output_suppressed = true;
             }
@@ -1399,6 +1406,15 @@ fn local_stdin_action(has_take_control: bool, suppressed: bool) -> LocalStdinAct
     }
 }
 
+/// Pure decision: is the in-process local terminal displaced? Identity-based,
+/// mirroring the dashboard/attach-client surfaces — the local terminal is
+/// displaced whenever some *other* surface (not `"local"`) is the controller,
+/// regardless of relative size. With no controller yet (session start) the
+/// local terminal owns the grid, so it is not displaced.
+fn local_displaced_by_controller(controller_id: Option<&str>) -> bool {
+    matches!(controller_id, Some(id) if id != "local")
+}
+
 fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(25));
@@ -1992,5 +2008,28 @@ mod local_stdin_tests {
     #[test]
     fn ordinary_input_is_forwarded_when_controlling() {
         assert_eq!(local_stdin_action(false, false), LocalStdinAction::Forward);
+    }
+}
+
+#[cfg(test)]
+mod local_displaced_tests {
+    use super::local_displaced_by_controller;
+
+    #[test]
+    fn not_displaced_when_local_is_controller() {
+        assert!(!local_displaced_by_controller(Some("local")));
+    }
+
+    #[test]
+    fn not_displaced_when_no_controller_yet() {
+        assert!(!local_displaced_by_controller(None));
+    }
+
+    #[test]
+    fn displaced_when_a_dashboard_controls_regardless_of_size() {
+        // Identity-based: any non-local controller displaces the local terminal,
+        // even a dashboard whose grid is smaller than the local console.
+        assert!(local_displaced_by_controller(Some("dashboard-abc")));
+        assert!(local_displaced_by_controller(Some("terminal-1234")));
     }
 }

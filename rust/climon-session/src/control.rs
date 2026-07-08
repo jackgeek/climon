@@ -27,12 +27,6 @@ pub fn choose_controller(surfaces: &[Surface]) -> Option<&Surface> {
     surfaces.iter().max_by_key(|s| (s.kind.priority(), s.seq))
 }
 
-/// Whether a surface of `(own_cols, own_rows)` cannot faithfully render a grid
-/// of `(ctrl_cols, ctrl_rows)` — i.e. it is smaller in either dimension.
-pub fn is_displaced(own_cols: u16, own_rows: u16, ctrl_cols: u16, ctrl_rows: u16) -> bool {
-    own_cols < ctrl_cols || own_rows < ctrl_rows
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,13 +63,5 @@ mod tests {
     #[test]
     fn returns_none_with_no_surfaces() {
         assert!(choose_controller(&[]).is_none());
-    }
-
-    #[test]
-    fn displaced_when_smaller_in_either_dimension() {
-        assert!(is_displaced(79, 24, 80, 24));
-        assert!(is_displaced(80, 23, 80, 24));
-        assert!(!is_displaced(80, 24, 80, 24));
-        assert!(!is_displaced(200, 50, 80, 24));
     }
 }

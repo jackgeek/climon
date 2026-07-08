@@ -10,12 +10,15 @@ only when no manual choice is in effect) is `pwa` (3) > `dashboard` (2) >
 `terminal` (1), ties broken by most-recently-connected. The daemon broadcasts a
 `Control` frame `{controllerId, cols, rows}` on every change.
 
-**Displacement is decided by controller identity, not size.** A surface is the
-controller when the daemon's broadcast `controllerId` equals its own `viewerId`;
-**every other surface is displaced**, regardless of relative size. A displaced
-surface blanks behind a centered notice, is fully non-interactive, and (on the
-local terminal) swallows every keystroke except take-control. When a surface
-takes control, the PTY is resized to it, so a controller always fits.
+**Displacement is decided by controller identity, not size — on every surface,
+including the in-process local terminal.** A surface is the controller when the
+daemon's broadcast `controllerId` equals its own `viewerId`; **every other
+surface is displaced**, regardless of relative size. A displaced surface blanks
+behind a centered notice, is fully non-interactive, and (on the local terminal)
+swallows every keystroke except take-control. When a surface takes control, the
+PTY is resized to it, so a controller always fits. (On Windows the retained
+ConPTY overgrown-repaint deferral is only a restore-time rendering safety, not
+the displaced trigger.)
 
 - Local terminal (displaced) message: *"This session is being viewed on a climon
   dashboard."* with *"Press Ctrl+T to take control and resize it to this
@@ -31,12 +34,25 @@ choosing* a session: clicking a session in the desktop session list, or tapping
 `armTakeControl` that flushes once the surface is attached). The desktop
 **Open terminal** button remains for opening the maximized terminal view.
 
+**Focus reclaims control.** When a dashboard/PWA window regains focus or becomes
+visible again (alt-tab, tab switch, unlocking a phone, resuming the PWA), it
+automatically takes control of the session it is showing. This is edge-triggered
+by the browser `focus`/`visibilitychange` events — it fires only on the
+transition and is skipped when the surface already holds control, so it never
+fights another surface while the user is away from this window.
+
+**No handoff flash.** The displaced *gating* (a surface stops reporting its size)
+updates immediately, but the displaced *overlay* is revealed only after a short
+delay (`DISPLACED_OVERLAY_DELAY_MS`). A fast take-control handshake (open, focus,
+or button) cancels the pending overlay the moment control is (re)gained, so the
+"being viewed on another dashboard" dialog never flashes on screen.
+
 > **Platform caveat.** On Windows the daemon's `local_terminal_size()` is a fixed
-> `(80, 24)` stub, so terminal-size-dependent PTY sizing of the **local**
+> `(80, 24)` stub, so terminal-size-dependent *PTY sizing* of the **local**
 > terminal cannot be reliably exercised on Windows — verify the local-terminal
 > size cases (TCH-2, TCH-4 local hop) on **macOS/Linux**. Identity-based
-> displacement, Ctrl+T take-control, and the browser/PWA cases (TCH-3, TCH-5,
-> TCH-6) work on all platforms.
+> displacement, Ctrl+T take-control, focus reclaim, the no-flash handoff, and the
+> browser/PWA cases (TCH-3, TCH-5, TCH-6, TCH-7, TCH-8) work on all platforms.
 
 Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
 `rust/climon-cli/src/client.rs`, `rust/climon-proto/src/frame.rs`,
@@ -173,5 +189,51 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
   surfaces or between a dashboard and the local terminal). The http:// LAN-IP
   origin behaves identically (the viewer id is generated via the
   `getRandomValues`/time fallback, not `crypto.randomUUID`).
+- **Platforms:** macOS, Linux, Windows.
+- **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-7 — Focus reclaims control for the returning dashboard/PWA
+
+- **Feature:** edge-triggered `focus`/`visibilitychange` auto-take-control for
+  the currently-shown session (skipped when already the controller)
+- **Preconditions:** the same session open in a local terminal (or another
+  dashboard) **and** a dashboard/PWA window "B" that is not currently focused.
+- **Config-matrix cell:** browser cell; also exercise a phone PWA.
+- **Steps:**
+  1. Open the session in surface A (local terminal or dashboard) and let it
+     control (e.g. press Ctrl+T in the terminal, or select it in A).
+  2. In window B, open the same session but leave B unfocused / in the
+     background (switch to another window or tab; on a phone, lock or background
+     the PWA). Confirm B is displaced (overlay).
+  3. Bring B back to the foreground (alt-tab to it, switch back to its tab,
+     unlock the phone / resume the PWA).
+  4. Without clicking anything else in B, observe control.
+  5. Repeat bringing B to the foreground several times while it already controls.
+- **Expected result:** In step 3 B automatically takes control the moment it
+  regains focus/visibility — its overlay clears, the shared PTY resizes to B, and
+  B becomes interactive — **without** any extra click. In step 5, because B is
+  already the controller, refocusing it does nothing (no redundant resize churn,
+  no flicker). While B was unfocused (step 2) it never stole control from A.
+- **Platforms:** macOS, Linux, Windows; phone PWA.
+- **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-8 — No handoff flash when taking control
+
+- **Feature:** deferred displaced overlay (`DISPLACED_OVERLAY_DELAY_MS`) cancelled
+  on control (re)gain
+- **Preconditions:** dashboard server running; a session controlled by another
+  surface so opening it here first arrives as displaced.
+- **Config-matrix cell:** browser cell; mobile viewport.
+- **Steps:**
+  1. Have surface A control the session.
+  2. In surface B, open/select the same session (which auto-takes control) — or
+     bring B to focus per TCH-7 — and watch the terminal area closely.
+  3. Repeat several times, including on a slower device / throttled CPU.
+- **Expected result:** B transitions straight from its previous view to the live
+  terminal at B's size. The *"This session is being viewed on another
+  dashboard."* overlay does **not** flash on screen during the take-control
+  handshake (the overlay is deferred and cancelled the instant B gains control).
+  If B genuinely stays displaced (e.g. another surface immediately grabs control),
+  the overlay still appears after the short delay.
 - **Platforms:** macOS, Linux, Windows.
 - **Result:** _(version / date / tester / pass|fail / notes)_

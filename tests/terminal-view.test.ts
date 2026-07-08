@@ -602,3 +602,28 @@ describe("TerminalHandle refresh", () => {
     expect(source).toContain("refresh: () => refreshTerminalRender(termRef.current)");
   });
 });
+
+describe("TerminalView control handoff", () => {
+  test("defers the displaced overlay to avoid a take-control handoff flash", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // The displaced gating ref updates immediately, but the visual overlay is
+    // scheduled behind a short delay so a fast handoff never flashes the dialog.
+    expect(source).toContain("scheduleDisplacedOverlay()");
+    expect(source).toContain("DISPLACED_OVERLAY_DELAY_MS");
+    // Gaining control cancels any pending overlay and shows the terminal at once.
+    expect(source).toContain("cancelDisplacedOverlay();\n              applyDisplacedUi(state);");
+    // The overlay is only revealed if we are still displaced when the delay ends.
+    expect(source).toContain("if (displacedRef.current) {\n        setDisplayState(\"displaced\");");
+  });
+
+  test("reclaims control when the window regains focus or visibility", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Edge-triggered focus/visibility listeners re-arm take-control for the
+    // currently attached session (bug: dashboards should take over on focus).
+    expect(source).toContain('window.addEventListener("focus", reclaimOnFocus)');
+    expect(source).toContain('document.addEventListener("visibilitychange", reclaimOnFocus)');
+    expect(source).toContain("armTakeControl(sessionId)");
+    // Skip reclaiming when we already hold control to avoid redundant churn.
+    expect(source).toContain("if (controllerIdRef.current === viewerIdRef.current) {");
+  });
+});

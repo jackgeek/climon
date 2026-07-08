@@ -66,6 +66,9 @@ const DOM_DELTA_LINE = 1;
 const DOM_DELTA_PAGE = 2;
 const RECONNECT_BASE_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 5_000;
+// How long to wait before revealing the "displaced" overlay, so a fast
+// take-control handoff (open/focus/button) does not flash the dialog.
+const DISPLACED_OVERLAY_DELAY_MS = 350;
 
 export const terminalOptions = {
   allowProposedApi: true,
@@ -439,6 +442,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const ctrlRowsRef = useRef(0);
   const displacedRef = useRef(false);
   const pendingTakeControlSessionRef = useRef<string | null>(null);
+  const displacedOverlayTimerRef = useRef<number | null>(null);
   const onControlStateChangeRef = useRef(onControlStateChange);
   const fontSizeRef = useRef(fontSize);
   const xtermThemeRef = useRef(xtermTheme);
@@ -524,6 +528,33 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   // otherwise. Driven by the authoritative controller state from Control frames.
   function applyDisplacedUi(state: ControlState): void {
     setDisplayState(state);
+  }
+
+  // Cancel a pending (not-yet-shown) displaced overlay.
+  function cancelDisplacedOverlay(): void {
+    if (displacedOverlayTimerRef.current !== null) {
+      clearTimeout(displacedOverlayTimerRef.current);
+      displacedOverlayTimerRef.current = null;
+    }
+  }
+
+  // Defer showing the displaced overlay briefly. When a surface takes control
+  // (on open, on focus, or via the button), the daemon may first re-broadcast
+  // the *current* controller before our take-control round-trips, which would
+  // flash the "being viewed on another dashboard" dialog for a frame or two.
+  // Showing the overlay only after a short delay -- and cancelling it the moment
+  // we (re)gain control -- keeps the handoff flicker-free. The displaced gating
+  // (displacedRef) still updates immediately so we never fight the controller.
+  function scheduleDisplacedOverlay(): void {
+    if (displacedOverlayTimerRef.current !== null) {
+      return;
+    }
+    displacedOverlayTimerRef.current = window.setTimeout(() => {
+      displacedOverlayTimerRef.current = null;
+      if (displacedRef.current) {
+        setDisplayState("displaced");
+      }
+    }, DISPLACED_OVERLAY_DELAY_MS);
   }
 
   function takeControl(): void {
@@ -793,7 +824,16 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             const state = deriveControlState({ ownViewerId: viewerIdRef.current, controllerId });
             const wasDisplaced = displacedRef.current;
             displacedRef.current = state === "displaced";
-            applyDisplacedUi(state);
+            if (state === "displaced") {
+              // Update the gating ref immediately (above) so we stop reporting
+              // our size, but defer the visual overlay to avoid a handoff flash.
+              scheduleDisplacedOverlay();
+            } else {
+              // We hold control: cancel any pending overlay and show the
+              // terminal right away.
+              cancelDisplacedOverlay();
+              applyDisplacedUi(state);
+            }
             onControlStateChangeRef.current?.({ controllerId, ownViewerId: viewerIdRef.current, state });
             if (!displacedRef.current && (gridChanged || wasDisplaced)) {
               // We control the grid (or just took control): render it at our size
@@ -848,6 +888,40 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     };
     ws.onclose = handleDisconnect;
   }
+
+  // Reclaim control when this dashboard/PWA window regains focus or becomes
+  // visible again. Per the control-priority design a surface takes over the
+  // session it is actively showing, so returning to this window (alt-tab, tab
+  // switch, unlocking a phone, resuming the PWA) makes it the controller again.
+  // Edge-triggered by the browser focus/visibility events -- it fires only on a
+  // transition, never continuously, so it cannot fight another surface while the
+  // user is away from this window.
+  useEffect(() => {
+    function reclaimOnFocus(): void {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      const sessionId = attachedSessionIdRef.current;
+      if (!sessionId) {
+        return;
+      }
+      // Already the controller? Nothing to reclaim -- avoid a redundant
+      // take-control resize round-trip.
+      if (controllerIdRef.current === viewerIdRef.current) {
+        return;
+      }
+      armTakeControl(sessionId);
+    }
+    window.addEventListener("focus", reclaimOnFocus);
+    document.addEventListener("visibilitychange", reclaimOnFocus);
+    return () => {
+      window.removeEventListener("focus", reclaimOnFocus);
+      document.removeEventListener("visibilitychange", reclaimOnFocus);
+    };
+  }, []);
+
+  // Clear any pending displaced-overlay timer on unmount.
+  useEffect(() => cancelDisplacedOverlay, []);
 
   // Create the terminal once and wire input + resize handling.
   useEffect(() => {
@@ -955,6 +1029,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     ctrlColsRef.current = 0;
     ctrlRowsRef.current = 0;
     displacedRef.current = false;
+    cancelDisplacedOverlay();
     setDisplayState("controlling");
     applyTerminalScrollbackForSession(term, session);
     resetTerminalForSession(term, session);
