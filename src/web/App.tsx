@@ -570,7 +570,6 @@ export function App() {
   const [tunnelLinkError, setTunnelLinkError] = useState("");
   const [tunnelLinkCopied, setTunnelLinkCopied] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
-  const [controlInfo, setControlInfo] = useState<{ controllerId: string | null; ownViewerId: string } | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const [pwaInstallOpen, setPwaInstallOpen] = useState(false);
@@ -1202,12 +1201,6 @@ export function App() {
     }
   }
 
-  // Whether THIS tab controls the active session's PTY grid. Control info is
-  // reported by the active session's TerminalView; when this tab is the
-  // controller the session-list Take-control button is hidden for it.
-  const isController =
-    controlInfo != null && controlInfo.controllerId != null && controlInfo.controllerId === controlInfo.ownViewerId;
-
   // Selecting a session on desktop moves keyboard focus into the terminal so
   // the user can start typing immediately. On mobile the terminal is offscreen
   // until maximized, so focusing it would be premature.
@@ -1445,7 +1438,14 @@ export function App() {
           collapsed={sidebarCompact}
           collapsible={!isMobile}
           onCollapsedChange={handleSidebarCollapsedChange}
-          onSelect={handleSelect}
+          onSelect={(id) => {
+            handleSelect(id);
+            // Actively choosing a session on desktop takes control of it, so the
+            // dashboard drives the grid without the user hunting for a button.
+            if (!isMobile) {
+              terminalRef.current?.armTakeControl(id);
+            }
+          }}
           onClose={(id) => requestClose(id)}
           onNew={() => {
             setDialogParent(null);
@@ -1478,12 +1478,13 @@ export function App() {
           stateIconNoMotion={stateIconNoMotion}
           currentTheme={themeId}
           onSelectTheme={handleSelectTheme}
-          isController={isController}
-          onTakeControl={() => terminalRef.current?.takeControl()}
           onMaximize={(id) => {
             const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
             setMaximized(true);
+            // Opening a session's terminal (the PWA "open terminal" action) takes
+            // control so the on-screen session sizes to this device.
+            terminalRef.current?.armTakeControl(id);
             const attentionMatchedAt = selected?.attentionMatchedAt;
             if (selected?.status === "needs-attention" && attentionMatchedAt) {
               requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id, attentionMatchedAt));
@@ -1505,9 +1506,6 @@ export function App() {
           accentColor={activeSession?.color}
           maximized={maximized}
           visible={terminalVisible}
-          onControlStateChange={(info) =>
-            setControlInfo({ controllerId: info.controllerId, ownViewerId: info.ownViewerId })
-          }
           fontSize={fontSize}
           xtermTheme={activeTheme.xterm}
           onFontSizeChange={adjustFontSize}

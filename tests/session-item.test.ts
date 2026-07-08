@@ -76,8 +76,7 @@ mock.module("@fluentui/react-components", () => ({
 }));
 
 mock.module("@fluentui/react-icons", () => ({
-  ...iconStubs,
-  ArrowMaximize16Regular: () => createElement("span", { "data-icon": "take-control" })
+  ...iconStubs
 }));
 
 const { SessionItem, sessionAccessibleLabel, sessionDisplayTitle } = await import(
@@ -282,8 +281,7 @@ describe("SessionItem terminated controls", () => {
           onMaximize: () => {},
           onNew: () => {},
           onPauseToggle: () => {},
-          onSelect: () => {},
-          onTakeControl: () => {}
+          onSelect: () => {}
         })
       );
 
@@ -323,39 +321,18 @@ describe("SessionItem open terminal ordering", () => {
 });
 
 describe("SessionItem take control", () => {
-  const controlProps = {
-    compact: false,
-    onClose: () => {},
-    onEdit: () => {},
-    onMaximize: () => {},
-    onNew: () => {},
-    onPauseToggle: () => {},
-    onSelect: () => {}
-  };
-
-  test("shows a take-control button for a live session this tab does not control", () => {
+  test("never renders a take-control button (auto-take-control replaced it)", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionItem, {
-        ...controlProps,
+        compact: false,
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onPauseToggle: () => {},
+        onSelect: () => {},
         active: true,
-        session: makeSession(),
-        isController: false,
-        onTakeControl: () => {}
-      })
-    );
-
-    expect(markup).toContain('data-icon="take-control"');
-    expect(markup).toContain('aria-label="Take control"');
-  });
-
-  test("hides the take-control button when this tab is the controller", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SessionItem, {
-        ...controlProps,
-        active: true,
-        session: makeSession(),
-        isController: true,
-        onTakeControl: () => {}
+        session: makeSession()
       })
     );
 
@@ -363,38 +340,11 @@ describe("SessionItem take control", () => {
     expect(markup).not.toContain("Take control");
   });
 
-  test("hides the take-control button when no handler is provided", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SessionItem, {
-        ...controlProps,
-        active: true,
-        session: makeSession()
-      })
-    );
-
-    expect(markup).not.toContain('data-icon="take-control"');
-  });
-
-  test("renders the take-control button for inactive live sessions so hover can reveal it", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SessionItem, {
-        ...controlProps,
-        active: false,
-        session: makeSession(),
-        onTakeControl: () => {}
-      })
-    );
-
-    expect(markup).toContain('data-icon="take-control"');
-  });
-
-  test("reveals the take-control button on hover like the other actions, but keeps it visible on mobile", () => {
+  test("source no longer references the take-control button plumbing", () => {
     const source = readFileSync("src/web/components/SessionItem.tsx", "utf8");
 
-    expect(source).toContain('":hover .climon-take-control": { display: "inline-flex" }');
-    expect(source).toContain('mergeClasses("climon-take-control", styles.lockBtn)');
-    expect(source).toMatch(
-      /lockBtn:\s*\{[\s\S]*?display:\s*"none"/
-    );
+    expect(source).not.toContain("climon-take-control");
+    expect(source).not.toContain("onTakeControl");
+    expect(source).not.toContain("lockBtn");
   });
 });

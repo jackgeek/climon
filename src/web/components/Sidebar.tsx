@@ -162,8 +162,6 @@ interface Props {
   onCloseTunnelLink: () => void;
   showRemotesMenu?: boolean;
   onRemoveDisconnected: () => void;
-  isController?: boolean;
-  onTakeControl?: () => void;
   onMaximize: (id: string) => void;
   isMobile: boolean;
   keyBarPinned: boolean;
@@ -196,8 +194,6 @@ export function Sidebar({
   onCloseTunnelLink,
   showRemotesMenu = false,
   onRemoveDisconnected,
-  isController,
-  onTakeControl,
   onMaximize,
   isMobile,
   keyBarPinned,
@@ -364,8 +360,6 @@ export function Sidebar({
                   onEdit={onEdit}
                   onPauseToggle={onPauseToggle}
                   onMaximize={onMaximize}
-                  isController={s.id === activeId ? isController : undefined}
-                  onTakeControl={s.id === activeId ? onTakeControl : undefined}
                   stateIconNoMotion={stateIconNoMotion}
                 />
               </div>

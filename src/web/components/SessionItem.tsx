@@ -2,7 +2,6 @@ import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-
 import {
   Dismiss16Regular,
   Add16Regular,
-  ArrowMaximize16Regular,
   FullScreenMaximize16Regular,
   Pause16Regular,
   Play16Regular,
@@ -30,8 +29,7 @@ const useStyles = makeStyles({
     ":hover .climon-close": { display: "inline-flex" },
     ":hover .climon-new": { display: "inline-flex" },
     ":hover .climon-edit": { display: "inline-flex" },
-    ":hover .climon-pause": { display: "inline-flex" },
-    ":hover .climon-take-control": { display: "inline-flex" }
+    ":hover .climon-pause": { display: "inline-flex" }
   },
   compactRoot: {
     minHeight: "54px",
@@ -126,11 +124,6 @@ const useStyles = makeStyles({
     bottom: "8px",
     display: "none"
   },
-  lockBtn: {
-    position: "absolute",
-    bottom: "8px",
-    display: "none"
-  },
   maximize: {
     display: "none",
     marginTop: "8px",
@@ -208,10 +201,6 @@ interface Props {
   onEdit: (session: SessionMeta) => void;
   onPauseToggle: (session: SessionMeta) => void;
   onMaximize: (id: string) => void;
-  /** True when THIS tab controls the session's PTY grid. */
-  isController?: boolean;
-  /** Take control of this session (resize its grid to fit this view). */
-  onTakeControl?: () => void;
   stateIconNoMotion?: boolean;
 }
 
@@ -304,8 +293,6 @@ export function SessionItem({
   onEdit,
   onPauseToggle,
   onMaximize,
-  isController,
-  onTakeControl,
   stateIconNoMotion = false
 }: Props) {
   const styles = useStyles();
@@ -382,21 +369,6 @@ export function SessionItem({
           onClick={(e) => {
             e.stopPropagation();
             onEdit(session);
-          }}
-        />
-      )}
-      {showLiveControls && !isController && onTakeControl && (
-        <Button
-          className={mergeClasses("climon-take-control", styles.lockBtn)}
-          style={{ right: `${rightOffsets.lock}px` }}
-          appearance="subtle"
-          size="small"
-          icon={<ArrowMaximize16Regular />}
-          title="Take control (resize this session to fit your view)"
-          aria-label="Take control"
-          onClick={(e) => {
-            e.stopPropagation();
-            onTakeControl();
           }}
         />
       )}

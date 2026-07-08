@@ -45,21 +45,38 @@ pub struct AttachResult {
     pub exit_code: i32,
 }
 
-/// Suppresses local PTY rendering while this terminal is displaced (the shared
-/// grid is larger than the local console, so a bigger surface controls it).
+/// Suppresses local PTY rendering while this terminal is *displaced* -- i.e.
+/// another surface (dashboard/PWA), not this terminal, is the controller of the
+/// shared grid. Displacement is decided by controller *identity*, not by size:
+/// whenever the daemon names a controller other than this terminal's
+/// `my_viewer_id`, output is paused and the take-control notice is shown.
 #[derive(Default)]
 pub struct LocalTerminalOutputGate {
+    /// This terminal's stable surface id, matched against the daemon's
+    /// broadcast `controller_id` to decide whether we control the grid.
+    my_viewer_id: String,
     displaced: bool,
     just_restored: bool,
 }
 
 impl LocalTerminalOutputGate {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(my_viewer_id: impl Into<String>) -> Self {
+        Self {
+            my_viewer_id: my_viewer_id.into(),
+            displaced: false,
+            just_restored: false,
+        }
     }
 
-    /// Updates displaced state from a `Control` frame. Records a
+    /// Recomputes displaced state from a `Control` frame's controller id: this
+    /// terminal is displaced whenever it is not itself the controller. Records a
     /// displaced→not-displaced edge so the caller can request a repaint.
+    pub fn apply_control(&mut self, controller_id: &str) {
+        self.set_displaced(controller_id != self.my_viewer_id);
+    }
+
+    /// Updates displaced state directly. Records a displaced→not-displaced edge
+    /// so the caller can request a repaint.
     pub fn set_displaced(&mut self, displaced: bool) {
         if self.displaced && !displaced {
             self.just_restored = true;
@@ -120,15 +137,16 @@ impl InputProcessor {
                 }
             } else if byte == self.prefix {
                 self.armed = true;
+            } else if byte == TAKE_CONTROL_KEY {
+                // Ctrl+T always seizes control for this terminal, regardless of
+                // whether it is currently displaced. The chord is never forwarded
+                // to the PTY.
+                return ProcessedInput {
+                    forward: out,
+                    action: InputAction::TakeControl,
+                };
             } else if displaced {
-                // Non-interactive: only Ctrl+T (take control) is accepted; all
-                // other input is swallowed.
-                if byte == TAKE_CONTROL_KEY {
-                    return ProcessedInput {
-                        forward: out,
-                        action: InputAction::TakeControl,
-                    };
-                }
+                // Displaced and non-interactive: swallow all other input.
             } else {
                 out.push(byte);
             }
@@ -159,14 +177,17 @@ pub fn render_local_displaced(cols: u16, rows: u16) -> String {
 
 /// Processes a single decoded frame from the daemon, writing PTY output to
 /// `out` and updating the gate/exit-code. Pure (no socket / raw-mode side
-/// effects) so it is unit-testable.
+/// effects) so it is unit-testable. Returns `true` when the terminal just
+/// regained control and the caller should ask the daemon for a fresh replay so
+/// a static screen is not left blank behind the cleared take-control notice.
+#[must_use]
 pub fn consume_frame<W: Write>(
     frame_type: FrameType,
     payload: &[u8],
     gate: &mut LocalTerminalOutputGate,
     out: &mut W,
     exit_code: &mut i32,
-) {
+) -> bool {
     match frame_type {
         FrameType::Output | FrameType::Replay => {
             if let Some(bytes) = gate.write_pty_output(payload) {
@@ -181,21 +202,27 @@ pub fn consume_frame<W: Write>(
         }
         FrameType::Control => {
             if let Ok(ctrl) = parse_json_payload::<ControlPayload>(payload) {
-                let (tcols, trows) = local_terminal_size();
-                let displaced = tcols < ctrl.cols || trows < ctrl.rows;
-                gate.set_displaced(displaced);
-                if displaced {
+                // Displacement is decided by controller identity: this terminal
+                // is displaced unless it is itself the named controller. When it
+                // controls, the daemon has sized the grid to this terminal, so
+                // the output always fits.
+                gate.apply_control(&ctrl.controller_id);
+                if gate.is_displaced() {
+                    let (tcols, trows) = local_terminal_size();
                     let _ = out.write_all(render_local_displaced(tcols, trows).as_bytes());
                     let _ = out.flush();
                 } else if gate.take_just_restored() {
-                    // Fits again: clear the notice; the next Output/Replay repaints.
+                    // Regained control: clear the notice and request a replay so
+                    // the current screen repaints immediately.
                     let _ = out.write_all(b"\x1b[2J\x1b[H");
                     let _ = out.flush();
+                    return true;
                 }
             }
         }
         _ => {}
     }
+    false
 }
 
 #[cfg(unix)]
@@ -376,6 +403,12 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
     let writer = stream.try_clone_box()?;
     let writer = Arc::new(std::sync::Mutex::new(writer));
 
+    // A stable, unique surface id for this terminal so the daemon can name
+    // exactly one controller and this terminal can tell whether it holds
+    // control. The process id is unique among all concurrently attached
+    // surfaces (each terminal is its own process; dashboards use random ids).
+    let viewer_id = format!("terminal-{}", std::process::id());
+
     // Send the initial host resize.
     let (cols, rows) = local_terminal_size();
     {
@@ -386,7 +419,7 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                 cols,
                 rows,
                 kind: Some(SurfaceKind::Terminal),
-                viewer_id: Some("local".to_string()),
+                viewer_id: Some(viewer_id.clone()),
             },
         ));
         let _ = w.flush();
@@ -407,9 +440,11 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
     let reader_stream = stream.try_clone_box()?;
     let reader_exit = Arc::clone(&exit_code);
     let reader_done = Arc::clone(&done);
+    let reader_writer = Arc::clone(&writer);
+    let reader_viewer_id = viewer_id.clone();
     let reader = std::thread::spawn(move || {
         let mut decoder = FrameDecoder::new();
-        let mut gate = LocalTerminalOutputGate::new();
+        let mut gate = LocalTerminalOutputGate::new(reader_viewer_id);
         let mut buf = [0u8; 8192];
         let mut stream = reader_stream;
         loop {
@@ -418,14 +453,23 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                 Ok(n) => {
                     let mut out = std::io::stdout();
                     let mut code = reader_exit.load(Ordering::SeqCst);
+                    let mut request_replay = false;
                     for frame in decoder.push(&buf[..n]) {
-                        consume_frame(
+                        request_replay |= consume_frame(
                             frame.frame_type,
                             &frame.payload,
                             &mut gate,
                             &mut out,
                             &mut code,
                         );
+                    }
+                    if request_replay {
+                        // We just regained control: pull a fresh repaint so an
+                        // idle screen isn't left blank behind the cleared notice.
+                        if let Ok(mut w) = reader_writer.lock() {
+                            let _ = w.write_all(&encode_frame(FrameType::Replay, &[]));
+                            let _ = w.flush();
+                        }
                     }
                     reader_exit.store(code, Ordering::SeqCst);
                     reader_displaced.store(gate.is_displaced(), Ordering::SeqCst);
@@ -456,7 +500,7 @@ pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result
                     cols,
                     rows,
                     kind: Some(SurfaceKind::Terminal),
-                    viewer_id: Some("local".to_string()),
+                    viewer_id: Some(viewer_id.clone()),
                 },
             ));
             let _ = w.flush();
@@ -581,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_t_takes_control_only_while_displaced() {
+    fn ctrl_t_always_takes_control() {
         let mut p = InputProcessor::new(0x1c);
         // While displaced: Ctrl+T -> TakeControl, swallowed (no forward).
         assert_eq!(
@@ -599,19 +643,20 @@ mod tests {
                 action: InputAction::None
             }
         );
-        // While NOT displaced: Ctrl+T forwards as a normal byte.
+        // While NOT displaced: Ctrl+T still takes control and is never forwarded
+        // to the PTY as a raw byte.
         assert_eq!(
             p.process(&[0x14], false),
             ProcessedInput {
-                forward: vec![0x14],
-                action: InputAction::None
+                forward: vec![],
+                action: InputAction::TakeControl
             }
         );
     }
 
     #[test]
     fn gate_suppresses_while_displaced_and_resumes_after_restore() {
-        let mut gate = LocalTerminalOutputGate::new();
+        let mut gate = LocalTerminalOutputGate::new("terminal-1");
         assert_eq!(gate.write_pty_output(b"before"), Some(b"before".to_vec()));
         gate.set_displaced(true);
         assert_eq!(gate.write_pty_output(b"hidden"), None);
@@ -620,5 +665,19 @@ mod tests {
         assert!(gate.take_just_restored());
         assert!(!gate.take_just_restored());
         assert_eq!(gate.write_pty_output(b"after"), Some(b"after".to_vec()));
+    }
+
+    #[test]
+    fn gate_is_displaced_when_another_surface_controls() {
+        let mut gate = LocalTerminalOutputGate::new("terminal-1");
+        // Another surface controls the grid: this terminal is displaced.
+        gate.apply_control("dashboard-abc");
+        assert!(gate.is_displaced());
+        assert_eq!(gate.write_pty_output(b"hidden"), None);
+        // This terminal regains control: no longer displaced, restore edge fires.
+        gate.apply_control("terminal-1");
+        assert!(!gate.is_displaced());
+        assert!(gate.take_just_restored());
+        assert_eq!(gate.write_pty_output(b"shown"), Some(b"shown".to_vec()));
     }
 }

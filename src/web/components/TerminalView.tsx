@@ -13,7 +13,7 @@ import {
   fetchScrollback,
   isLiveStatus
 } from "../api.js";
-import { deriveControlState, surfaceKind, type ControlState } from "../control-state.js";
+import { deriveControlState, generateViewerId, surfaceKind, type ControlState } from "../control-state.js";
 import { readIsStandalone } from "../pwa/pwaContext.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
@@ -348,6 +348,7 @@ export interface TerminalHandle {
   refresh: () => void;
   sendInput: (data: string) => void;
   takeControl: () => void;
+  armTakeControl: (sessionId: string) => void;
   acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
   focus: () => void;
   captureText: () => string;
@@ -431,12 +432,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const attachedSessionIdRef = useRef<string | null>(null);
-  const viewerIdRef = useRef<string>(crypto.randomUUID());
+  const viewerIdRef = useRef<string>(generateViewerId());
   const kindRef = useRef(surfaceKind(readIsStandalone()));
   const controllerIdRef = useRef<string | null>(null);
   const ctrlColsRef = useRef(0);
   const ctrlRowsRef = useRef(0);
   const displacedRef = useRef(false);
+  const pendingTakeControlSessionRef = useRef<string | null>(null);
   const onControlStateChangeRef = useRef(onControlStateChange);
   const fontSizeRef = useRef(fontSize);
   const xtermThemeRef = useRef(xtermTheme);
@@ -494,13 +496,18 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }, [xtermTheme]);
 
   function sendResize(): void {
+    // Only the controller drives the grid. A non-controller (displaced) surface
+    // must stay silent -- reporting its size would fight the controller and
+    // trigger a resize feedback loop across surfaces.
+    if (displacedRef.current) {
+      return;
+    }
     const term = termRef.current;
     const ws = wsRef.current;
     if (term && ws && ws.readyState === WebSocket.OPEN) {
       // Report this tab's NATURAL fit dimensions (what its container can hold),
-      // not term.cols/rows -- when following, xterm is forced to the controller's
-      // grid, so its own size would be wrong. proposeDimensions() measures the
-      // container without resizing xterm.
+      // not term.cols/rows -- proposeDimensions() measures the container without
+      // resizing xterm.
       const proposed = fitRef.current?.proposeDimensions();
       const cols = proposed?.cols ?? term.cols;
       const rows = proposed?.rows ?? term.rows;
@@ -521,9 +528,38 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
   function takeControl(): void {
     const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "takeControl" }));
+    const term = termRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !term) {
+      return;
     }
+    // Report our natural size first so the daemon resizes the PTY to fit this
+    // surface, then seize control. This bypasses the displaced guard on
+    // sendResize() because control has not transferred to us yet.
+    const proposed = fitRef.current?.proposeDimensions();
+    const cols = proposed?.cols ?? term.cols;
+    const rows = proposed?.rows ?? term.rows;
+    ws.send(JSON.stringify({ type: "resize", cols, rows, kind: kindRef.current, viewerId: viewerIdRef.current }));
+    ws.send(JSON.stringify({ type: "takeControl" }));
+  }
+
+  // Arm an automatic take-control for the given session so that selecting or
+  // opening a session in this dashboard makes it the controller. If we are
+  // already attached to that session, take control immediately; otherwise the
+  // pending request is flushed when the next attachment opens.
+  function armTakeControl(sessionId: string): void {
+    pendingTakeControlSessionRef.current = sessionId;
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN && attachedSessionIdRef.current === sessionId) {
+      flushPendingTakeControl(sessionId);
+    }
+  }
+
+  function flushPendingTakeControl(sessionId: string): void {
+    if (pendingTakeControlSessionRef.current !== sessionId) {
+      return;
+    }
+    pendingTakeControlSessionRef.current = null;
+    takeControl();
   }
 
   function sendAttentionAck(sessionId: string, attentionMatchedAt: string): void {
@@ -550,6 +586,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }
 
   function fitNow(): void {
+    // A displaced (non-controller) surface must not fit or report its size --
+    // that is what drives the grid, and only the controller may do so.
+    if (displacedRef.current) {
+      return;
+    }
     if (
       !canRefitTerminalForSession(
         selectedSessionRef.current,
@@ -708,6 +749,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         return;
       }
       flushAttentionAck();
+      // If the user selected/opened this session, take control once attached.
+      // Defer a frame so the terminal viewport has settled before we measure it.
+      if (pendingTakeControlSessionRef.current === liveSession.id) {
+        requestAnimationFrame(() => flushPendingTakeControl(liveSession.id));
+      }
     };
     ws.onmessage = (ev) => {
       if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
@@ -744,24 +790,14 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             controllerIdRef.current = controllerId;
             ctrlColsRef.current = ctrlCols;
             ctrlRowsRef.current = ctrlRows;
-            const proposed = fitRef.current?.proposeDimensions();
-            const ownCols = proposed?.cols ?? term.cols;
-            const ownRows = proposed?.rows ?? term.rows;
-            const state = deriveControlState({
-              ownViewerId: viewerIdRef.current,
-              controllerId,
-              ownCols,
-              ownRows,
-              ctrlCols,
-              ctrlRows
-            });
+            const state = deriveControlState({ ownViewerId: viewerIdRef.current, controllerId });
             const wasDisplaced = displacedRef.current;
             displacedRef.current = state === "displaced";
             applyDisplacedUi(state);
             onControlStateChangeRef.current?.({ controllerId, ownViewerId: viewerIdRef.current, state });
             if (!displacedRef.current && (gridChanged || wasDisplaced)) {
-              // Grid changed (or we just stopped being displaced): rebuild
-              // scrollback for the new controller grid on the next resize.
+              // We control the grid (or just took control): render it at our size
+              // and rebuild scrollback on the next resize.
               replayAfterNextResizeRef.current = true;
               refit();
             }
@@ -1001,6 +1037,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       }
     },
     takeControl,
+    armTakeControl,
     acknowledgeAttention: sendAttentionAck,
     focus: focusActiveTerminal,
     captureText: () => captureTerminalText(termRef.current)
@@ -1024,7 +1061,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       {displayState === "displaced" && (
         <div className={styles.overlay}>
           <div className={styles.overlayCard}>
-            <Text>This session is being viewed at a larger size elsewhere.</Text>
+            <Text>This session is being viewed on another dashboard.</Text>
             <Button appearance="primary" onClick={takeControl}>
               Take control
             </Button>

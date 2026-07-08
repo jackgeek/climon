@@ -509,20 +509,21 @@ impl HostState {
         self.broadcast_control();
     }
 
-    /// Processes a chunk of in-process local-terminal stdin against the current
-    /// displaced state. While the local terminal is displaced (its output is
-    /// suppressed because a larger surface controls the grid), the monitored
-    /// command is non-interactive: all input is swallowed EXCEPT Ctrl+T (0x14),
-    /// which takes control back to the local terminal. Returns the bytes that
-    /// should be forwarded to the PTY (empty while displaced).
+    /// Processes a chunk of in-process local-terminal stdin. Ctrl+T (0x14) always
+    /// takes control back to the local terminal, regardless of displaced state,
+    /// and is swallowed. Otherwise, while the local terminal is displaced (its
+    /// output is suppressed because another surface controls the grid) the
+    /// monitored command is non-interactive and all input is swallowed; when not
+    /// displaced, input is forwarded to the PTY. Returns the bytes to forward.
     fn local_stdin(&mut self, buf: &[u8]) -> Vec<u8> {
-        if !self.local_output_suppressed {
-            return buf.to_vec();
+        match local_stdin_action(buf.contains(&0x14), self.local_output_suppressed) {
+            LocalStdinAction::TakeControl => {
+                self.take_control("local");
+                Vec::new()
+            }
+            LocalStdinAction::Swallow => Vec::new(),
+            LocalStdinAction::Forward => buf.to_vec(),
         }
-        if buf.contains(&0x14) {
-            self.take_control("local");
-        }
-        Vec::new()
     }
 
     /// Re-picks a controller when the current one is gone. If the controller is
@@ -1370,6 +1371,34 @@ fn local_restore_decision(
     }
 }
 
+/// What to do with a chunk of in-process local-terminal stdin. Extracted as a
+/// pure decision so the Ctrl+T-always-takes-control rule is unit-testable
+/// without a live PTY/`HostState`.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalStdinAction {
+    /// The chunk contained Ctrl+T (0x14): take control back to the local
+    /// terminal and swallow the input.
+    TakeControl,
+    /// The local terminal is displaced (output suppressed by another
+    /// controller): swallow the input so the command stays non-interactive.
+    Swallow,
+    /// Forward the input unchanged to the PTY.
+    Forward,
+}
+
+/// Pure decision for in-process local stdin. Ctrl+T always wins — it takes
+/// control regardless of displaced state — otherwise displaced input is
+/// swallowed and everything else is forwarded.
+fn local_stdin_action(has_take_control: bool, suppressed: bool) -> LocalStdinAction {
+    if has_take_control {
+        LocalStdinAction::TakeControl
+    } else if suppressed {
+        LocalStdinAction::Swallow
+    } else {
+        LocalStdinAction::Forward
+    }
+}
+
 fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(25));
@@ -1929,5 +1958,39 @@ mod restore_decision_tests {
             local_restore_decision(Some(past), now, true),
             LocalRestoreDecision::SkipOvergrown
         );
+    }
+}
+
+#[cfg(test)]
+mod local_stdin_tests {
+    use super::{local_stdin_action, LocalStdinAction};
+
+    #[test]
+    fn ctrl_t_takes_control_even_when_not_displaced() {
+        // Regression guard: previously, when the local terminal was NOT
+        // displaced, stdin was forwarded to the PTY before checking for Ctrl+T,
+        // so the terminal could never regain control with Ctrl+T.
+        assert_eq!(
+            local_stdin_action(true, false),
+            LocalStdinAction::TakeControl
+        );
+    }
+
+    #[test]
+    fn ctrl_t_takes_control_when_displaced() {
+        assert_eq!(
+            local_stdin_action(true, true),
+            LocalStdinAction::TakeControl
+        );
+    }
+
+    #[test]
+    fn displaced_input_is_swallowed() {
+        assert_eq!(local_stdin_action(false, true), LocalStdinAction::Swallow);
+    }
+
+    #[test]
+    fn ordinary_input_is_forwarded_when_controlling() {
+        assert_eq!(local_stdin_action(false, false), LocalStdinAction::Forward);
     }
 }
