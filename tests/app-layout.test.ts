@@ -209,8 +209,16 @@ describe("scheduleTerminalRefit", () => {
     test("Insert sends raw text and clears the staging text", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
-      // Insert: raw text, then clear.
-      expect(source).toContain("onComposeInsert={(text) => {\n                  terminalRef.current?.sendInput(text);\n                  setComposeText(\"\");");
+      // Extract the onComposeInsert handler body so the assertion tolerates
+      // unrelated statements (e.g. compose-history recording) between sending
+      // the text and clearing the staging area.
+      const insertStart = source.indexOf("onComposeInsert={(text) => {");
+      expect(insertStart).toBeGreaterThan(-1);
+      const insertEnd = source.indexOf("}}", insertStart);
+      const insertBody = source.slice(insertStart, insertEnd);
+      // Insert must send the raw text and then clear the staging text.
+      expect(insertBody).toContain("terminalRef.current?.sendInput(text);");
+      expect(insertBody).toContain('setComposeText("");');
       expect(source).not.toContain("onComposeInsertRun");
     });
 

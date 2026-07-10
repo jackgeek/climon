@@ -162,6 +162,24 @@ mod tests {
         }
     }
 
+    /// Polls `cond` on a short cadence until it holds or `timeout` elapses,
+    /// returning whether it held. Replaces fixed sleeps so the watcher tests do
+    /// not race the poll thread's scheduling on contended CI runners.
+    fn wait_until<F: Fn() -> bool>(timeout: Duration, cond: F) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if cond() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    const WAIT: Duration = Duration::from_secs(5);
+
     #[test]
     fn clears_a_pre_existing_request_on_start() {
         let dir = tmp("clear");
@@ -181,7 +199,10 @@ mod tests {
             *seen2.lock().unwrap() = Some(r);
         });
         write_shutdown_request_to_dir(&dir, &req()).unwrap();
-        std::thread::sleep(Duration::from_millis(120));
+        assert!(
+            wait_until(WAIT, || seen.lock().unwrap().is_some()),
+            "watcher never fired on the valid request"
+        );
         assert_eq!(
             seen.lock()
                 .unwrap()
@@ -203,9 +224,13 @@ mod tests {
             calls2.store(true, Ordering::SeqCst);
         });
         std::fs::write(get_shutdown_request_path_in_dir(&dir), "not json").unwrap();
-        std::thread::sleep(Duration::from_millis(120));
+        // The watcher must consume (delete) the malformed file; wait for that
+        // rather than a fixed sleep, then assert the callback never fired.
+        assert!(
+            wait_until(WAIT, || !get_shutdown_request_path_in_dir(&dir).exists()),
+            "watcher never dropped the malformed request"
+        );
         assert!(!calls.load(Ordering::SeqCst));
-        assert!(!get_shutdown_request_path_in_dir(&dir).exists());
         watcher.stop();
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -219,9 +244,16 @@ mod tests {
             calls2.fetch_add(1, Ordering::SeqCst);
         });
         write_shutdown_request_to_dir(&dir, &req()).unwrap();
-        std::thread::sleep(Duration::from_millis(80));
+        // Wait for the first request to fire before writing the second, so the
+        // "at most once" guarantee is what is under test rather than scheduling.
+        assert!(
+            wait_until(WAIT, || calls.load(Ordering::SeqCst) >= 1),
+            "watcher never fired on the first request"
+        );
         write_shutdown_request_to_dir(&dir, &req()).unwrap();
-        std::thread::sleep(Duration::from_millis(80));
+        // The watcher latched `done` after the first fire, so a second request
+        // can never re-fire; give it several poll cycles and confirm it stays 1.
+        std::thread::sleep(Duration::from_millis(120));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         watcher.stop();
         std::fs::remove_dir_all(&dir).ok();
@@ -234,10 +266,13 @@ mod tests {
         let guard = spawn_poll(15, move || {
             calls2.fetch_add(1, Ordering::SeqCst);
         });
-        std::thread::sleep(Duration::from_millis(120));
+        assert!(
+            wait_until(WAIT, || calls.load(Ordering::SeqCst) >= 1),
+            "expected at least one tick"
+        );
         drop(guard);
+        // drop() joins the poll thread, so no tick can occur after it returns.
         let after_drop = calls.load(Ordering::SeqCst);
-        assert!(after_drop >= 1, "expected at least one tick");
         std::thread::sleep(Duration::from_millis(60));
         assert_eq!(
             calls.load(Ordering::SeqCst),

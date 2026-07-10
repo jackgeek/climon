@@ -209,7 +209,7 @@ describe("runIngestConnection", () => {
     const decoder = new MuxDecoder();
     const attaches: string[] = [];
     const detaches: string[] = [];
-    client.on("data", (chunk) => {
+    client.on("data", (chunk: Buffer) => {
       for (const msg of decoder.push(chunk)) {
         if (msg.type === "control" && msg.message.kind === "attach") {
           attaches.push(msg.message.id);
