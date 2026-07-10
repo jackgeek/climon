@@ -25,6 +25,7 @@ import {
   TerminalView,
   loadTerminalAddons,
   configureTerminalUnicode,
+  createEmojiUnicodeProvider,
   terminalOptions
 } from "../src/web/components/TerminalView.js";
 
@@ -173,22 +174,105 @@ describe("TerminalView", () => {
     expect(loaded).toEqual(["fit", "web-links"]);
   });
 
-  test("activates Unicode 11 widths so wide emoji occupy two cells instead of eating a space", async () => {
+  async function cursorAdvance(grapheme: string): Promise<number> {
+    const term = new Terminal({ cols: 40, rows: 3, allowProposedApi: true });
+    configureTerminalUnicode(term, new Unicode11Addon());
+    await writeTerminal(term, grapheme);
+    const advance = term.buffer.active.cursorX;
+    term.dispose();
+    return advance;
+  }
+
+  test("installs the climon emoji-aware Unicode version", async () => {
     const term = new Terminal({ cols: 40, rows: 3, allowProposedApi: true });
 
     configureTerminalUnicode(term, new Unicode11Addon());
-    await writeTerminal(term, "😀");
 
-    expect(term.unicode.activeVersion).toBe("11");
-    // Default xterm Unicode v6 advances the cursor by 1 for 😀 (U+1F600), which
-    // desyncs from the two-cell glyph the app drew and swallows a space. Unicode
-    // 11 widths advance by 2, matching what modern PTY apps assume.
-    expect(term.buffer.active.cursorX).toBe(2);
-
+    expect(term.unicode.activeVersion).toBe("climon-emoji");
     term.dispose();
   });
 
-  test("wires Unicode 11 width handling into the live terminal on creation", () => {
+  test("advances two cells for wide emoji so they do not eat a space", async () => {
+    // Plain wide emoji and CJK are already correct under Unicode 11 — regression guards.
+    expect(await cursorAdvance("😀")).toBe(2);
+    expect(await cursorAdvance("⭐️")).toBe(2);
+    expect(await cursorAdvance("世")).toBe(2);
+    // ASCII must stay one cell.
+    expect(await cursorAdvance("A")).toBe(1);
+  });
+
+  test("promotes emoji-presentation (VS16) sequences to two cells", async () => {
+    // A narrow base + U+FE0F renders as a two-cell emoji; Unicode 11 alone leaves
+    // these at width 1, desyncing the cursor and swallowing a space.
+    expect(await cursorAdvance("❤️")).toBe(2);
+    expect(await cursorAdvance("⚠️")).toBe(2);
+    expect(await cursorAdvance("▶️")).toBe(2);
+  });
+
+  test("keeps keycap sequences to two cells", async () => {
+    // Keycap = digit + U+FE0F + U+20E3; VS16 promotion plus the combining keycap join.
+    expect(await cursorAdvance("1️⃣")).toBe(2);
+  });
+
+  test("keeps skin-tone emoji to two cells instead of summing the modifier", async () => {
+    // Base emoji + skin-tone modifier (U+1F3FD) must stay a single two-cell cluster.
+    expect(await cursorAdvance("👍🏽")).toBe(2);
+  });
+
+  test("leaves ZWJ sequences unchanged (documented out-of-scope limitation)", async () => {
+    // ZWJ family clustering is intentionally not handled: font-dependent and risky.
+    expect(await cursorAdvance("👨‍👩‍👧‍👦")).toBe(8);
+  });
+
+  test("emoji provider promotes VS16 and joins skin-tone modifiers, else delegates", () => {
+    const createPropertyValue = (_state: number, width: number, shouldJoin: boolean): number =>
+      (width << 1) | (shouldJoin ? 1 : 0);
+    const extractWidth = (value: number): number => (value >> 1) & 0b11;
+    const base = {
+      wcwidth: (cp: number): 0 | 1 | 2 => (cp === 0x41 ? 1 : 2),
+      charProperties: (): number => createPropertyValue(0, 1, false)
+    };
+
+    const provider = createEmojiUnicodeProvider(base, createPropertyValue, extractWidth);
+    const narrowBase = createPropertyValue(0, 1, false);
+
+    // VS16 after a narrow base -> width 2 + join.
+    const vs16 = provider.charProperties(0xfe0f, narrowBase);
+    expect(extractWidth(vs16)).toBe(2);
+    expect(vs16 & 1).toBe(1);
+
+    // Skin-tone modifier -> width 2 + join.
+    const tone = provider.charProperties(0x1f3fd, createPropertyValue(0, 2, false));
+    expect(extractWidth(tone)).toBe(2);
+    expect(tone & 1).toBe(1);
+
+    // Anything else delegates to the base provider.
+    expect(provider.charProperties(0x41, 0)).toBe(createPropertyValue(0, 1, false));
+    expect(provider.wcwidth(0x41)).toBe(1);
+  });
+
+  test("falls back to Unicode 11 without throwing when xterm internals are unavailable", () => {
+    let version = "6";
+    const stub = {
+      loadAddon: () => {},
+      unicode: {
+        get activeVersion() {
+          return version;
+        },
+        set activeVersion(value: string) {
+          version = value;
+        }
+      }
+    } as unknown as Parameters<typeof configureTerminalUnicode>[0];
+    const addon = { activate: () => {}, dispose: () => {} } as unknown as Parameters<
+      typeof configureTerminalUnicode
+    >[1];
+
+    expect(() => configureTerminalUnicode(stub, addon)).not.toThrow();
+    expect(version).toBe("11");
+  });
+
+  test("wires emoji-aware Unicode width handling into the live terminal on creation", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("configureTerminalUnicode(term, new Unicode11Addon());");

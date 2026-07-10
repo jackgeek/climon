@@ -2,10 +2,17 @@
 
 Manual checks for the dashboard terminal rendering emoji and other wide
 (two-cell) characters at the correct width. The browser terminal loads the
-xterm.js Unicode 11 addon and activates version `11`, so wide emoji advance the
-cursor by two cells — matching what the PTY application drew. Without it, xterm's
-default Unicode v6 widths count many emoji as one cell, the cursor desyncs from
-the glyph, and following text overwrites/"eats" spaces and leaves ghost glyphs.
+xterm.js Unicode 11 addon plus a small custom Unicode provider that promotes
+emoji-presentation (VS16) sequences and joins skin-tone modifiers, so those
+grapheme clusters advance the cursor by two cells — matching what the PTY
+application drew. Without it, xterm's default Unicode v6 widths count many emoji
+as one cell, the cursor desyncs from the glyph, and following text
+overwrites/"eats" spaces and leaves ghost glyphs.
+
+Covered: plain wide emoji (`😀`), VS16 on a narrow base (`❤️ ⚠️ ▶️`), keycaps
+(`1️⃣`), and skin-tone emoji (`👍🏽`). Not covered (intentionally): ZWJ sequences
+such as families/professions (`👨‍👩‍👧‍👦`, `👩‍💻`) — those stay per-codepoint and
+may still misalign.
 
 ## TEW-1 — Wide emoji keep their spacing (no eaten spaces)
 
@@ -40,5 +47,24 @@ the glyph, and following text overwrites/"eats" spaces and leaves ghost glyphs.
 - **Expected result:** Rows stay independent — no glyphs from one row bleed into
   the row above or below, and clearing/redrawing (scrolling) leaves no residual
   cells.
+- **Platforms:** Desktop Chrome, Firefox, Safari.
+- **Result:** _date / tester / platform / pass-fail / notes_
+
+## TEW-3 — VS16, keycap and skin-tone emoji occupy two cells
+
+- **Feature:** Terminal emoji / wide-character width fidelity
+- **Preconditions:** As TEW-1.
+- **Config-matrix cell:** Browser = desktop Chrome/Firefox/Safari.
+- **Steps:**
+  1. Print markers around the tricky grapheme clusters so misalignment is
+     obvious, e.g.:
+
+     ```sh
+     printf 'A \xe2\x9d\xa4\xef\xb8\x8f B \xe2\x9a\xa0\xef\xb8\x8f C \xe2\x96\xb6\xef\xb8\x8f D\n'   # VS16: ❤️ ⚠️ ▶️
+     printf 'A 1\xef\xb8\x8f\xe2\x83\xa3 B \xf0\x9f\x91\x8d\xf0\x9f\x8f\xbd C\n'                     # keycap 1️⃣ and skin-tone 👍🏽
+     ```
+  2. Observe the rendered lines.
+- **Expected result:** Each of `❤️ ⚠️ ▶️ 1️⃣ 👍🏽` occupies two cells; the markers
+  (`B C D`) stay evenly spaced with no swallowed space or ghost glyph.
 - **Platforms:** Desktop Chrome, Firefox, Safari.
 - **Result:** _date / tester / platform / pass-fail / notes_
