@@ -3,6 +3,7 @@ import { makeStyles } from "@fluentui/react-components";
 import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import {
@@ -266,6 +267,14 @@ export function loadTerminalAddons(
 ): void {
   term.loadAddon(fit);
   term.loadAddon(webLinks);
+}
+
+export function configureTerminalUnicode(
+  term: Pick<Terminal, "loadAddon" | "unicode">,
+  unicode11: ITerminalAddon
+): void {
+  term.loadAddon(unicode11);
+  term.unicode.activeVersion = "11";
 }
 
 export interface TerminalHandle {
@@ -722,6 +731,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const fit = new FitAddon();
     const webLinks = new WebLinksAddon();
     loadTerminalAddons(term, fit, webLinks);
+    configureTerminalUnicode(term, new Unicode11Addon());
     term.open(container);
     termRef.current = term;
     fitRef.current = fit;

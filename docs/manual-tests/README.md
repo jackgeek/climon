@@ -84,6 +84,7 @@ result-tracking row.
 | — | Uplink advertises sessions created after it connects (sessions-dir watcher re-reconcile) | [uplink-advertise-new-sessions.md](uplink-advertise-new-sessions.md) |
 | — | Remote host self-managed ingest tunnel — stable `climon-ingest` dev tunnel id, label, non-secret description, restart reuse | [phase18-remote-host-tunnel.md](phase18-remote-host-tunnel.md) |
 | — | Terminal viewport fit — terminal re-fits its pane instead of locking to the host grid (addon-fit/xterm version-mismatch regression) | [terminal-viewport-fit.md](terminal-viewport-fit.md) |
+| — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |
 
 ## Recording results
 

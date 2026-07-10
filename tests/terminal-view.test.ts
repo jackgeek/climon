@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import xterm from "@xterm/headless";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -23,6 +24,7 @@ import {
   shouldHandleWheelAsScrollback,
   TerminalView,
   loadTerminalAddons,
+  configureTerminalUnicode,
   terminalOptions
 } from "../src/web/components/TerminalView.js";
 
@@ -169,6 +171,27 @@ describe("TerminalView", () => {
     );
 
     expect(loaded).toEqual(["fit", "web-links"]);
+  });
+
+  test("activates Unicode 11 widths so wide emoji occupy two cells instead of eating a space", async () => {
+    const term = new Terminal({ cols: 40, rows: 3, allowProposedApi: true });
+
+    configureTerminalUnicode(term, new Unicode11Addon());
+    await writeTerminal(term, "😀");
+
+    expect(term.unicode.activeVersion).toBe("11");
+    // Default xterm Unicode v6 advances the cursor by 1 for 😀 (U+1F600), which
+    // desyncs from the two-cell glyph the app drew and swallows a space. Unicode
+    // 11 widths advance by 2, matching what modern PTY apps assume.
+    expect(term.buffer.active.cursorX).toBe(2);
+
+    term.dispose();
+  });
+
+  test("wires Unicode 11 width handling into the live terminal on creation", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("configureTerminalUnicode(term, new Unicode11Addon());");
   });
 
   test("installed FitAddon computes dimensions against the xterm 6 core without the removed viewport API", () => {
