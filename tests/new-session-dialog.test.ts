@@ -1,6 +1,16 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as RealComponents from "@fluentui/react-components";
+
+// `mock.module` is global and mutates the module in place for the whole test
+// run, so snapshot the real Fluent exports *before* mocking and restore them
+// once this file's tests finish; otherwise suites that render real Fluent
+// components afterward (e.g. terminal-panel, app-layout) get the stubs.
+const realComponents = { ...RealComponents };
+afterAll(() => {
+  mock.module("@fluentui/react-components", () => realComponents);
+});
 
 type PassthroughProps = {
   children?: ReactNode;

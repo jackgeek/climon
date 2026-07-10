@@ -770,6 +770,17 @@
       }
     }
   },
+  "server.ingest_daemon_bootstrap_failed": {
+    "id": "458f7b1b",
+    "t": "ingest daemon bootstrap failed: {error}",
+    "hint": "Warn log when the remote ingest daemon cannot be started during server startup; the dashboard still comes up. {error} is the failure message.",
+    "params": {
+      "error": {
+        "redact": true,
+        "category": "diagnostic"
+      }
+    }
+  },
   "server.ingest_daemon_ready": {
     "id": "06c46483",
     "t": "ingest daemon ready (pid {pid}, port {port}).",
