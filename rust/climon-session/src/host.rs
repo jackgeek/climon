@@ -1087,12 +1087,19 @@ pub fn run_session_host(
 
 /// The centered notice shown on the in-process local terminal when it is
 /// *displaced* — the shared PTY grid is larger than this console, so a surface
-/// (dashboard/PWA) is controlling it. Clears the screen and centers a friendly
-/// message plus the take-control hint, then pauses local output until control
-/// returns (preserving the Windows ConPTY corruption guard).
+/// (dashboard/PWA) is controlling it. Clears only the *visible viewport* (never
+/// scrollback) and centers a friendly message plus the take-control hint, then
+/// pauses local output until control returns (preserving the Windows ConPTY
+/// corruption guard).
 fn render_local_displaced(_cols: u16, _rows: u16) -> String {
     let (w, h) = debug_console_size();
-    let mut out = String::from("\x1b[2J\x1b[H");
+    // Clear only the *visible* viewport, never `\e[2J`: on Windows Terminal (and
+    // others) `\e[2J` clears scrollback. `\e[H` homes the cursor and `\e[J`
+    // (erase-below) then clears from there to the end of the visible screen — the
+    // whole viewport — without touching scrollback above it. The notice is
+    // centered with absolute positioning, so nothing scrolls off. Reset SGR first
+    // so the cleared cells behind the notice use the default background.
+    let mut out = String::from("\x1b[m\x1b[H\x1b[J");
     let msg = "This session is being viewed on a climon dashboard.";
     let hint = "Press Space to take control and resize it to this terminal.";
     let row = (h / 2).max(1);
