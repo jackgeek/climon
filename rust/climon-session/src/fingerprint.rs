@@ -72,14 +72,25 @@ impl HeadlessGrid {
             rows.pop();
         }
         let mut out = Vec::new();
-        out.extend_from_slice(b"\x1b[H\x1b[2J\x1b[m");
+        // Home only. NEVER `\e[2J`: on Windows Terminal (and others) it clears
+        // scrollback. This repaint lands on top of the current primary buffer,
+        // overwriting only the visible viewport (where the displaced notice sat),
+        // so it must be non-destructive to history above the viewport.
+        out.extend_from_slice(b"\x1b[H");
         for (i, row) in rows.iter().enumerate() {
             if i > 0 {
                 out.extend_from_slice(b"\r\n");
             }
-            out.extend_from_slice(b"\x1b[2K");
+            // Reset SGR *before* the erase so the erased cells are painted with
+            // the default background (kills the vt100 last-cell attribute bleed);
+            // the row content then re-establishes whatever attributes it needs.
+            out.extend_from_slice(b"\x1b[m\x1b[2K");
             out.extend_from_slice(row);
         }
+        // Clear from the cursor to the end of the visible screen so stale rows
+        // below the current content are removed. `\e[J` (erase-below) does NOT
+        // touch scrollback, unlike `\e[2J`.
+        out.extend_from_slice(b"\x1b[m\x1b[J");
         out
     }
 
@@ -246,6 +257,44 @@ mod tests {
                 "repaint must not use absolute row positioning, found: {seq:?}"
             );
         }
+    }
+
+    #[test]
+    fn render_screen_resets_sgr_before_every_erase_and_never_clears_scrollback() {
+        // Regression: render_screen must (a) never emit `\e[2J` (clears
+        // scrollback on Windows Terminal), and (b) reset SGR *before* every
+        // erase so a lingering background attribute cannot bleed into the
+        // cleared cells / prompt.
+        let mut grid = HeadlessGrid::new(20, 4);
+        // Blue background then text, leaving the blue attribute active on the
+        // last painted cell (the vt100 bleed source).
+        grid.write(b"\x1b[44mline one\r\nline two");
+
+        let out = String::from_utf8_lossy(&grid.render_screen()).to_string();
+
+        // (a) No full-screen clear anywhere in the repaint.
+        assert!(
+            !out.contains("\x1b[2J"),
+            "render_screen must never emit \\e[2J (nukes scrollback); got {out:?}"
+        );
+
+        // (b) Every erase (`\e[2K` erase-line or `\e[J` erase-below) must be
+        // immediately preceded by an SGR reset (`\e[m`) so cleared cells use
+        // the default background.
+        for erase in ["\x1b[2K", "\x1b[J"] {
+            let mut from = 0;
+            while let Some(rel) = out[from..].find(erase) {
+                let idx = from + rel;
+                assert!(
+                    out[..idx].ends_with("\x1b[m"),
+                    "erase {erase:?} at byte {idx} not preceded by \\e[m reset in {out:?}"
+                );
+                from = idx + erase.len();
+            }
+        }
+
+        // Content is still present.
+        assert!(out.contains("line one") && out.contains("line two"));
     }
 
     #[test]
