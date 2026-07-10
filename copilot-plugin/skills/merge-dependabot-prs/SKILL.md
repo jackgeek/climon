@@ -3,8 +3,9 @@ name: merge-dependabot-prs
 description: >
   Use when asked to process, triage, test, or merge open Dependabot dependency
   PRs in this repo. Retargets each Dependabot PR onto dev, runs the relevant
-  test suite (cargo for Rust deps, bun for JS deps), squash-merges the ones that
-  pass, and reports why any PR could not be merged.
+  gate (cargo test for Rust deps; peer-dependency check + web build + bun test
+  for JS deps), squash-merges the ones that pass, and reports why any PR could
+  not be merged.
 ---
 
 # Merge Dependabot PRs
@@ -74,10 +75,10 @@ gh pr view <number> --json baseRefName,mergeable,mergeStateStatus
 
 Dependabot separates PRs by ecosystem, encoded in the branch name:
 
-| Branch prefix              | Ecosystem | Test command (run from repo root)      |
-| -------------------------- | --------- | -------------------------------------- |
-| `dependabot/cargo/rust/…`  | Rust      | `cd rust && cargo test`                |
-| `dependabot/bun/…`         | JS/TS     | `bun test tests`                       |
+| Branch prefix              | Ecosystem | Gate command(s) (run from repo root)                          |
+| -------------------------- | --------- | ------------------------------------------------------------- |
+| `dependabot/cargo/rust/…`  | Rust      | `cd rust && cargo test`                                       |
+| `dependabot/bun/…`         | JS/TS     | `bun install && bun run check:peers && bun run build:web && bun test tests` |
 
 Confirm with the actual diff when the prefix is unclear:
 
@@ -88,23 +89,39 @@ gh pr view <number> --json files --jq '.files[].path'
 - Changed paths under `rust/` (e.g. `rust/Cargo.toml`, `rust/Cargo.lock`) → run
   the Rust suite.
 - Changed paths at the root (e.g. `package.json`, `bun.lock`) → run the Bun
-  suite.
-- If a PR somehow touches both, run both suites; it passes only if both pass.
+  gate (peer check + web build + tests).
+- If a PR somehow touches both, run both; it passes only if everything passes.
 
-## Step 4: Check out the branch and run the tests
+**Grouped PRs:** Dependabot groups tightly-coupled families (`@xterm/*`,
+`@fluentui/*`, `react`+`react-dom` — see `.github/dependabot.yml`) so a single PR
+may bump several packages at once. `check:peers` (below) is what confirms the
+group upgraded to mutually-compatible versions.
+
+## Step 4: Check out the branch and run the gate
 
 ```sh
 gh pr checkout <number>
 ```
 
-Then run the command chosen in Step 3. For Bun deps you may need `bun install`
-first so the lockfile change is reflected:
+Then run the command(s) chosen in Step 3.
+
+For **Bun deps**, run the full gate — reinstall so the lockfile change is
+reflected, then the peer check, the web build, and the tests, in that order:
 
 ```sh
-bun install && bun test tests
+bun install && bun run check:peers && bun run build:web && bun test tests
 ```
 
-For Rust deps:
+- **`check:peers` is a mandatory blocking gate.** It fails when a bump leaves a
+  tightly-coupled peer behind (e.g. `@xterm/xterm` 6 with `@xterm/addon-fit` on
+  0.10, whose removed-internal access silently broke terminal `fit()` — a bug the
+  unit suite did not catch). If it reports any mismatch, record the PR as **not
+  mergeable — peer-dependency mismatch** (quote the exact dependent → peer line)
+  and skip it. Do not merge on faith.
+- **`build:web` catches build-time breaks** (type/bundling regressions) the unit
+  suite misses. A failed build means **not mergeable — web build failed**.
+
+For **Rust deps**:
 
 ```sh
 cd rust && cargo test
@@ -202,6 +219,10 @@ Give the user a one-line closing note on how many merged vs. need attention.
   using "it's probably pre-existing" as cover to skip verification. Always
   reproduce a failure on clean `dev` before deciding: fails on `dev` too =
   pre-existing (don't block); passes on `dev` = caused by the PR (block).
+- **Skipping the peer-dependency check on JS bumps.** A green `bun test tests`
+  does not prove runtime compatibility — `@xterm/xterm` 6 passed the unit suite
+  while `@xterm/addon-fit` 0.10 was broken at runtime. Always run
+  `bun run check:peers` (and `bun run build:web`) and block on any mismatch.
 - **Skipping the summary** when everything merged, or lumping all skips into one
   vague line. Each unmerged PR needs its own explicit reason.
 - **Leaving the repo on a Dependabot branch.** Always `git checkout` back to the
