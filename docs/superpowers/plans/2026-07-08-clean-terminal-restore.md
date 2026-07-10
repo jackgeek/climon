@@ -4,7 +4,7 @@
 
 **Goal:** When the in-process local terminal reclaims control after being displaced by a dashboard/PWA, restore the session with full scrollback history intact, the session's current visible state, and no terminal color bleed.
 
-**Architecture:** Use the terminal's alternate screen buffer (DEC private mode 1049). On displace, emit `\e[?1049h` and draw the centered notice on the alt buffer so the primary buffer (grid + scrollback + SGR state) is saved untouched. On restore, emit `\e[?1049l` to losslessly recover the primary buffer, then repaint only the current visible grid on top with a fixed `render_screen` that resets SGR before every erase and never uses `\e[2J`. Client-only change in `rust/climon-session`; no protocol, server, or config changes.
+**Architecture:** The notice never touches scrollback (it draws with absolute cursor positioning inside the viewport, no scrolling), so the only cause of history loss is the `\e[2J` full-screen clear in the notice draw and the restore repaint. The fix clears and repaints **only the visible viewport** using erase sequences that never touch scrollback: `\e[J` (erase-below) for whole-viewport clears and `\e[2K` (erase-line) per row, always preceded by an SGR reset (`\e[m`) to kill color bleed — and **never `\e[2J`**. No alternate screen buffer (DEC 1049): it corrupts nested full-screen apps and legacy consoles (see spec's Rejected alternatives). Client-only change in `rust/climon-session`; no protocol, server, or config changes.
 
 **Tech Stack:** Rust (`climon-session`), `vt100` grid parser. Tests: `cargo test -p climon-session --lib`, `cargo clippy`, `cargo fmt`.
 
@@ -30,7 +30,7 @@ cargo test -p climon-session --lib
 
 **Modify (Rust):**
 - `rust/climon-session/src/fingerprint.rs` — rewrite `HeadlessGrid::render_screen` (SGR reset before every erase, `\e[H` + `\e[J`, never `\e[2J`); add a color-bleed/no-`\e[2J` unit test.
-- `rust/climon-session/src/host.rs` — `render_local_displaced` (~1095) + its caller in `update_local_displaced` (~397) enter the alt screen; the restore-watcher `Repaint` arm in `spawn_restore_thread` (~1500) exits the alt screen before repainting. Strip `CLIMON_DEBUG_RESTORE` diagnostics (Task 4).
+- `rust/climon-session/src/host.rs` — `render_local_displaced` (~1095) clears only the visible viewport (`\e[m\e[H\e[J`) instead of `\e[2J\e[H`; the restore-watcher `Repaint` arm in `spawn_restore_thread` (~1500) is unchanged apart from calling the fixed `render_screen`. Strip `CLIMON_DEBUG_RESTORE` diagnostics (Task 4).
 
 **Modify (docs):**
 - `docs/manual-tests/terminal-control-handoff.md` — add the clean-restore manual test case.
@@ -167,32 +167,30 @@ git commit -m "fix(session): render_screen resets SGR before erase and never cle
 
 ---
 
-## Task 2: Enter the alt screen on displace
+## Task 2: Clear only the viewport when drawing the displaced notice
 
 **Files:**
-- Modify: `rust/climon-session/src/host.rs` (`render_local_displaced` ~1095, `update_local_displaced` ~397)
+- Modify: `rust/climon-session/src/host.rs` (`render_local_displaced` ~1095)
 
-This wires the alternate screen buffer so the primary buffer (grid + scrollback + colors) is saved when the notice is shown. No unit test (this is stdout-side effect on the real console; covered by the manual test in Task 3). Verify by build + manual.
+The notice already centers its two lines with absolute positioning, so it never
+scrolls content off. The only history-destroying step is its `\e[2J\e[H` prologue.
+Replace that with a viewport-only clear so scrollback is never touched. No unit test
+(this is a stdout side effect on the real console; covered by the manual test in
+Task 3). Verify by build + manual.
 
-- [ ] **Step 1: Add an `enter_alt` parameter to `render_local_displaced`**
+- [ ] **Step 1: Replace the `\e[2J\e[H` prologue with a viewport-only clear**
 
-Replace `render_local_displaced` (currently ~1095-1106) with:
+Replace `render_local_displaced` (currently ~1093-1104) with:
 
 ```rust
-fn render_local_displaced(_cols: u16, _rows: u16, enter_alt: bool) -> String {
+fn render_local_displaced(_cols: u16, _rows: u16) -> String {
     let (w, h) = debug_console_size();
-    let mut out = String::new();
-    if enter_alt {
-        // Enter the alternate screen buffer: the terminal saves the primary
-        // buffer -- visible grid, scrollback, and SGR/color state -- so the
-        // restore path (`\e[?1049l`) can recover it losslessly. Emitted only on
-        // the first displace transition; re-centering redraws on the alt buffer.
-        out.push_str("\x1b[?1049h");
-    }
-    // Clear + home is safe here: on the first transition it targets the fresh
-    // alt buffer, and on re-center it targets the existing alt buffer -- neither
-    // has scrollback to lose.
-    out.push_str("\x1b[2J\x1b[H");
+    // Clear only the *visible* viewport, never `\e[2J`: on Windows Terminal (and
+    // others) `\e[2J` clears scrollback. `\e[H` homes the cursor and `\e[J`
+    // (erase-below) then clears from there to the end of the visible screen --
+    // the whole viewport -- without touching scrollback above it. Reset SGR
+    // first so the cleared cells (behind the notice) use the default background.
+    let mut out = String::from("\x1b[m\x1b[H\x1b[J");
     let msg = "This session is being viewed on a climon dashboard.";
     let hint = "Press Space to take control and resize it to this terminal.";
     let row = (h / 2).max(1);
@@ -204,81 +202,10 @@ fn render_local_displaced(_cols: u16, _rows: u16, enter_alt: bool) -> String {
 }
 ```
 
-(Note: the doc-comment block above `render_local_displaced` stays; update its wording to mention the alt screen if desired. `\e[2J\e[H` order matches the original.)
-
-- [ ] **Step 2: Pass `enter_alt` from the caller in `update_local_displaced`**
-
-In `update_local_displaced`, find the render call (currently ~422-424):
-
-```rust
-                write_local_stdout(
-                    render_local_displaced(notice_size.0, notice_size.1).as_bytes(),
-                );
-```
-
-Replace it with (compute `enter_alt` = "this is the first displace transition, not a re-center", i.e. we are not yet suppressed):
-
-```rust
-                // First displace transition enters the alt screen (saving the
-                // primary buffer); a re-center while already displaced just
-                // redraws on the alt buffer.
-                let enter_alt = !self.local_output_suppressed;
-                write_local_stdout(
-                    render_local_displaced(notice_size.0, notice_size.1, enter_alt)
-                        .as_bytes(),
-                );
-```
-
-Confirm this sits inside the `if needs_render { ... }` block and *before* `self.local_output_suppressed = true;` (so `enter_alt` reflects the pre-transition state). It does in the current code (the `write_local_stdout` call precedes `self.local_output_suppressed = true;`).
-
-- [ ] **Step 3: Build to verify it compiles**
-
-```powershell
-cargo build -p climon-session
-```
-
-Expected: compiles clean.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add rust/climon-session/src/host.rs
-git commit -m "feat(session): enter alt screen for the local displaced notice"
-```
-
----
-
-## Task 3: Exit the alt screen on restore + add the manual test
-
-**Files:**
-- Modify: `rust/climon-session/src/host.rs` (`spawn_restore_thread` `Repaint` arm, ~1500-1541)
-- Modify: `docs/manual-tests/terminal-control-handoff.md`
-
-- [ ] **Step 1: Exit the alt screen before the current-grid repaint**
-
-In the `LocalRestoreDecision::Repaint =>` arm of `spawn_restore_thread`, find (currently ~1510):
-
-```rust
-                let out = s.grid.render_screen();
-```
-
-Replace it with a prefix that exits the alt screen (restoring the primary buffer losslessly) before the current-grid repaint, guarded so we only emit `\e[?1049l` if the notice actually entered the alt screen:
-
-```rust
-                // Exit the alternate screen buffer first: the terminal restores
-                // the saved primary buffer (full scrollback history + colors).
-                // Then repaint only the current visible grid on top so it
-                // reflects the session's current state. Guard on the notice
-                // having been rendered (== alt screen entered) to avoid an
-                // unbalanced `\e[?1049l`.
-                let mut out = Vec::new();
-                if s.local_notice_size.is_some() {
-                    out.extend_from_slice(b"\x1b[?1049l");
-                }
-                out.extend_from_slice(&s.grid.render_screen());
-```
-
-Leave the rest of the arm unchanged: the existing `write_local_stdout(&out);`, then `s.local_output_suppressed = false;`, `s.local_restore_at = None;`, `s.local_notice_size = None;`. The debug block that references `out.len()` / `debug_escape(&out, ...)` still works (now includes the 1049l prefix).
+The signature is unchanged (no `enter_alt` parameter — we never enter the alt
+screen), so the existing caller in `update_local_displaced` (~422) needs no change.
+Update the doc-comment above the function to mention the viewport-only clear if
+desired.
 
 - [ ] **Step 2: Build to verify it compiles**
 
@@ -288,9 +215,33 @@ cargo build -p climon-session
 
 Expected: compiles clean.
 
-- [ ] **Step 3: Add the clean-restore manual test case**
+- [ ] **Step 3: Commit**
 
-Open `docs/manual-tests/terminal-control-handoff.md`, read the existing case shape (ID/feature/preconditions/steps/expected/platforms/result row per `docs/manual-tests/README.md`), and append a new case using the next unused ID for that file. Use this content (adjust the ID prefix/number to match the file's existing numbering):
+```bash
+git add rust/climon-session/src/host.rs
+git commit -m "fix(session): clear only the viewport when drawing the displaced notice"
+```
+
+---
+
+## Task 3: Add the clean-restore manual test
+
+**Files:**
+- Modify: `docs/manual-tests/terminal-control-handoff.md`
+
+The restore-watcher `Repaint` arm already calls `s.grid.render_screen()` and writes
+it while holding the lock, then unsuppresses — that flow is correct as-is once
+`render_screen` is fixed (Task 1). There is **no alt-screen exit to emit** (we never
+entered one), so no code change is needed in `spawn_restore_thread`. This task just
+adds the required manual test.
+
+- [ ] **Step 1: Add the clean-restore manual test case**
+
+Open `docs/manual-tests/terminal-control-handoff.md`, read the existing case shape
+(ID/feature/preconditions/steps/expected/platforms/result row per
+`docs/manual-tests/README.md`), and append a new case using the next unused ID for
+that file. Use this content (adjust the ID prefix/number to match the file's existing
+numbering):
 
 ```markdown
 ### <NEXT-ID>: Reclaim preserves scrollback history and colors
@@ -309,22 +260,22 @@ Open `docs/manual-tests/terminal-control-handoff.md`, read the existing case sha
      "being viewed on a climon dashboard" notice; output pauses).
   4. In the local terminal, press **Space** to reclaim control.
 - **Expected result:** After ~250 ms the local terminal returns to the session's
-  current state. Full scrollback above the viewport is intact (scroll up to
-  confirm the pre-displace lines are still there). No background/foreground color
-  bleeds into the erased rows or the shell prompt. The prompt is left on the last
-  content row.
-- **Platforms:** Windows (Windows Terminal — primary). Note conhost may degrade
-  to no history restore but must still show no color bleed.
+  current state. Scrollback above the viewport is intact (scroll up to confirm the
+  pre-displace lines are still there). No background/foreground color bleeds into
+  the erased rows or the shell prompt. The prompt is left on the last content row.
+- **Platforms:** Windows (Windows Terminal — primary; also spot-check conhost).
 - **Result:** _(unverified — fill in on run: pass/fail, date, platform)_
 ```
 
-Ensure the case is linked/indexed if the file has a table of contents; otherwise appending to the case list is sufficient (the file itself is already linked from `docs/manual-tests/README.md`).
+Ensure the case is linked/indexed if the file has a table of contents; otherwise
+appending to the case list is sufficient (the file itself is already linked from
+`docs/manual-tests/README.md`).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 2: Commit**
 
 ```bash
-git add rust/climon-session/src/host.rs docs/manual-tests/terminal-control-handoff.md
-git commit -m "feat(session): exit alt screen on reclaim to restore history; add manual test"
+git add docs/manual-tests/terminal-control-handoff.md
+git commit -m "docs: add clean-restore manual test for terminal control handoff"
 ```
 
 ---
@@ -426,6 +377,7 @@ Use the superpowers:requesting-code-review skill before merging.
 
 ## Self-review checklist (done while writing this plan)
 
-- **Spec coverage:** color bleed → Task 1 (SGR reset); history loss → Task 1 (no `\e[2J`, `\e[J`) + Tasks 2–3 (alt screen save/restore); current-state repaint → Task 3; notice re-centering preserved → Task 2 (`enter_alt` only on first transition); edge cases (nested alt / conhost degrade / rapid re-displace / unbalanced 1049l) → Task 3 guard + design; diagnostics/target-diag cleanup → Task 4; manual test → Task 3; Windows verify → Task 5; no `Co-authored-by`, PR #108 → Task 6. All covered.
+- **Spec coverage:** color bleed → Task 1 (SGR reset before every erase); history loss → Task 1 (no `\e[2J`, `\e[J` for below-cursor) + Task 2 (viewport-only notice clear, no `\e[2J`); current-state repaint → Task 1/Task 3 (`render_screen`); notice re-centering preserved → Task 2 (signature unchanged, caller untouched); edge cases (nested full-screen app / conhost / `\e[J` vs `\e[2J` scrollback semantics / rapid re-displace) → spec Edge cases; diagnostics/target-diag cleanup → Task 4; manual test → Task 3; Windows verify → Task 5; no `Co-authored-by`, PR #108 → Task 6. All covered.
+- **No alternate screen buffer:** the fix stays on the primary buffer throughout (viewport-only `\e[H`/`\e[2K`/`\e[J`), so there is no DEC-1049 enter/exit, no nesting hazard, and no unbalanced-sequence guard needed.
 - **Placeholders:** none — every code step shows the actual code; the manual-test `<NEXT-ID>` is an intentional file-local numbering slot with explicit instructions.
-- **Type/name consistency:** `render_local_displaced(cols, rows, enter_alt: bool)` defined in Task 2 Step 1 and called in Task 2 Step 2; `render_screen()` fixed in Task 1 and called in Task 3; `local_notice_size` guard used consistently in Tasks 2–3. Consistent.
+- **Type/name consistency:** `render_local_displaced(cols, rows)` signature unchanged (Task 2), so its caller in `update_local_displaced` is untouched; `render_screen()` fixed in Task 1 and called unchanged in Task 3's `Repaint` arm; `local_notice_size` re-centering state preserved. Consistent.

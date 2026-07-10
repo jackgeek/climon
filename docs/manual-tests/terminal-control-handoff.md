@@ -28,8 +28,8 @@ the displaced trigger.)
   displaced* — once the local terminal controls the grid, Space is ordinary
   shell input. (Ctrl+T is avoided because host terminals and browsers commonly
   intercept it, e.g. "new tab" / "go to symbol", so it never reaches climon.)
-- Dashboard/PWA (displaced) overlay: *"This session is being viewed on another
-  dashboard."* with a **Take control** button (browsers cannot reliably capture
+- Dashboard/PWA (displaced) overlay: *"This session is being viewed
+  elsewhere."* with a **Take control** button (browsers cannot reliably capture
   a keyboard chord like Ctrl+T, so the dashboard uses a button, not a key).
 
 **No session-list take-control/maximize button.** Control is taken by *actively
@@ -49,7 +49,7 @@ fights another surface while the user is away from this window.
 updates immediately, but the displaced *overlay* is revealed only after a short
 delay (`DISPLACED_OVERLAY_DELAY_MS`). A fast take-control handshake (open, focus,
 or button) cancels the pending overlay the moment control is (re)gained, so the
-"being viewed on another dashboard" dialog never flashes on screen.
+"being viewed elsewhere" dialog never flashes on screen.
 
 > **Platform caveat.** On Windows the daemon's `local_terminal_size()` is a fixed
 > `(80, 24)` stub, so terminal-size-dependent *PTY sizing* of the **local**
@@ -119,8 +119,8 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
   3. Observe surface B without taking control.
   4. On surface B, click **Take control** in the overlay.
 - **Expected result:** In step 3 surface B is **displaced** regardless of its
-  size: it blanks behind the centered *"This session is being viewed on another
-  dashboard."* overlay with a **Take control** button, and it sends no resize
+  size: it blanks behind the centered *"This session is being viewed
+  elsewhere."* overlay with a **Take control** button, and it sends no resize
   frames (no fighting/flicker on either surface). In step 4 surface B takes
   control, the shared terminal resizes to B's viewport, and surface A becomes
   displaced.
@@ -236,8 +236,8 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
      bring B to focus per TCH-7 — and watch the terminal area closely.
   3. Repeat several times, including on a slower device / throttled CPU.
 - **Expected result:** B transitions straight from its previous view to the live
-  terminal at B's size. The *"This session is being viewed on another
-  dashboard."* overlay does **not** flash on screen during the take-control
+  terminal at B's size. The *"This session is being viewed elsewhere."* overlay
+  does **not** flash on screen during the take-control
   handshake (the overlay is deferred and cancelled the instant B gains control).
   If B genuinely stays displaced (e.g. another surface immediately grabs control),
   the overlay still appears after the short delay.
@@ -270,4 +270,33 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
   desktop dashboard and local terminal remain quietly displaced throughout (they
   do not flicker or fight the PWA).
 - **Platforms:** phone PWA (authoritative); desktop browser.
+- **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-10 — Reclaim preserves scrollback history and colors
+
+- **Feature:** clean restore on reclaim — the displaced notice and the take-control
+  repaint clear only the visible viewport (never `\e[2J`) and reset SGR before every
+  erase, so reclaiming preserves scrollback above the viewport and leaves no color
+  bleed (`render_local_displaced` + `HeadlessGrid::render_screen`).
+- **Preconditions:** climon rebuilt from this branch and a **new** session started
+  (the daemon runs the binary it was launched from); a running `climon server`
+  dashboard.
+- **Config-matrix cell:** default config; browser cell. Verify on Windows Terminal
+  (primary) and spot-check conhost.
+- **Steps:**
+  1. Start an attached session (e.g. `climon bash`) and run a command that emits
+     colored output and scrolls well past one screen, e.g.
+     `for i in $(seq 1 200); do printf '\e[44mline %s\e[0m\n' "$i"; done`
+     (PowerShell: `1..200 | % { Write-Host $_ -ForegroundColor Blue }`).
+  2. Scroll back in the local terminal and confirm the earlier lines are visible.
+  3. Open the session in a browser and take control so the local terminal is
+     displaced (shows the *"being viewed on a climon dashboard"* notice; output
+     pauses).
+  4. In the local terminal, press **Space** to reclaim control.
+- **Expected result:** After ~250 ms the local terminal returns to the session's
+  current state. Scrollback above the viewport is intact — scrolling up still shows
+  the pre-displace lines. No background/foreground color bleeds into the erased rows
+  or the shell prompt. The prompt is left on the last content row.
+- **Platforms:** macOS, Linux, Windows (Windows Terminal authoritative for the
+  scrollback/`\e[2J` semantics; also spot-check conhost).
 - **Result:** _(version / date / tester / pass|fail / notes)_

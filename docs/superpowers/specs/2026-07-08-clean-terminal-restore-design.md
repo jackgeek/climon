@@ -47,65 +47,77 @@ scrollback history intact and no color bleed.**
 ## Goals
 
 - On restore, the local terminal shows the session's **current visible state** with
-  **full scrollback history preserved** and **no residual background/foreground
-  color bleed**.
-- The displace notice no longer destroys scrollback; on restore the pre-displace
-  screen + history are recovered losslessly.
+  **scrollback history above the viewport preserved** and **no residual
+  background/foreground color bleed**.
+- Neither the displace notice nor the restore repaint destroys scrollback; the
+  history the terminal already held remains scrollable after reclaim.
 - No regression to the confirmed-working take-control/resize/PWA flows on this
   branch.
 
 ## Non-goals
 
-- Reconstructing scrollback that the *daemon's parsed grid* never held. We restore
-  what the terminal itself had before displacement (via the alternate-screen
-  buffer), not a synthesized history from the ring buffer.
+- Restoring the *pre-displace visible content* to the viewport. On reclaim we show
+  the session's **current** grid (which may differ from the pre-displace screen if
+  the dashboard changed it), not a snapshot of what the viewport held before.
+- Using the alternate screen buffer (DEC private mode 1049). It saves/restores
+  scrollback for free but corrupts nested full-screen apps (e.g. `vim`) and legacy
+  consoles; we deliberately avoid it (see Rejected alternatives).
 - Changing the priority/controller model, the Space chord, the 250 ms restore
   delay, or any protocol frame. This is purely a local-terminal display fix.
 - Reflowing output or per-surface grids (unchanged from the parent design).
 
-## Approach C — alt-screen for the notice + current-grid repaint on exit
+## Approach — viewport-only clears (no alternate screen buffer)
 
-The alternate screen buffer (DEC private mode 1049) is the standard, terminal-native
-way to overlay UI and then restore the prior screen *and scrollback and colors* for
-free — exactly what full-screen programs (vim, less, and Copilot's own TUI) do.
+The key realisation: **the notice never touches scrollback in the first place.**
+`render_local_displaced` draws its two lines with *absolute* cursor positioning
+(`\e[{row};{col}H`) inside the visible viewport — it emits no newlines that scroll
+content off the top. So the only thing that ever destroyed history was the
+`\e[2J` clear at the *start* of the notice and again in the restore repaint. Remove
+those two `\e[2J`s and history is safe on every terminal — no save/restore machinery
+is needed, because nothing above the viewport is ever disturbed.
 
-### On displace (enter alt screen)
+So the fix is: clear and repaint **only the visible viewport**, using erase
+sequences that never touch scrollback, and reset SGR before every erase.
 
-Replace the notice's destructive `\e[2J\e[H` prologue with entering the alternate
-screen buffer:
+### On displace (draw the notice — viewport-only clear)
 
-1. Emit `\e[?1049h`. The terminal saves the primary buffer (visible grid **and**
-   scrollback **and** current SGR state) and switches to a fresh alt buffer. Nothing
-   in the primary buffer is touched.
-2. Draw the centered notice on the alt buffer (message + "Press Space to take
-   control…" hint), using the existing centering logic.
+`render_local_displaced` clears just the visible screen and draws the centered
+notice:
+
+1. Emit `\e[m\e[H\e[J` — reset SGR, home the cursor, then `\e[J` (erase-below).
+   With the cursor at home, erase-below clears the entire *visible* viewport but
+   does **not** touch scrollback (unlike `\e[2J`). The SGR reset first means the
+   cleared cells use the default background (no bleed behind the notice).
+2. Draw the centered notice (message + "Press Space to take control…" hint) with the
+   existing absolute-positioning centering logic. No scrolling occurs.
 3. Suppress PTY forwarding (unchanged).
 
-The existing **notice re-centering on resize while displaced** (uncommitted work on
-this branch) is retained: on a console resize while displaced it re-clears the *alt*
-buffer and redraws the centered notice at the new size. Because this only ever
-touches the alt buffer, it never affects the saved primary buffer/history.
+The existing **notice re-centering on resize while displaced** is retained
+unchanged: it simply re-invokes `render_local_displaced`, which re-clears the
+viewport (again, no scrollback touched) and redraws the notice at the new size.
 
-### On restore (exit alt screen, then repaint current grid)
+### On restore (repaint the current grid — viewport-only)
 
 In the restore-watcher fire block, after the 250 ms `LOCAL_RESTORE_DELAY`:
 
-1. Emit `\e[?1049l`. The terminal **losslessly restores** the primary buffer: the
-   full pre-displace screen, all scrollback above it, and the saved SGR/color state.
-2. Repaint **only the current visible grid** in place, so the restored screen
-   reflects the session's *current* state (the dashboard may have changed it while
-   we were displaced), using the fixed `render_screen` (below). This overwrites just
-   the visible rows on top of the restored primary buffer — scrollback above is
-   untouched.
-3. Resume PTY forwarding (unchanged: unsuppress while still holding the lock, as
+1. Repaint **only the current visible grid** in place with the fixed `render_screen`
+   (below). This overwrites exactly the viewport rows where the notice sat with the
+   session's *current* state (the dashboard may have changed it while we were
+   displaced). Scrollback above the viewport is never written, so the history the
+   terminal already held stays intact.
+2. Resume PTY forwarding (unchanged: unsuppress while still holding the lock, as
    today, so the reader thread cannot interleave a live chunk mid-repaint).
+
+No `\e[?1049l`, no alt-screen exit, no history snapshot — the terminal's own
+scrollback was never disturbed, so there is nothing to restore.
 
 ### Fixed `render_screen` (current-grid, in place, non-destructive)
 
-`HeadlessGrid::render_screen` is rewritten so it is safe to paint on top of the
-restored primary buffer:
+`HeadlessGrid::render_screen` is rewritten so it repaints the viewport without ever
+clearing scrollback:
 
-- **Home only:** start with `\e[H`. **Never `\e[2J`** (it nukes scrollback).
+- **Home only:** start with `\e[H`. **Never `\e[2J`** (it clears scrollback on
+  Windows Terminal and others).
 - **Reset SGR before every erase:** for each row emit `\e[m` (reset attributes)
   **then** `\e[2K` (erase line) **then** the row content. Resetting before the erase
   means the cleared cells are painted with the *default* background, killing the
@@ -119,9 +131,16 @@ restored primary buffer:
   absolute cursor positioning (the Windows console-height-mismatch guard documented
   in the current function).
 
-This keeps `render_screen` self-contained and correct whether it lands on a
-freshly-restored primary buffer (the alt-screen path) or, as a fallback, on a
-console that never entered the alt screen (see Edge cases).
+## Rejected alternatives
+
+**Alternate screen buffer (DEC 1049).** Emitting `\e[?1049h` on displace / `\e[?1049l`
+on restore would let the terminal save and restore scrollback for free. Rejected
+because it corrupts more than it fixes: if the monitored program is itself a
+full-screen app (`vim`, `less`), the local `1049h` nests a second alt screen and the
+`1049l` returns to the app's alt screen, not the primary buffer; legacy `conhost`
+ignores 1049 entirely; and an unbalanced `1049l` (restore firing without a matching
+enter) can blank the primary buffer. The viewport-only approach avoids all of these
+by never leaving the primary buffer.
 
 ## Architecture / key files
 
@@ -131,11 +150,13 @@ Client-only change, all in `rust/climon-session` (per the Rust-client convention
   reset + `\e[H`/`\e[J` fix (no `\e[2J`). Add a unit test asserting an SGR reset
   precedes every erase and that the output contains no `\e[2J`.
 - `rust/climon-session/src/host.rs`:
-  - `render_local_displaced` (~1095) / the displace path in `update_local_displaced`
-    (~397) — emit `\e[?1049h` and draw the notice on the alt buffer instead of
-    `\e[2J\e[H`. Preserve notice re-centering (`local_notice_size`).
-  - The restore-watcher `Repaint` arm in `spawn_restore_thread` (~1500) — emit
-    `\e[?1049l` before `render_screen()`, then write the repaint, then unsuppress.
+  - `render_local_displaced` (~1095) — clear only the visible viewport with
+    `\e[m\e[H\e[J` (reset + home + erase-below) instead of `\e[2J\e[H`, then draw the
+    centered notice with the existing absolute positioning. Preserve notice
+    re-centering (`local_notice_size`).
+  - The restore-watcher `Repaint` arm in `spawn_restore_thread` (~1500) — unchanged
+    apart from the fixed `render_screen()`: no alt-screen exit is emitted (we never
+    entered one).
   - Strip the `CLIMON_DEBUG_RESTORE` diagnostics
     (`grid_nonempty_lines`, the `local_stdin` per-chunk log,
     `local_debug_capture_until`) once the fix is verified, unless still useful.
@@ -147,24 +168,22 @@ already-gated in-development feature).
 ## Edge cases
 
 - **PTY app already in alt screen when displaced** (e.g. the monitored command is
-  `vim`). Entering `\e[?1049h` from the local terminal nests a second alt screen;
-  exiting with `\e[?1049l` on restore returns to the app's alt screen. The step-2
-  current-grid repaint then corrects the visible content to the session's current
-  state, so the screen is right regardless of nesting.
-- **Legacy `conhost` without 1049 support.** `\e[?1049h/l` are ignored, so the
-  notice draws on the primary buffer and restore degrades to today's behavior. The
-  fixed `render_screen` (SGR reset, no `\e[2J`) still fixes the color bleed and
-  avoids the scrollback-nuking clear in that degraded path. Windows Terminal
-  supports 1049 fully — **verify on the user's box** before claiming done.
+  `vim`). We never touch the alt screen ourselves, so there is no nesting: the
+  notice's viewport-only clear and the restore repaint both land on whatever buffer
+  is current, and the step-1 current-grid repaint corrects the visible content to the
+  session's current state.
+- **Legacy `conhost`.** The fix relies only on `\e[H`, `\e[2K`, and `\e[J`, which are
+  universally supported — no DEC-1049 dependency — so the color-bleed and
+  scrollback-preservation fixes apply identically on conhost and Windows Terminal.
+  **Verify on the user's box** before claiming done.
+- **`\e[2J`/`\e[J` scrollback semantics.** The whole fix rests on `\e[J`
+  (erase-below) never clearing scrollback while `\e[2J` may. This holds on Windows
+  Terminal, xterm, and modern conhost; confirm empirically on the user's terminal
+  that scrollback survives after Space-reclaim.
 - **Rapid displace→restore within the delay** (surface re-grows during the 250 ms).
-  Unchanged: `LocalRestoreDecision::SkipOvergrown` stays suppressed on the alt
-  buffer; the next genuine restore transition exits it. We never emit `\e[?1049l`
-  without a matching prior `\e[?1049h`.
-- **Restore fires but we never entered the alt screen** (e.g. suppression set before
-  this code path in some ordering). Emitting a stray `\e[?1049l` on the primary
-  buffer is a no-op on compliant terminals; the fixed `render_screen` still paints
-  correctly. Guard the `\e[?1049l` emission on the same state that gated the
-  `\e[?1049h` (notice was rendered) to avoid unbalanced sequences.
+  Unchanged: `LocalRestoreDecision::SkipOvergrown` stays suppressed; the next genuine
+  restore transition repaints. No alt-screen state to balance, so there is no
+  unbalanced-sequence hazard.
 
 ## Testing
 
@@ -184,9 +203,9 @@ already-gated in-development feature).
   numbered steps, expected result, platforms, result-tracking row) and keep it
   linked from the README index. Steps: run a monitored command that emits colored
   output and scrolls past one screen; open the dashboard so the local terminal is
-  displaced; press Space to reclaim; **expect** full scrollback intact, current
-  state shown, and no background color bleed on the prompt.
-- Verify alt-screen 1049 behavior on Windows Terminal and note conhost degradation.
+  displaced; press Space to reclaim; **expect** scrollback above the viewport intact,
+  current state shown, and no background color bleed on the prompt.
+- Verify on both Windows Terminal and conhost that scrollback survives the reclaim.
 
 ## Docs
 
