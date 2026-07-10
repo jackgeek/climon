@@ -1145,7 +1145,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       {displayState === "displaced" && (
         <div className={styles.overlay}>
           <div className={styles.overlayCard}>
-            <Text>This session is being viewed on another dashboard.</Text>
+            <Text>This session is being viewed elsewhere.</Text>
             <Button appearance="primary" onClick={takeControl}>
               Take control
             </Button>
