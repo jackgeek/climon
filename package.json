@@ -22,6 +22,7 @@
     "compile": "bun scripts/compile.ts",
     "sign-release": "bun scripts/sign-release.ts",
     "verify-signing-key": "bun scripts/verify-signing-key.ts",
+    "check:peers": "bun scripts/check-peer-deps.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",
