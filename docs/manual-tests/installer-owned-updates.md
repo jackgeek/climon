@@ -38,25 +38,187 @@ No configuration matrix applies beyond platform coverage.
 
 ---
 
+## Test setup — building a signed local update rig
+
+Most cases below need a locally built, locally signed release served over
+loopback so a scratch client can update against it without touching the real
+`jackgeek/climon` release pipeline. This section builds that rig once; each case
+references its variables (`$RIG`, `$BASE`, `$CLIMON_HOME`, `$INSTALL`,
+`$CLIENT`). Run everything from the repository root of your build checkout.
+
+**Fastest path (recommended for the legacy-hop cases MT-IOU-02…08):** run the
+automated harness, which builds the real v3.1.3 legacy updater, signs C and C+1
+with a throwaway key, serves them over loopback, and drives every scenario:
+
+```bash
+# Keep the scratch install dirs so you can inspect them afterwards.
+CLIMON_KEEP_UPGRADE_SCRATCH=1 bun scripts/upgrade-test-harness.ts
+# Inspect the resulting install fixtures under .test-tmp/upgrade-harness-*/install-*
+```
+
+The manual rig below is for hands-on exploration and for the current-side cases
+(MT-IOU-01, MT-IOU-09) and the production-isolation case (MT-IOU-10). The legacy
+first hop needs a client that trusts the *rig's* signing key, so a genuinely
+pre-change production client can only be exercised end-to-end by the harness
+(which patches the v3.1.3 public key) or by the real-hardware release gate with a
+production-signed release (see the "Release gate" note at the end).
+
+### Prerequisites
+
+- `bun`, `cargo`, and `git` on `PATH`; run from the repo root.
+- A scratch directory that is safe to delete.
+- A loopback static file server (examples use `python3 -m http.server`; any
+  server that serves the release directory at its root works, mirroring the
+  harness's `serveDir`).
+
+### A. Generate a throwaway Ed25519 keypair
+
+The raw public key is embedded in the test build; the PKCS8 private key signs the
+release. These mirror `generateTestKeypair` and `signReleaseDir`.
+
+```bash
+export RIG=/tmp/climon-iou-rig
+mkdir -p "$RIG"
+
+eval "$(bun -e '
+const kp = await crypto.subtle.generateKey({name:"Ed25519"}, true, ["sign","verify"]);
+const pub = Buffer.from(await crypto.subtle.exportKey("raw", kp.publicKey)).toString("base64");
+const priv = Buffer.from(await crypto.subtle.exportKey("pkcs8", kp.privateKey)).toString("base64");
+console.log(`export IOU_PUB=${pub}`);
+console.log(`export IOU_PRIV=${priv}`);
+')"
+```
+
+### B. Build a test-endpoint client release for version C
+
+`CLIMON_TEST_UPDATE_ENDPOINT=1` compiles in the dev-only `test-update-endpoint`
+feature (so the client honours `CLIMON_TEST_MANIFEST_URL`) and embeds the
+throwaway public key via `CLIMON_UPDATE_PUBKEY_B64`. `CLIMON_VERSION` stamps the
+build version. This produces `dist/climon-<os>-<arch>.zip` containing exactly
+`install[.exe]`, the client payload, and `climon-server[.exe]`.
+
+```bash
+export C_VERSION=9.9.0
+CLIMON_TEST_UPDATE_ENDPOINT=1 CLIMON_VERSION="$C_VERSION" \
+  CLIMON_UPDATE_PUBKEY_B64="$IOU_PUB" bun scripts/compile.ts
+
+mkdir -p "$RIG/release-c"
+cp dist/climon-*.zip "$RIG/release-c/"
+```
+
+### C. Sign the release and emit the manifest
+
+Pick the loopback port up front so the signed manifest URLs match where you will
+serve them. `sign-release.ts` writes `<zip>.sig` (base64) and a `manifest.json`
+whose per-artifact `url`/`sig` point at `RELEASE_BASE_URL`.
+
+```bash
+export BASE=http://127.0.0.1:5599
+DIST_DIR="$RIG/release-c" RELEASE_VERSION="$C_VERSION" \
+  CLIMON_UPDATE_PRIVATE_KEY="$IOU_PRIV" RELEASE_BASE_URL="$BASE" \
+  bun scripts/sign-release.ts
+```
+
+### D. Serve the release directory over loopback
+
+```bash
+( cd "$RIG/release-c" && python3 -m http.server 5599 --bind 127.0.0.1 ) &
+export RIG_SERVER=$!
+curl -s "$BASE/manifest.json" | head        # sanity check
+```
+
+Stop it later with `kill "$RIG_SERVER"`.
+
+### E. Point a scratch client at the local manifest
+
+Isolate all climon state in a scratch `CLIMON_HOME`, then run the client with
+`CLIMON_TEST_MANIFEST_URL` pointed at the rig. The client resolves its install
+directory from its own location (`current_exe().parent()`), so run the binary
+**from inside its install directory**.
+
+```bash
+export CLIMON_HOME="$RIG/climon-home"
+mkdir -p "$CLIMON_HOME"
+
+# Example: install the C build, then update against the same manifest.
+export INSTALL="$RIG/install"
+rm -rf "$INSTALL"; mkdir -p "$INSTALL"
+( cd "$INSTALL" && unzip -o "$RIG/release-c/climon-"*.zip >/dev/null && ./install )
+export CLIENT="$INSTALL/climon"      # climon.exe on Windows
+CLIMON_TEST_MANIFEST_URL="$BASE/manifest.json" "$CLIENT" update
+```
+
+### Helper: build a second release C+1
+
+Repeat steps **B–D** with a new version into `$RIG/release-c1` on a different
+port (e.g. `5600`, `BASE_C1=http://127.0.0.1:5600`), used by MT-IOU-09.
+
+### Helper: tamper an artifact
+
+Append bytes to a signed `.zip` while leaving its `.sig` referencing the original
+bytes (mirrors the harness `tamperedZip`):
+
+```bash
+printf '\nclimon-iou-tamper\n' >> "$RIG/release-c/climon-"*.zip
+```
+
+Restore the valid artifact by re-copying it from **B** (or re-running B–C).
+
+### Helper: simulate offline
+
+`kill "$RIG_SERVER"` (or otherwise block the loopback endpoint) so the client's
+download fails.
+
+### Environment variables used by the rig
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `CLIMON_TEST_UPDATE_ENDPOINT=1` | `scripts/compile.ts` | Compiles in the dev-only `test-update-endpoint` feature and pubkey override for the built client. |
+| `CLIMON_VERSION` | `scripts/compile.ts` | Stamps the built release version. |
+| `CLIMON_UPDATE_PUBKEY_B64` | `climon-update/build.rs` | Embeds the throwaway raw Ed25519 public key (override compiled out of releases). |
+| `CLIMON_UPDATE_PRIVATE_KEY` | `scripts/sign-release.ts` | PKCS8 Ed25519 private key that signs the local release. |
+| `RELEASE_BASE_URL` / `DIST_DIR` / `RELEASE_VERSION` | `scripts/sign-release.ts` | Signing inputs and manifest download base. |
+| `CLIMON_TEST_MANIFEST_URL` | `climon update` (test builds only) | Redirects the manifest fetch to the local rig; ignored by production builds. |
+| `CLIMON_HOME` | client | Isolates session/config state. |
+| `CLIMON_KEEP_UPGRADE_SCRATCH=1` | `scripts/upgrade-test-harness.ts` | Preserves scratch install dirs for inspection. |
+
+> **Windows note:** use PowerShell env syntax (`$env:CLIMON_TEST_MANIFEST_URL =
+> "$BASE/manifest.json"`), `install.exe`/`climon.exe`, `Expand-Archive` instead
+> of `unzip`, and `python -m http.server` for the loopback server.
+
+---
+
 ## MT-IOU-01 — Fresh install archive and platform layout
 
 - **ID:** MT-IOU-01
 - **Feature / phase:** Installer-owned updates — fresh install layout
-- **Preconditions:** A release/staging archive for this platform containing
-  exactly `install[.exe]`, the client payload (`climon` on Unix, `climon.dll` on
-  Windows), and `climon-server[.exe]`; scratch `HOME`/`LOCALAPPDATA` and
-  `CLIMON_HOME` so no real install is touched.
+- **Preconditions:** The rig's release-C archive from setup steps **A–C** (or any
+  release/staging archive for this platform containing exactly `install[.exe]`,
+  the client payload — `climon` on Unix, `climon.dll` on Windows — and
+  `climon-server[.exe]`); scratch `HOME`/`LOCALAPPDATA` and `CLIMON_HOME` so no
+  real install is touched.
 - **Config-matrix cell:** n/a
 - **Platforms:** Windows, macOS, Linux
 
 **Steps:**
-1. Extract the platform zip into a scratch staging directory.
-2. Run the installer from the staging directory (`install.exe` on Windows,
-   `./install` on Unix).
-3. List the resolved install directory.
-4. Inspect the pointer files on Windows (`climon.version`,
-   `climon-server.version`).
-5. From a fresh shell on PATH, run `climon --version` and `climon server --help`.
+
+```bash
+export INSTALL="$RIG/install-fresh"
+rm -rf "$INSTALL"; mkdir -p "$INSTALL"
+# 1. Inspect the archive entries.
+unzip -l "$RIG/release-c/climon-"*.zip
+# 2. Extract into a scratch install dir and run the installer from there.
+( cd "$INSTALL" && unzip -o "$RIG/release-c/climon-"*.zip >/dev/null && ./install )
+# 3. List the resolved install directory.
+ls -la "$INSTALL"
+# 4. (Windows) inspect pointer files: type climon.version & climon-server.version
+# 5. Run the installed client and server help.
+"$INSTALL/climon" --version
+"$INSTALL/climon" server --help
+```
+
+On **Windows**, run `install.exe`, then `type climon.version` and
+`type climon-server.version`, and `climon.exe --version`.
 
 **Expected result:**
 - The zip contains only `install[.exe]`, the client payload, and
@@ -87,19 +249,32 @@ No configuration matrix applies beyond platform coverage.
   (single `climon.exe`, no `climon.version` pointer — e.g. v3.1.3); the updater
   pointed at a signed current release ("C") whose zip contains `install.exe`,
   `climon.dll`, and `climon-server.exe`; scratch `CLIMON_HOME`. No intermediate
-  bridge release is involved.
+  bridge release is involved. Because a genuine released client trusts the
+  production key, exercise this end-to-end with the harness (Scenario 2 → 4) or
+  the real-hardware release gate.
 - **Config-matrix cell:** n/a
 - **Platforms:** Windows
 
 **Steps:**
-1. Confirm the install dir is legacy: single `climon.exe`, no `climon.version`.
-2. Run `climon update` (the released pre-change updater).
-3. Observe the console output of this first-hop copy.
-4. Run `climon --version` from a fresh shell (this runs the renamed bootstrap),
-   read the printed message, and note that no window pops up for the detached
-   recovery process it spawns.
+
+```powershell
+# Automated reproduction (recommended): run on a Windows host and inspect scratch.
+$env:CLIMON_KEEP_UPGRADE_SCRATCH = "1"; bun scripts/upgrade-test-harness.ts
+# Then inspect .test-tmp\upgrade-harness-*\install-main before/after Scenarios 2 and 4.
+```
+
+Manual, on a real pre-change install with a production-signed C:
+
+1. Confirm the install dir is legacy: single `climon.exe`, no `climon.version`
+   (`dir` the install directory).
+2. Run `climon update` (the released pre-change updater) and observe the
+   first-hop copy output.
+3. Run `climon --version` from a fresh shell (this runs the renamed bootstrap)
+   and read the printed message.
+4. During that run, note that no console window pops up for the detached recovery
+   process the bootstrap spawns.
 5. Follow the prompt and rerun `climon --version` (or `climon update`).
-6. List the install dir and inspect both pointer files.
+6. `dir` the install dir and `type climon.version` / `type climon-server.version`.
 
 **Expected result:**
 - The released updater verifies the Ed25519 signature over the complete release
@@ -138,24 +313,36 @@ No configuration matrix applies beyond platform coverage.
 - **Preconditions:** A real pre-change Windows install that has completed the
   first signed hop (its `climon.exe` is now the bootstrap and `climon.exe.old`
   holds the prior client); a way to make the bootstrap redownload/verify/stage or
-  child launch fail (e.g. disconnect networking); access to `install.ps1`.
+  child launch fail (e.g. stop the rig server / disconnect networking); access to
+  `install.ps1`. The harness Scenario 6 (Windows branch) automates all three
+  sub-cases.
 - **Config-matrix cell:** n/a
 - **Platforms:** Windows
 
 **Steps:**
-1. With the bootstrap unable to complete recovery, run a **normal** command such
-   as `climon --version`.
-2. Observe which binary handles it and the exit behavior.
-3. Separately, run `climon update` under the same failure condition and observe
-   the output.
-4. Rename or delete `climon.exe.old`, then run `climon --version` again.
+
+```powershell
+# Automated: the Windows branch of Scenario 6 drives all three assertions.
+$env:CLIMON_KEEP_UPGRADE_SCRATCH = "1"; bun scripts/upgrade-test-harness.ts
+```
+
+Manual (rig or real install, with the update endpoint unreachable):
+
+1. With the bootstrap unable to complete recovery (stop the loopback server or
+   disconnect networking), run a **normal** command such as
+   `$env:CLIMON_TEST_MANIFEST_URL="$BASE/manifest.json"; climon.exe --version`.
+2. Observe which binary handles it and the exit code (`$LASTEXITCODE`).
+3. Separately, run `climon.exe update` under the same failure condition and
+   observe the output.
+4. Rename or delete `climon.exe.old`, then run `climon.exe --version` again.
 
 **Expected result:**
 - When the bootstrap cannot run and `climon.exe.old` is present, a **normal**
   command falls back to the locally derived `<dir>\climon.exe.old` with the
   original arguments and returns its exit code.
 - For an original `update` command, the bootstrap returns a clear, retryable
-  error and **never** invokes the old updater recursively.
+  error containing `Please retry climon update.` and **never** invokes the old
+  updater recursively.
 - When `climon.exe.old` is missing, the bootstrap is retained and guidance
   instructs the user to re-run `install.ps1`; the command returns non-zero.
 - The `.old` fallback path is always the resolved `<install-dir>\climon.exe.old`,
@@ -176,15 +363,26 @@ No configuration matrix applies beyond platform coverage.
 - **Preconditions:** A **real** already-released pre-change macOS install
   (installed `climon` and `climon-server`, no `.version`); the updater pointed at
   a signed current release C whose zip contains `install`, `climon`, and
-  `climon-server`; scratch `CLIMON_HOME`; network available.
+  `climon-server`; scratch `CLIMON_HOME`; network available. Exercise end-to-end
+  with the harness (Scenario 2 → 4) or the real-hardware release gate.
 - **Config-matrix cell:** n/a
 - **Platforms:** macOS
 
 **Steps:**
-1. Confirm the install is the legacy Unix layout.
+
+```bash
+# Automated reproduction on a macOS host:
+CLIMON_KEEP_UPGRADE_SCRATCH=1 bun scripts/upgrade-test-harness.ts
+# Inspect .test-tmp/upgrade-harness-*/install-main after Scenario 4.
+```
+
+Manual, on a real pre-change install with a production-signed C:
+
+1. Confirm the install is the legacy Unix layout (`ls` the install dir: `climon`,
+   `climon-server`, no `.version`).
 2. Run a command through the released updater, e.g. `climon update`.
 3. Observe whether the command completes without a manual rerun.
-4. List the install dir and inspect `.version`.
+4. `ls -la` the install dir and `cat .version`.
 5. Start a new monitored `climon` session and open the dashboard.
 
 **Expected result:**
@@ -215,15 +413,25 @@ No configuration matrix applies beyond platform coverage.
 - **Preconditions:** A **real** already-released pre-change Linux install
   (installed `climon` and `climon-server`, no `.version`); the updater pointed at
   a signed current release C whose zip contains `install`, `climon`, and
-  `climon-server`; scratch `CLIMON_HOME`; network available.
+  `climon-server`; scratch `CLIMON_HOME`; network available. Exercise end-to-end
+  with the harness (Scenario 2 → 4) or the real-hardware release gate.
 - **Config-matrix cell:** n/a
 - **Platforms:** Linux
 
 **Steps:**
-1. Confirm the install is the legacy Unix layout.
+
+```bash
+# Automated reproduction on a Linux host:
+CLIMON_KEEP_UPGRADE_SCRATCH=1 bun scripts/upgrade-test-harness.ts
+# Inspect .test-tmp/upgrade-harness-*/install-main after Scenario 4.
+```
+
+Manual, on a real pre-change install with a production-signed C:
+
+1. Confirm the install is the legacy Unix layout (`ls` the install dir).
 2. Run a command through the released updater, e.g. `climon update`.
 3. Observe whether the command completes without a manual rerun.
-4. List the install dir and inspect `.version`.
+4. `ls -la` the install dir and `cat .version`.
 5. Start a new monitored `climon` session and open the dashboard.
 
 **Expected result:**
@@ -249,22 +457,34 @@ No configuration matrix applies beyond platform coverage.
 
 - **ID:** MT-IOU-06
 - **Feature / phase:** Installer-owned updates — first signed hop integrity
-- **Preconditions:** A real pre-change legacy install (Windows or Unix); a served
-  current release whose `.zip` bytes have been tampered while the `.sig` still
-  references the original, or a valid `.sig` for different bytes; scratch
-  `CLIMON_HOME`. Automated: `scripts/upgrade-test-harness.ts` Scenario 1.
+- **Preconditions:** A pre-change legacy install (Windows or Unix) whose updater
+  trusts the rig's signing key (built by the harness) or the production key; a
+  served current release whose `.zip` bytes have been tampered while the `.sig`
+  still references the original. Automated: `scripts/upgrade-test-harness.ts`
+  Scenario 1.
 - **Config-matrix cell:** n/a
 - **Platforms:** Windows, macOS, Linux
 
 **Steps:**
-1. Point the released legacy updater at the tampered current archive.
-2. Run `climon update`.
-3. Inspect the install dir and the printed status.
+
+```bash
+# Automated (recommended): Scenario 1 tampers the served C zip and asserts rejection.
+CLIMON_KEEP_UPGRADE_SCRATCH=1 bun scripts/upgrade-test-harness.ts
+```
+
+Manual, on a legacy install that trusts the rig key (harness-built) with the rig
+running:
+
+1. Tamper the served C artifact (setup "Helper: tamper an artifact").
+2. From the legacy install dir, run
+   `CLIMON_TEST_MANIFEST_URL="$BASE/manifest.json" "$CLIENT" update`.
+3. Inspect the install dir and the printed status; confirm exactly one artifact
+   download occurred.
 
 **Expected result:**
 - The legacy client verifies the Ed25519 signature over the complete release ZIP
-  (which includes `install[.exe]`) and **rejects** the tampered archive before
-  extracting or copying anything.
+  (which includes `install[.exe]`) and **rejects** the tampered archive with a
+  `signature verification failed` message before extracting or copying anything.
 - No file is mutated: `climon[.exe]` is untouched, no bootstrap is installed, and
   no `climon.exe.old` is created.
 
@@ -288,8 +508,19 @@ No configuration matrix applies beyond platform coverage.
 - **Platforms:** Windows, macOS, Linux
 
 **Steps:**
-1. Run any command so the bootstrap performs its recovery redownload.
-2. Observe the outcome and the install dir.
+
+```bash
+# Automated (recommended): Scenario 3 tampers the redownload after the first hop.
+CLIMON_KEEP_UPGRADE_SCRATCH=1 bun scripts/upgrade-test-harness.ts
+```
+
+Manual, after completing the first hop against the rig:
+
+1. Tamper the served C artifact again (setup "Helper: tamper an artifact").
+2. Run any command so the bootstrap performs its recovery redownload:
+   `CLIMON_TEST_MANIFEST_URL="$BASE/manifest.json" "$CLIENT" update`.
+3. Observe the outcome and the install dir; confirm the bootstrap performed its
+   own separate download.
 
 **Expected result:**
 - The bootstrap independently verifies the Ed25519 signature over the freshly
@@ -314,17 +545,27 @@ No configuration matrix applies beyond platform coverage.
 - **Preconditions:** A real pre-change macOS or Linux install that has completed
   the first signed hop (its `climon` is now the bootstrap); no network
   connectivity to the canonical release endpoint; scratch `CLIMON_HOME`.
-  Automated: `scripts/upgrade-test-harness.ts` Scenario 6.
+  Automated: `scripts/upgrade-test-harness.ts` Scenario 6 (Unix branch).
 - **Config-matrix cell:** n/a
 - **Platforms:** macOS, Linux
 
 **Steps:**
-1. With networking disabled, run any command so the bootstrap attempts recovery.
+
+```bash
+# Automated (recommended): the Unix branch of Scenario 6 stops the server first.
+CLIMON_KEEP_UPGRADE_SCRATCH=1 bun scripts/upgrade-test-harness.ts
+```
+
+Manual, after completing the first hop against the rig:
+
+1. Take the endpoint offline (`kill "$RIG_SERVER"`), then run any command so the
+   bootstrap attempts recovery:
+   `CLIMON_TEST_MANIFEST_URL="$BASE/manifest.json" "$CLIENT" --version`.
 2. Read the printed message.
 3. Re-run the same command and confirm the same network-required guidance is
    printed again — it is re-staged, fails, and re-printed on every offline run
    (there is no dedupe/"already shown" state).
-4. Inspect the install dir.
+4. Inspect the install dir (`ls -la`) to confirm nothing was mutated.
 
 **Expected result:**
 - On every offline run the bootstrap re-stages, fails, and re-prints the same
@@ -347,21 +588,36 @@ No configuration matrix applies beyond platform coverage.
 
 - **ID:** MT-IOU-09
 - **Feature / phase:** Installer-owned updates — versioned installer delegation
-- **Preconditions:** A current installer-owned install at version C (Windows stub
-  layout or Unix layout); a signed release C+1; at least two attached, long-lived
-  `climon` sessions running from C; scratch `CLIMON_HOME`. Automated:
+- **Preconditions:** A current installer-owned install at version C (from
+  MT-IOU-01, Windows stub layout or Unix layout); a signed release C+1 built and
+  served per the "Helper: build a second release C+1" step; at least two attached,
+  long-lived `climon` sessions running from C; scratch `CLIMON_HOME`. Automated:
   `scripts/upgrade-test-harness.ts` Scenario 5.
 - **Config-matrix cell:** n/a
 - **Platforms:** Windows, macOS, Linux
 
 **Steps:**
-1. Start two or more monitored sessions from separate terminals and keep them
-   attached.
-2. In another terminal, run `climon update` pointed at C+1.
-3. Observe the update output.
-4. List the install dir and inspect the pointer/`.version` files.
-5. Confirm the attached sessions keep running, then start a new
-   `climon --version` / monitored session.
+
+```bash
+# Build + serve C+1 (repeat setup B–D with a new version and port):
+export C1_VERSION=9.9.1 BASE_C1=http://127.0.0.1:5600
+CLIMON_TEST_UPDATE_ENDPOINT=1 CLIMON_VERSION="$C1_VERSION" \
+  CLIMON_UPDATE_PUBKEY_B64="$IOU_PUB" bun scripts/compile.ts
+mkdir -p "$RIG/release-c1"; cp dist/climon-*.zip "$RIG/release-c1/"
+DIST_DIR="$RIG/release-c1" RELEASE_VERSION="$C1_VERSION" \
+  CLIMON_UPDATE_PRIVATE_KEY="$IOU_PRIV" RELEASE_BASE_URL="$BASE_C1" \
+  bun scripts/sign-release.ts
+( cd "$RIG/release-c1" && python3 -m http.server 5600 --bind 127.0.0.1 ) &
+
+# 1. Start two or more monitored sessions from C in separate terminals and keep
+#    them attached (e.g. "$CLIENT" shell).
+# 2. Update the C install against the C+1 manifest.
+CLIMON_TEST_MANIFEST_URL="$BASE_C1/manifest.json" "$CLIENT" update
+# 3-4. Inspect the install dir and the pointer/.version files.
+ls -la "$INSTALL"; cat "$INSTALL/.version" 2>/dev/null
+# 5. Confirm the attached sessions keep running, then start a new session.
+"$CLIENT" --version
+```
 
 **Expected result:**
 - `climon update` performs only check → download → verify → safe stage → invoke
@@ -389,15 +645,29 @@ No configuration matrix applies beyond platform coverage.
 - **Preconditions:** A **production** `climon` build produced by the default
   `scripts/compile.ts` path / `.github/workflows/release.yml` (i.e. built without
   `CLIMON_TEST_UPDATE_ENDPOINT=1`, so the `test-update-endpoint` cargo feature and
-  the `CLIMON_UPDATE_PUBKEY_B64` override are compiled out); a loopback manifest
-  server; scratch `CLIMON_HOME`.
+  the `CLIMON_UPDATE_PUBKEY_B64` override are compiled out); the rig's loopback
+  manifest server from setup; scratch `CLIMON_HOME`.
 - **Config-matrix cell:** n/a
 - **Platforms:** Windows, macOS, Linux
 
 **Steps:**
-1. Set `CLIMON_TEST_MANIFEST_URL` to the loopback manifest server URL.
-2. Run `climon update` (or `climon __update-check`).
-3. Observe which endpoint the client contacts.
+
+```bash
+# 1. Build a PRODUCTION client (no test-endpoint feature, no pubkey override).
+bun scripts/compile.ts
+export PROD="$RIG/install-prod"; rm -rf "$PROD"; mkdir -p "$PROD"
+( cd "$PROD" && unzip -o "$PWD/../../dist/climon-"*.zip >/dev/null 2>&1 \
+    || unzip -o "$RIG/../$(basename "$PWD")" >/dev/null 2>&1; true )
+# (Simplest: copy the freshly built dist zip into $PROD and extract it, then ./install.)
+# 2. Point CLIMON_TEST_MANIFEST_URL at the rig and run update.
+CLIMON_TEST_MANIFEST_URL="$BASE/manifest.json" "$PROD/climon" update; echo "exit=$?"
+# 3. Observe which endpoint the client contacts (the rig server logs no request;
+#    the client only ever resolves the canonical GitHub manifest URL).
+```
+
+Confirm via the rig server logs that **no** request for `manifest.json` arrives
+from the production build, and that the run instead targets the canonical
+`https://github.com/jackgeek/climon/releases/latest/download/manifest.json`.
 
 **Expected result:**
 - The production build **ignores** `CLIMON_TEST_MANIFEST_URL` entirely and only
@@ -414,3 +684,28 @@ No configuration matrix applies beyond platform coverage.
 | Date | Tester | Platform | Version | Pass/Fail | Notes |
 |---|---|---|---|---|---|
 |  |  |  |  |  |  |
+
+---
+
+## Release gate — real-hardware validation
+
+Because a genuinely pre-change client trusts the **production** signing key, the
+legacy first hop (MT-IOU-02, MT-IOU-04, MT-IOU-05) can only be validated fully
+end-to-end either through `scripts/upgrade-test-harness.ts` (which builds the real
+v3.1.3 updater and substitutes a throwaway key) or on real hardware against a
+production-signed release candidate. Before publishing, record real-machine
+results for:
+
+- Windows x64: direct pre-change release → release candidate, rerun behaviour,
+  `.old` fallback, and non-recursive update failure (MT-IOU-02, MT-IOU-03).
+- macOS arm64/x64: direct pre-change release → candidate with automatic resume
+  and offline guidance (MT-IOU-04, MT-IOU-08).
+- Linux x64/arm64: direct pre-change release → candidate with automatic resume
+  and offline guidance (MT-IOU-05, MT-IOU-08).
+- Tampered first-hop and bootstrap artifacts rejected before mutation/execution
+  (MT-IOU-06, MT-IOU-07).
+- Current release candidate → next signed candidate through `--apply-update-v1`
+  (MT-IOU-09).
+
+Do not publish until the Windows, macOS, and Linux direct-migration cases pass.
+No bridge release or ordered adoption requirement is permitted.
