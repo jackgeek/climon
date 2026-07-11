@@ -526,6 +526,28 @@ export function TunnelReauthOverlay({ onReauth }: { onReauth: () => void }) {
   );
 }
 
+/**
+ * Normalizes any Tunnel Link error into a {@link DevtunnelFailure} so the failure
+ * UI (with an explicit Retry) surfaces even for network-level rejections that never
+ * reach the structured {@link DevtunnelApiError} path (offline, server down).
+ */
+export function toTunnelLinkFailure(error: unknown): DevtunnelFailure {
+  if (error instanceof DevtunnelApiError) {
+    return error.failure;
+  }
+  const message = error instanceof Error ? error.message : "Failed to reach the Tunnel Link service.";
+  return {
+    code: "unknown",
+    operation: "detect",
+    summary: message || "Failed to reach the Tunnel Link service.",
+    remediation: "Check that the dashboard server is running, then retry.",
+    technicalDetail: message,
+    occurredAt: new Date().toISOString(),
+    retryClass: "transient",
+    retryable: true
+  };
+}
+
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -1362,11 +1384,7 @@ export function App() {
     try {
       setTunnelLinkStatus(await ensureDashboardTunnel());
     } catch (e) {
-      if (e instanceof DevtunnelApiError) {
-        setTunnelLinkFailure(e.failure);
-      } else {
-        setTunnelLinkFailure(undefined);
-      }
+      setTunnelLinkFailure(toTunnelLinkFailure(e));
       await refreshTunnelLinkStatus();
     }
   }, [refreshTunnelLinkStatus]);
@@ -1377,9 +1395,7 @@ export function App() {
     try {
       setTunnelLinkStatus(await retryDashboardTunnel());
     } catch (e) {
-      if (e instanceof DevtunnelApiError) {
-        setTunnelLinkFailure(e.failure);
-      }
+      setTunnelLinkFailure(toTunnelLinkFailure(e));
       await refreshTunnelLinkStatus();
     } finally {
       setTunnelLinkRetrying(false);
