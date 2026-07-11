@@ -485,6 +485,23 @@ fn platform_installer_main(
 /// failures/declines exit the process from within the wrapper). Mirrors
 /// `installer-bundle-entry.ts` + `index.ts`'s `tryRunInstaller`.
 pub fn run_installer(version: &str, client_stub: &[u8], server_stub: &[u8]) -> i32 {
+    // Parse update operations from raw OsString args before UTF-8 onboarding.
+    let raw_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    match crate::update::parse_update_operation(&raw_args) {
+        Ok(Some(crate::update::UpdateOperation::Apply(args))) => {
+            return run_apply_dispatch(&args, version, client_stub, server_stub);
+        }
+        Ok(Some(crate::update::UpdateOperation::Recover(_))) => {
+            eprintln!("recover-bootstrap: operation is not available yet (exit 2)");
+            return 2;
+        }
+        Ok(None) => { /* fall through to normal install */ }
+        Err(e) => {
+            eprintln!("update protocol error: {e}");
+            return 1;
+        }
+    }
+
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if let Some(migrate) = parse_migrate_args(&argv) {
         return run_migrate(version, client_stub, server_stub, &migrate);
@@ -500,6 +517,95 @@ pub fn run_installer(version: &str, client_stub: &[u8], server_stub: &[u8]) -> i
         exit: &mut exit,
     });
     0
+}
+
+/// Dispatches the apply-update operation to the platform-specific implementation.
+fn run_apply_dispatch(
+    args: &crate::update::ApplyUpdateArgs,
+    version: &str,
+    _client_stub: &[u8],
+    _server_stub: &[u8],
+) -> i32 {
+    #[cfg(unix)]
+    {
+        match crate::update::run_apply_update_unix(args, version) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("apply-update: {e}");
+                1
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match run_apply_update_windows(args, version, _client_stub, _server_stub) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("apply-update: {e}");
+                1
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        eprintln!("apply-update: unsupported platform");
+        1
+    }
+}
+
+/// Windows apply-update: validates version/payloads, places the full layout
+/// via `place_windows_layout_with_options` (pointers written atomically last),
+/// then cleans up retired siblings.
+#[cfg(target_os = "windows")]
+fn run_apply_update_windows(
+    args: &crate::update::ApplyUpdateArgs,
+    version: &str,
+    client_stub: &[u8],
+    server_stub: &[u8],
+) -> Result<(), String> {
+    use crate::files::InstallBinariesOptions;
+    use crate::update::cleanup_retired;
+
+    if args.version != version {
+        return Err(format!(
+            "Version mismatch: installer is {} but update requests {}",
+            version, args.version
+        ));
+    }
+    if !args.source.is_dir() {
+        return Err(format!(
+            "Source directory does not exist: {}",
+            args.source.display()
+        ));
+    }
+    // Validate required payloads.
+    for name in &["climon.dll", "climon-server.exe"] {
+        if !args.source.join(name).exists() {
+            return Err(format!(
+                "Required source payload missing: {}",
+                args.source.join(name).display()
+            ));
+        }
+    }
+    // Read payloads.
+    let client_dll = std::fs::read(args.source.join("climon.dll"))
+        .map_err(|e| format!("read climon.dll: {e}"))?;
+    let server_exe = std::fs::read(args.source.join("climon-server.exe"))
+        .map_err(|e| format!("read climon-server.exe: {e}"))?;
+
+    crate::files::place_windows_layout_with_options(
+        &args.dir,
+        &args.version,
+        client_stub,
+        server_stub,
+        &client_dll,
+        &server_exe,
+        InstallBinariesOptions::default(),
+    )
+    .map_err(|e| e.message)?;
+
+    cleanup_retired(&args.dir);
+    Ok(())
 }
 
 /// Parsed migrate-mode invocation: `--migrate --dir <path> --source <path>`.

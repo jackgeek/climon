@@ -278,12 +278,21 @@ fn place_windows_layout_once(
     )?;
     place_stub(install_dir, "climon.exe", stub_client)?;
     place_stub(install_dir, "climon-server.exe", stub_server)?;
-    write_text(install_dir, "climon.version", &format!("{version}\n"))?;
-    write_text(
-        install_dir,
-        "climon-server.version",
-        &format!("{version}\n"),
-    )?;
+    // Pointer files are written atomically (temp + rename) so they are never
+    // observed half-written. The installer-owned atomic writer lives in
+    // crate::update; the climon-update copy will be removed in Task 3.
+    crate::update::write_pointer_atomic(install_dir, "climon", version).map_err(|e| {
+        InstallError {
+            code: None,
+            message: e,
+        }
+    })?;
+    crate::update::write_pointer_atomic(install_dir, "climon-server", version).map_err(|e| {
+        InstallError {
+            code: None,
+            message: e,
+        }
+    })?;
     Ok(())
 }
 

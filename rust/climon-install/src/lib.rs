@@ -45,8 +45,10 @@ pub mod processes;
 pub mod setup_cmd;
 #[cfg(test)]
 pub(crate) mod testutil;
+pub mod update;
 pub mod version_bump;
 pub mod windows;
 
 pub use installer::{run_installer, run_installer_main, InstallerIo, PathSetup};
 pub use setup_cmd::run_setup_command;
+pub use update::{parse_update_operation, ApplyUpdateArgs, RecoverBootstrapArgs, UpdateOperation};
