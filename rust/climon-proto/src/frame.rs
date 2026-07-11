@@ -25,6 +25,11 @@ pub enum FrameType {
     // unmapped so existing tag numbers stay stable.
     Control = 11,
     TakeControl = 12,
+    AuthChallenge = 13,
+    AuthResponse = 14,
+    AuthOk = 15,
+    AuthError = 16,
+    AuthProbeOk = 17,
 }
 
 impl FrameType {
@@ -40,6 +45,11 @@ impl FrameType {
             8 => Some(FrameType::Title),
             11 => Some(FrameType::Control),
             12 => Some(FrameType::TakeControl),
+            13 => Some(FrameType::AuthChallenge),
+            14 => Some(FrameType::AuthResponse),
+            15 => Some(FrameType::AuthOk),
+            16 => Some(FrameType::AuthError),
+            17 => Some(FrameType::AuthProbeOk),
             _ => None,
         }
     }
@@ -143,18 +153,47 @@ pub struct DecodedFrame {
 }
 
 /// Incremental frame decoder. Mirrors the TS `FrameDecoder`.
-#[derive(Default)]
 pub struct FrameDecoder {
     buffer: Vec<u8>,
+    max_payload: usize,
+    errored: bool,
+}
+
+impl Default for FrameDecoder {
+    fn default() -> Self {
+        FrameDecoder::new()
+    }
 }
 
 impl FrameDecoder {
     pub fn new() -> Self {
-        FrameDecoder { buffer: Vec::new() }
+        FrameDecoder::with_max_payload(crate::auth::POST_AUTH_MAX_PAYLOAD)
+    }
+
+    /// Creates a decoder that rejects any frame whose payload exceeds `max_payload`.
+    pub fn with_max_payload(max_payload: usize) -> Self {
+        FrameDecoder {
+            buffer: Vec::new(),
+            max_payload,
+            errored: false,
+        }
+    }
+
+    /// Raise/lower the payload cap (e.g. from pre-auth 4 KiB to post-auth 8 MiB).
+    pub fn set_max_payload(&mut self, max_payload: usize) {
+        self.max_payload = max_payload;
+    }
+
+    /// True once a frame exceeded the cap; the stream must be abandoned.
+    pub fn errored(&self) -> bool {
+        self.errored
     }
 
     /// Feeds a chunk and returns any complete frames now available.
     pub fn push(&mut self, chunk: &[u8]) -> Vec<DecodedFrame> {
+        if self.errored {
+            return Vec::new();
+        }
         self.buffer.extend_from_slice(chunk);
         let mut frames = Vec::new();
         let mut offset = 0;
@@ -165,6 +204,11 @@ impl FrameDecoder {
                 self.buffer[offset + 2],
                 self.buffer[offset + 3],
             ]) as usize;
+            if len > self.max_payload {
+                self.errored = true;
+                self.buffer.clear();
+                return frames;
+            }
             let total = HEADER_SIZE + len;
             if self.buffer.len() - offset < total {
                 break;
@@ -345,6 +389,44 @@ mod tests {
         let decoded = FrameDecoder::new().push(&frame);
         let payload: TitlePayload = parse_json_payload(&decoded[0].payload).unwrap();
         assert_eq!(payload.name, "dev server");
+    }
+
+    #[test]
+    fn maps_the_auth_frame_tags() {
+        assert_eq!(FrameType::from_u8(13), Some(FrameType::AuthChallenge));
+        assert_eq!(FrameType::from_u8(14), Some(FrameType::AuthResponse));
+        assert_eq!(FrameType::from_u8(15), Some(FrameType::AuthOk));
+        assert_eq!(FrameType::from_u8(16), Some(FrameType::AuthError));
+        assert_eq!(FrameType::from_u8(17), Some(FrameType::AuthProbeOk));
+    }
+
+    #[test]
+    fn rejects_frames_larger_than_the_payload_limit() {
+        let mut decoder = FrameDecoder::with_max_payload(8);
+        // A header claiming a 9-byte payload exceeds the 8-byte cap.
+        let frame = encode_frame(FrameType::Input, b"123456789");
+        let decoded = decoder.push(&frame);
+        assert!(decoded.is_empty());
+        assert!(decoder.errored());
+    }
+
+    #[test]
+    fn accepts_frames_at_the_payload_limit() {
+        let mut decoder = FrameDecoder::with_max_payload(8);
+        let frame = encode_frame(FrameType::Input, b"12345678");
+        let decoded = decoder.push(&frame);
+        assert_eq!(decoded.len(), 1);
+        assert!(!decoder.errored());
+    }
+
+    #[test]
+    fn can_raise_the_payload_limit_after_auth() {
+        let mut decoder = FrameDecoder::with_max_payload(4);
+        decoder.set_max_payload(1024);
+        let frame = encode_frame(FrameType::Input, b"longer-than-four");
+        let decoded = decoder.push(&frame);
+        assert_eq!(decoded.len(), 1);
+        assert!(!decoder.errored());
     }
 
     #[test]
