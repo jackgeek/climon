@@ -201,7 +201,6 @@ fn default_spawner() -> ProcessSpawner {
 fn apply_windows_flags(command: &mut tokio::process::Command) {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         // devtunnel.exe is a console app; CREATE_NO_WINDOW suppresses the
         // console window flash on Windows.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
