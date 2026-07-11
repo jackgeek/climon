@@ -110,7 +110,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
     status: null,
     tunnelInput: ""
   });
-  const [color, setColor] = useState<SessionColorMode>("auto");
+  const [color, setColor] = useState<SessionColorMode | "">("");
   const [priority, setPriority] = useState("");
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState("");
@@ -169,7 +169,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const script = buildSetupScript({
     tunnelId: status?.tunnel?.id ?? "",
     ingestPort: status?.ingestPort ?? 3132,
-    color,
+    color: color || undefined,
     priority: priorityValid ? parsedPriority : undefined,
     clientId: clientIdValid ? clientIdTrimmed : undefined,
     remoteSpawn: status?.remoteSpawn,
@@ -210,10 +210,11 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
               <Field label="Color" className={styles.field}>
                 <Dropdown
                   className={styles.control}
-                  value={color}
+                  value={color === "" ? "Default" : color === "none" ? "None" : color === "auto" ? "Auto" : color}
                   selectedOptions={[color]}
-                  onOptionSelect={(_, d) => setColor((d.optionValue as SessionColorMode | undefined) ?? "auto")}
+                  onOptionSelect={(_, d) => setColor((d.optionValue as SessionColorMode | "" | undefined) ?? "")}
                 >
+                  <Option value="" text="Default">Default</Option>
                   {sessionColorDropdownOptions(true).map((c) => (
                     <Option key={c} value={c} text={c}>
                       {c !== "none" && c !== "auto" && <span className={styles.swatch} style={{ backgroundColor: ANSI_CSS[c] }} />}

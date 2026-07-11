@@ -92,3 +92,33 @@ processes are left behind.
 | Date | Build | Platform | Result | Notes |
 |---|---|---|---|---|
 | | | | | |
+
+---
+
+## ITH-04 — Color dropdown defaults to empty and omits `session.color`
+
+- **ID:** ITH-04
+- **Feature / phase:** Remote (`climon-remote`) — Remotes dialog setup-script
+  generation (`buildSetupScript`, `RemoteClientDialog`).
+- **Preconditions:** ITH-01 passed (a tunnel id exists, so the setup script is
+  generated).
+- **Config-matrix cell:** Remote / dev-tunnel, home host
+- **Platforms:** macOS, Linux, Windows
+
+**Steps:**
+1. Open the Remotes dialog on the home dashboard.
+2. Observe the **Color** dropdown's initial value.
+3. Read the generated setup script without changing the dropdown.
+4. Select a concrete color (e.g. `green`) and re-read the script.
+5. Re-select **Default** and re-read the script.
+
+**Expected:** The Color dropdown defaults to **Default** (empty). While
+**Default** is selected the setup script contains **no** `climon config
+session.color` line. Selecting `green` adds `climon config session.color green`;
+re-selecting **Default** removes the line again.
+
+**Result-tracking row:**
+
+| Date | Build | Platform | Result | Notes |
+|---|---|---|---|---|
+| | | | | |
