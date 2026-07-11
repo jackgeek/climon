@@ -1582,9 +1582,10 @@ struct HostSlot {
 }
 
 /// Desired-state supervisor for `devtunnel host`. Mirrors `TunnelHostSupervisor`.
-/// Transient host exits (and spawn failures) drive a capped-exponential
-/// [`RetryController`]; actionable/permanent failures pause hosting until the
-/// desired tunnel id changes.
+/// The [`RetryController`] classifies each host exit or spawn failure: transient
+/// ones are retried on the next reconcile tick (bounded by the ingest supervisor
+/// poll cadence), while actionable/permanent ones pause hosting until the desired
+/// tunnel id changes.
 pub struct TunnelHostSupervisor<'a> {
     config_env: ConfigEnv,
     spawn_host: SpawnHostFn<'a>,
@@ -1626,12 +1627,27 @@ impl<'a> TunnelHostSupervisor<'a> {
             return;
         }
 
-        // Same target: react to a host process exit.
+        // Same target: retry a prior transient spawn failure, or react to a
+        // host process exit.
         let (paused, has_process) = match &self.current {
             Some(slot) => (slot.paused, slot.process.is_some()),
             None => return,
         };
-        if paused || !has_process {
+        if paused {
+            return;
+        }
+        if !has_process {
+            // A previous spawn failed transiently (actionable spawn failures set
+            // `paused`, so we never reach here for those). Retry on this
+            // reconcile so a transient CLI/spawn error does not strand hosting
+            // until the desired tunnel id changes.
+            let id = self
+                .current
+                .as_ref()
+                .map(|slot| slot.tunnel_id.clone())
+                .unwrap_or_default();
+            self.current = None;
+            self.spawn_for(id);
             return;
         }
         let exit = self
@@ -3242,6 +3258,46 @@ mod tests {
         assert_eq!(*attempts.lock().unwrap(), 1);
         supervisor.reconcile();
         assert_eq!(*attempts.lock().unwrap(), 1);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn supervisor_retries_transient_spawn_failure() {
+        let home = unique_home("sup-transient-spawn");
+        let config_env = ConfigEnv::new(Some(home.to_str().unwrap()), &home);
+        let remote_path = climon_config::config::get_remote_host_path(&config_env);
+        std::fs::write(&remote_path, r#"{"tunnelId":"tunA","ingestPort":3132}"#).unwrap();
+
+        let attempts = Arc::new(Mutex::new(0u32));
+        let at = attempts.clone();
+        let mut supervisor = TunnelHostSupervisor::new(
+            config_env.clone(),
+            Box::new(move |_id: &str| {
+                let mut n = at.lock().unwrap();
+                *n += 1;
+                if *n == 1 {
+                    // First attempt fails transiently (not actionable): the slot
+                    // is left process-less but NOT paused.
+                    Err(transient_failure())
+                } else {
+                    Ok(Box::new(FakeHostProcess {
+                        exit: HostExitState::Running,
+                        stopped: Arc::new(Mutex::new(0u32)),
+                    }) as Box<dyn HostProcess>)
+                }
+            }),
+        );
+
+        // Attempt 1: transient spawn failure.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 1);
+        // A transient spawn failure MUST be retried on the next reconcile rather
+        // than stranding hosting until the desired id changes.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        // Now hosting is running: further reconciles do not respawn.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 2);
         std::fs::remove_dir_all(&home).ok();
     }
 
