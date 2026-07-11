@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { loadConfig, saveConfig, writeConfigSetting } from "../src/config.js";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { deriveIngestTunnelId } from "../src/remote/ingest-tunnel-id.js";
 import {
   buildDefaultConfigFromSettings,
   coerceConfigValueFromSettings,
@@ -447,6 +448,35 @@ describe("config jsonc paths and migration", () => {
 });
 
 describe("config three-way saves", () => {
+  test("server-style saves preserve install id", async () => {
+    const home = await makeTestHome("climon-three-way-server-style-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    const installId = "00000000-0000-4000-8000-000000000000";
+    const derivedTunnelId = deriveIngestTunnelId(installId);
+
+    try {
+      await writeFile(
+        join(home, "config.jsonc"),
+        JSON.stringify({
+          version: 1,
+          server: { host: "0.0.0.0", port: 3131 },
+          install: { id: installId }
+        })
+      );
+
+      const config = await loadConfig(env);
+      config.server.host = "127.0.0.1";
+      await saveConfig(config, env);
+
+      const reloaded = await loadConfig(env);
+      expect(reloaded.install?.id).toBe(installId);
+      expect(deriveIngestTunnelId(reloaded.install?.id ?? "")).toBe(derivedTunnelId);
+      expect(reloaded.server.host).toBe("127.0.0.1");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("preserves disjoint top-level changes and install id from stale loaded configs", async () => {
     const home = await makeTestHome("climon-three-way-top-level-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
