@@ -1,9 +1,21 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createElement, type CSSProperties, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as RealComponents from "@fluentui/react-components";
 import * as RealIcons from "@fluentui/react-icons";
 import type { SessionMeta } from "../src/types.js";
+
+// `mock.module` is global and mutates the module in place for the whole test
+// run, so snapshot the real Fluent exports *before* mocking and restore them
+// once this file's tests finish; otherwise suites that render real Fluent
+// components afterward (e.g. terminal-panel, app-layout) get the stubs.
+const realComponents = { ...RealComponents };
+const realIcons = { ...RealIcons };
+afterAll(() => {
+  mock.module("@fluentui/react-components", () => realComponents);
+  mock.module("@fluentui/react-icons", () => realIcons);
+});
 
 // Stub every real icon export so this file's `mock.module` does not drop named
 // exports that other components import. `mock.module` is global for the whole

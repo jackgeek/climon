@@ -8,6 +8,21 @@ updates:
     target-branch: "dev"
     schedule:
       interval: "daily"
+    # Group tightly-coupled families so siblings bump together in one PR to
+    # mutually-compatible versions. This prevents "coupled sibling left behind"
+    # mismatches such as @xterm/xterm 6 landing while @xterm/addon-fit stays on
+    # 0.10 (peerDep xterm ^5), which silently broke terminal fit() at runtime.
+    groups:
+      xterm:
+        patterns:
+          - "@xterm/*"
+      fluentui:
+        patterns:
+          - "@fluentui/*"
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
 
   # Rust (Cargo) dependencies for the client workspace under rust/
   - package-ecosystem: "cargo"

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import xterm from "@xterm/headless";
+import { FitAddon } from "@xterm/addon-fit";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -168,6 +169,49 @@ describe("TerminalView", () => {
     );
 
     expect(loaded).toEqual(["fit", "web-links"]);
+  });
+
+  test("installed FitAddon computes dimensions against the xterm 6 core without the removed viewport API", () => {
+    // Regression guard for the addon-fit/xterm version mismatch: xterm 6 removed
+    // `terminal._core.viewport`, which addon-fit@0.10 read as
+    // `_core.viewport.scrollBarWidth` inside proposeDimensions(). That throw was
+    // swallowed by fitNow()'s try/catch, so fit() became a silent no-op and the
+    // terminal never re-fit its pane. A compatible addon-fit must compute
+    // dimensions from the cell size and element geometry without touching the
+    // removed viewport internal.
+    const fit = new FitAddon();
+
+    const element = { parentElement: {} as object };
+    // Shaped like an xterm 6 terminal: `_core` has NO `viewport`.
+    const fakeTerminal = {
+      element,
+      options: { scrollback: 1000, overviewRuler: { width: 0 } },
+      _core: {
+        _renderService: { dimensions: { css: { cell: { width: 9, height: 18 } } } }
+      }
+    };
+
+    const computedStyle = (target: unknown) => ({
+      getPropertyValue: (prop: string) => {
+        if (target === element.parentElement) {
+          if (prop === "height") return "600";
+          if (prop === "width") return "800";
+        }
+        return "0";
+      }
+    });
+
+    const priorWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = { getComputedStyle: computedStyle };
+    try {
+      fit.activate(fakeTerminal as unknown as Parameters<FitAddon["activate"]>[0]);
+      const dims = fit.proposeDimensions();
+      expect(dims).toBeDefined();
+      expect(dims?.rows).toBeGreaterThan(1);
+      expect(dims?.cols).toBeGreaterThan(1);
+    } finally {
+      (globalThis as { window?: unknown }).window = priorWindow;
+    }
   });
 
   test("focuses and refreshes xterm when the terminal pane is focused", () => {

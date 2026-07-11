@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey } from "node:crypto";
+import { createPrivateKey } from "node:crypto";
 import { UPDATE_PUBLIC_KEY_B64 } from "../src/update/pubkey.js";
 
 export type VerifySigningKeyInput = {
@@ -26,7 +26,10 @@ function derivePublicKeyB64(privateKeyPkcs8B64: string): string {
     format: "der",
     type: "pkcs8"
   });
-  const jwk = createPublicKey(priv).export({ format: "jwk" }) as { x: string };
+  // An Ed25519 private-key JWK carries the raw public point in `x`, so we can
+  // derive the public key without createPublicKey (whose @types/node overload no
+  // longer accepts a KeyObject).
+  const jwk = priv.export({ format: "jwk" }) as { x: string };
   return Buffer.from(jwk.x, "base64url").toString("base64");
 }
 
