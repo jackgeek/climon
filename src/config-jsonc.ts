@@ -183,11 +183,11 @@ function renderObject(
       
       // Check if the object is empty
       if (Object.keys(nestedRecord).length === 0) {
-        lines.push(`${childIndentStr}"${key}": {}${isLast ? "" : ","}`);
+        lines.push(`${childIndentStr}${JSON.stringify(key)}: {}${isLast ? "" : ","}`);
       } else {
         const nestedObj = renderObject(nestedRecord, path, settingMap, registryOrder, baseIndent + 1);
         const nestedLines = nestedObj.split("\n");
-        lines.push(`${childIndentStr}"${key}": ${nestedLines[0]}`);
+        lines.push(`${childIndentStr}${JSON.stringify(key)}: ${nestedLines[0]}`);
         for (let j = 1; j < nestedLines.length - 1; j++) {
           lines.push(nestedLines[j]);
         }
@@ -196,7 +196,7 @@ function renderObject(
     } else {
       // Leaf value
       const renderedValue = JSON.stringify(value);
-      lines.push(`${childIndentStr}"${key}": ${renderedValue}${isLast ? "" : ","}`);
+      lines.push(`${childIndentStr}${JSON.stringify(key)}: ${renderedValue}${isLast ? "" : ","}`);
     }
   }
 

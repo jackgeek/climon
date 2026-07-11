@@ -348,6 +348,34 @@ describe("config jsonc paths and migration", () => {
     await rm(home, { recursive: true, force: true });
   });
 
+  test("saveConfig preserves unknown property names requiring JSON escaping", async () => {
+    const home = await makeTestHome("climon-jsonc-escaped-key-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    const unknownKey = 'future"\\key';
+    const unknownValue = { enabled: true, label: "keep-me" };
+
+    try {
+      await writeFile(
+        join(home, "config.jsonc"),
+        JSON.stringify({
+          version: 1,
+          server: { host: "127.0.0.1", port: 3131 },
+          [unknownKey]: unknownValue
+        })
+      );
+
+      const config = await loadConfig(env);
+      config.server.host = "0.0.0.0";
+      await saveConfig(config, env);
+
+      const reloaded = await loadConfig(env) as typeof config & Record<string, unknown>;
+      expect(reloaded[unknownKey]).toEqual(unknownValue);
+      expect(reloaded.server.host).toBe("0.0.0.0");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test("loadConfig reads legacy config.json when config.jsonc is absent", async () => {
     const home = await makeTestHome("climon-jsonc-fallback-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;

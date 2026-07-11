@@ -47,6 +47,21 @@ describe("config JSONC helpers", () => {
     expect(rendered).not.toContain("// custom");
   });
 
+  test("escapes unknown property names when rendering", () => {
+    const config = {
+      'empty"\\\nkey': {},
+      'nested"\\key': {
+        'child"\\key': true
+      },
+      'primitive"\\key': "value"
+    };
+
+    const rendered = renderJsoncConfig(config);
+    const parsed = parseJsoncConfig(rendered, "/test/escaped-keys.jsonc");
+
+    expect(parsed).toEqual(config);
+  });
+
   test("parses comment-like text inside strings unchanged", () => {
     const parsed = parseJsoncConfig(`{
       "url": "http://example.com/path",
