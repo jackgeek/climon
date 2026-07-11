@@ -69,7 +69,9 @@ present:
 7. Spawn the staged `install.exe` in recovery mode with:
    - the target installation directory;
    - the staging directory;
-   - the bootstrap process ID to wait for.
+   - the bootstrap process ID to wait for;
+   - the original arguments, used only if child-side migration fails and the
+     legacy fallback must run.
 8. Exit immediately so Windows releases the `climon.exe` file lock.
 9. The child installer waits for the bootstrap PID to exit, installs the stable
    client/server stubs, versioned payloads, and pointer files, removes temporary
@@ -171,6 +173,8 @@ manifest, verification, and staging logic should be reused from
 - valid and invalid bootstrap archive layouts;
 - signature rejection leaves the install unchanged;
 - bounded download failures invoke legacy fallback;
+- child installer arguments preserve the original arguments for failure
+  fallback only;
 - successful recovery does not relaunch or resume the original command;
 - successful recovery prints the critical-update rerun message;
 - recovery waits for the bootstrap PID before replacing `climon.exe`;
