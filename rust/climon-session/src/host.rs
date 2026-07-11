@@ -1974,11 +1974,11 @@ mod render_local_displaced_tests {
     use super::render_local_displaced;
 
     #[test]
-    fn hint_tells_the_user_to_press_space_without_the_resize_claim() {
-        // The take-control hint no longer promises a resize (the daemon does
-        // not resize the shared PTY back to this terminal just because it
-        // regained control), so the notice must say exactly "Press Space to
-        // take control." and must not claim it resizes anything.
+    fn hint_is_concise_press_space_to_take_control() {
+        // The take-control hint intentionally omits implementation detail
+        // (the daemon may resize the PTY, but that is not relevant to the user
+        // action). The notice must say exactly "Press Space to take control."
+        // without claiming it will resize the terminal.
         let out = render_local_displaced(80, 24);
         assert!(
             out.contains("Press Space to take control."),
@@ -1987,7 +1987,7 @@ mod render_local_displaced_tests {
         );
         assert!(
             !out.contains("and resize it to this terminal"),
-            "displaced notice must not claim it resizes the terminal; got {out:?}"
+            "displaced notice must not include the old resize claim; got {out:?}"
         );
     }
 }
