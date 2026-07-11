@@ -39,7 +39,7 @@ import { ensureSpawnSecret } from "../remote/spawn-secret.js";
 import { requestRemoteSpawn } from "./remote-spawn-client.js";
 import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
-import { detectDevtunnel, ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
+import { ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
 import { connectAuthenticatedSession, probeAuthenticatedSession } from "../session-socket.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";

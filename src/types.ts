@@ -116,6 +116,8 @@ export interface SessionDefaultsConfig {
   color?: SessionColorMode;
   /** Default sort priority (0-1000) for new sessions. */
   priority?: number;
+  /** Transport for daemon IPC: "local" (owner-only Unix socket / named pipe) or "tcp" (authenticated loopback). */
+  ipcTransport?: "local" | "tcp";
 }
 
 export interface TunnelLinkConfig {
