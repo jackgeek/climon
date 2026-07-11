@@ -330,3 +330,38 @@ healthy.
 | Date | Build | Platform | Result | Notes |
 |---|---|---|---|---|
 | | | | | |
+
+---
+
+## DTRS-11 — Stalled devtunnel at launch: 5s timeout, warning, best-effort spawn
+
+- **ID:** DTRS-11
+- **Feature / phase:** Dev-tunnel resilience — bounded launch probe with
+  best-effort spawn (`rust/climon-cli/src/launcher.rs` `probe_devtunnel_sync`,
+  `plan_uplink_start`).
+- **Preconditions:** `remote.enabled = true` and `remote.tunnelId` set (no
+  direct `remote.host`), so launching a session runs the synchronous devtunnel
+  probe. Ability to put a **stub `devtunnel` that sleeps > 5s** first on `PATH`
+  (e.g. a script that runs `sleep 30` for any args, or on Windows a `.cmd` that
+  `timeout /t 30`). This simulates a stalled Dev Tunnels network call.
+- **Config-matrix cell:** Remote ingest/uplink
+- **Platforms:** macOS, Linux, Windows (devbox/uplink side)
+
+**Steps:**
+1. Put the sleeping stub `devtunnel` first on `PATH` so `devtunnel --version`
+   hangs for ~30s.
+2. Launch a session, e.g. `climon shell` (or `bun run dev shell` from source).
+3. Time how long until the session terminal appears, and read stderr.
+
+**Expected:** The session starts within ~5 seconds (not blocked for the full
+stub sleep). Before/at launch, stderr prints the warning `climon: Dev Tunnels
+didn't respond within 5s; starting remote monitoring anyway. If sessions don't
+appear on the remote dashboard, check `climon remotes` or run `devtunnel user
+login`.` The uplink is still spawned (best-effort). Removing the stub and using
+a real, healthy `devtunnel` prints no such warning and starts normally.
+
+**Result-tracking row:**
+
+| Date | Build | Platform | Result | Notes |
+|---|---|---|---|---|
+| | | | | |
