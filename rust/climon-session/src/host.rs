@@ -1007,6 +1007,14 @@ pub fn run_session_host(
             TRACKED_MOUSE_PRIVATE_MODES,
         ));
     }
+    // Join every per-connection wrapper thread. On unix/tcp a wrapper still
+    // blocked in the pre-auth `daemon_handshake` read unblocks within
+    // HANDSHAKE_READ_TIMEOUT, so shutdown always completes. On Windows byte
+    // pipes `set_read_timeout` is a no-op, so a same-user peer that connects and
+    // never sends handshake bytes can keep its wrapper (and thus this join)
+    // blocked until it disconnects. This is a graceful-shutdown liveness gap
+    // only, bounded to same-user callers by the owner-only pipe DACL and to
+    // MAX_PENDING_HANDSHAKES concurrent pre-auth peers; see docs/security.md.
     for h in conn_threads.lock().unwrap().drain(..) {
         let _ = h.join();
     }
@@ -1120,6 +1128,9 @@ fn spawn_accept_thread(
             Ok(mut stream) => {
                 let _ = stream.set_nonblocking(false);
                 let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+                // Bound how long a pre-auth peer may stall the handshake read.
+                // Effective on unix/tcp; a documented no-op on Windows byte pipes
+                // (see the shutdown-join note below for the residual same-user risk).
                 let _ = stream.set_read_timeout(Some(HANDSHAKE_READ_TIMEOUT));
 
                 if pending.fetch_add(1, Ordering::SeqCst)
