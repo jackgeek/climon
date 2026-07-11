@@ -200,16 +200,17 @@ fn has_standalone_50x(input: &str) -> bool {
 }
 
 fn has_standalone_number(input: &str, number: &str) -> bool {
+    let is_word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let mut start = 0;
     while let Some(offset) = input[start..].find(number) {
         let index = start + offset;
-        let before_is_digit = index > 0 && input.as_bytes()[index - 1].is_ascii_digit();
+        let before_is_word = index > 0 && is_word_byte(input.as_bytes()[index - 1]);
         let after = index + number.len();
-        let after_is_digit = after < input.len() && input.as_bytes()[after].is_ascii_digit();
-        if !before_is_digit && !after_is_digit {
+        let after_is_word = after < input.len() && is_word_byte(input.as_bytes()[after]);
+        if !before_is_word && !after_is_word {
             return true;
         }
-        start = after;
+        start = index + 1;
     }
     false
 }
@@ -547,5 +548,19 @@ mod tests {
         assert!(!sanitized.contains("https://example.com"));
         assert!(sanitized.ends_with('…'));
         assert_eq!(sanitized.chars().count(), 301);
+    }
+
+    #[test]
+    fn numeric_codes_require_word_boundaries() {
+        let input = DevtunnelFailureInput {
+            operation: super::super::types::DevtunnelOperation::ListTunnels,
+            status: 1,
+            stdout: String::new(),
+            stderr: "request id abc429def failed".to_string(),
+            spawn_error: None,
+            parse_failed: None,
+        };
+        let actual = classify_failure(&input, "2026-07-11T13:00:00.000Z");
+        assert_eq!(actual.code, DevtunnelErrorCode::Unknown);
     }
 }
