@@ -259,12 +259,14 @@ pub struct UplinkStartPlan {
 }
 
 /// Launch-time Dev Tunnels probe result: whether the CLI is runnable and, if so,
-/// whether the user is signed in. Lets `plan_uplink_start` tell "CLI missing"
-/// apart from "CLI present but logged out".
+/// whether the user is signed in, plus whether the probe timed out before it
+/// could answer. Lets `plan_uplink_start` tell "CLI missing" apart from "CLI
+/// present but logged out" apart from "devtunnel stalled / didn't respond".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevtunnelProbe {
     pub available: bool,
     pub authenticated: bool,
+    pub timed_out: bool,
 }
 
 /// Decides whether to spawn the detached uplink. Mirrors `planUplinkStart`.
@@ -341,6 +343,7 @@ fn probe_devtunnel_sync() -> DevtunnelProbe {
             return DevtunnelProbe {
                 available: false,
                 authenticated: false,
+                timed_out: false,
             }
         }
     };
@@ -351,12 +354,14 @@ fn probe_devtunnel_sync() -> DevtunnelProbe {
             return DevtunnelProbe {
                 available: false,
                 authenticated: false,
+                timed_out: false,
             };
         }
         let user = gateway.show_user().await;
         DevtunnelProbe {
             available: true,
             authenticated: user.authenticated,
+            timed_out: false,
         }
     })
 }
@@ -421,6 +426,7 @@ fn ensure_uplink() {
             DevtunnelProbe {
                 available: false,
                 authenticated: false,
+                timed_out: false,
             }
         };
         let plan = plan_uplink_start(
@@ -805,6 +811,7 @@ mod tests {
             &DevtunnelProbe {
                 available: false,
                 authenticated: false,
+                timed_out: false,
             },
         );
         assert!(!plan.should_spawn);
@@ -828,6 +835,7 @@ mod tests {
             &DevtunnelProbe {
                 available: true,
                 authenticated: false,
+                timed_out: false,
             },
         );
         assert!(!plan.should_spawn);
@@ -851,6 +859,7 @@ mod tests {
             &DevtunnelProbe {
                 available: true,
                 authenticated: true,
+                timed_out: false,
             },
         );
         assert_eq!(
@@ -874,6 +883,7 @@ mod tests {
             &DevtunnelProbe {
                 available: false,
                 authenticated: false,
+                timed_out: false,
             },
         );
         assert_eq!(
@@ -897,6 +907,7 @@ mod tests {
             &DevtunnelProbe {
                 available: false,
                 authenticated: false,
+                timed_out: false,
             },
         );
         assert_eq!(
@@ -920,6 +931,7 @@ mod tests {
             &DevtunnelProbe {
                 available: true,
                 authenticated: true,
+                timed_out: false,
             },
         );
         assert_eq!(
