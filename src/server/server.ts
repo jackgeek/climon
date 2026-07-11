@@ -1,5 +1,4 @@
 import { existsSync, rmSync, watch } from "node:fs";
-import { join } from "node:path";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -1364,44 +1363,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }, 150);
   });
 
-  async function readRemotesResponse() {
-    const { buildRemotesResponse } = await import("./remotes.js");
-    const path = join(getClimonHome(process.env), "ingest-status.json");
-    let status: import("./remotes.js").IngestStatusFile | undefined;
-    try {
-      status = JSON.parse(await Bun.file(path).text());
-    } catch {
-      status = undefined;
-    }
-    return buildRemotesResponse(
-      status,
-      Date.now(),
-      computeRemotesActive(config),
-      (pid) => isProcessAlive(pid)
-    );
-  }
-
-  // Live-push a `remotes` SSE event whenever the ingest rewrites its status
-  // beacon (connect/disconnect/identity/heartbeat). Staleness is recomputed by
-  // the builder, never trusted from the file.
-  let remotesDebounce: ReturnType<typeof setTimeout> | undefined;
-  const remotesWatcher = watch(getClimonHome(process.env), (_event, filename) => {
-    if (filename !== "ingest-status.json") return;
-    if (remotesDebounce) clearTimeout(remotesDebounce);
-    remotesDebounce = setTimeout(() => {
-      void readRemotesResponse().then((payload) => {
-        const data = `event: remotes\ndata: ${JSON.stringify(payload)}\n\n`;
-        for (const controller of sseClients) {
-          try {
-            controller.enqueue(encoder.encode(data));
-          } catch {
-            sseClients.delete(controller);
-          }
-        }
-      });
-    }, 150);
-  });
-
   function isLocal(request: Request, server: Bun.Server<WsData>): boolean {
     const address = server.requestIP(request)?.address ?? "";
     return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
@@ -1650,11 +1611,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           remoteSpawn,
           spawnSecret
         });
-      }
-
-      if (url.pathname === "/api/remotes" && request.method === "GET") {
-        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
-        return Response.json(await readRemotesResponse());
       }
 
       if (url.pathname === "/api/dashboard-tunnel/status" && request.method === "GET") {
@@ -2184,14 +2140,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // Does NOT remove server.json (callers decide) and does NOT touch the ingest.
     const closeListenerAndStreams = async (): Promise<void> => {
       watcher.close();
-      remotesWatcher.close();
       if (debounce) {
         clearTimeout(debounce);
         debounce = undefined;
-      }
-      if (remotesDebounce) {
-        clearTimeout(remotesDebounce);
-        remotesDebounce = undefined;
       }
       for (const controller of sseClients) {
         try {

@@ -55,12 +55,11 @@ reports one host connection. The dashboard no longer requires a manual
 1. On the devbox, run the setup script from the Remotes dialog (sets
    `remote.enabled true` and `remote.tunnelId <new id>`).
 2. Start a `climon` session on the devbox.
-3. On the home dashboard, open the **Remote hosts** flyout (and/or `GET
-   /api/remotes`).
+3. On home, run `climon remotes` and open the home dashboard.
 
-**Expected:** The devbox appears in the flyout as a live host
-(`● <hostname> (<os>) — <addr> — N sessions`), and `/api/remotes` `connections`
-is non-empty. The devbox's session is visible in the session list.
+**Expected:** The devbox appears in `climon remotes` as a live host
+(`● <hostname> (<os>) — <addr> — N sessions`). The devbox's session is visible
+in the dashboard session list.
 
 **Result-tracking row:**
 
