@@ -10,6 +10,7 @@
 //! - [`verify`]          <- `src/update/verify.ts`
 //! - [`pubkey`]          <- `src/update/pubkey.ts`
 
+pub mod artifact;
 pub mod check;
 pub mod clock;
 pub mod download;

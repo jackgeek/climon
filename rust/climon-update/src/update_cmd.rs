@@ -4,7 +4,6 @@
 //! Never kills a process for the expected outcomes; returns a structured status.
 
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::Path;
 
 use crate::download::{download_text, download_to_file, MAX_ARTIFACT_BYTES, MAX_TEXT_BYTES};
@@ -255,23 +254,36 @@ fn write_versioned_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), Stri
     })
 }
 
-/// Extracts all entries from a ZIP archive into a name->bytes map.
+/// Extracts all regular-file entries from a ZIP archive into a `name → bytes`
+/// map. Backed by [`crate::artifact::extract_zip`] for safe path handling;
+/// recursive directory traversal rebuilds the map with forward-slash keys
+/// matching the original ZIP entry names.
 fn unzip(bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
-    let reader = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("unzip failed: {e}"))?;
+    let dir = tempfile::tempdir().map_err(|e| format!("temp dir: {e}"))?;
+    crate::artifact::extract_zip(bytes, dir.path()).map_err(|e| e.to_string())?;
+    collect_extracted_files(dir.path(), dir.path())
+}
+
+/// Recursively walks `dir`, collecting file contents keyed by path relative to
+/// `root` with forward-slash separators. Only regular files are collected;
+/// directories are traversed but not included in the output.
+fn collect_extracted_files(root: &Path, dir: &Path) -> Result<HashMap<String, Vec<u8>>, String> {
     let mut out = HashMap::new();
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .map_err(|e| format!("unzip entry failed: {e}"))?;
-        if !file.is_file() {
-            continue;
+    for entry in std::fs::read_dir(dir).map_err(|e| format!("readdir {}: {e}", dir.display()))? {
+        let e = entry.map_err(|e| format!("dir entry: {e}"))?;
+        let p = e.path();
+        if p.is_dir() {
+            let sub = collect_extracted_files(root, &p)?;
+            out.extend(sub);
+        } else if p.is_file() {
+            let rel = p
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let data = std::fs::read(&p).map_err(|e| format!("read {}: {e}", p.display()))?;
+            out.insert(rel, data);
         }
-        let name = file.name().to_string();
-        let mut data = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut data)
-            .map_err(|e| format!("unzip read failed: {e}"))?;
-        out.insert(name, data);
     }
     Ok(out)
 }
@@ -283,7 +295,7 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use ed25519_dalek::{Signer, SigningKey};
     use std::collections::BTreeMap;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::net::TcpListener;
     use zip::write::SimpleFileOptions;
 
