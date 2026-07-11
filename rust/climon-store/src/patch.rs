@@ -153,6 +153,8 @@ mod tests {
             terminal_title: None,
             attention_snippet: None,
             progress: None,
+            ipc_protocol_version: None,
+            ipc_generation: None,
         }
     }
 

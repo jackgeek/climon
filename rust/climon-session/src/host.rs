@@ -10,12 +10,13 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use climon_proto::auth::IPC_PROTOCOL_VERSION;
 use climon_proto::frame::{
     encode_frame, encode_json_frame, parse_json_payload, AttentionPayload, ControlPayload,
     ExitPayload, FrameDecoder, FrameType, PtySizePayload, ResizePayload, SurfaceKind,
@@ -39,7 +40,8 @@ use crate::replay::{
     track_mouse_private_modes_from_output, TRACKED_MOUSE_PRIVATE_MODES,
 };
 use crate::socket::{
-    cleanup_session_socket, listen_on_session_socket, SessionListener, SessionStream,
+    cleanup_session_socket, default_session_endpoint, listen_on_session_socket, IpcTransport,
+    SessionListener, SessionStream,
 };
 use crate::title_capture::capture_terminal_output;
 
@@ -47,6 +49,7 @@ const SESSION_ENV_VAR: &str = "CLIMON_SESSION_ID";
 const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
 const SCROLLBACK_CAP: usize = 256 * 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the local terminal stays suppressed after a browser viewer shrinks
 /// back to (or under) the local size before the restore watcher repaints it from
 /// the parsed grid's current screen. This delay lets the PTY's resize-repaint
@@ -875,13 +878,38 @@ pub fn run_session_host(
         }
     });
 
-    // --- IPC socket server ---
-    let (listener, resolved_ref) = listen_on_session_socket(&meta.socket_path)?;
+    // --- IPC socket server (bind → publish credential → publish endpoint) ---
+    let transport = match config
+        .get("session")
+        .and_then(|s| s.get("ipcTransport"))
+        .and_then(|v| v.as_str())
+    {
+        Some("tcp") => IpcTransport::Tcp,
+        _ => IpcTransport::Local,
+    };
+    let endpoint = default_session_endpoint(&env.sock_dir(), id, transport)?;
+
+    let _ownership = climon_store::ipc_lock::IpcOwnershipGuard::acquire(&env, id)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::AlreadyExists, e.to_string()))?;
+
+    let (listener, resolved_ref) = listen_on_session_socket(&endpoint)?;
+
+    let auth_record = climon_store::ipc_auth::mint(&resolved_ref);
+    climon_store::ipc_auth::write(&env, id, &auth_record)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let credential = Arc::new(
+        auth_record
+            .credential_bytes()
+            .map_err(|e| std::io::Error::other(e.to_string()))?,
+    );
+
     let _ = climon_store::patch::patch_session_meta(
         &env,
         id,
         SessionMetaPatch {
             socket_path: Some(resolved_ref.clone()),
+            ipc_protocol_version: Some(IPC_PROTOCOL_VERSION as u32),
+            ipc_generation: Some(auth_record.generation.clone()),
             ..Default::default()
         },
     );
@@ -893,6 +921,7 @@ pub fn run_session_host(
         Arc::clone(&shutdown),
         Arc::clone(&conn_threads),
         Arc::clone(&client_seq),
+        Arc::clone(&credential),
     );
 
     // --- Idle-sampling thread ---
@@ -978,11 +1007,20 @@ pub fn run_session_host(
             TRACKED_MOUSE_PRIVATE_MODES,
         ));
     }
+    // Join every per-connection wrapper thread. On unix/tcp a wrapper still
+    // blocked in the pre-auth `daemon_handshake` read unblocks within
+    // HANDSHAKE_READ_TIMEOUT, so shutdown always completes. On Windows byte
+    // pipes `set_read_timeout` is a no-op, so a same-user peer that connects and
+    // never sends handshake bytes can keep its wrapper (and thus this join)
+    // blocked until it disconnects. This is a graceful-shutdown liveness gap
+    // only, bounded to same-user callers by the owner-only pipe DACL and to
+    // MAX_PENDING_HANDSHAKES concurrent pre-auth peers; see docs/security.md.
     for h in conn_threads.lock().unwrap().drain(..) {
         let _ = h.join();
     }
 
     cleanup_session_socket(&resolved_ref);
+    let _ = climon_store::ipc_auth::remove(&env, id);
     Ok(exit_code)
 }
 
@@ -1082,56 +1120,86 @@ fn spawn_accept_thread(
     shutdown: Arc<AtomicBool>,
     conn_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
     client_seq: Arc<AtomicU64>,
+    credential: Arc<Vec<u8>>,
 ) -> JoinHandle<()> {
+    let pending = Arc::new(AtomicUsize::new(0));
     thread::spawn(move || loop {
         match listener.accept() {
-            Ok(stream) => {
-                let client_id = client_seq.fetch_add(1, Ordering::SeqCst);
-                // Accepted sockets can inherit the listener's non-blocking flag;
-                // per-connection reads must block.
+            Ok(mut stream) => {
                 let _ = stream.set_nonblocking(false);
                 let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-                let writer_clone = match stream.try_clone_box() {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                // Dedicated writer thread drains the client's outbound queue so
-                // socket writes never happen under the shared state lock.
-                let (tx, rx) = channel::<Arc<Vec<u8>>>();
-                let writer_handle = spawn_writer_thread(writer_clone, rx);
+                // Bound how long a pre-auth peer may stall the handshake read.
+                // Effective on unix/tcp; a documented no-op on Windows byte pipes
+                // (see the shutdown-join note below for the residual same-user risk).
+                let _ = stream.set_read_timeout(Some(HANDSHAKE_READ_TIMEOUT));
+
+                if pending.fetch_add(1, Ordering::SeqCst)
+                    >= climon_proto::auth::MAX_PENDING_HANDSHAKES
                 {
-                    let mut s = state.lock().unwrap();
-                    s.clients.insert(
-                        client_id,
-                        Client {
-                            tx,
-                            in_clients: false,
-                            kind: SurfaceKind::Dashboard,
-                            viewer_id: format!("client-{client_id}"),
-                            cols: 0,
-                            rows: 0,
-                            seq: 0,
-                        },
-                    );
+                    pending.fetch_sub(1, Ordering::SeqCst);
+                    let _ = stream.shutdown_both();
+                    continue;
                 }
-                // 10ms initial-frames timer (gives the client a chance to send
-                // its first Resize so viewer + size are known).
-                let timer_state = Arc::clone(&state);
-                let timer = thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(10));
-                    let mut s = timer_state.lock().unwrap();
-                    s.write_initial_frames(client_id);
+
+                let client_id = client_seq.fetch_add(1, Ordering::SeqCst);
+                let state = Arc::clone(&state);
+                let pty_writer = Arc::clone(&pty_writer);
+                let credential = Arc::clone(&credential);
+                let pending_slot = Arc::clone(&pending);
+
+                let handle = thread::spawn(move || {
+                    let purpose = match crate::auth::daemon_handshake(&mut *stream, &credential) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            pending_slot.fetch_sub(1, Ordering::SeqCst);
+                            let _ = stream.shutdown_both();
+                            return;
+                        }
+                    };
+                    if purpose == climon_proto::auth::Purpose::Probe {
+                        pending_slot.fetch_sub(1, Ordering::SeqCst);
+                        let _ = stream.shutdown_both();
+                        return;
+                    }
+
+                    let _ = stream.set_read_timeout(None);
+                    pending_slot.fetch_sub(1, Ordering::SeqCst);
+
+                    let writer_clone = match stream.try_clone_box() {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    let (tx, rx) = channel::<Arc<Vec<u8>>>();
+                    let writer_handle = spawn_writer_thread(writer_clone, rx);
+                    {
+                        let mut s = state.lock().unwrap();
+                        s.clients.insert(
+                            client_id,
+                            Client {
+                                tx,
+                                in_clients: false,
+                                kind: SurfaceKind::Dashboard,
+                                viewer_id: format!("client-{client_id}"),
+                                cols: 0,
+                                rows: 0,
+                                seq: 0,
+                            },
+                        );
+                    }
+                    let timer_state = Arc::clone(&state);
+                    let timer = thread::spawn(move || {
+                        thread::sleep(Duration::from_millis(10));
+                        let mut s = timer_state.lock().unwrap();
+                        s.write_initial_frames(client_id);
+                    });
+                    let reader_handle =
+                        spawn_connection_reader(stream, client_id, state, pty_writer);
+                    let _ = timer.join();
+                    let _ = reader_handle.join();
+                    let _ = writer_handle.join();
                 });
-                let reader_handle = spawn_connection_reader(
-                    stream,
-                    client_id,
-                    Arc::clone(&state),
-                    Arc::clone(&pty_writer),
-                );
-                let mut handles = conn_threads.lock().unwrap();
-                handles.push(timer);
-                handles.push(reader_handle);
-                handles.push(writer_handle);
+
+                conn_threads.lock().unwrap().push(handle);
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if shutdown.load(Ordering::SeqCst) {

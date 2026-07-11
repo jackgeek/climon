@@ -503,6 +503,11 @@ pub fn load_config(env: &Env) -> Result<Value, String> {
                 session.insert("color".to_string(), c.clone());
             }
         }
+        if let Some(t) = parsed_session.get("ipcTransport") {
+            if t.is_string() {
+                session.insert("ipcTransport".to_string(), t.clone());
+            }
+        }
 
         let mut out = Map::new();
         out.insert("version".to_string(), Value::from(1));
@@ -573,6 +578,12 @@ pub fn load_config(env: &Env) -> Result<Value, String> {
                 None => "auto".to_string(),
             };
             session.insert("color".to_string(), Value::from(color));
+            match session.get("ipcTransport").and_then(|v| v.as_str()) {
+                Some("local" | "tcp") => {}
+                _ => {
+                    session.insert("ipcTransport".to_string(), Value::from("local"));
+                }
+            }
         }
         {
             let hotkeys = out.get_mut("hotKeys").unwrap().as_object_mut().unwrap();

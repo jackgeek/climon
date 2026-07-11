@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { POST_AUTH_MAX_PAYLOAD } from "./auth.js";
 
 /** IPC frame type tags mirrored from rust/climon-proto/src/frame.rs. */
 export enum FrameType {
@@ -13,7 +14,12 @@ export enum FrameType {
   // Tags 9 and 10 are reserved (previously used) and intentionally left unused
   // so existing tag numbers stay stable.
   Control = 11,
-  TakeControl = 12
+  TakeControl = 12,
+  AuthChallenge = 13,
+  AuthResponse = 14,
+  AuthOk = 15,
+  AuthError = 16,
+  AuthProbeOk = 17,
 }
 
 /** Surface categories that can participate in terminal control handoff. */
@@ -55,7 +61,7 @@ export interface TitlePayload {
   name: string;
 }
 
-const HEADER_SIZE = 5; // 4-byte length + 1-byte type
+export const HEADER_SIZE = 5; // 4-byte length + 1-byte type
 
 export function encodeFrame(type: FrameType, payload: Uint8Array | string = new Uint8Array(0)): Buffer {
   const body = typeof payload === "string" ? Buffer.from(payload, "utf8") : Buffer.from(payload);
@@ -81,12 +87,28 @@ export interface DecodedFrame {
  */
 export class FrameDecoder {
   private buffer: Buffer = Buffer.alloc(0);
+  private _maxPayload: number = POST_AUTH_MAX_PAYLOAD;
+  private _errored: boolean = false;
+
+  get errored(): boolean {
+    return this._errored;
+  }
+
+  setMaxPayload(n: number): void {
+    this._maxPayload = n;
+  }
 
   push(chunk: Uint8Array): DecodedFrame[] {
+    if (this._errored) return [];
     this.buffer = this.buffer.length === 0 ? Buffer.from(chunk) : Buffer.concat([this.buffer, Buffer.from(chunk)]);
     const frames: DecodedFrame[] = [];
     while (this.buffer.length >= HEADER_SIZE) {
       const length = this.buffer.readUInt32BE(0);
+      if (length > this._maxPayload) {
+        this._errored = true;
+        this.buffer = Buffer.alloc(0);
+        break;
+      }
       const total = HEADER_SIZE + length;
       if (this.buffer.length < total) {
         break;

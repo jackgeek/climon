@@ -595,6 +595,8 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         terminal_title: None,
         attention_snippet: None,
         progress: None,
+        ipc_protocol_version: None,
+        ipc_generation: None,
     };
     write_session_meta(&store_env, &meta).map_err(|e| e.to_string())?;
 

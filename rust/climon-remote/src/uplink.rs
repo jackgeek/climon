@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
-use std::net::{TcpStream as StdTcpStream, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,7 +47,7 @@ use crate::spawn_auth::{
     sign_now, verify_signed_control, RejectReason, ReplayGuard, DEFAULT_FRESHNESS_WINDOW_MS,
 };
 use crate::target_set::UplinkTargetSpec;
-use climon_session::socket::{parse_session_socket_ref, ParsedRef};
+use climon_session::socket::{connect_session_socket, SessionStream};
 
 /// Default keepalive interval in seconds. Mirrors `DEFAULT_KEEPALIVE_SECONDS`.
 pub const DEFAULT_KEEPALIVE_SECONDS: f64 = 60.0;
@@ -263,33 +263,73 @@ struct Attached {
 
 type AttachedMap = Arc<AsyncMutex<HashMap<String, Attached>>>;
 
-/// Connects to a local daemon session socket, returning two clones (one for the
-/// reader thread, one for the writer thread) with a short read timeout so the
-/// reader can poll the active flag and exit on detach.
+struct SessionStreamReadWrite(Box<dyn SessionStream>);
+
+impl Read for SessionStreamReadWrite {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl Write for SessionStreamReadWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+/// Loads the session credential, opens the daemon endpoint, and completes the
+/// client handshake. Fails closed if the sidecar is missing (legacy/unauthenticated
+/// daemon). Mirrors the local CLI's attach authentication.
+fn open_authenticated_session(
+    env: &StoreEnv,
+    id: &str,
+    reference: &str,
+) -> std::io::Result<Box<dyn SessionStream>> {
+    climon_store::validate_session_id(id)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+    let record = climon_store::ipc_auth::read(env, id)
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "Session '{id}' has no IPC credential. It was started by an older, \
+                     unauthenticated climon. Stop and restart the session to upgrade."
+                ),
+            )
+        })?;
+    let credential = record
+        .credential_bytes()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let mut stream = connect_session_socket(reference)?;
+    climon_session::auth::client_handshake(
+        &mut *stream,
+        &credential,
+        climon_proto::auth::Purpose::Session,
+    )
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
+    Ok(stream)
+}
+
+/// Connects to a local daemon session socket **after authenticating**, returning
+/// two clones (reader + writer) with a short read timeout so the reader can poll
+/// the active flag and exit on detach.
 fn connect_session_pair(
+    env: &StoreEnv,
+    id: &str,
     reference: &str,
 ) -> std::io::Result<(Box<dyn ReadWrite>, Box<dyn ReadWrite>)> {
-    match parse_session_socket_ref(reference)? {
-        ParsedRef::Tcp { host, port } => {
-            let stream = StdTcpStream::connect((host.as_str(), port))?;
-            stream.set_read_timeout(Some(Duration::from_millis(200)))?;
-            let clone = stream.try_clone()?;
-            Ok((Box::new(stream), Box::new(clone)))
-        }
-        #[cfg(unix)]
-        ParsedRef::Path(path) => {
-            use std::os::unix::net::UnixStream;
-            let stream = UnixStream::connect(&path)?;
-            stream.set_read_timeout(Some(Duration::from_millis(200)))?;
-            let clone = stream.try_clone()?;
-            Ok((Box::new(stream), Box::new(clone)))
-        }
-        #[cfg(not(unix))]
-        ParsedRef::Path(_) => Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "unix socket unsupported on this platform",
-        )),
-    }
+    let stream = open_authenticated_session(env, id, reference)?;
+    stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+    let clone = stream.try_clone_box()?;
+    Ok((
+        Box::new(SessionStreamReadWrite(stream)),
+        Box::new(SessionStreamReadWrite(clone)),
+    ))
 }
 
 trait ReadWrite: Read + Write + Send {}
@@ -395,10 +435,11 @@ async fn attach(bridge: &Bridge, session_id: &str) {
         Ok(Some(m)) => m,
         _ => return,
     };
-    let (reader, writer) = match connect_session_pair(&meta.socket_path) {
-        Ok(pair) => pair,
-        Err(_) => return,
-    };
+    let (reader, writer) =
+        match connect_session_pair(&bridge.store_env, session_id, &meta.socket_path) {
+            Ok(pair) => pair,
+            Err(_) => return,
+        };
     let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let (writer_tx, writer_rx) = std::sync::mpsc::channel::<Vec<u8>>();
 
@@ -1633,6 +1674,28 @@ mod tests {
         StoreEnv::with_home(home.to_path_buf())
     }
 
+    #[test]
+    fn uplink_authenticates_before_bridging() {
+        use climon_session::auth::daemon_handshake;
+        use climon_session::socket::listen_on_session_socket;
+        use climon_store::Env;
+
+        let home = temp_home();
+        let env = Env::with_home(&home);
+        let (listener, resolved) = listen_on_session_socket("tcp://127.0.0.1:0").unwrap();
+        let record = climon_store::ipc_auth::mint(&resolved);
+        climon_store::ipc_auth::write(&env, "rare-geckos-jam", &record).unwrap();
+        let cred = record.credential_bytes().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut s = listener.accept().unwrap();
+            daemon_handshake(&mut *s, &cred).is_ok()
+        });
+        let stream = open_authenticated_session(&env, "rare-geckos-jam", &resolved);
+        assert!(stream.is_ok());
+        assert!(server.join().unwrap());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     fn sample_meta(home: &Path, id: &str, origin: Option<Origin>) -> SessionMeta {
         let now = climon_store::paths::now_iso();
         SessionMeta {
@@ -1666,6 +1729,8 @@ mod tests {
             terminal_title: None,
             attention_snippet: None,
             progress: None,
+            ipc_protocol_version: None,
+            ipc_generation: None,
         }
     }
 

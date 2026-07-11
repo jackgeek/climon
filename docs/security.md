@@ -30,6 +30,75 @@ networks. We assume:
 - Input arriving over the wire (mux frames, session metadata, labels) is
   untrusted.
 
+## Session IPC authentication
+
+Each live session has a per-session daemon that accepts local IPC from the CLI,
+remote uplink, and dashboard server. The old unauthenticated loopback-TCP shape
+was a CWE-306 risk: any local process/user that could connect to
+`127.0.0.1:<port>` could read live PTY output or inject keystrokes. Current
+builds close that boundary with owner-only local transports by default and a
+mandatory mutual-HMAC handshake on every connection over every transport.
+
+- **Owner-only endpoint.** `session.ipcTransport` is a global-only setting with
+  `local` (default) and `tcp`. `local` uses a Unix domain socket on
+  macOS/Linux/WSL, created `0600` inside an owner-only sessions directory, or a
+  Windows named pipe with a same-user DACL. Windows pipe bind also uses
+  `FILE_FLAG_FIRST_PIPE_INSTANCE`; the reserved first-instance handle is held
+  until the first accept consumes it, so another process cannot squat the pipe
+  name during startup. `tcp` is only an authenticated loopback fallback for
+  cases such as Unix socket paths exceeding the platform `SUN_LEN` limit; it is
+  not a security downgrade because the same handshake is still required.
+- **Owner-only credential sidecar.** The daemon mints a 32-byte CSPRNG
+  credential plus a random `generation`, records the resolved endpoint, and
+  atomically writes `$CLIMON_HOME/sessions/<id>.ipc-auth` with owner-only access
+  (`0600` on Unix, same-user DACL on Windows). The JSON coordination file
+  contains `version`, `generation`, `endpoint`, and `credential` (hex). Session
+  metadata carries only non-secret coordination fields; consumers read the
+  sidecar locally to authenticate.
+- **Mutual HMAC-SHA-256 handshake.** The daemon first sends an `AuthChallenge`
+  with the protocol version and a 32-byte nonce. The client replies with an
+  `AuthResponse` containing a purpose byte, its own 32-byte nonce, and a client
+  proof over the transcript keyed by the credential. The daemon verifies that
+  proof in constant time, then returns `AuthOk` or `AuthProbeOk` with a daemon
+  proof, or `AuthError(code)`. The client verifies the daemon proof before any
+  terminal bytes are bridged. Nonces are per connection, so neither the
+  credential nor a captured proof is replayable. Purpose `Session` attaches and
+  bridges PTY I/O; purpose `Probe` proves liveness only and is dropped after
+  `AuthProbeOk`. Pre-auth frames are capped at 4096 bytes, post-auth frames at
+  8 MiB, and the daemon permits at most `MAX_PENDING_HANDSHAKES=32`
+  unauthenticated peers. Unix/TCP handshakes have a 5-second read timeout, so a
+  peer that connects and never responds is dropped.
+- **Exclusive owner, bind before publish.** A daemon must create
+  `sessions/<id>.ipc-lock/` with an atomic `mkdir` before binding; a second
+  daemon for the same id fails fast. The daemon binds the endpoint and is ready
+  to authenticate before publishing the sidecar/metadata (`bind → publish`), so
+  consumers never see an endpoint that is not already guarded. A raw connection
+  that skips the handshake receives no PTY bytes and is dropped.
+- **Consumers authenticate before bridging.** The Rust CLI attach path, Rust
+  remote uplink, and Bun dashboard server all read the sidecar and complete the
+  handshake before forwarding any bytes. The remote uplink reads the credential
+  host-locally; it never crosses the dev tunnel. The dashboard server performs
+  the daemon handshake before bridging the browser WebSocket; the credential and
+  all `Auth*` frames stay server-side and are never forwarded to the browser.
+  Dashboard liveness probes use the authenticated `Probe` purpose.
+- **Fail closed for legacy sessions.** If `$CLIMON_HOME/sessions/<id>.ipc-auth`
+  is absent, consumers refuse to attach instead of falling back to unauthenticated
+  IPC and surface: `Session '<id>' has no IPC credential. It was started by an
+  older, unauthenticated climon. Stop and restart the session to upgrade.`
+- **Cleanup.** A daemon removes its own `.ipc-auth` sidecar and `.ipc-lock/`
+  ownership directory on graceful exit. `climon cleanup` also reaps orphaned
+  sidecars and lock directories for sessions whose recorded daemon pid is no
+  longer alive.
+
+Residual risk: on Windows byte pipes, `set_read_timeout` is a no-op. A same-user
+peer that connects and never completes the handshake can keep its per-connection
+wrapper thread, and therefore the daemon's graceful-shutdown thread join, blocked
+until it disconnects. This is a graceful-shutdown liveness gap only: there is no
+authentication bypass or data exposure, the named-pipe DACL bounds it to same-user
+callers, and `MAX_PENDING_HANDSHAKES` bounds concurrent pre-auth peers. Remote
+input remains untrusted; remote-id validation, metadata namespacing, patch
+allowlists, and loopback-only privileged dashboard APIs still apply.
+
 ## Project-local config trust
 
 Project-local `.climon/config.jsonc` files are treated as untrusted when a user

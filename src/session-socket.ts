@@ -1,5 +1,9 @@
 import { rm } from "node:fs/promises";
+import type { Buffer } from "node:buffer";
 import { createServer, connect, type Server, type Socket } from "node:net";
+import { Purpose } from "./ipc/auth.js";
+import { clientHandshake } from "./ipc/handshake.js";
+import { credentialBytes, readIpcAuthRecord } from "./ipc/ipc-auth-store.js";
 
 export interface TcpSessionSocket {
   host: string;
@@ -41,6 +45,78 @@ export function isResolvedSessionSocketRef(ref: SessionSocketRef): boolean {
 export function connectSessionSocket(ref: SessionSocketRef): Socket {
   const parsed = parseSessionSocketRef(ref);
   return "path" in parsed ? connect(parsed.path) : connect(parsed.port, parsed.host);
+}
+
+function waitForConnect(socket: Socket, timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off("connect", onConnect);
+      socket.off("error", onError);
+      reject(new Error("connect timed out"));
+    }, timeoutMs);
+    const onConnect = (): void => {
+      clearTimeout(timer);
+      socket.off("error", onError);
+      resolve();
+    };
+    const onError = (err: Error): void => {
+      clearTimeout(timer);
+      socket.off("connect", onConnect);
+      reject(err);
+    };
+    socket.once("connect", onConnect);
+    socket.once("error", onError);
+  });
+}
+
+export interface AuthenticatedSession {
+  socket: Socket;
+  /** Bytes the daemon pipelined AFTER AuthOk; feed these into the consumer's
+   * FrameDecoder before reading further from the socket. */
+  leftover: Buffer;
+}
+
+/** Reads the session credential, connects, and completes the Session handshake.
+ * Rejects with an actionable error if the sidecar is missing (legacy daemon). */
+export async function connectAuthenticatedSession(id: string, timeoutMs = 5000): Promise<AuthenticatedSession> {
+  const record = await readIpcAuthRecord(id);
+  if (!record) {
+    throw new Error(
+      `Session '${id}' has no IPC credential. It was started by an older, unauthenticated climon. Stop and restart the session to upgrade.`,
+    );
+  }
+  const credential = credentialBytes(record);
+  const socket = connectSessionSocket(record.endpoint);
+  try {
+    await waitForConnect(socket, timeoutMs);
+    const leftover = await clientHandshake(socket, credential, Purpose.Session, timeoutMs);
+    return { socket, leftover };
+  } catch (err) {
+    socket.destroy();
+    throw err;
+  }
+}
+
+/** Liveness probe: true only if the daemon authenticates a Probe handshake. */
+export async function probeAuthenticatedSession(id: string, timeoutMs = 2000): Promise<boolean> {
+  let record;
+  try {
+    record = await readIpcAuthRecord(id);
+  } catch {
+    return false;
+  }
+  if (!record) return false;
+  const credential = credentialBytes(record);
+  const socket = connectSessionSocket(record.endpoint);
+  try {
+    await waitForConnect(socket, timeoutMs);
+    await clientHandshake(socket, credential, Purpose.Probe, timeoutMs);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    socket.destroy();
+  }
 }
 
 export async function waitForSessionSocket(ref: SessionSocketRef, timeoutMs = 10_000): Promise<void> {

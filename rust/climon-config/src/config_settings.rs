@@ -219,6 +219,14 @@ fn v_session_priority(_p: &str, v: &Value) -> Result<(), String> {
     }
 }
 
+fn v_session_ipc_transport(_p: &str, v: &Value) -> Result<(), String> {
+    match v.as_str() {
+        Some("local" | "tcp") => Ok(()),
+        Some(_) => Err("session.ipcTransport must be one of: local, tcp".into()),
+        None => Err("session.ipcTransport must be a string".into()),
+    }
+}
+
 fn v_tunnel_keepalive(_p: &str, v: &Value) -> Result<(), String> {
     match v.as_f64() {
         Some(n) if n.is_finite() && n >= 0.0 => Ok(()),
@@ -501,6 +509,16 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .default(Value::from(DEFAULT_PRIORITY))
         .accept_input()
         .with_validate(v_session_priority),
+        ConfigSetting::new(
+            "session.ipcTransport",
+            String,
+            "Transport for per-session daemon IPC. 'local' (default) uses an owner-only Unix domain socket (macOS/Linux/WSL) or Windows named pipe; 'tcp' uses an authenticated loopback TCP fallback for when local socket paths are unavailable. All transports require the mutual-HMAC handshake, so 'tcp' is not a security downgrade.",
+            vec![Client, Daemon],
+        )
+        .default(Value::from("local"))
+        .accept_input()
+        .global_only()
+        .with_validate(v_session_ipc_transport),
         ConfigSetting::new(
             "session.terminalProgram",
             String,
@@ -845,6 +863,7 @@ mod tests {
                 "remote.autoLink",
                 "session.color",
                 "session.priority",
+                "session.ipcTransport",
                 "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",
@@ -865,7 +884,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 41);
+        assert_eq!(all_config_keys().len(), 42);
     }
 
     #[test]
@@ -893,7 +912,7 @@ mod tests {
                 "dashboard": { "theme": "Default", "keyBarPinned": true, "stateIconNoMotion": false },
                 "attention": { "idleSeconds": 10 },
                 "remote": { "discover": true, "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
-                "session": { "color": "auto", "priority": 500 },
+                "session": { "color": "auto", "priority": 500, "ipcTransport": "local" },
                 "tunnelLink": { "keepAlive": 60 },
                 "logging": { "level": "trace" },
                 "feature": {
@@ -964,6 +983,7 @@ mod tests {
                 "remote.autoLink",
                 "session.color",
                 "session.priority",
+                "session.ipcTransport",
                 "session.terminalProgram",
                 "tunnelLink.keepAlive",
                 "logging.level",

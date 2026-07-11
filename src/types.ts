@@ -116,6 +116,8 @@ export interface SessionDefaultsConfig {
   color?: SessionColorMode;
   /** Default sort priority (0-1000) for new sessions. */
   priority?: number;
+  /** Transport for daemon IPC: "local" (owner-only Unix socket / named pipe) or "tcp" (authenticated loopback). */
+  ipcTransport?: "local" | "tcp";
 }
 
 export interface TunnelLinkConfig {
@@ -225,6 +227,10 @@ export interface SessionMeta {
   attentionSnippet?: string;
   /** Latest terminal progress (OSC 9;4) reported by a program inside the PTY; absent/null = none. */
   progress?: TerminalProgress | null;
+  /** IPC protocol version published by the live daemon; absent for sessions that predate IPC auth. */
+  ipcProtocolVersion?: number;
+  /** IPC generation token published by the live daemon; absent for legacy sessions. */
+  ipcGeneration?: string;
 }
 
 export interface SessionMetaPatch {

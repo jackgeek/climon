@@ -10,11 +10,14 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 
+use climon_proto::auth::Purpose;
 use climon_proto::frame::{
     encode_frame, encode_json_frame, parse_json_payload, ControlPayload, ExitPayload, FrameDecoder,
     FrameType, ResizePayload, SurfaceKind,
 };
+use climon_session::auth::client_handshake;
 use climon_session::socket::connect_session_socket;
+use climon_store::Env as StoreEnv;
 
 /// Default detach prefix (Ctrl-\\). Matches `connectToSession`'s default.
 pub const DEFAULT_DETACH_PREFIX: u8 = 0x1c;
@@ -401,11 +404,74 @@ fn install_sigwinch_handler() {
     }
 }
 
+/// Loads the session's credential, opens the endpoint, and completes the client
+/// handshake. Returns the authenticated stream. Fails closed if the sidecar is
+/// missing (legacy/unauthenticated daemon).
+fn open_authenticated_session(
+    env: &StoreEnv,
+    id: &str,
+    reference: &str,
+) -> std::io::Result<Box<dyn climon_session::socket::SessionStream>> {
+    climon_store::validate_session_id(id)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+    let record = climon_store::ipc_auth::read(env, id)
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "Session '{id}' has no IPC credential. It was started by an older, \
+                     unauthenticated climon. Stop and restart the session to upgrade."
+                ),
+            )
+        })?;
+    let credential = record
+        .credential_bytes()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let mut stream = connect_session_socket(reference)?;
+    client_handshake(&mut *stream, &credential, Purpose::Session)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string()))?;
+    Ok(stream)
+}
+
+/// Waits until the daemon for `id` is accepting authenticated probes, or times out.
+pub fn wait_for_authenticated_session(
+    env: &StoreEnv,
+    id: &str,
+    reference: &str,
+    timeout: std::time::Duration,
+) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if let Ok(Some(record)) = climon_store::ipc_auth::read(env, id) {
+            if let Ok(cred) = record.credential_bytes() {
+                if let Ok(mut s) = connect_session_socket(reference) {
+                    if client_handshake(&mut *s, &cred, Purpose::Probe).is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("Timed out waiting for authenticated session {id}"),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Connects the local terminal to a running session daemon at `reference`,
 /// forwarding keystrokes and rendering PTY output until the session exits or the
 /// detach chord is pressed. Mirrors `connectToSession`.
-pub fn connect_to_session(reference: &str, detach_prefix: u8) -> std::io::Result<AttachResult> {
-    let stream = connect_session_socket(reference)?;
+pub fn connect_to_session(
+    env: &StoreEnv,
+    id: &str,
+    reference: &str,
+    detach_prefix: u8,
+) -> std::io::Result<AttachResult> {
+    let stream = open_authenticated_session(env, id, reference)?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
     let writer = stream.try_clone_box()?;
     let writer = Arc::new(std::sync::Mutex::new(writer));
@@ -704,6 +770,61 @@ mod tests {
             "displaced notice must start with reset-SGR + home + erase-to-end \
              (\\e[m\\e[H\\e[J); got {out:?}"
         );
+    }
+
+    #[test]
+    fn missing_ipc_sidecar_fails_closed_with_restart_guidance() {
+        use climon_store::Env;
+
+        let home = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("climon-missing-ipc-sidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        let env = Env::with_home(&home);
+
+        let err = match open_authenticated_session(&env, "rare-geckos-jam", "tcp://127.0.0.1:1") {
+            Ok(_) => panic!("expected missing IPC sidecar to fail closed"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("restart"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn attach_authenticates_before_sending_resize() {
+        use climon_session::auth::daemon_handshake;
+        use climon_session::socket::listen_on_session_socket;
+        use climon_store::Env;
+
+        let home = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("climon-attach-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        let env = Env::with_home(&home);
+
+        let (listener, resolved) = listen_on_session_socket("tcp://127.0.0.1:0").unwrap();
+        let record = climon_store::ipc_auth::mint(&resolved);
+        climon_store::ipc_auth::write(&env, "rare-geckos-jam", &record).unwrap();
+        let cred = record.credential_bytes().unwrap();
+
+        let server = std::thread::spawn(move || {
+            let mut s = listener.accept().unwrap();
+            daemon_handshake(&mut *s, &cred).is_ok()
+        });
+
+        let ok = open_authenticated_session(&env, "rare-geckos-jam", &resolved).is_ok();
+        assert!(ok);
+        assert!(
+            server.join().unwrap(),
+            "daemon must see a valid handshake first"
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

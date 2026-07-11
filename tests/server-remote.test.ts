@@ -291,6 +291,16 @@ describe("shouldMarkDisconnected", () => {
     expect(await shouldMarkDisconnected(meta({ status: "paused", origin: "local" }), probeDead)).toBe(true);
   });
 
+  test("local sessions probe by session id when the daemon pid is alive", async () => {
+    let probedId: string | undefined;
+    const probeLive = async (id: string) => {
+      probedId = id;
+      return true;
+    };
+    expect(await shouldMarkDisconnected(meta({ id: "rare-geckos-jam", daemonPid: process.pid }), probeLive)).toBe(false);
+    expect(probedId).toBe("rare-geckos-jam");
+  });
+
   test("terminated sessions are never touched", async () => {
     const probe = async () => false;
     expect(await shouldMarkDisconnected(meta({ status: "completed" }), probe)).toBe(false);

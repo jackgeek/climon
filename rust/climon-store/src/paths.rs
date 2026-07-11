@@ -69,6 +69,11 @@ impl Env {
     pub fn server_state_path(&self) -> PathBuf {
         self.climon_home.join(SERVER_STATE_BASENAME)
     }
+
+    /// `$CLIMON_HOME/sessions/<id>.ipc-auth` — owner-only credential sidecar.
+    pub fn ipc_auth_path(&self, id: &str) -> PathBuf {
+        self.sessions_dir().join(format!("{id}.ipc-auth"))
+    }
 }
 
 /// Best-effort home directory for the `~/.climon` fallback. Reads `$HOME` on
@@ -177,6 +182,10 @@ mod tests {
         assert_eq!(
             env.server_state_path(),
             Path::new("/tmp/climon-home/server.json")
+        );
+        assert_eq!(
+            env.ipc_auth_path("rare-geckos-jam"),
+            Path::new("/tmp/climon-home/sessions/rare-geckos-jam.ipc-auth")
         );
     }
 

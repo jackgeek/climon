@@ -42,6 +42,7 @@ describe("config settings registry", () => {
       "remote.autoLink",
       "session.color",
       "session.priority",
+      "session.ipcTransport",
       "session.terminalProgram",
       "tunnelLink.keepAlive",
       "logging.level",
@@ -100,7 +101,7 @@ describe("config settings registry", () => {
       dashboard: { theme: "Default", keyBarPinned: true, stateIconNoMotion: false },
       attention: { idleSeconds: 10 },
       remote: { discover: true, ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
-      session: { color: "auto", priority: 500 },
+      session: { color: "auto", priority: 500, ipcTransport: "local" },
       tunnelLink: { keepAlive: 60 },
       logging: { level: "trace" },
       feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled", smartNotifications: "disabled" },
@@ -161,6 +162,7 @@ describe("config settings registry", () => {
       "remote.autoLink",
       "session.color",
       "session.priority",
+      "session.ipcTransport",
       "session.terminalProgram",
       "tunnelLink.keepAlive",
       "logging.level",
@@ -176,7 +178,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(41);
+    expect(allConfigKeys().length).toBe(42);
   });
 
   test("coerces values through registry validators", () => {

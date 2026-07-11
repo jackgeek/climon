@@ -478,6 +478,8 @@ pub fn to_local_meta(
         terminal_title,
         attention_snippet: None,
         progress,
+        ipc_protocol_version: None,
+        ipc_generation: None,
     }
 }
 
