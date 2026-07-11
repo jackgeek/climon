@@ -173,6 +173,14 @@ async fn run_command(cmd: &str, args: &[String], env: &HashMap<String, String>) 
     // The proven uplink path (dev's `devtunnel_command`) also only overlays.
     command.envs(effective_env);
     apply_windows_flags(&mut command);
+    // Terminate the child if this future is dropped (e.g. the launch-time probe
+    // in `probe_devtunnel_sync` hits its timeout). Without this a stalled
+    // `devtunnel` — for instance one blocked on its global lock on Windows —
+    // outlives the dropped future and keeps the caller's runtime from tearing
+    // down, hanging the launcher long past the timeout. These probe/management
+    // commands are short-lived request/response calls, so killing a cancelled
+    // one is always correct; the long-running host uses `default_spawner`.
+    command.kill_on_drop(true);
     match command.output().await {
         Ok(output) => RunResult {
             status: output.status.code().unwrap_or(1),

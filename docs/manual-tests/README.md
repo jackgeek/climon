@@ -91,6 +91,7 @@ result-tracking row.
 | — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |
 | — | Jiggle-repaint on local restore (force wrapped app to redraw when the local terminal regains control) | [jiggle-repaint-on-restore.md](jiggle-repaint-on-restore.md) |
 | — | Remote session attach authentication — authenticated Rust ingest proxy (`.ipc-auth` + daemon handshake) + visible attach errors | [remote-attach-auth.md](remote-attach-auth.md) |
+| — | Dev-tunnel launch probe timeout — launch never hangs when `devtunnel` stalls; `remote.devtunnelProbeTimeout` tunable | [devtunnel-probe-timeout.md](devtunnel-probe-timeout.md) |
 
 ## Recording results
 

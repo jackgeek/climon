@@ -37,6 +37,7 @@ describe("config settings registry", () => {
       "remote.clientId",
       "remote.spawnSecret",
       "remote.keepAlive",
+      "remote.devtunnelProbeTimeout",
       "remote.peerHome",
       "remote.peerHost",
       "remote.autoLink",
@@ -100,7 +101,7 @@ describe("config settings registry", () => {
       hotKeys: { focusTopSession: "Alt+J" },
       dashboard: { theme: "Default", keyBarPinned: true, stateIconNoMotion: false },
       attention: { idleSeconds: 10 },
-      remote: { discover: true, ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
+      remote: { discover: true, ingestPortRetryAttempts: 100, keepAlive: 60, devtunnelProbeTimeout: 5, autoLink: true },
       session: { color: "auto", priority: 500, ipcTransport: "local" },
       tunnelLink: { keepAlive: 60 },
       logging: { level: "trace" },
@@ -157,6 +158,7 @@ describe("config settings registry", () => {
       "remote.clientId",
       "remote.spawnSecret",
       "remote.keepAlive",
+      "remote.devtunnelProbeTimeout",
       "remote.peerHome",
       "remote.peerHost",
       "remote.autoLink",
@@ -178,7 +180,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(42);
+    expect(allConfigKeys().length).toBe(43);
   });
 
   test("coerces values through registry validators", () => {
@@ -246,6 +248,21 @@ describe("config settings registry", () => {
     expect(() => coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "-5")).toThrow();
     expect(() => coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "1.5")).toThrow();
     expect(coerceConfigValueFromSettings("remote.ingestPortRetryAttempts", "100")).toBe(100);
+  });
+
+  test("remote.devtunnelProbeTimeout defaults to 5 and is client-scoped", () => {
+    const setting = findConfigSetting("remote.devtunnelProbeTimeout");
+    expect(setting).toBeDefined();
+    expect(setting?.type).toBe("number");
+    expect(setting?.defaultValue).toBe(5);
+    expect(setting?.scope).toEqual(["client"]);
+  });
+
+  test("remote.devtunnelProbeTimeout rejects non-integers and values below 1", () => {
+    expect(() => coerceConfigValueFromSettings("remote.devtunnelProbeTimeout", "0")).toThrow();
+    expect(() => coerceConfigValueFromSettings("remote.devtunnelProbeTimeout", "-1")).toThrow();
+    expect(() => coerceConfigValueFromSettings("remote.devtunnelProbeTimeout", "2.5")).toThrow();
+    expect(coerceConfigValueFromSettings("remote.devtunnelProbeTimeout", "30")).toBe(30);
   });
 });
 
