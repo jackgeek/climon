@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { loadConfig, saveConfig } from "../src/config.js";
+import { loadConfig, saveConfig, writeConfigSetting } from "../src/config.js";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import {
@@ -442,6 +442,160 @@ describe("config jsonc paths and migration", () => {
     // Assert config.json no longer exists
     expect(existsSync(legacyPath)).toBe(false);
     
+    await rm(home, { recursive: true, force: true });
+  });
+});
+
+describe("config three-way saves", () => {
+  test("preserves disjoint top-level changes and install id from stale loaded configs", async () => {
+    const home = await makeTestHome("climon-three-way-top-level-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        terminal: { clampBrowserToHost: false, detachPrefix: 0x1c },
+        install: { id: "install-three-way" }
+      })
+    );
+
+    const first = await loadConfig(env);
+    const second = await loadConfig(env);
+    first.server.port = 4001;
+    second.terminal.clampBrowserToHost = true;
+
+    await saveConfig(first, env);
+    await saveConfig(second, env);
+
+    const reloaded = await loadConfig(env);
+    expect(reloaded.server.port).toBe(4001);
+    expect(reloaded.terminal.clampBrowserToHost).toBe(true);
+    expect(reloaded.install?.id).toBe("install-three-way");
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("merges nested changes and deletion while preserving unrelated latest keys", async () => {
+    const home = await makeTestHome("climon-three-way-nested-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    const initial = {
+      version: 1,
+      server: {
+        host: "127.0.0.1",
+        port: 3131,
+        obsolete: "remove-me"
+      },
+      terminal: { clampBrowserToHost: false, detachPrefix: 0x1c }
+    };
+    await writeFile(join(home, "config.jsonc"), JSON.stringify(initial));
+
+    const first = await loadConfig(env);
+    const second = await loadConfig(env);
+    first.server.host = "0.0.0.0";
+    delete (second.server as typeof second.server & { obsolete?: string }).obsolete;
+
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        ...initial,
+        server: { ...initial.server, latestNested: "keep-nested" },
+        latestTopLevel: { keep: true }
+      })
+    );
+
+    await saveConfig(first, env);
+    await saveConfig(second, env);
+
+    const reloaded = await loadConfig(env);
+    const record = reloaded as typeof reloaded & {
+      server: typeof reloaded.server & {
+        obsolete?: string;
+        latestNested: string;
+      };
+      latestTopLevel: { keep: boolean };
+    };
+    expect(record.server.host).toBe("0.0.0.0");
+    expect(record.server.obsolete).toBeUndefined();
+    expect(record.server.latestNested).toBe("keep-nested");
+    expect(record.latestTopLevel).toEqual({ keep: true });
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("uses the later save when stale configs change the same setting", async () => {
+    const home = await makeTestHome("climon-three-way-last-writer-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 }
+      })
+    );
+
+    const first = await loadConfig(env);
+    const second = await loadConfig(env);
+    first.server.port = 4001;
+    second.server.port = 4002;
+
+    await saveConfig(first, env);
+    await saveConfig(second, env);
+
+    expect((await loadConfig(env)).server.port).toBe(4002);
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("advances repeated-save golden state from the caller and preserves later external writes", async () => {
+    const home = await makeTestHome("climon-three-way-repeated-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 }
+      })
+    );
+
+    const config = await loadConfig(env);
+    config.server.port = 4001;
+    writeConfigSetting("update.lastCheck", "2026-07-11T12:00:00.000Z", "global", env);
+    await saveConfig(config, env);
+    expect(config.update).toBeUndefined();
+
+    writeConfigSetting("update.lastCheck", "2026-07-11T13:00:00.000Z", "global", env);
+    config.server.host = "0.0.0.0";
+    await saveConfig(config, env);
+
+    const reloaded = await loadConfig(env);
+    expect(reloaded.server.port).toBe(4001);
+    expect(reloaded.server.host).toBe("0.0.0.0");
+    expect(reloaded.update?.lastCheck).toBe("2026-07-11T13:00:00.000Z");
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("fully replaces config objects that were not returned by loadConfig", async () => {
+    const home = await makeTestHome("climon-three-way-untracked-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 },
+        install: { id: "replace-me" },
+        futureSection: { remove: true }
+      })
+    );
+
+    const replacement = defaultConfig();
+    replacement.server.port = 4999;
+    await saveConfig(replacement, env);
+
+    const reloaded = await loadConfig(env);
+    const record = reloaded as typeof reloaded & {
+      futureSection?: { remove: boolean };
+    };
+    expect(reloaded.server.port).toBe(4999);
+    expect(reloaded.install).toBeUndefined();
+    expect(record.futureSection).toBeUndefined();
     await rm(home, { recursive: true, force: true });
   });
 });

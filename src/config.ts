@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseColorMode } from "./session-meta.js";
 import type { ClimonConfig } from "./types.js";
 import { parseJsoncConfig, renderJsoncConfig } from "./config-jsonc.js";
-import { cloneConfigValue } from "./config-merge.js";
+import { applyConfigDelta, cloneConfigValue, diffConfig } from "./config-merge.js";
 import {
   acceptedConfigKeys,
   buildDefaultConfigFromSettings,
@@ -203,7 +203,10 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
   return config;
 }
 
-export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+async function writeCompleteConfig(
+  configRecord: Record<string, unknown>,
+  env: NodeJS.ProcessEnv
+): Promise<void> {
   await ensureClimonHome(env);
   const home = getClimonHome(env);
   const canonicalPath = getConfigPathForDir(home);
@@ -215,7 +218,7 @@ export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = 
   const hasCanonical = existsSync(canonicalPath);
   
   // Write the canonical config.jsonc
-  const rendered = renderJsoncConfig(config as unknown as Record<string, unknown>);
+  const rendered = renderJsoncConfig(configRecord);
   await writeFile(canonicalPath, rendered, { mode: 0o600 });
   try {
     await chmod(canonicalPath, 0o600);
@@ -234,6 +237,21 @@ export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = 
       );
     }
   }
+}
+
+export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const current = config as unknown as Record<string, unknown>;
+  const golden = configGoldenSnapshots.get(config);
+  let toWrite = current;
+  if (golden) {
+    const delta = diffConfig(golden, current);
+    const latest = await loadConfigInternal(env);
+    toWrite = delta
+      ? applyConfigDelta(latest as unknown as Record<string, unknown>, delta)
+      : latest as unknown as Record<string, unknown>;
+  }
+  await writeCompleteConfig(toWrite, env);
+  if (golden) configGoldenSnapshots.set(config, cloneConfigValue(current));
 }
 
 export async function assertConfigReadable(env: NodeJS.ProcessEnv = process.env): Promise<void> {
