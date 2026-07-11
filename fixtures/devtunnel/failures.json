@@ -1,0 +1,173 @@
+[
+  {
+    "name": "missing executable",
+    "input": {
+      "operation": "detect",
+      "status": 127,
+      "stdout": "",
+      "stderr": "spawn failed",
+      "spawnError": "ENOENT"
+    },
+    "expected": {
+      "code": "cli_missing",
+      "retryClass": "actionable",
+      "retryable": false
+    }
+  },
+  {
+    "name": "not logged in JSON",
+    "input": {
+      "operation": "show-user",
+      "status": 0,
+      "stdout": "{\"status\":\"Not logged in\"}",
+      "stderr": ""
+    },
+    "expected": {
+      "code": "not_authenticated",
+      "retryClass": "actionable",
+      "retryable": false
+    }
+  },
+  {
+    "name": "tunnel count quota exhausted",
+    "input": {
+      "operation": "create-tunnel",
+      "status": 1,
+      "stdout": "",
+      "stderr": "Too many tunnels. The maximum number of tunnels has been reached."
+    },
+    "expected": {
+      "code": "tunnel_quota_exhausted",
+      "retryClass": "actionable",
+      "retryable": false
+    }
+  },
+  {
+    "name": "ordinary rate limit",
+    "input": {
+      "operation": "list-tunnels",
+      "status": 1,
+      "stdout": "",
+      "stderr": "HTTP 429 Too Many Requests. Retry-After: 30"
+    },
+    "expected": {
+      "code": "rate_limited",
+      "retryClass": "transient",
+      "retryable": true,
+      "retryAfterMs": 30000
+    }
+  },
+  {
+    "name": "permission denied",
+    "input": {
+      "operation": "show-tunnel",
+      "status": 1,
+      "stdout": "",
+      "stderr": "403 Forbidden: user does not have access to this tunnel"
+    },
+    "expected": {
+      "code": "permission_denied",
+      "retryClass": "actionable",
+      "retryable": false
+    }
+  },
+  {
+    "name": "tunnel not found",
+    "input": {
+      "operation": "show-tunnel",
+      "status": 1,
+      "stdout": "",
+      "stderr": "Tunnel not found in eun1: saved-tunnel"
+    },
+    "expected": {
+      "code": "tunnel_not_found",
+      "retryClass": "permanent",
+      "retryable": false
+    }
+  },
+  {
+    "name": "port conflict",
+    "input": {
+      "operation": "create-port",
+      "status": 1,
+      "stdout": "",
+      "stderr": "Conflict with existing entity"
+    },
+    "expected": {
+      "code": "port_conflict",
+      "retryClass": "permanent",
+      "retryable": false
+    }
+  },
+  {
+    "name": "network unavailable",
+    "input": {
+      "operation": "list-tunnels",
+      "status": 1,
+      "stdout": "",
+      "stderr": "Name or service not known"
+    },
+    "expected": {
+      "code": "network_unavailable",
+      "retryClass": "transient",
+      "retryable": true
+    }
+  },
+  {
+    "name": "service unavailable",
+    "input": {
+      "operation": "create-tunnel",
+      "status": 1,
+      "stdout": "",
+      "stderr": "503 Service Unavailable"
+    },
+    "expected": {
+      "code": "service_unavailable",
+      "retryClass": "transient",
+      "retryable": true
+    }
+  },
+  {
+    "name": "unexpected host exit",
+    "input": {
+      "operation": "host-tunnel",
+      "status": 1,
+      "stdout": "",
+      "stderr": "host process exited"
+    },
+    "expected": {
+      "code": "process_exited",
+      "retryClass": "transient",
+      "retryable": true
+    }
+  },
+  {
+    "name": "invalid successful output",
+    "input": {
+      "operation": "create-tunnel",
+      "status": 0,
+      "stdout": "not-json",
+      "stderr": "",
+      "parseFailed": true
+    },
+    "expected": {
+      "code": "invalid_output",
+      "retryClass": "unknown",
+      "retryable": false
+    }
+  },
+  {
+    "name": "unknown failure",
+    "input": {
+      "operation": "delete-tunnel",
+      "status": 9,
+      "stdout": "",
+      "stderr": "unexpected condition"
+    },
+    "expected": {
+      "code": "unknown",
+      "retryClass": "unknown",
+      "retryable": false
+    }
+  }
+]
