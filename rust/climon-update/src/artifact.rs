@@ -514,6 +514,74 @@ mod tests {
         );
     }
 
+    /// Patches `external_file_attributes` in the first central-directory record
+    /// whose attributes match `old_attrs`, replacing them with `new_attrs`.
+    ///
+    /// The central-directory record has the fixed layout (per ZIP spec):
+    ///
+    /// ```text
+    /// offset  field
+    ///  0      PK\x01\x02 signature (4 bytes)
+    ///  4      ZipCentralEntryBlock fields …
+    ///  38     external_file_attributes (4 bytes, little-endian)
+    /// ```
+    ///
+    /// Using the signature + fixed offset makes the patch precise and independent
+    /// of entry name length or file-data content.
+    fn patch_cd_external_attributes(mut bytes: Vec<u8>, old_attrs: u32, new_attrs: u32) -> Vec<u8> {
+        const CD_SIG: [u8; 4] = [0x50, 0x4B, 0x01, 0x02];
+        // external_file_attributes is at byte 38 from the start of PK\x01\x02
+        // (4-byte Magic + 34 bytes of ZipCentralEntryBlock before the field).
+        const ATTRS_OFFSET: usize = 38;
+
+        let old = old_attrs.to_le_bytes();
+        let new_val = new_attrs.to_le_bytes();
+
+        let mut i = 0;
+        while i + ATTRS_OFFSET + 4 <= bytes.len() {
+            if bytes[i..i + 4] == CD_SIG {
+                let ea = i + ATTRS_OFFSET;
+                if bytes[ea..ea + 4] == old {
+                    bytes[ea..ea + 4].copy_from_slice(&new_val);
+                    return bytes;
+                }
+            }
+            i += 1;
+        }
+        panic!(
+            "patch_cd_external_attributes: attrs {old_attrs:#010x} not found in ZIP central directory"
+        );
+    }
+
+    /// A non-symlink special Unix-mode entry (FIFO / character device / etc.)
+    /// must be rejected by the `unix_mode()` file-type guard in `extract_zip`.
+    ///
+    /// The `is_symlink()` check does NOT cover this case
+    /// (`S_IFIFO & S_IFLNK ≠ S_IFLNK`), so this test specifically exercises
+    /// the secondary guard.  It would fail if that guard were removed.
+    #[test]
+    fn non_symlink_special_unix_mode_entry_is_rejected() {
+        let (signing, pub_b64) = test_keypair();
+
+        // Build a regular-file ZIP, then patch the central-directory
+        // external_file_attributes to FIFO type: S_IFIFO | 0o755 = 0o010755.
+        // normalize() stores a 0o644 regular file as 0o100644 (S_IFREG | 0o644).
+        let base_zip = make_zip(&[("fifo-entry", b"payload", 0o644)]);
+        let fifo_zip = patch_cd_external_attributes(
+            base_zip,
+            0o100644_u32 << 16, // what normalize() stores for a 0o644 regular file
+            0o010755_u32 << 16, // S_IFIFO | 0o755
+        );
+        let sig = test_sign(&signing, &fifo_zip);
+
+        let err = stage_downloaded_artifact(&fifo_zip, &sig, &pub_b64).unwrap_err();
+        assert_eq!(err.kind(), &ArtifactErrorKind::InvalidArchive);
+        assert!(
+            err.to_string().contains("special entry"),
+            "error should identify a special-entry rejection, got: {err}"
+        );
+    }
+
     // ── entry() ───────────────────────────────────────────────────────────────
 
     #[test]
