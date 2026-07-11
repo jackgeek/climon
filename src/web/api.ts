@@ -404,6 +404,7 @@ export function buildSetupScript(params: SetupScriptParams): string {
     return "# Enable host remotes to generate the devbox config script.";
   }
   const lines = [
+    "climon config feature.remotes enabled",
     "climon config remote.enabled true",
     `climon config remote.tunnelId ${arg(params.tunnelId)}`
   ];
