@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { Socket } from "node:net";
 import {
   AuthErrorCode,
@@ -10,7 +11,7 @@ import {
   randomNonce,
   verifyDaemonProof,
 } from "./auth.js";
-import { FrameDecoder, FrameType, encodeFrame } from "./frame.js";
+import { FrameDecoder, FrameType, HEADER_SIZE, encodeFrame } from "./frame.js";
 
 /** Handshake failure — never leaks credentials or nonces in the message. */
 export class HandshakeError extends Error {
@@ -35,12 +36,16 @@ export function clientHandshake(
   socket: Socket,
   credential: Uint8Array,
   purpose: Purpose,
-): Promise<void> {
+  timeoutMs = 5000,
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const decoder = new FrameDecoder();
     decoder.setMaxPayload(PRE_AUTH_MAX_PAYLOAD);
 
     let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let rawIn = Buffer.alloc(0);
+    let handshakeConsumed = 0;
     let responseNonce: Uint8Array | null = null;
     let cproof: Uint8Array | null = null;
     let challengeNonce: Uint8Array | null = null;
@@ -58,11 +63,12 @@ export function clientHandshake(
       if (done) return;
       done = true;
       cleanup();
-      resolve();
+      resolve(rawIn.subarray(handshakeConsumed));
     };
 
     const onData = (chunk: Buffer): void => {
       if (done) return;
+      rawIn = rawIn.length === 0 ? Buffer.from(chunk) : Buffer.concat([rawIn, Buffer.from(chunk)]);
       const frames = decoder.push(chunk);
       if (decoder.errored) {
         fail(new HandshakeError("frame exceeds pre-auth payload cap"));
@@ -70,6 +76,7 @@ export function clientHandshake(
       }
       for (const frame of frames) {
         if (done) break;
+        handshakeConsumed += HEADER_SIZE + frame.payload.length;
         handleFrame(frame.type, frame.payload);
       }
     };
@@ -83,6 +90,10 @@ export function clientHandshake(
     };
 
     const cleanup = (): void => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
       socket.off("data", onData);
       socket.off("error", onError);
       socket.off("close", onClose);
@@ -91,6 +102,7 @@ export function clientHandshake(
     socket.on("data", onData);
     socket.on("error", onError);
     socket.on("close", onClose);
+    timer = setTimeout(() => fail(new HandshakeError("handshake timed out")), timeoutMs);
 
     const handleFrame = (type: FrameType, payload: Buffer): void => {
       if (step === "challenge") {

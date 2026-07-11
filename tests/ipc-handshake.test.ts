@@ -155,4 +155,21 @@ describe("clientHandshake", () => {
       close();
     }
   });
+
+  it("rejects when the daemon never sends a challenge", async () => {
+    const credential = new Uint8Array(32).fill(0x09);
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    try {
+      const address = server.address() as { port: number };
+      const socket = await makeClientSocket(address.port);
+      await expect(clientHandshake(socket, credential, Purpose.Session, 20)).rejects.toThrow("handshake timed out");
+      socket.destroy();
+    } finally {
+      server.close();
+    }
+  });
 });

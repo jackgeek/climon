@@ -61,7 +61,7 @@ export interface TitlePayload {
   name: string;
 }
 
-const HEADER_SIZE = 5; // 4-byte length + 1-byte type
+export const HEADER_SIZE = 5; // 4-byte length + 1-byte type
 
 export function encodeFrame(type: FrameType, payload: Uint8Array | string = new Uint8Array(0)): Buffer {
   const body = typeof payload === "string" ? Buffer.from(payload, "utf8") : Buffer.from(payload);

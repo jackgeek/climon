@@ -23,6 +23,7 @@ import {
   parseJsonPayload,
   type AttentionPayload,
   type ControlPayload,
+  type DecodedFrame,
   type ExitPayload,
   type PtySizePayload,
   type ResizePayload,
@@ -38,8 +39,8 @@ import { ensureSpawnSecret } from "../remote/spawn-secret.js";
 import { requestRemoteSpawn } from "./remote-spawn-client.js";
 import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
-import { ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
-import { connectSessionSocket } from "../session-socket.js";
+import { detectDevtunnel, ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
+import { connectAuthenticatedSession, probeAuthenticatedSession } from "../session-socket.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
@@ -855,29 +856,6 @@ async function runClimonSpawn(args: string[], cwd: string): Promise<SpawnOutcome
 }
 
 /**
- * Tries to open and immediately close a connection to a daemon's socket to
- * confirm it is still listening. Resolves false on timeout or error.
- */
-function probeSocket(socketPath: string, timeoutMs = 2000): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = connectSessionSocket(socketPath);
-    const timer = setTimeout(() => {
-      socket.destroy();
-      resolve(false);
-    }, timeoutMs);
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.end();
-      resolve(true);
-    });
-    socket.once("error", () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
-  });
-}
-
-/**
  * Decides whether a session should be marked disconnected on dashboard startup.
  * Local sessions require a live daemonPid AND a responsive socket. Remote
  * sockets are active ingest bridges: connecting to them is observable by the
@@ -885,7 +863,7 @@ function probeSocket(socketPath: string, timeoutMs = 2000): Promise<boolean> {
  */
 export async function shouldMarkDisconnected(
   session: SessionMeta,
-  probe: (socketPath: string) => Promise<boolean>
+  probe: (id: string) => Promise<boolean>
 ): Promise<boolean> {
   if (
     session.status !== "running" &&
@@ -899,14 +877,14 @@ export async function shouldMarkDisconnected(
     return false;
   }
   const pidAlive = session.daemonPid ? isProcessAlive(session.daemonPid) : false;
-  const socketOk = pidAlive ? await probe(session.socketPath) : false;
+  const socketOk = pidAlive ? await probe(session.id) : false;
   return !socketOk;
 }
 
 async function cleanupStaleSessions(): Promise<void> {
   const sessions = await listSessions();
   for (const session of sessions) {
-    if (await shouldMarkDisconnected(session, probeSocket)) {
+    if (await shouldMarkDisconnected(session, probeAuthenticatedSession)) {
       await patchSessionMeta(session.id, {
         status: "disconnected",
         priorityReason: "disconnected",
@@ -2145,13 +2123,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       return new Response("Not found", { status: 404 });
     },
     websocket: {
-      open(ws: ServerWebSocket<WsData>) {
-        const daemon: Socket = connectSessionSocket(ws.data.socketPath);
+      async open(ws: ServerWebSocket<WsData>) {
+        let session;
+        try {
+          session = await connectAuthenticatedSession(ws.data.sessionId);
+        } catch {
+          ws.close();
+          return;
+        }
+        const daemon = session.socket;
         const decoder = new FrameDecoder();
         (ws.data as WsData & { daemon?: Socket }).daemon = daemon;
 
-        daemon.on("data", (chunk: Buffer) => {
-          for (const frame of decoder.push(chunk)) {
+        const dispatchFrames = (frames: DecodedFrame[]): void => {
+          for (const frame of frames) {
             if (frame.type === FrameType.Output) {
               ws.sendBinary(frame.payload);
             } else if (frame.type === FrameType.Replay) {
@@ -2168,6 +2153,24 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               const ctrl = parseJsonPayload<ControlPayload>(frame.payload);
               ws.send(JSON.stringify({ type: "control", controllerId: ctrl.controllerId, cols: ctrl.cols, rows: ctrl.rows }));
             }
+          }
+        };
+
+        if (session.leftover.length > 0) {
+          dispatchFrames(decoder.push(session.leftover));
+          if (decoder.errored) {
+            ws.close();
+            return;
+          }
+        }
+        daemon.on("data", (chunk: Buffer) => {
+          if (decoder.errored) {
+            ws.close();
+            return;
+          }
+          dispatchFrames(decoder.push(chunk));
+          if (decoder.errored) {
+            ws.close();
           }
         });
         daemon.on("error", () => ws.close());
