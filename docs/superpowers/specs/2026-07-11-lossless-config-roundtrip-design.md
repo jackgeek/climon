@@ -69,7 +69,8 @@ When `saveConfig()` receives an object registered by `loadConfig()`, it will:
    caller-facing snapshot.
 3. Apply only the caller's delta to that latest object.
 4. Render and write the merged object.
-5. Advance the caller's golden snapshot to a deep clone of the merged result.
+5. Advance the caller's golden snapshot to a deep clone of its current
+   in-memory state.
 
 The deep delta supports additions, replacements, nested changes, and explicit
 deletions. Arrays and primitive values are replaced as units. Object changes
@@ -77,6 +78,11 @@ recurse so unrelated nested keys remain untouched.
 
 If two stale callers change different settings and save sequentially, both
 changes survive. If they change the same setting, the later save wins.
+
+The caller object is not mutated to include unrelated values discovered during
+the merge. Advancing its golden snapshot from its own current state ensures a
+later save does not mistake those absent concurrent values for caller-requested
+deletions.
 
 Objects not produced by `loadConfig()` have no golden snapshot and retain the
 existing full-save behavior. This preserves initialization and migration
@@ -97,7 +103,8 @@ locking mechanism.
 5. Register a golden snapshot and return the complete object to the caller.
 6. On save, calculate the golden-to-current delta.
 7. Reload the latest complete config and apply only that delta.
-8. Serialize the merged object and advance the golden snapshot.
+8. Serialize the merged object and advance the golden snapshot from the
+   caller's current state.
 
 For server startup, `install.id` therefore survives the host-pinning mutation.
 `ensureInstallId()` reads the same ID on every start, and
