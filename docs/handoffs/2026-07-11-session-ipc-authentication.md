@@ -151,7 +151,7 @@ Line ranges below are verified against audited commit
   resize.
 - `rust/climon-session/tests/session_integration.rs:324-403` sends
   unauthenticated attention acknowledgement.
-- `rust/climon-session/tests/session_integration.rs:405-450` continues the
+- `rust/climon-session/tests/session_integration.rs:405-498` continues the
   resize/attention lifecycle coverage that must be migrated to authenticated
   helpers.
 
@@ -267,17 +267,19 @@ Protocol version 1:
 1. Server accepts the transport into a **pre-auth** state. It does not create a
    `Client`.
 2. Server generates a fresh 32-byte nonce and sends this camel-case JSON
-   `AuthChallenge`: `{"version":1,"sessionId":"<id>","serverNonce":"<64 hex>"}`.
+   `AuthChallenge`:
+   `{"version":1,"sessionId":"<id>","serverNonce":"<64 lowercase hex>"}`.
 3. Client verifies the expected version and session ID, generates a fresh
    32-byte client nonce, and returns this camel-case JSON `AuthResponse`:
-   `{"version":1,"clientNonce":"<64 hex>","mac":"<64 hex>"}`.
+   `{"version":1,"clientNonce":"<64 lowercase hex>","mac":"<64 lowercase hex>"}`.
 4. Server validates shape and lengths, computes the expected MAC, and verifies it
    using the HMAC library's constant-time verification API.
 5. Server sends `AuthOk` as `{"version":1}`, then and only then registers the
    client and permits operational frames. The client sends no operational frame
    until `AuthOk`.
 
-Define the HMAC transcript byte-for-byte as:
+Use HMAC-SHA-256 keyed by the raw 32-byte per-session credential. Define its
+transcript byte-for-byte as:
 
 ```text
 b"climon-session-ipc-v1\0"
@@ -287,6 +289,12 @@ b"climon-session-ipc-v1\0"
 || 32 raw server-nonce bytes
 || 32 raw client-nonce bytes
 ```
+
+Send the full 32-byte HMAC-SHA-256 tag without truncation. Encode each nonce and
+the tag as exactly 64 lowercase ASCII hex characters on the wire; reject
+uppercase, non-hex, odd-length, shortened, or extended values. Rust and Bun must
+decode those fields to the same raw bytes and produce byte-for-byte identical
+transcript and tag bytes for shared fixed test vectors.
 
 The server nonce prevents replaying a captured response on a later connection;
 credential rotation prevents reuse across daemon incarnations. Domain separation
@@ -430,8 +438,10 @@ live IPC credential.
 
 Write each failing test before its production change.
 
-1. In `rust/climon-proto/src/frame.rs`, add parity tests for tags 13-16,
-   round-trips, malformed payloads, unknown versions, and oversized frames.
+1. In `rust/climon-proto/src/frame.rs`, add Rust/Bun parity tests for tags 13-16,
+   round-trips, malformed payloads, unknown versions, oversized frames, and fixed
+   HMAC-SHA-256 vectors proving byte-for-byte transcript, full 32-byte tag, and
+   lowercase-hex wire-encoding parity.
 2. In `rust/climon-store/src/meta.rs` and a focused new authentication-storage
    module/test, prove 32-byte CSPRNG output, atomic rotation, exact parsing,
    owner-only Unix modes, metadata mode repair, and sidecar cleanup. Add Windows
@@ -610,8 +620,9 @@ credential in a separate owner-only sidecar and require proof of possession.
 - **Upgrade downgrade:** compatibility logic must not interpret missing challenge
   or missing version as legacy permission.
 - **Resource exhaustion:** pre-auth peers need strict size/time/concurrency caps.
-- **Wire parity:** Rust daemon, Rust clients, and Bun server must agree exactly on
-  tags, payloads, HMAC transcript, and version.
+- **Wire parity:** Rust daemon, Rust clients, and Bun server must agree
+  byte-for-byte on tags, payload encodings, version, HMAC-SHA-256 transcript, and
+  the untruncated 32-byte tag/lowercase-hex representation.
 - **Socket-path length:** `$CLIMON_HOME/sock/<id>.sock` can exceed Unix limits in
   deep test/worktree paths; error handling and test scratch locations matter.
 
