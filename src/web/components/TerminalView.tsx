@@ -3,6 +3,7 @@ import { makeStyles } from "@fluentui/react-components";
 import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import type { SessionMeta } from "../../types.js";
 import type { TerminalResizeMode } from "../../ipc/frame.js";
 import {
@@ -266,6 +267,87 @@ export function loadTerminalAddons(
 ): void {
   term.loadAddon(fit);
   term.loadAddon(webLinks);
+}
+
+export function configureTerminalUnicode(
+  term: Pick<Terminal, "loadAddon" | "unicode">,
+  unicode11: ITerminalAddon
+): void {
+  term.loadAddon(unicode11);
+  if (installEmojiUnicodeProvider(term)) {
+    term.unicode.activeVersion = EMOJI_UNICODE_VERSION;
+  } else {
+    // Fall back to the plain Unicode 11 widths if xterm's internals are not
+    // shaped as expected — the worst case is the pre-existing partial fix.
+    term.unicode.activeVersion = "11";
+  }
+}
+
+const EMOJI_UNICODE_VERSION = "climon-emoji";
+const EMOJI_PRESENTATION_SELECTOR = 0xfe0f;
+const SKIN_TONE_MIN = 0x1f3fb;
+const SKIN_TONE_MAX = 0x1f3ff;
+
+interface UnicodeVersionProvider {
+  readonly version: string;
+  wcwidth(codepoint: number): 0 | 1 | 2;
+  charProperties(codepoint: number, preceding: number): number;
+}
+
+type PropertyPacker = (state: number, width: number, shouldJoin: boolean) => number;
+type WidthExtractor = (value: number) => number;
+
+/**
+ * Wraps xterm's Unicode 11 provider to width emoji grapheme clusters that the
+ * per-codepoint wcwidth table gets wrong: an emoji-presentation selector (VS16)
+ * promotes a narrow base to two cells (also covering keycaps via the trailing
+ * combining mark), and a skin-tone modifier joins the preceding emoji as a single
+ * two-cell cluster. Everything else delegates to the base provider.
+ */
+export function createEmojiUnicodeProvider(
+  base: Pick<UnicodeVersionProvider, "wcwidth" | "charProperties">,
+  createPropertyValue: PropertyPacker,
+  extractWidth: WidthExtractor
+): UnicodeVersionProvider {
+  return {
+    version: EMOJI_UNICODE_VERSION,
+    wcwidth: (codepoint) => base.wcwidth(codepoint),
+    charProperties(codepoint, preceding) {
+      if (
+        codepoint === EMOJI_PRESENTATION_SELECTOR &&
+        preceding !== 0 &&
+        extractWidth(preceding) < 2
+      ) {
+        return createPropertyValue(0, 2, true);
+      }
+      if (codepoint >= SKIN_TONE_MIN && codepoint <= SKIN_TONE_MAX && preceding !== 0) {
+        return createPropertyValue(0, 2, true);
+      }
+      return base.charProperties(codepoint, preceding);
+    }
+  };
+}
+
+interface UnicodeServiceInternals {
+  _providers?: Record<string, UnicodeVersionProvider | undefined>;
+  register(provider: UnicodeVersionProvider): void;
+  constructor: {
+    createPropertyValue?: PropertyPacker;
+    extractWidth?: WidthExtractor;
+  };
+}
+
+function installEmojiUnicodeProvider(term: Pick<Terminal, "unicode">): boolean {
+  const service = (term as { _core?: { unicodeService?: UnicodeServiceInternals } })._core
+    ?.unicodeService;
+  const base = service?._providers?.["11"];
+  const createPropertyValue = service?.constructor?.createPropertyValue;
+  const extractWidth = service?.constructor?.extractWidth;
+  if (!service || !base || typeof createPropertyValue !== "function" || typeof extractWidth !== "function") {
+    return false;
+  }
+  service.register(createEmojiUnicodeProvider(base, createPropertyValue, extractWidth));
+  return true;
 }
 
 export interface TerminalHandle {
@@ -722,6 +804,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const fit = new FitAddon();
     const webLinks = new WebLinksAddon();
     loadTerminalAddons(term, fit, webLinks);
+    configureTerminalUnicode(term, new Unicode11Addon());
     term.open(container);
     termRef.current = term;
     fitRef.current = fit;
