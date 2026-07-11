@@ -1351,6 +1351,20 @@ fn socket_client_controls_input(
     )
 }
 
+/// The intermediate PTY height for a restore jiggle: one row away from `rows`,
+/// so the resize is always a real (non-deduped) change that forces the wrapped
+/// command to repaint. Steps down normally, but up when `rows <= 1` because
+/// `PtyResizer::resize` clamps to `>= 1` and the de-dupe would otherwise swallow
+/// a no-op resize. We jiggle rows (not cols) so wrapped lines are not reflowed —
+/// only a single line is dropped/added.
+fn jiggle_rows(rows: u16) -> u16 {
+    if rows > 1 {
+        rows - 1
+    } else {
+        rows + 1
+    }
+}
+
 fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(25));
@@ -1842,7 +1856,7 @@ mod writer_thread_tests {
 
 #[cfg(test)]
 mod restore_decision_tests {
-    use super::{local_restore_decision, LocalRestoreDecision};
+    use super::{jiggle_rows, local_restore_decision, LocalRestoreDecision};
     use std::time::{Duration, Instant};
 
     #[test]
