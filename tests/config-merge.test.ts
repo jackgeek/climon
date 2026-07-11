@@ -7,6 +7,10 @@ import {
 } from "../src/config-merge.js";
 
 describe("config merge helpers", () => {
+  function parseConfig<T>(json: string): T {
+    return JSON.parse(json) as T;
+  }
+
   test("diffConfig returns undefined when data is unchanged", () => {
     const value = {
       server: { host: "127.0.0.1", port: 3131 },
@@ -61,6 +65,62 @@ describe("config merge helpers", () => {
     });
   });
 
+  test("diffConfig preserves added own __proto__ properties", () => {
+    const golden = parseConfig<{
+      server: { host: string };
+    }>('{"server":{"host":"127.0.0.1"}}');
+    const current = parseConfig<{
+      server: { host: string; __proto__: { marker: string } };
+    }>('{"server":{"host":"127.0.0.1","__proto__":{"marker":"added"}}}');
+
+    const delta = diffConfig(golden, current);
+    expect(delta?.kind).toBe("object");
+    const serverDelta = (delta as Extract<ConfigDelta, { kind: "object" }>).entries.server as Extract<
+      ConfigDelta,
+      { kind: "object" }
+    >;
+    expect(Object.prototype.hasOwnProperty.call(serverDelta.entries, "__proto__")).toBe(true);
+    expect(serverDelta.entries["__proto__"]).toEqual({
+      kind: "replace",
+      value: { marker: "added" }
+    });
+  });
+
+  test("applyConfigDelta preserves added own __proto__ properties", () => {
+    const delta = parseConfig<ConfigDelta>(
+      '{"kind":"object","entries":{"server":{"kind":"object","entries":{"__proto__":{"kind":"replace","value":{"marker":"added"}}}}}}'
+    );
+    const latest = parseConfig<{
+      server: { host: string };
+    }>('{"server":{"host":"127.0.0.1"}}');
+
+    const next = applyConfigDelta(latest, delta);
+    expect(Object.prototype.hasOwnProperty.call(next.server, "__proto__")).toBe(true);
+    expect(next.server["__proto__"]).toEqual({ marker: "added" });
+    expect(Object.getPrototypeOf(next.server)).toBe(Object.prototype);
+  });
+
+  test("diffConfig preserves replaced own __proto__ properties", () => {
+    const golden = parseConfig<{
+      server: { host: string; __proto__: string };
+    }>('{"server":{"host":"127.0.0.1","__proto__":"old"}}');
+    const current = parseConfig<{
+      server: { host: string; __proto__: string };
+    }>('{"server":{"host":"127.0.0.1","__proto__":"new"}}');
+
+    const delta = diffConfig(golden, current);
+    expect(delta?.kind).toBe("object");
+    const serverDelta = (delta as Extract<ConfigDelta, { kind: "object" }>).entries.server as Extract<
+      ConfigDelta,
+      { kind: "object" }
+    >;
+    expect(Object.prototype.hasOwnProperty.call(serverDelta.entries, "__proto__")).toBe(true);
+    expect(serverDelta.entries["__proto__"]).toEqual({
+      kind: "replace",
+      value: "new"
+    });
+  });
+
   test("explicit deletion removes only the requested key and preserves unrelated latest keys", () => {
     const golden = {
       server: { host: "127.0.0.1", port: 3131, lan: true },
@@ -92,6 +152,39 @@ describe("config merge helpers", () => {
       server: { host: "127.0.0.1", port: 3131, token: "keep" },
       feature: { remote: "enabled", extra: "stay" }
     });
+  });
+
+  test("applyConfigDelta preserves replaced own __proto__ properties", () => {
+    const delta = parseConfig<ConfigDelta>(
+      '{"kind":"object","entries":{"server":{"kind":"object","entries":{"__proto__":{"kind":"replace","value":{"marker":"new"}}}}}}'
+    );
+    const latest = parseConfig<{
+      server: { host: string; token: string };
+    }>('{"server":{"host":"127.0.0.1","token":"keep"}}');
+
+    const next = applyConfigDelta(latest, delta);
+    expect(Object.prototype.hasOwnProperty.call(next.server, "__proto__")).toBe(true);
+    expect(next.server["__proto__"]).toEqual({ marker: "new" });
+    expect(next.server.token).toBe("keep");
+    expect(Object.getPrototypeOf(next.server)).toBe(Object.prototype);
+  });
+
+  test("diffConfig preserves deletion of own __proto__ properties", () => {
+    const golden = parseConfig<{
+      server: { host: string; __proto__: { marker: string } };
+    }>('{"server":{"host":"127.0.0.1","__proto__":{"marker":"remove"}}}');
+    const current = parseConfig<{
+      server: { host: string };
+    }>('{"server":{"host":"127.0.0.1"}}');
+
+    const delta = diffConfig(golden, current);
+    expect(delta?.kind).toBe("object");
+    const serverDelta = (delta as Extract<ConfigDelta, { kind: "object" }>).entries.server as Extract<
+      ConfigDelta,
+      { kind: "object" }
+    >;
+    expect(Object.prototype.hasOwnProperty.call(serverDelta.entries, "__proto__")).toBe(true);
+    expect(serverDelta.entries["__proto__"]).toEqual({ kind: "delete" });
   });
 
   test("arrays replace as a unit", () => {

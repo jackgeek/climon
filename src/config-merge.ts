@@ -14,7 +14,7 @@ export function cloneConfigValue<T>(value: T): T {
 }
 
 function diffObjectConfig(golden: Record<string, unknown>, current: Record<string, unknown>): ConfigDelta | undefined {
-  const entries: Record<string, ConfigDelta> = {};
+  const entries = Object.create(null) as Record<string, ConfigDelta>;
   const keys = new Set([...Object.keys(golden), ...Object.keys(current)]);
 
   for (const key of keys) {
@@ -38,6 +38,15 @@ function diffObjectConfig(golden: Record<string, unknown>, current: Record<strin
   return Object.keys(entries).length > 0 ? { kind: "object", entries } : undefined;
 }
 
+function setOwnDataProperty(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true
+  });
+}
+
 export function diffConfig(golden: unknown, current: unknown): ConfigDelta | undefined {
   if (isDeepStrictEqual(golden, current)) return undefined;
   if (isObjectRecord(golden) && isObjectRecord(current)) {
@@ -59,13 +68,13 @@ function applyObjectDelta(
     }
 
     if (childDelta.kind === "replace") {
-      next[key] = cloneConfigValue(childDelta.value);
+      setOwnDataProperty(next, key, cloneConfigValue(childDelta.value));
       continue;
     }
 
     const existing = next[key];
     const base = isObjectRecord(existing) ? existing : {};
-    next[key] = applyObjectDelta(base, childDelta);
+    setOwnDataProperty(next, key, applyObjectDelta(base, childDelta));
   }
 
   return next;
