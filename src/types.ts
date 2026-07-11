@@ -103,6 +103,8 @@ export interface RemoteConfig {
   clientId?: string;
   /** Interval in seconds between mux keepalive pings (default 60, 0 to disable). */
   keepAlive?: number;
+  /** Seconds to wait for the devtunnel launch probe before giving up (default 5, minimum 1). */
+  devtunnelProbeTimeout?: number;
   /** CLIMON_HOME of the peer OS (e.g. Windows path from WSL) for same-machine discovery. */
   peerHome?: string;
   /** Optional host override used when connecting to a discovered peer dashboard. */

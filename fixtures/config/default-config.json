@@ -22,6 +22,7 @@
     "discover": true,
     "ingestPortRetryAttempts": 100,
     "keepAlive": 60,
+    "devtunnelProbeTimeout": 5,
     "autoLink": true
   },
   "session": {

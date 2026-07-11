@@ -344,16 +344,33 @@ fn config_u16(env: &ConfigEnv, cwd: &Path, key: &str) -> Option<u16> {
     }
 }
 
-/// Total wall-clock budget for the launch-time Dev Tunnels probe
-/// (`detect()` + `show_user()`). Long enough for a healthy network round-trip,
-/// short enough that a stalled `devtunnel` never feels like a hang. On elapse
-/// the probe reports `timed_out` and the launcher spawns the uplink best-effort.
-const DEVTUNNEL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Default wall-clock budget (seconds) for the launch-time Dev Tunnels probe
+/// (`detect()` + `show_user()`) when `remote.devtunnelProbeTimeout` is unset.
+/// Long enough for a healthy network round-trip, short enough that a stalled
+/// `devtunnel` never feels like a hang. On elapse the probe reports `timed_out`
+/// and the launcher spawns the uplink best-effort.
+const DEFAULT_DEVTUNNEL_PROBE_TIMEOUT_SECONDS: u64 = 5;
+
+/// Resolves the Dev Tunnels probe timeout from `remote.devtunnelProbeTimeout`
+/// (whole seconds, minimum 1), falling back to
+/// [`DEFAULT_DEVTUNNEL_PROBE_TIMEOUT_SECONDS`] when unset or invalid. Raise it
+/// on slow networks where a healthy `devtunnel` round-trip exceeds the default.
+fn devtunnel_probe_timeout(env: &ConfigEnv, cwd: &Path) -> Duration {
+    let seconds = match resolve_config_setting("remote.devtunnelProbeTimeout", env, cwd) {
+        Some(serde_json::Value::Number(n)) => n
+            .as_f64()
+            .filter(|f| f.fract() == 0.0 && *f >= 1.0)
+            .map(|f| f as u64)
+            .unwrap_or(DEFAULT_DEVTUNNEL_PROBE_TIMEOUT_SECONDS),
+        _ => DEFAULT_DEVTUNNEL_PROBE_TIMEOUT_SECONDS,
+    };
+    Duration::from_secs(seconds)
+}
 
 /// Best-effort synchronous Dev Tunnels probe over the shared gateway. Reports
 /// CLI availability and sign-in state so launch planning can distinguish
 /// missing-CLI from logged-out. Mirrors `detectDevtunnel` + `showUser`.
-fn probe_devtunnel_sync() -> DevtunnelProbe {
+fn probe_devtunnel_sync(timeout: Duration) -> DevtunnelProbe {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -367,7 +384,7 @@ fn probe_devtunnel_sync() -> DevtunnelProbe {
             }
         }
     };
-    runtime.block_on(async {
+    let result = runtime.block_on(async {
         let probe = async {
             let gateway = DevtunnelGateway::new();
             let detected = gateway.detect().await;
@@ -385,7 +402,7 @@ fn probe_devtunnel_sync() -> DevtunnelProbe {
                 timed_out: false,
             }
         };
-        match tokio::time::timeout(DEVTUNNEL_PROBE_TIMEOUT, probe).await {
+        match tokio::time::timeout(timeout, probe).await {
             Ok(result) => result,
             Err(_) => DevtunnelProbe {
                 available: false,
@@ -393,7 +410,17 @@ fn probe_devtunnel_sync() -> DevtunnelProbe {
                 timed_out: true,
             },
         }
-    })
+    });
+    // Tear the runtime down WITHOUT blocking on any still-running `devtunnel`
+    // child. When the timeout fires the probe future — and the `tokio::process`
+    // child it owns — is dropped; the gateway spawns its probe commands with
+    // `kill_on_drop`, so the child is terminated, and `shutdown_background`
+    // guarantees teardown never waits on it. Otherwise a stalled `devtunnel`
+    // (e.g. contending for its global lock on Windows) keeps the launcher
+    // blocked long past `timeout`, which manifests as `climon shell` hanging
+    // right after startup with no prompt.
+    runtime.shutdown_background();
+    result
 }
 
 /// Auto-links WSL<->Windows dashboard discovery when appropriate. Mirrors
@@ -451,7 +478,7 @@ fn ensure_uplink() {
     if !should_spawn {
         let needs_tunnel = enabled && host.is_none() && tunnel_id.is_some();
         let probe = if needs_tunnel {
-            probe_devtunnel_sync()
+            probe_devtunnel_sync(devtunnel_probe_timeout(&env, &cwd))
         } else {
             DevtunnelProbe {
                 available: false,

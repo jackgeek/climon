@@ -116,6 +116,13 @@
     connection. Prevents dev tunnel idle timeouts from dropping the connection. Set to 0
     to disable.
 
+  remote.devtunnelProbeTimeout
+    Type: number; Default: 5; Scope: client
+    Seconds the launcher waits for the Dev Tunnels readiness probe (devtunnel --version
+    + user show) before giving up and spawning the uplink best-effort. A stalled
+    devtunnel is terminated on timeout so it never hangs launch. Raise it on slow
+    networks; minimum 1.
+
   remote.peerHome
     Type: string; Default: unset; Scope: client, server
     Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g.
