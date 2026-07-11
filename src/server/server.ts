@@ -2131,9 +2131,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           ws.close();
           return;
         }
+        const wsData = ws.data as WsData & { daemon?: Socket; closed?: boolean };
+        // The browser may disconnect during the auth handshake above; the `close`
+        // handler ran before `daemon` was set, so destroy the now-orphaned
+        // authenticated socket instead of bridging it.
+        if (wsData.closed) {
+          session.socket.destroy();
+          return;
+        }
         const daemon = session.socket;
         const decoder = new FrameDecoder();
-        (ws.data as WsData & { daemon?: Socket }).daemon = daemon;
+        wsData.daemon = daemon;
 
         const dispatchFrames = (frames: DecodedFrame[]): void => {
           for (const frame of frames) {
@@ -2217,8 +2225,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
       },
       close(ws: ServerWebSocket<WsData>) {
-        const daemon = (ws.data as WsData & { daemon?: Socket }).daemon;
-        daemon?.destroy();
+        const wsData = ws.data as WsData & { daemon?: Socket; closed?: boolean };
+        wsData.closed = true;
+        wsData.daemon?.destroy();
       }
     }
     });

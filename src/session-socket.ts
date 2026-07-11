@@ -47,13 +47,20 @@ export function connectSessionSocket(ref: SessionSocketRef): Socket {
   return "path" in parsed ? connect(parsed.path) : connect(parsed.port, parsed.host);
 }
 
-function waitForConnect(socket: Socket): Promise<void> {
+function waitForConnect(socket: Socket, timeoutMs: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off("connect", onConnect);
+      socket.off("error", onError);
+      reject(new Error("connect timed out"));
+    }, timeoutMs);
     const onConnect = (): void => {
+      clearTimeout(timer);
       socket.off("error", onError);
       resolve();
     };
     const onError = (err: Error): void => {
+      clearTimeout(timer);
       socket.off("connect", onConnect);
       reject(err);
     };
@@ -71,7 +78,7 @@ export interface AuthenticatedSession {
 
 /** Reads the session credential, connects, and completes the Session handshake.
  * Rejects with an actionable error if the sidecar is missing (legacy daemon). */
-export async function connectAuthenticatedSession(id: string): Promise<AuthenticatedSession> {
+export async function connectAuthenticatedSession(id: string, timeoutMs = 5000): Promise<AuthenticatedSession> {
   const record = await readIpcAuthRecord(id);
   if (!record) {
     throw new Error(
@@ -81,8 +88,8 @@ export async function connectAuthenticatedSession(id: string): Promise<Authentic
   const credential = credentialBytes(record);
   const socket = connectSessionSocket(record.endpoint);
   try {
-    await waitForConnect(socket);
-    const leftover = await clientHandshake(socket, credential, Purpose.Session);
+    await waitForConnect(socket, timeoutMs);
+    const leftover = await clientHandshake(socket, credential, Purpose.Session, timeoutMs);
     return { socket, leftover };
   } catch (err) {
     socket.destroy();
@@ -102,7 +109,7 @@ export async function probeAuthenticatedSession(id: string, timeoutMs = 2000): P
   const credential = credentialBytes(record);
   const socket = connectSessionSocket(record.endpoint);
   try {
-    await waitForConnect(socket);
+    await waitForConnect(socket, timeoutMs);
     await clientHandshake(socket, credential, Purpose.Probe, timeoutMs);
     return true;
   } catch {
