@@ -39,6 +39,7 @@ import { zipSync, unzipSync, type ZipOptions } from "fflate";
 
 const projectRoot = dirname(dirname(import.meta.path));
 const rustDir = resolve(projectRoot, "rust");
+const cargoTargetDir = resolve(rustDir, process.env.CARGO_TARGET_DIR ?? "target");
 const distDir = resolve(projectRoot, "dist");
 const stageRoot = resolve(distDir, ".stage");
 const rustClientsStageDir = resolve(distDir, ".rust-clients");
@@ -233,7 +234,7 @@ async function buildHostRustClient(platform: string): Promise<Uint8Array> {
     console.log(`→ Building standalone Rust client (cargo, ${platform}, legacy layout)...`);
     await $`cargo build --release -p climon-cli ${testEndpointArgs}`.cwd(rustDir);
     const builtName = isWindows ? "climon.exe" : "climon";
-    const built = resolve(rustDir, "target", "release", builtName);
+    const built = resolve(cargoTargetDir, "release", builtName);
     if (!existsSync(built)) {
       throw new Error(`Expected cargo to produce ${built} but it was not found`);
     }
@@ -242,14 +243,14 @@ async function buildHostRustClient(platform: string): Promise<Uint8Array> {
   console.log(`→ Building Rust client (cargo, ${platform})...`);
   if (isWindows) {
     await $`cargo build --release -p climon-dll ${testEndpointArgs}`.cwd(rustDir);
-    const built = resolve(rustDir, "target", "release", "climon.dll");
+    const built = resolve(cargoTargetDir, "release", "climon.dll");
     if (!existsSync(built)) {
       throw new Error(`Expected cargo to produce ${built} but it was not found`);
     }
     return new Uint8Array(readFileSync(built));
   }
   await $`cargo build --release -p climon-cli ${testEndpointArgs}`.cwd(rustDir);
-  const built = resolve(rustDir, "target", "release", "climon");
+  const built = resolve(cargoTargetDir, "release", "climon");
   if (!existsSync(built)) {
     throw new Error(`Expected cargo to produce ${built} but it was not found`);
   }
@@ -272,10 +273,9 @@ async function buildHostInstaller(platform: string): Promise<Uint8Array> {
       // Signals climon-setup/build.rs that this is a real installer build, so a
       // missing stub is a hard error instead of an empty placeholder.
       CLIMON_BUILDING_INSTALLER: "1",
-      CLIMON_CLIENT_STUB: resolve(rustDir, "target", "release", "climon-stub.exe"),
+      CLIMON_CLIENT_STUB: resolve(cargoTargetDir, "release", "climon-stub.exe"),
       CLIMON_SERVER_STUB: resolve(
-        rustDir,
-        "target",
+        cargoTargetDir,
         "release",
         "climon-server-stub.exe"
       ),
@@ -284,7 +284,7 @@ async function buildHostInstaller(platform: string): Promise<Uint8Array> {
   await $`cargo build --release -p climon-setup ${testEndpointArgs}`
     .env({ ...process.env, ...stubEnv })
     .cwd(rustDir);
-  const built = resolve(rustDir, "target", "release", `install${exe}`);
+  const built = resolve(cargoTargetDir, "release", `install${exe}`);
   if (!existsSync(built)) {
     throw new Error(`Expected cargo to produce ${built} but it was not found`);
   }

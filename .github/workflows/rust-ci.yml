@@ -2,10 +2,32 @@ name: rust-ci
 
 on:
   pull_request:
-    paths: ["rust/**", "fixtures/proto/**", "fixtures/cli/**", ".github/workflows/rust-ci.yml"]
+    paths:
+      - "rust/**"
+      - "fixtures/proto/**"
+      - "fixtures/cli/**"
+      - "scripts/**"
+      - "src/**"
+      - "tests/upgrade-harness.test.ts"
+      - "tests/windows-installer-package.test.ts"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/rust-ci.yml"
   push:
     branches: [main]
-    paths: ["rust/**", "fixtures/proto/**", "fixtures/cli/**", ".github/workflows/rust-ci.yml"]
+    paths:
+      - "rust/**"
+      - "fixtures/proto/**"
+      - "fixtures/cli/**"
+      - "scripts/**"
+      - "src/**"
+      - "tests/upgrade-harness.test.ts"
+      - "tests/windows-installer-package.test.ts"
+      - "package.json"
+      - "bun.lock"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/rust-ci.yml"
 
 defaults:
   run:
@@ -18,18 +40,25 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Fail fast instead of burning up to 6h of runner time if a test deadlocks
-    # (e.g. the Windows ConPTY reader-join hang fixed in #38). A full run is
-    # ~1-5 min per OS, so 20 min leaves ample headroom for cold caches.
-    timeout-minutes: 20
+    # The migration harness performs multiple release builds, including the
+    # actual v3.1.3 source in a detached worktree, after the normal Rust suite.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+      - name: Install Bun dependencies
+        working-directory: .
+        run: bun install --frozen-lockfile
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -40,6 +69,12 @@ jobs:
           # macOS (which has no `setsid` binary) and the tests exercise the real
           # path instead of being skipped. Empty elsewhere (a no-op).
           CLIMON_DISABLE_SETSID: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+      - name: Upgrade harness unit tests
+        working-directory: .
+        run: bun test tests/upgrade-harness.test.ts tests/windows-installer-package.test.ts
+      - name: Cross-platform legacy update migration
+        working-directory: .
+        run: bun scripts/upgrade-test-harness.ts
 
   licenses:
     runs-on: ubuntu-latest
