@@ -293,8 +293,7 @@ hostname/OS, address, and session count). A leading `●` marks a healthy entry;
 `○` marks a **stale** one. Staleness is derived live by the reader — an entry is
 stale when the writing process is gone or there has been no recent
 ping/heartbeat — so a crashed uplink or ingest shows as stale rather than
-lingering as healthy. The same data drives the dashboard's **Remote hosts**
-menu, updated live over SSE.
+lingering as healthy.
 
 `--json` emits a stable shape (top-level `uplink`, `ingest`, and
 `remotesEnabled`) suitable for `jq`. When neither `feature.remotes` nor

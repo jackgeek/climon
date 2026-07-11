@@ -2,14 +2,12 @@
 
 Manual checks for the remote-visibility surface: the `ingest-status.json` /
 `uplink-status.json` status beacons, the `climon remotes` CLI (`--watch` /
-`--json`, healthy/stale `●`/`○`), the loopback-only `GET /api/remotes` + SSE
-`remotes` event, the dashboard **Remote hosts** menu + panel, and the ingest-side
-sanitization of attacker-controlled `hello.hostname`/`hello.os` (review findings
-C1/C2/C3).
+`--json`, healthy/stale `●`/`○`), and the ingest-side sanitization of
+attacker-controlled `hello.hostname`/`hello.os` (review findings C1/C2/C3).
 
 | Cell | Scenario | Notes |
 |---|---|---|
-| REM-CONNECT | Connect → appears | Friendly hostname/OS in CLI + dashboard. |
+| REM-CONNECT | Connect → appears | Friendly hostname/OS in CLI. |
 | REM-STALE | Disconnect → stale → clears | Reader-derived staleness. |
 | REM-WATCH | `--watch` live updates | Redraw on connect/disconnect. |
 | REM-JSON | `--json` parseable | `jq .` ok; keys `uplink`/`ingest`/`remotesEnabled`. |
@@ -19,7 +17,7 @@ C1/C2/C3).
 
 ---
 
-## MT-P16-01 — Connected remote appears in CLI and dashboard
+## MT-P16-01 — Connected remote appears in the CLI
 
 - **ID:** MT-P16-01
 - **Feature / phase:** Remotes visibility — connection listing
@@ -31,12 +29,10 @@ C1/C2/C3).
 
 **Steps:**
 1. On home, run `climon remotes`.
-2. Open the dashboard, hamburger menu → **Remote hosts**.
-3. Compare the devbox's hostname/OS/address/session-count in both.
+2. Note the devbox's hostname/OS/address/session-count.
 
 **Expected result:** The devbox is listed under the ingest section with a
-leading `●`, its friendly hostname and OS, address, and current session count;
-the dashboard **Remote hosts** panel shows the same host with the same details.
+leading `●`, its friendly hostname and OS, address, and current session count.
 
 - **Result:** _date / tester / platform / config-matrix cell / pass-fail / notes_
 
@@ -59,7 +55,7 @@ the dashboard **Remote hosts** panel shows the same host with the same details.
 **Expected result:** Shortly after disconnect the entry flips to `○` (STALE) —
 because the reader derives staleness from the missing ping/heartbeat, not a
 flag in the file — and then clears from the list once the ingest stops
-advertising it. The dashboard panel reflects the same transition over SSE.
+advertising it.
 
 - **Result:** _date / tester / platform / config-matrix cell / pass-fail / notes_
 
@@ -123,13 +119,11 @@ glyphs, so it is safe to consume programmatically.
 1. Confirm both flags are off (`climon config feature.remotes`,
    `climon config feature.wslBridge`).
 2. Run `climon remotes`.
-3. Open the dashboard hamburger menu and look for the **Remotes** /
-   **Remote hosts** items.
+3. Open the dashboard hamburger menu and look for the **Remotes** item.
 
 **Expected result:** The CLI prints a short hint that remotes are disabled (and
 how to enable them) instead of an empty list; the dashboard hamburger menu hides
-both the **Remotes** and **Remote hosts** items entirely (so the panel is not
-reachable) while `feature.remotes` is off.
+the **Remotes** item entirely while `feature.remotes` is off.
 
 - **Result:** _date / tester / platform / config-matrix cell / pass-fail / notes_
 
@@ -147,7 +141,7 @@ reachable) while `feature.remotes` is off.
 
 **Steps:**
 1. Connect the legacy/forced uplink that omits `hostname`/`os`.
-2. Run `climon remotes` and open the dashboard panel.
+2. Run `climon remotes`.
 
 **Expected result:** The connection still lists (not dropped): the hostname
 falls back to the bounded `clientId` and the OS renders as `unknown`. Session
@@ -178,7 +172,6 @@ count and stale/healthy state still work.
 **Expected result:** The hostname is truncated to **64 chars** with the `ESC`
 bytes stripped, so there is **no** clear-screen/color effect and the terminal
 title is unchanged; `os` renders as `unknown`. `ingest-status.json` contains no
-`ESC` (`\u001b`) bytes and the stored hostname is ≤64 chars. The dashboard panel
-renders the same sanitized text (auto-escaped) with no script/escape effect.
+`ESC` (`\u001b`) bytes and the stored hostname is ≤64 chars.
 
 - **Result:** _date / tester / platform / config-matrix cell / pass-fail / notes_

@@ -403,19 +403,17 @@ ingest / uplink supervisor
         │  (single writer)
         ▼
 ingest-status.json / uplink-status.json   ($CLIMON_HOME, 0600)
-        │                         │
-        ▼                         ▼
-  climon remotes          GET /api/remotes (loopback-only)
-  (--watch / --json)              │
-                                  ▼  SSE "remotes" event
-                          dashboard "Remote hosts" menu + panel
+        │
+        ▼
+  climon remotes
+  (--watch / --json)
 ```
 
 `hello.hostname`/`hello.os` are untrusted remote input: the ingest sanitizes
 them at the trust boundary (cap `hostname` to 64 chars + strip control/ESC
 bytes; allowlist `os` to `darwin`/`win32`/`linux`, else `unknown`) before they
-are stored, so every downstream sink (`climon remotes` TTY, `--json`, the
-dashboard) only ever formats already-safe strings.
+are stored, so every downstream sink (`climon remotes` TTY, `--json`) only ever
+formats already-safe strings.
 
 ## Same-machine WSL <-> Windows discovery (`src/remote/peer.ts`, `discovery.ts`, `link.ts`)
 

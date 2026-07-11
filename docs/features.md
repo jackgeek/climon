@@ -126,7 +126,6 @@ The React 19 + Fluent UI v9 single-page app (`src/web/`).
 | ID | Feature | What it does | Value add | Identified by |
 |---|---|---|---|---|
 | dash-15 | Spawn sessions from the dashboard | With `feature.sessionSpawning`, a per-session **[+]** (and a header **[+]** when empty) spawns a new session server-side, inheriting the parent's working directory — arbitrarily nestable. | Launch new sessions straight from the dashboard, in the right directory, without touching a terminal — including from your phone. | `feature.sessionSpawning`; `src/web/components/Sidebar.tsx`, `SessionItem.tsx`, `src/server/server.ts` (`POST /api/sessions`) |
-| dash-16 | Remote hosts panel | A "Remote hosts" menu/panel lists connected remote devboxes from the loopback `GET /api/remotes` + SSE feed. | See and manage which remote machines are feeding sessions into your dashboard. | (with `feature.remotes`); [manual-tests/phase16-remotes-visibility.md](manual-tests/phase16-remotes-visibility.md); `src/web/components/RemoteHostsPanel.tsx` |
 | dash-17 | OSC 9;4 terminal progress indicator | Captures the `OSC 9;4` taskbar-progress escape a program emits and renders it per-session: determinate bar, error/warning icons, or spinner; `dashboard.stateIconNoMotion` freezes the spinner. | See how far along a build or task is *from the session list itself*, without opening the terminal. | `dashboard.stateIconNoMotion`; [manual-tests/terminal-progress-indicator.md](manual-tests/terminal-progress-indicator.md); `rust/climon-session` (capture) + `src/web` (render); **dev branch** |
 | dash-18 | Mobile session-list attention toast | Shows the attention toast on the mobile session-list view (previously suppressed there). | On a phone, you're alerted about a session needing attention even while looking at the list. | [manual-tests/foreground-attention-toast.md](manual-tests/foreground-attention-toast.md); `src/web`; **dev branch** |
 | dash-19 | Searchable, light/dark-grouped theme picker | Expands the theme picker into a searchable list grouped by light/dark across the full theme set. | Find and preview the exact theme you want quickly, instead of scrolling a flat list. | `src/web`; **in-flight branch `all-dashboard-themes`** |
@@ -168,11 +167,10 @@ want to change:
    novel logic (the fuzzy snippet extractor) lives client-side in
    `rust/climon-session`. Happy to move it to *Client* if you'd rather group by
    where the code lives.
-3. **Cross-cutting remotes.** The remote uplink/ingest bridge spans client, server,
-   and dashboard. I listed the core capability once under *Client — in development*
-   and its dashboard surface (Remote hosts panel) and remote-spawn separately, to
-   avoid duplicating one big feature across four sections. Tell me if you'd prefer
-   it consolidated or split differently.
+3. **Cross-cutting remotes.** The remote uplink/ingest bridge spans client and
+   server. I listed the core capability once under *Client — in development*
+   and remote-spawn separately, to avoid duplicating one big feature across
+   sections. Tell me if you'd prefer it consolidated or split differently.
 4. **In-flight branch scope.** `all-dashboard-themes` and `terminal-scroll-wheel`
    have real commits but aren't merged. I included them as *in development*; the
    scroll-wheel manual-test file path isn't pinned yet (link points at the dir).

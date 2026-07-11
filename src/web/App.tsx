@@ -36,9 +36,7 @@ import {
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
   probeTunnelAuth,
-  fetchRemotes,
   postPushPresence,
-  type RemotesResponse,
   type DashboardTunnelStatus
 } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -47,7 +45,6 @@ import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { EditSessionDialog } from "./components/EditSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
-import { RemoteHostsPanel } from "./components/RemoteHostsPanel.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
 import { TerminalView, type TerminalHandle, stripTerminalDecorations } from "./components/TerminalView.js";
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
@@ -570,12 +567,6 @@ export function App() {
   const [features, setFeatures] = useState<FeatureFlagsMap>({});
   const [focusTopSessionShortcut, setFocusTopSessionShortcut] = useState<string>("Alt+J");
   const [remoteOpen, setRemoteOpen] = useState(false);
-  const [remoteHostsOpen, setRemoteHostsOpen] = useState(false);
-  const [remotes, setRemotes] = useState<RemotesResponse>({
-    connections: [],
-    ingestRunning: false,
-    remotesActive: false
-  });
   const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
   const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);
   const [tunnelLinkError, setTunnelLinkError] = useState("");
@@ -926,13 +917,6 @@ export function App() {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as { sessions?: SessionMeta[] };
         applySessionsRefresh(data.sessions ?? []);
-      } catch {
-        // Ignore malformed payloads; the next event will reconcile.
-      }
-    });
-    es.addEventListener("remotes", (ev) => {
-      try {
-        setRemotes(JSON.parse((ev as MessageEvent).data) as RemotesResponse);
       } catch {
         // Ignore malformed payloads; the next event will reconcile.
       }
@@ -1491,10 +1475,6 @@ export function App() {
           onEdit={(session) => setEditTarget(session)}
           onPauseToggle={handlePauseToggle}
           onManageRemote={() => setRemoteOpen(true)}
-          onShowRemoteHosts={() => {
-            setRemoteHostsOpen(true);
-            void fetchRemotes().then(setRemotes);
-          }}
           notificationsEnabled={notificationsEnabled}
           onToggleNotifications={handleToggleNotifications}
           canInstallPwa={installAvailable}
@@ -1638,12 +1618,6 @@ export function App() {
         onKill={() => void handleForceKill()}
       />
       <RemoteClientDialog open={remoteOpen} onOpenChange={setRemoteOpen} />
-      <RemoteHostsPanel
-        open={remoteHostsOpen}
-        onClose={() => setRemoteHostsOpen(false)}
-        connections={remotes.connections}
-        remotesActive={remotes.remotesActive}
-      />
       <TunnelLinkDialog
         open={tunnelLinkOpen}
         status={tunnelLinkStatus}

@@ -23,7 +23,6 @@ import {
   scrollActiveSessionIntoView,
   type StableSessionItemRefRegistry
 } from "../src/web/sidebar-utils.js";
-import { remoteHostsMenuLabel } from "../src/web/components/RemoteHostsPanel.js";
 
 type PassthroughProps = {
   children?: ReactNode;
@@ -123,7 +122,6 @@ describe("Sidebar menu", () => {
       onEdit: () => {},
       onPauseToggle: () => {},
       onManageRemote: () => {},
-      onShowRemoteHosts: () => {},
       notificationsEnabled: false,
       onToggleNotifications: () => {},
       canInstallPwa: false,
@@ -193,7 +191,7 @@ describe("Sidebar menu", () => {
     expect(registry.elements.s1).toBe(element);
   });
 
-  test("hides remotes and remote hosts menu items unless remotes are enabled", () => {
+  test("hides the remotes menu item unless remotes are enabled", () => {
     const commonProps = {
       sessions: [],
       activeId: null,
@@ -207,7 +205,6 @@ describe("Sidebar menu", () => {
       onEdit: () => {},
       onPauseToggle: () => {},
       onManageRemote: () => {},
-      onShowRemoteHosts: () => {},
       notificationsEnabled: false,
       onToggleNotifications: () => {},
       canInstallPwa: false,
@@ -231,8 +228,6 @@ describe("Sidebar menu", () => {
 
     expect(disabled).not.toContain(remotesMenuLabel);
     expect(enabled).toContain(remotesMenuLabel);
-    expect(disabled).not.toContain(remoteHostsMenuLabel);
-    expect(enabled).toContain(remoteHostsMenuLabel);
   });
 
   test("no longer shows the clamp terminal size item in the hamburger menu", () => {
@@ -249,7 +244,6 @@ describe("Sidebar menu", () => {
       onEdit: () => {},
       onPauseToggle: () => {},
       onManageRemote: () => {},
-      onShowRemoteHosts: () => {},
       notificationsEnabled: false,
       onToggleNotifications: () => {},
       canInstallPwa: false,
