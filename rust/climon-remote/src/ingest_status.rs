@@ -9,6 +9,7 @@ use climon_config::config::{get_climon_home, Env as ConfigEnv};
 use climon_store::atomic::atomic_write;
 use serde::{Deserialize, Serialize};
 
+use crate::devtunnel::DevtunnelHealth;
 use crate::process::is_process_alive;
 
 pub const INGEST_STATUS_BASENAME: &str = "ingest-status.json";
@@ -38,6 +39,10 @@ pub struct IngestStatus {
     pub updated_at: u64,
     #[serde(default)]
     pub connections: Vec<IngestConnectionStatus>,
+    // Normalized dev-tunnel host health. `#[serde(default)]` keeps existing status
+    // JSON (written before this field) parsing as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devtunnel: Option<DevtunnelHealth>,
 }
 
 pub fn get_ingest_status_path(config_env: &ConfigEnv) -> std::path::PathBuf {
@@ -99,6 +104,52 @@ pub fn is_connection_stale(conn: &IngestConnectionStatus, now_ms: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::devtunnel::{
+        DevtunnelErrorCode, DevtunnelFailure, DevtunnelHealth, DevtunnelOperation,
+        DevtunnelRetryClass, DevtunnelRetryState, DevtunnelState,
+    };
+
+    fn quota_health() -> DevtunnelHealth {
+        DevtunnelHealth::from_failure(
+            DevtunnelState::Paused,
+            DevtunnelFailure {
+                code: DevtunnelErrorCode::TunnelQuotaExhausted,
+                operation: DevtunnelOperation::HostTunnel,
+                summary: "You have reached your dev tunnel limit.".into(),
+                remediation: "Delete an unused tunnel with `devtunnel delete`.".into(),
+                technical_detail: "raw stderr: quota exhausted (429)".into(),
+                occurred_at: "2026-07-11T13:00:00.000Z".into(),
+                retry_class: DevtunnelRetryClass::Actionable,
+                retryable: false,
+                retry_after_ms: None,
+                status: Some(429),
+            },
+            Some(DevtunnelRetryState {
+                attempt: 0,
+                next_retry_at: None,
+                paused: true,
+            }),
+            "2026-07-11T13:00:00.000Z".into(),
+        )
+    }
+
+    #[test]
+    fn roundtrips_with_devtunnel_health_camel_case() {
+        let mut status = sample();
+        status.devtunnel = Some(quota_health());
+        let json = serialize_ingest_status(&status);
+        assert!(json.contains("\"devtunnel\""));
+        assert!(json.contains("\"technicalDetail\""));
+        assert!(json.contains("\"occurredAt\""));
+        assert_eq!(parse_ingest_status(&json), Some(status));
+    }
+
+    #[test]
+    fn parses_old_status_without_devtunnel_field() {
+        let raw = "{\"pid\":42,\"updatedAt\":123,\"connections\":[]}";
+        let parsed = parse_ingest_status(raw).expect("old status must parse");
+        assert_eq!(parsed.devtunnel, None);
+    }
 
     fn env_for(home: &Path) -> ConfigEnv {
         ConfigEnv::new(Some(home.to_str().unwrap()), home.to_path_buf())
@@ -130,6 +181,7 @@ mod tests {
                 session_count: 3,
                 last_ping_at: Some(999_000),
             }],
+            devtunnel: None,
         }
     }
 

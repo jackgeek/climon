@@ -5,27 +5,16 @@
 //! `#[ignore]`d.
 
 use std::collections::HashMap;
-use std::future::Future;
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
 
 use climon_config::config::{get_remote_host_path, Env as ConfigEnv};
 
+use crate::devtunnel::gateway::{CreateTunnelArgs, DevtunnelGateway, DevtunnelGatewayDeps};
+use crate::devtunnel::{
+    classify_failure, DevtunnelFailure, DevtunnelFailureInput, DevtunnelOperation,
+};
 use crate::remote_host::{read_remote_host_state, write_remote_host_state, RemoteHostState};
 
-/// Result of running an external command. Mirrors `RunResult`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunResult {
-    pub status: i32,
-    pub stdout: String,
-    pub stderr: String,
-}
-
-/// An injectable async command runner. Mirrors `Runner`.
-pub type Runner = Arc<
-    dyn Fn(String, Vec<String>) -> Pin<Box<dyn Future<Output = RunResult> + Send>> + Send + Sync,
->;
+pub use crate::devtunnel::gateway::{devtunnel_env, RunResult, Runner};
 
 /// devtunnel service tunnel-id rules.
 fn is_tunnel_id(candidate: &str) -> bool {
@@ -41,35 +30,6 @@ fn is_tunnel_id(candidate: &str) -> bool {
         return false;
     }
     bytes[1..len - 1].iter().all(|&b| is_mid(b))
-}
-
-/// Returns an env map with `LD_LIBRARY_PATH` set to the user-local ICU library
-/// path when it is missing and the path exists. Mirrors `devtunnelEnv`.
-pub fn devtunnel_env(env: &HashMap<String, String>) -> HashMap<String, String> {
-    if env.contains_key("LD_LIBRARY_PATH") {
-        return env.clone();
-    }
-    let home = env
-        .get("HOME")
-        .cloned()
-        .or_else(|| std::env::var("HOME").ok())
-        .unwrap_or_default();
-    let icu_lib = Path::new(&home)
-        .join(".local")
-        .join("icu")
-        .join("usr")
-        .join("lib")
-        .join("x86_64-linux-gnu");
-    if icu_lib.exists() {
-        let mut out = env.clone();
-        out.insert(
-            "LD_LIBRARY_PATH".to_string(),
-            icu_lib.to_string_lossy().into_owned(),
-        );
-        out
-    } else {
-        env.clone()
-    }
 }
 
 /// Extracts a tunnel id from a bare id or a
@@ -166,50 +126,57 @@ pub fn use_manual_tunnel(
     Ok(state)
 }
 
+/// Builds a gateway that routes through the provided injectable [`Runner`] while
+/// using the process environment for the disable guard and spawner.
+fn gateway_from_runner(runner: &Runner) -> DevtunnelGateway {
+    DevtunnelGateway::with_deps(DevtunnelGatewayDeps {
+        runner: Some(runner.clone()),
+        env: Some(std::env::vars().collect::<HashMap<String, String>>()),
+        ..Default::default()
+    })
+}
+
+/// Builds a `DevtunnelFailure` for a local (non-CLI) error such as failing to
+/// persist `remote-host.json`, so the typed error surface stays uniform.
+fn local_failure(operation: DevtunnelOperation, message: String) -> DevtunnelFailure {
+    classify_failure(
+        &DevtunnelFailureInput {
+            operation,
+            status: 1,
+            stdout: String::new(),
+            stderr: message,
+            spawn_error: None,
+            parse_failed: None,
+        },
+        &climon_store::paths::now_iso(),
+    )
+}
+
 /// Auto-creates a tunnel and a port mapping, then records it as the desired
 /// hosting state. Mirrors `createTunnel`.
+#[allow(clippy::result_large_err)]
 pub async fn create_tunnel(
     ingest_port: u16,
     env: &ConfigEnv,
     runner: &Runner,
-) -> Result<RemoteHostState, String> {
-    let create = runner(
-        "devtunnel".to_string(),
-        vec!["create".to_string(), "--json".to_string()],
-    )
-    .await;
-    if create.status != 0 {
-        let detail = create.stderr.trim();
-        let detail = if detail.is_empty() {
-            create.status.to_string()
-        } else {
-            detail.to_string()
-        };
-        return Err(format!("devtunnel create failed: {detail}"));
-    }
-    let tunnel_id = parse_tunnel_id(&create.stdout)
-        .ok_or_else(|| "Could not parse tunnel id from `devtunnel create` output.".to_string())?;
+) -> Result<RemoteHostState, DevtunnelFailure> {
+    let gateway = gateway_from_runner(runner);
+    let create = gateway.create_tunnel(&CreateTunnelArgs::default()).await?;
+    let tunnel_id = parse_tunnel_id(&create.stdout).ok_or_else(|| {
+        classify_failure(
+            &DevtunnelFailureInput {
+                operation: DevtunnelOperation::CreateTunnel,
+                status: create.status,
+                stdout: create.stdout.clone(),
+                stderr: create.stderr.clone(),
+                spawn_error: None,
+                parse_failed: Some(true),
+            },
+            &climon_store::paths::now_iso(),
+        )
+    })?;
 
-    let port_res = runner(
-        "devtunnel".to_string(),
-        vec![
-            "port".to_string(),
-            "create".to_string(),
-            tunnel_id.clone(),
-            "-p".to_string(),
-            ingest_port.to_string(),
-        ],
-    )
-    .await;
-    if port_res.status != 0 {
-        let detail = port_res.stderr.trim();
-        let detail = if detail.is_empty() {
-            port_res.status.to_string()
-        } else {
-            detail.to_string()
-        };
-        return Err(format!("devtunnel port create failed: {detail}"));
-    }
+    gateway.create_port(&tunnel_id, ingest_port, None).await?;
 
     let state = RemoteHostState {
         tunnel_id,
@@ -217,7 +184,8 @@ pub async fn create_tunnel(
         ingest_host: None,
         can_host: Some(true),
     };
-    write_remote_host_state(&state, env).map_err(|e| e.to_string())?;
+    write_remote_host_state(&state, env)
+        .map_err(|e| local_failure(DevtunnelOperation::CreateTunnel, e.to_string()))?;
     Ok(state)
 }
 
@@ -227,11 +195,8 @@ pub async fn delete_tunnel(env: &ConfigEnv, runner: &Runner) -> std::io::Result<
     let state = read_remote_host_state(env);
     if let Some(state) = &state {
         if state.can_host == Some(true) {
-            let _ = runner(
-                "devtunnel".to_string(),
-                vec!["delete".to_string(), state.tunnel_id.clone()],
-            )
-            .await;
+            let gateway = gateway_from_runner(runner);
+            let _ = gateway.delete_tunnel(&state.tunnel_id, false).await;
         }
     }
     let path = get_remote_host_path(env);
@@ -251,12 +216,15 @@ pub struct ReconcileResult {
 }
 
 /// Ensures the tunnel's port mapping matches the ingest's actual bound port.
-/// Mirrors `reconcileTunnelPort`.
+/// Mirrors `reconcileTunnelPort`. Only a `TunnelNotFound` failure permits
+/// recreating the tunnel; any other classified failure is propagated and no
+/// success-shaped state is persisted.
+#[allow(clippy::result_large_err)]
 pub async fn reconcile_tunnel_port(
     actual_port: u16,
     env: &ConfigEnv,
     runner: &Runner,
-) -> std::io::Result<ReconcileResult> {
+) -> Result<ReconcileResult, DevtunnelFailure> {
     let state = match read_remote_host_state(env) {
         Some(state) => state,
         None => {
@@ -276,36 +244,23 @@ pub async fn reconcile_tunnel_port(
     }
 
     if state.can_host == Some(true) {
-        let _del = runner(
-            "devtunnel".to_string(),
-            vec![
-                "port".to_string(),
-                "delete".to_string(),
-                state.tunnel_id.clone(),
-                "-p".to_string(),
-                state.ingest_port.to_string(),
-            ],
-        )
-        .await;
-        let add = runner(
-            "devtunnel".to_string(),
-            vec![
-                "port".to_string(),
-                "create".to_string(),
-                state.tunnel_id.clone(),
-                "-p".to_string(),
-                actual_port.to_string(),
-            ],
-        )
-        .await;
-        if add.status != 0 {
-            if let Ok(fresh) = create_tunnel(actual_port, env, runner).await {
+        let gateway = gateway_from_runner(runner);
+        let _ = gateway
+            .delete_port(&state.tunnel_id, state.ingest_port)
+            .await;
+        if let Err(failure) = gateway
+            .create_port(&state.tunnel_id, actual_port, None)
+            .await
+        {
+            if failure.code == crate::devtunnel::DevtunnelErrorCode::TunnelNotFound {
+                let fresh = create_tunnel(actual_port, env, runner).await?;
                 return Ok(ReconcileResult {
                     changed: true,
                     port: fresh.ingest_port,
                     recreated: true,
                 });
             }
+            return Err(failure);
         }
     }
 
@@ -313,7 +268,8 @@ pub async fn reconcile_tunnel_port(
         ingest_port: actual_port,
         ..state
     };
-    write_remote_host_state(&updated, env)?;
+    write_remote_host_state(&updated, env)
+        .map_err(|e| local_failure(DevtunnelOperation::CreatePort, e.to_string()))?;
     Ok(ReconcileResult {
         changed: true,
         port: actual_port,
@@ -360,6 +316,7 @@ fn parse_tunnel_id(stdout: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn ok_runner() -> Runner {
         Arc::new(|_cmd, _args| {
@@ -368,6 +325,7 @@ mod tests {
                     status: 0,
                     stdout: String::new(),
                     stderr: String::new(),
+                    spawn_error: None,
                 }
             })
         })
@@ -406,48 +364,6 @@ mod tests {
     fn parse_rejects_junk() {
         assert_eq!(parse_tunnel_input(""), None);
         assert_eq!(parse_tunnel_input("has spaces"), None);
-    }
-
-    #[test]
-    fn devtunnel_env_adds_icu_when_missing() {
-        let tmp = std::env::temp_dir().join(format!(
-            "climon-icu-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let icu = tmp
-            .join(".local")
-            .join("icu")
-            .join("usr")
-            .join("lib")
-            .join("x86_64-linux-gnu");
-        std::fs::create_dir_all(&icu).unwrap();
-        let mut env = HashMap::new();
-        env.insert("HOME".to_string(), tmp.to_string_lossy().into_owned());
-        let out = devtunnel_env(&env);
-        assert_eq!(
-            out.get("HOME").map(String::as_str),
-            Some(tmp.to_string_lossy().as_ref())
-        );
-        assert_eq!(
-            out.get("LD_LIBRARY_PATH").map(String::as_str),
-            Some(icu.to_string_lossy().as_ref())
-        );
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    #[test]
-    fn devtunnel_env_is_unchanged_when_already_set() {
-        let mut env = HashMap::new();
-        env.insert("LD_LIBRARY_PATH".to_string(), "/already".to_string());
-        let out = devtunnel_env(&env);
-        assert_eq!(
-            out.get("LD_LIBRARY_PATH").map(String::as_str),
-            Some("/already")
-        );
     }
 
     #[tokio::test]
@@ -513,6 +429,7 @@ mod tests {
                     status: 0,
                     stdout: "1.0.1234\n".to_string(),
                     stderr: String::new(),
+                    spawn_error: None,
                 }
             })
         });
@@ -529,6 +446,7 @@ mod tests {
                     status: 127,
                     stdout: String::new(),
                     stderr: "spawn failed".to_string(),
+                    spawn_error: None,
                 }
             })
         });

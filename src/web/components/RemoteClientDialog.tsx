@@ -21,10 +21,13 @@ import { sessionColorDropdownOptions } from "../session-color-options.js";
 import {
   buildSetupScript,
   copyToClipboard,
+  DevtunnelApiError,
   fetchRemoteStatus,
+  retryRemoteTunnel,
   type RemoteStatus
 } from "../api.js";
 import { applyRemoteStatusToDraft, type RemoteClientDraftState } from "./remoteClientState.js";
+import { DevtunnelFailure } from "./DevtunnelFailure.js";
 
 const useStyles = makeStyles({
   script: {
@@ -59,30 +62,44 @@ interface Props {
   onOpenChange: (open: boolean) => void;
 }
 
-export function RemoteTunnelStatusSection({ status }: { status: RemoteStatus | null }) {
+export function RemoteTunnelStatusSection({
+  status,
+  onRetry,
+  retrying = false
+}: {
+  status: RemoteStatus | null;
+  onRetry?: () => void;
+  retrying?: boolean;
+}) {
   const styles = useStyles();
   const tunnelId = status?.tunnel?.id;
-
-  if (tunnelId) {
-    return (
-      <div className={styles.section}>
-        <Text weight="semibold" style={{ display: "block" }}>Ingest tunnel (auto-managed)</Text>
-        <Text>{tunnelId}</Text>
-        <Text className={styles.hint}>
-          Climon creates and reuses this labeled dev tunnel when host remotes are enabled.
-        </Text>
-      </div>
-    );
-  }
+  const failure = status?.devtunnel?.lastFailure;
 
   return (
     <div className={styles.section}>
       <Text weight="semibold" style={{ display: "block" }}>Ingest tunnel (auto-managed)</Text>
-      <Text className={styles.hint}>
-        {status?.devtunnelAvailable
-          ? "No ingest tunnel is recorded yet. Enable host remotes to let Climon create it automatically."
-          : "The devtunnel CLI was not found on this machine, so Climon cannot auto-manage the ingest tunnel."}
-      </Text>
+      {tunnelId ? (
+        <>
+          <Text>{tunnelId}</Text>
+          <Text className={styles.hint}>
+            Climon creates and reuses this labeled dev tunnel when host remotes are enabled.
+          </Text>
+        </>
+      ) : (
+        <Text className={styles.hint}>
+          {status?.devtunnelAvailable
+            ? "No ingest tunnel is recorded yet. Enable host remotes to let Climon create it automatically."
+            : "The devtunnel CLI was not found on this machine, so Climon cannot auto-manage the ingest tunnel."}
+        </Text>
+      )}
+      {failure && (
+        <DevtunnelFailure
+          failure={failure}
+          retry={status?.devtunnel?.retry}
+          onRetry={onRetry ?? (() => {})}
+          retrying={retrying}
+        />
+      )}
     </div>
   );
 }
@@ -98,6 +115,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
   const [clientId, setClientId] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const { status } = draft;
 
   function applyStatus(s: RemoteStatus): void {
@@ -109,6 +127,24 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
       applyStatus(await fetchRemoteStatus());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load remote status.");
+    }
+  }
+
+  async function handleRetry(): Promise<void> {
+    setRetrying(true);
+    setError("");
+    try {
+      applyStatus(await retryRemoteTunnel());
+    } catch (e) {
+      if (e instanceof DevtunnelApiError) {
+        // Re-fetch so the refreshed health (carrying the latest failure) drives
+        // the shared failure UI rather than a bare error string.
+        await refresh();
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to retry ingest tunnel.");
+      }
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -152,7 +188,7 @@ export function RemoteClientDialog({ open, onOpenChange }: Props) {
               Connect Climon sessions from remote machines via a Microsoft dev tunnel. 
             </Text>
 
-            <RemoteTunnelStatusSection status={status} />
+            <RemoteTunnelStatusSection status={status} onRetry={() => void handleRetry()} retrying={retrying} />
 
             <div className={styles.row}>
               <Field
