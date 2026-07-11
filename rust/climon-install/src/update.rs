@@ -8,15 +8,18 @@
 //!   from a staged source directory, validates payloads and version, then
 //!   cleans up retired siblings.
 //!
-//! - **Recover** (`--recover-bootstrap-v1`): reserved for future bootstrap
-//!   recovery (Tasks 4-6); currently returns a "not available yet" error.
+//! - **Recover** (`--recover-bootstrap-v1`): applies a verified staged release
+//!   and resumes the original command through the newly installed client.
 //!
 //! The installer owns all archive payload validation and installed layout
 //! placement. The updater (`climon-update`) delegates to this protocol
 //! rather than performing file placement itself.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Direct launcher used to resume the newly installed client after recovery.
+pub type RecoveryClientLauncher<'a> = dyn FnMut(&Path, &[OsString]) -> Result<i32, String> + 'a;
 
 /// Arguments for the `--apply-update-v1` operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +270,32 @@ pub fn run_apply_update(
     Ok(())
 }
 
+/// Applies a staged recovery release, then resumes the original command through
+/// the newly installed client. The launch only occurs after every apply step
+/// succeeds.
+pub fn run_recover_bootstrap(
+    args: &RecoverBootstrapArgs,
+    installer_build_version: &str,
+    placement: ApplyPlacement<'_>,
+    launch_client: &mut RecoveryClientLauncher<'_>,
+) -> Result<i32, String> {
+    run_apply_update(&args.apply, installer_build_version, placement)?;
+    launch_client(
+        &args.apply.dir.join(installed_client_name()),
+        &args.original_args,
+    )
+}
+
+#[cfg(unix)]
+fn installed_client_name() -> &'static str {
+    "climon"
+}
+
+#[cfg(windows)]
+fn installed_client_name() -> &'static str {
+    "climon.exe"
+}
+
 /// Validates that all required source payloads are present.
 #[cfg(unix)]
 fn validate_source_payloads(source: &std::path::Path) -> Result<(), String> {
@@ -419,10 +448,7 @@ pub fn cleanup_retired(dir: &std::path::Path) {
 /// `climon-server` then `climon` (commit point), writes `.version`, and cleans
 /// up retired siblings.
 #[cfg(unix)]
-pub fn run_apply_update_unix(
-    args: &ApplyUpdateArgs,
-    installer_build_version: &str,
-) -> Result<(), String> {
+fn with_unix_placement<T>(operation: impl FnOnce(ApplyPlacement<'_>) -> T) -> T {
     let mut place_server = |a: &ApplyUpdateArgs| {
         let src = a.source.join("climon-server");
         let dst = a.dir.join("climon-server");
@@ -445,16 +471,51 @@ pub fn run_apply_update_unix(
         cleanup_retired(&a.dir);
     };
 
-    run_apply_update(
-        args,
-        installer_build_version,
-        ApplyPlacement {
-            place_server: &mut place_server,
-            place_client: &mut place_client,
-            write_version: &mut write_version,
-            cleanup: &mut cleanup,
-        },
-    )
+    operation(ApplyPlacement {
+        place_server: &mut place_server,
+        place_client: &mut place_client,
+        write_version: &mut write_version,
+        cleanup: &mut cleanup,
+    })
+}
+
+#[cfg(unix)]
+pub fn run_apply_update_unix(
+    args: &ApplyUpdateArgs,
+    installer_build_version: &str,
+) -> Result<(), String> {
+    with_unix_placement(|placement| run_apply_update(args, installer_build_version, placement))
+}
+
+/// Applies a Unix bootstrap recovery and synchronously resumes the newly
+/// installed client, preserving raw process arguments and its exact exit code.
+#[cfg(unix)]
+pub fn run_recover_bootstrap_unix(
+    args: &RecoverBootstrapArgs,
+    installer_build_version: &str,
+) -> Result<i32, String> {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Command;
+
+    let mut launch_client = |program: &std::path::Path, original_args: &[OsString]| {
+        let status = Command::new(program)
+            .args(original_args)
+            .status()
+            .map_err(|error| {
+                format!(
+                    "launch installed client {} failed: {error}",
+                    program.display()
+                )
+            })?;
+        Ok(match status.code() {
+            Some(code) => code,
+            None => status.signal().map_or(1, |signal| 128 + signal),
+        })
+    };
+
+    with_unix_placement(|placement| {
+        run_recover_bootstrap(args, installer_build_version, placement, &mut launch_client)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +568,7 @@ mod tests {
     use std::cell::RefCell;
     use std::ffi::OsString;
     use std::fs;
+    use std::path::Path;
 
     fn temp_root(name: &str) -> std::path::PathBuf {
         let dir = std::env::current_dir()
@@ -1214,6 +1276,196 @@ mod tests {
         assert_eq!(client_mode & 0o111, 0o111);
         assert_eq!(server_mode & 0o111, 0o111);
 
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_recovery_applies_update_then_resumes_with_raw_args_and_exact_exit_code() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = temp_root("update-unix-recovery-order");
+        let source = root.join("stage");
+        let dir = root.join("install");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(source.join("climon"), b"new-client").unwrap();
+        fs::write(source.join("climon-server"), b"new-server").unwrap();
+        fs::write(dir.join("climon"), b"old-bootstrap").unwrap();
+        fs::write(dir.join("climon-server"), b"old-server").unwrap();
+
+        let raw_arg = OsString::from_vec(vec![b'-', 0xff]);
+        let recover = RecoverBootstrapArgs {
+            apply: ApplyUpdateArgs {
+                dir: dir.clone(),
+                source: source.clone(),
+                version: "3.2.1".to_string(),
+            },
+            bootstrap_pid: None,
+            fallback: None,
+            original_args: vec![os("session"), raw_arg.clone(), os("--verbose")],
+        };
+        let events = RefCell::new(Vec::new());
+        let mut place_server = |args: &ApplyUpdateArgs| {
+            assert!(args.source.join("climon").is_file());
+            assert!(args.source.join("climon-server").is_file());
+            events.borrow_mut().push("validate source");
+            fs::copy(
+                args.source.join("climon-server"),
+                args.dir.join("climon-server"),
+            )
+            .map_err(|error| error.to_string())?;
+            events.borrow_mut().push("replace server");
+            Ok(())
+        };
+        let mut place_client = |args: &ApplyUpdateArgs| {
+            fs::copy(args.source.join("climon"), args.dir.join("climon"))
+                .map_err(|error| error.to_string())?;
+            events.borrow_mut().push("replace client");
+            Ok(())
+        };
+        let mut write_version = |args: &ApplyUpdateArgs| {
+            fs::write(args.dir.join(".version"), &args.version)
+                .map_err(|error| error.to_string())?;
+            events.borrow_mut().push("write version");
+            Ok(())
+        };
+        let mut cleanup = |_args: &ApplyUpdateArgs| {};
+        let mut launch = |program: &Path, args: &[OsString]| {
+            assert_eq!(program, dir.join("climon"));
+            assert_eq!(args, recover.original_args.as_slice());
+            assert_eq!(args[1], raw_arg);
+            assert_eq!(fs::read(program).unwrap(), b"new-client");
+            assert_eq!(fs::read(dir.join("climon-server")).unwrap(), b"new-server");
+            assert_eq!(fs::read_to_string(dir.join(".version")).unwrap(), "3.2.1");
+            events.borrow_mut().push("spawn installed client");
+            Ok(23)
+        };
+
+        let code = run_recover_bootstrap(
+            &recover,
+            "3.2.1",
+            ApplyPlacement {
+                place_server: &mut place_server,
+                place_client: &mut place_client,
+                write_version: &mut write_version,
+                cleanup: &mut cleanup,
+            },
+            &mut launch,
+        )
+        .unwrap();
+
+        assert_eq!(code, 23);
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                "validate source",
+                "replace server",
+                "replace client",
+                "write version",
+                "spawn installed client",
+            ]
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_recovery_invalid_staged_source_never_mutates_bootstrap_client() {
+        let root = temp_root("update-unix-recovery-invalid-source");
+        let source = root.join("stage");
+        let dir = root.join("install");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(source.join("climon"), b"new-client").unwrap();
+        fs::write(dir.join("climon"), b"old-bootstrap").unwrap();
+
+        let recover = RecoverBootstrapArgs {
+            apply: ApplyUpdateArgs {
+                dir: dir.clone(),
+                source,
+                version: "3.2.1".to_string(),
+            },
+            bootstrap_pid: None,
+            fallback: None,
+            original_args: vec![],
+        };
+        let mutated = RefCell::new(false);
+        let mut place_server = |_args: &ApplyUpdateArgs| {
+            *mutated.borrow_mut() = true;
+            Ok(())
+        };
+        let mut place_client = |_args: &ApplyUpdateArgs| {
+            *mutated.borrow_mut() = true;
+            Ok(())
+        };
+        let mut write_version = |_args: &ApplyUpdateArgs| {
+            *mutated.borrow_mut() = true;
+            Ok(())
+        };
+        let mut cleanup = |_args: &ApplyUpdateArgs| {};
+        let mut launch = |_program: &Path, _args: &[OsString]| -> Result<i32, String> {
+            panic!("invalid staged recovery must not launch")
+        };
+
+        let error = run_recover_bootstrap(
+            &recover,
+            "3.2.1",
+            ApplyPlacement {
+                place_server: &mut place_server,
+                place_client: &mut place_client,
+                write_version: &mut write_version,
+                cleanup: &mut cleanup,
+            },
+            &mut launch,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("Required source payload missing"), "{error}");
+        assert!(!*mutated.borrow());
+        assert_eq!(fs::read(dir.join("climon")).unwrap(), b"old-bootstrap");
+        assert!(!dir.join(".version").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_recovery_command_returns_resumed_client_exact_exit_code() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("update-unix-recovery-command");
+        let source = root.join("stage");
+        let dir = root.join("install");
+        let marker = root.join("args.txt");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            source.join("climon"),
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexit 23\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(source.join("climon"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(source.join("climon-server"), b"new-server").unwrap();
+        fs::write(dir.join("climon"), b"old-bootstrap").unwrap();
+
+        let recover = RecoverBootstrapArgs {
+            apply: ApplyUpdateArgs {
+                dir: dir.clone(),
+                source,
+                version: "3.2.1".to_string(),
+            },
+            bootstrap_pid: None,
+            fallback: None,
+            original_args: vec![os("session"), os("--verbose")],
+        };
+
+        let code = run_recover_bootstrap_unix(&recover, "3.2.1").unwrap();
+
+        assert_eq!(code, 23);
+        assert_eq!(fs::read_to_string(marker).unwrap(), "session\n--verbose\n");
         fs::remove_dir_all(&root).ok();
     }
 

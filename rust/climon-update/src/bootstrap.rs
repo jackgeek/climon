@@ -6,8 +6,9 @@
 //! recovery application remains owned by `climon-install`.
 
 use std::ffi::OsString;
+use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use climon_install::manifest::{install_files_for_platform, Platform};
 
@@ -22,6 +23,34 @@ pub enum RecoveryPlatform {
     Windows,
     Unix,
 }
+
+/// Result of launching the recovery installer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryLaunch {
+    /// A detached recovery process now owns the staged release.
+    Detached,
+    /// The synchronous recovery installer and resumed client have exited.
+    Synchronous(i32),
+}
+
+/// Failure phase for legacy bootstrap recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootstrapError {
+    /// Manifest retrieval, artifact download, verification, or extraction failed.
+    Staging(String),
+    /// Verified staging succeeded, but validation or recovery execution failed.
+    Recovery(String),
+}
+
+impl fmt::Display for BootstrapError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Staging(message) | Self::Recovery(message) => formatter.write_str(message),
+        }
+    }
+}
+
+const UNIX_RECOVERY_GUIDANCE: &str = "climon must complete a one-time critical update and requires a network connection.\nReconnect and rerun this command, or run the current install.sh to repair climon.";
 
 /// Inputs needed to bootstrap a legacy updater invocation.
 pub struct BootstrapRequest<'a> {
@@ -55,7 +84,7 @@ pub trait BootstrapRuntime {
         program: &Path,
         args: &[OsString],
         detached: bool,
-    ) -> Result<(), String>;
+    ) -> Result<RecoveryLaunch, String>;
 }
 
 impl BootstrapStaging for StagedArtifact {
@@ -97,7 +126,7 @@ impl BootstrapRuntime for ProductionBootstrapRuntime {
         program: &Path,
         args: &[OsString],
         detached: bool,
-    ) -> Result<(), String> {
+    ) -> Result<RecoveryLaunch, String> {
         let mut command = Command::new(program);
         command.args(args);
 
@@ -119,21 +148,28 @@ impl BootstrapRuntime for ProductionBootstrapRuntime {
                 format!("launch recovery {} failed: {error}", program.display())
             })?;
             drop(child);
-            return Ok(());
+            return Ok(RecoveryLaunch::Detached);
         }
 
         let status = command
             .status()
             .map_err(|error| format!("run recovery {} failed: {error}", program.display()))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(match status.code() {
-                Some(code) => format!("recovery installer exited with code {code}"),
-                None => "recovery installer terminated without an exit code".to_string(),
-            })
+        Ok(RecoveryLaunch::Synchronous(exit_status_code(status)))
+    }
+}
+
+fn exit_status_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
         }
     }
+    1
 }
 
 fn installer_name(node_platform: &str) -> &'static str {
@@ -148,21 +184,31 @@ fn installer_name(node_platform: &str) -> &'static str {
 pub fn run_legacy_bootstrap_with_runtime<R: BootstrapRuntime>(
     request: BootstrapRequest<'_>,
     runtime: &mut R,
-) -> Result<(), String> {
-    let manifest = runtime.fetch_manifest()?;
-    let staging = runtime.stage_release(&manifest, request.node_platform, request.node_arch)?;
-    let installer = staging.entry(installer_name(request.node_platform))?;
+) -> Result<i32, BootstrapError> {
+    let manifest = runtime.fetch_manifest().map_err(BootstrapError::Staging)?;
+    let staging = runtime
+        .stage_release(&manifest, request.node_platform, request.node_arch)
+        .map_err(BootstrapError::Staging)?;
+    let installer = staging
+        .entry(installer_name(request.node_platform))
+        .map_err(BootstrapError::Recovery)?;
 
-    let install_platform = Platform::from_node_platform(request.node_platform)
-        .ok_or_else(|| format!("unsupported bootstrap platform: {}", request.node_platform))?;
+    let install_platform =
+        Platform::from_node_platform(request.node_platform).ok_or_else(|| {
+            BootstrapError::Recovery(format!(
+                "unsupported bootstrap platform: {}",
+                request.node_platform
+            ))
+        })?;
     for file in install_files_for_platform(install_platform) {
-        staging.entry(&file.source)?;
+        staging
+            .entry(&file.source)
+            .map_err(BootstrapError::Recovery)?;
     }
 
-    let install_dir = request
-        .current_exe
-        .parent()
-        .ok_or_else(|| "bootstrap executable path has no parent directory".to_string())?;
+    let install_dir = request.current_exe.parent().ok_or_else(|| {
+        BootstrapError::Recovery("bootstrap executable path has no parent directory".to_string())
+    })?;
     let source = staging.root().to_path_buf();
     let mut recovery_args = vec![
         OsString::from("--recover-bootstrap-v1"),
@@ -179,11 +225,16 @@ pub fn run_legacy_bootstrap_with_runtime<R: BootstrapRuntime>(
     }
 
     let detached = request.platform == RecoveryPlatform::Windows;
-    runtime.launch_recovery(&installer, &recovery_args, detached)?;
-    if detached {
-        staging.persist()?;
+    let launch = runtime
+        .launch_recovery(&installer, &recovery_args, detached)
+        .map_err(BootstrapError::Recovery)?;
+    match launch {
+        RecoveryLaunch::Detached => {
+            staging.persist().map_err(BootstrapError::Recovery)?;
+            Ok(0)
+        }
+        RecoveryLaunch::Synchronous(code) => Ok(code),
     }
-    Ok(())
 }
 
 fn current_recovery_platform() -> RecoveryPlatform {
@@ -208,10 +259,25 @@ pub fn run_legacy_bootstrap(
         node_arch: current_node_arch(),
     };
     let mut runtime = ProductionBootstrapRuntime;
-    match run_legacy_bootstrap_with_runtime(request, &mut runtime) {
-        Ok(()) => 0,
+    run_legacy_bootstrap_entry_with_runtime(request, &mut runtime, &mut |message| {
+        eprintln!("{message}")
+    })
+}
+
+fn run_legacy_bootstrap_entry_with_runtime<R: BootstrapRuntime>(
+    request: BootstrapRequest<'_>,
+    runtime: &mut R,
+    eprint: &mut dyn FnMut(&str),
+) -> i32 {
+    let unix = request.platform == RecoveryPlatform::Unix;
+    match run_legacy_bootstrap_with_runtime(request, runtime) {
+        Ok(code) => code,
+        Err(BootstrapError::Staging(_)) if unix => {
+            eprint(UNIX_RECOVERY_GUIDANCE);
+            1
+        }
         Err(error) => {
-            eprintln!("climon bootstrap failed: {error}");
+            eprint(&format!("climon bootstrap failed: {error}"));
             1
         }
     }
@@ -230,7 +296,10 @@ mod tests {
     struct RuntimeState {
         fetches: usize,
         stages: usize,
+        stage_requests: Vec<(String, String)>,
         launches: Vec<(PathBuf, Vec<OsString>, bool)>,
+        staging_alive: bool,
+        staging_alive_during_launch: Vec<bool>,
         persists: usize,
         events: Vec<&'static str>,
     }
@@ -258,7 +327,13 @@ mod tests {
             let mut state = self.state.lock().unwrap();
             state.persists += 1;
             state.events.push("persist");
-            Ok(self.root)
+            Ok(self.root.clone())
+        }
+    }
+
+    impl Drop for FakeStaging {
+        fn drop(&mut self) {
+            self.state.lock().unwrap().staging_alive = false;
         }
     }
 
@@ -268,6 +343,7 @@ mod tests {
         stage_error: Option<String>,
         entries: HashSet<String>,
         launch_error: Option<String>,
+        launch_result: Option<RecoveryLaunch>,
     }
 
     impl FakeRuntime {
@@ -278,6 +354,7 @@ mod tests {
                 stage_error: None,
                 entries: entries.iter().map(|name| (*name).to_string()).collect(),
                 launch_error: None,
+                launch_result: None,
             }
         }
     }
@@ -293,13 +370,19 @@ mod tests {
         fn stage_release(
             &mut self,
             _manifest: &Manifest,
-            _node_platform: &str,
-            _node_arch: &str,
+            node_platform: &str,
+            node_arch: &str,
         ) -> Result<Self::Staging, String> {
-            self.state.lock().unwrap().stages += 1;
+            let mut state = self.state.lock().unwrap();
+            state.stages += 1;
+            state
+                .stage_requests
+                .push((node_platform.to_string(), node_arch.to_string()));
+            drop(state);
             if let Some(error) = &self.stage_error {
                 return Err(error.clone());
             }
+            self.state.lock().unwrap().staging_alive = true;
             Ok(FakeStaging {
                 root: PathBuf::from("/verified-stage"),
                 entries: self.entries.clone(),
@@ -312,8 +395,10 @@ mod tests {
             program: &Path,
             args: &[OsString],
             detached: bool,
-        ) -> Result<(), String> {
+        ) -> Result<RecoveryLaunch, String> {
             let mut state = self.state.lock().unwrap();
+            let staging_alive = state.staging_alive;
+            state.staging_alive_during_launch.push(staging_alive);
             state
                 .launches
                 .push((program.to_path_buf(), args.to_vec(), detached));
@@ -321,7 +406,11 @@ mod tests {
             if let Some(error) = &self.launch_error {
                 return Err(error.clone());
             }
-            Ok(())
+            Ok(self.launch_result.unwrap_or(if detached {
+                RecoveryLaunch::Detached
+            } else {
+                RecoveryLaunch::Synchronous(0)
+            }))
         }
     }
 
@@ -383,7 +472,7 @@ mod tests {
             &mut runtime,
         );
 
-        assert_eq!(result, Err("offline".to_string()));
+        assert_eq!(result, Err(BootstrapError::Staging("offline".to_string())));
         let state = runtime.state.lock().unwrap();
         assert_eq!(state.fetches, 1);
         assert_eq!(state.stages, 0);
@@ -405,7 +494,12 @@ mod tests {
             &mut runtime,
         );
 
-        assert_eq!(result, Err("signature verification failed".to_string()));
+        assert_eq!(
+            result,
+            Err(BootstrapError::Staging(
+                "signature verification failed".to_string()
+            ))
+        );
         let state = runtime.state.lock().unwrap();
         assert_eq!(state.stages, 1);
         assert!(state.launches.is_empty());
@@ -425,7 +519,25 @@ mod tests {
             &mut runtime,
         );
 
-        assert!(result.unwrap_err().contains("climon-server"));
+        assert!(result.unwrap_err().to_string().contains("climon-server"));
+        assert!(runtime.state.lock().unwrap().launches.is_empty());
+    }
+
+    #[test]
+    fn missing_installer_entry_never_launches() {
+        let mut runtime = FakeRuntime::new(&["climon", "climon-server"]);
+
+        let result = run_legacy_bootstrap_with_runtime(
+            request(
+                Path::new("/installed/climon"),
+                &[],
+                RecoveryPlatform::Unix,
+                "linux",
+            ),
+            &mut runtime,
+        );
+
+        assert!(result.unwrap_err().to_string().contains("install"));
         assert!(runtime.state.lock().unwrap().launches.is_empty());
     }
 
@@ -489,7 +601,83 @@ mod tests {
             );
             assert_eq!(*detached, expected_detached);
             assert_eq!(state.persists, usize::from(expected_detached));
+            assert_eq!(
+                state.stage_requests,
+                vec![(node_platform.to_string(), "x64".to_string())]
+            );
         }
+    }
+
+    #[test]
+    fn unix_recovery_returns_exact_exit_code_and_keeps_staging_alive_until_completion() {
+        let mut runtime = FakeRuntime::new(&["install", "climon", "climon-server"]);
+        runtime.launch_result = Some(RecoveryLaunch::Synchronous(23));
+
+        let result = run_legacy_bootstrap_with_runtime(
+            request(
+                Path::new("/installed/climon"),
+                &[OsString::from("session")],
+                RecoveryPlatform::Unix,
+                "linux",
+            ),
+            &mut runtime,
+        );
+
+        assert_eq!(result, Ok(23));
+        let state = runtime.state.lock().unwrap();
+        assert_eq!(state.staging_alive_during_launch, vec![true]);
+        assert!(!state.staging_alive);
+        assert_eq!(state.persists, 0);
+    }
+
+    #[test]
+    fn unix_recovery_staging_failures_emit_exact_network_repair_guidance() {
+        let expected = "climon must complete a one-time critical update and requires a network connection.\nReconnect and rerun this command, or run the current install.sh to repair climon.";
+
+        for stage_error in [None, Some("signature verification failed".to_string())] {
+            let mut runtime = FakeRuntime::new(&["install", "climon", "climon-server"]);
+            if let Some(error) = stage_error {
+                runtime.stage_error = Some(error);
+            } else {
+                runtime.manifest = Err("offline".to_string());
+            }
+            let mut output = Vec::new();
+
+            let code = run_legacy_bootstrap_entry_with_runtime(
+                request(
+                    Path::new("/installed/climon"),
+                    &[],
+                    RecoveryPlatform::Unix,
+                    "linux",
+                ),
+                &mut runtime,
+                &mut |message| output.push(message.to_string()),
+            );
+
+            assert_eq!(code, 1);
+            assert_eq!(output, vec![expected]);
+        }
+    }
+
+    #[test]
+    fn unix_recovery_execution_failures_are_not_reported_as_network_failures() {
+        let mut runtime = FakeRuntime::new(&["install", "climon", "climon-server"]);
+        runtime.launch_error = Some("permission denied".to_string());
+        let mut output = Vec::new();
+
+        let code = run_legacy_bootstrap_entry_with_runtime(
+            request(
+                Path::new("/installed/climon"),
+                &[],
+                RecoveryPlatform::Unix,
+                "linux",
+            ),
+            &mut runtime,
+            &mut |message| output.push(message.to_string()),
+        );
+
+        assert_eq!(code, 1);
+        assert_eq!(output, vec!["climon bootstrap failed: permission denied"]);
     }
 
     #[test]
@@ -527,7 +715,10 @@ mod tests {
             &mut runtime,
         );
 
-        assert_eq!(result, Err("spawn failed".to_string()));
+        assert_eq!(
+            result,
+            Err(BootstrapError::Recovery("spawn failed".to_string()))
+        );
         let state = runtime.state.lock().unwrap();
         assert_eq!(state.events, vec!["launch"]);
         assert_eq!(state.persists, 0);

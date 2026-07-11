@@ -491,9 +491,8 @@ pub fn run_installer(version: &str, client_stub: &[u8], server_stub: &[u8]) -> i
         Ok(Some(crate::update::UpdateOperation::Apply(args))) => {
             return run_apply_dispatch(&args, version, client_stub, server_stub);
         }
-        Ok(Some(crate::update::UpdateOperation::Recover(_))) => {
-            eprintln!("recover-bootstrap: operation is not available yet (exit 2)");
-            return 2;
+        Ok(Some(crate::update::UpdateOperation::Recover(args))) => {
+            return run_recover_dispatch(&args, version, client_stub, server_stub);
         }
         Ok(None) => { /* fall through to normal install */ }
         Err(e) => {
@@ -517,6 +516,37 @@ pub fn run_installer(version: &str, client_stub: &[u8], server_stub: &[u8]) -> i
         exit: &mut exit,
     });
     0
+}
+
+/// Dispatches bootstrap recovery to the platform-specific implementation.
+fn run_recover_dispatch(
+    args: &crate::update::RecoverBootstrapArgs,
+    version: &str,
+    _client_stub: &[u8],
+    _server_stub: &[u8],
+) -> i32 {
+    #[cfg(unix)]
+    {
+        match crate::update::run_recover_bootstrap_unix(args, version) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("recover-bootstrap: {error}");
+                1
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (args, version, _client_stub, _server_stub);
+        eprintln!("recover-bootstrap: operation is not available yet (exit 2)");
+        2
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (args, version, _client_stub, _server_stub);
+        eprintln!("recover-bootstrap: unsupported platform");
+        1
+    }
 }
 
 /// Dispatches the apply-update operation to the platform-specific implementation.
