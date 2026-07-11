@@ -170,7 +170,7 @@ pub fn render_local_displaced(cols: u16, rows: u16) -> String {
     // (never `\e[2J`, which clears scrollback on Windows Terminal and others).
     let mut out = String::from("\x1b[m\x1b[H\x1b[J");
     let msg = "This session is being viewed on a climon dashboard.";
-    let hint = "Press Space to take control and resize it to this terminal.";
+    let hint = "Press Space to take control.";
     let row = (h / 2).max(1);
     for (i, line) in [msg, hint].iter().enumerate() {
         let col = ((w as usize).saturating_sub(line.len()) / 2 + 1).max(1);
@@ -703,6 +703,24 @@ mod tests {
             out.starts_with("\x1b[m\x1b[H\x1b[J"),
             "displaced notice must start with reset-SGR + home + erase-to-end \
              (\\e[m\\e[H\\e[J); got {out:?}"
+        );
+    }
+
+    #[test]
+    fn render_local_displaced_hint_does_not_claim_it_resizes_the_terminal() {
+        // The take-control hint no longer promises a resize (the daemon does
+        // not resize the shared PTY back to this terminal just because it
+        // regained control), so the notice must say exactly "Press Space to
+        // take control." and must not claim it resizes anything.
+        let out = render_local_displaced(80, 24);
+        assert!(
+            out.contains("Press Space to take control."),
+            "displaced notice must contain the exact hint \"Press Space to \
+             take control.\"; got {out:?}"
+        );
+        assert!(
+            !out.contains("and resize it to this terminal"),
+            "displaced notice must not claim it resizes the terminal; got {out:?}"
         );
     }
 

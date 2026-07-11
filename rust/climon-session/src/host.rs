@@ -978,7 +978,7 @@ fn render_local_displaced(_cols: u16, _rows: u16) -> String {
     // so the cleared cells behind the notice use the default background.
     let mut out = String::from("\x1b[m\x1b[H\x1b[J");
     let msg = "This session is being viewed on a climon dashboard.";
-    let hint = "Press Space to take control and resize it to this terminal.";
+    let hint = "Press Space to take control.";
     let row = (h / 2).max(1);
     for (i, line) in [msg, hint].iter().enumerate() {
         let col = ((w as usize).saturating_sub(line.len()) / 2 + 1).max(1);
@@ -1966,5 +1966,28 @@ mod local_displaced_tests {
         // even a dashboard whose grid is smaller than the local console.
         assert!(local_displaced_by_controller(Some("dashboard-abc")));
         assert!(local_displaced_by_controller(Some("terminal-1234")));
+    }
+}
+
+#[cfg(test)]
+mod render_local_displaced_tests {
+    use super::render_local_displaced;
+
+    #[test]
+    fn hint_tells_the_user_to_press_space_without_the_resize_claim() {
+        // The take-control hint no longer promises a resize (the daemon does
+        // not resize the shared PTY back to this terminal just because it
+        // regained control), so the notice must say exactly "Press Space to
+        // take control." and must not claim it resizes anything.
+        let out = render_local_displaced(80, 24);
+        assert!(
+            out.contains("Press Space to take control."),
+            "displaced notice must contain the exact hint \"Press Space to \
+             take control.\"; got {out:?}"
+        );
+        assert!(
+            !out.contains("and resize it to this terminal"),
+            "displaced notice must not claim it resizes the terminal; got {out:?}"
+        );
     }
 }
