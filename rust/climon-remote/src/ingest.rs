@@ -33,7 +33,7 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::devtunnel::{
     classify_devtunnel_exit, DevtunnelErrorCode, DevtunnelFailure, DevtunnelGateway,
-    DevtunnelOperation, DevtunnelRetryClass, RetryController,
+    DevtunnelHealth, DevtunnelOperation, DevtunnelRetryClass, DevtunnelState, RetryController,
 };
 use crate::ingest_state::IngestState;
 use crate::keepalive::mux_idle_timeout_ms;
@@ -1591,6 +1591,9 @@ pub struct TunnelHostSupervisor<'a> {
     spawn_host: SpawnHostFn<'a>,
     current: Option<HostSlot>,
     retry: RetryController,
+    // Shared, normalized dev-tunnel host health published to the ingest status
+    // beacon. Updated on every host transition; read by the status writer.
+    health: Arc<Mutex<Option<DevtunnelHealth>>>,
 }
 
 impl<'a> TunnelHostSupervisor<'a> {
@@ -1600,7 +1603,18 @@ impl<'a> TunnelHostSupervisor<'a> {
             spawn_host,
             current: None,
             retry: RetryController::new(),
+            health: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// A clonable handle to the shared host-health cell so the ingest status
+    /// writer can read the latest snapshot without borrowing the supervisor.
+    pub fn health_handle(&self) -> Arc<Mutex<Option<DevtunnelHealth>>> {
+        self.health.clone()
+    }
+
+    fn set_health(&self, health: Option<DevtunnelHealth>) {
+        *self.health.lock().unwrap() = health;
     }
 
     /// Compares persisted `remote-host.json` against the running host and
@@ -1623,6 +1637,13 @@ impl<'a> TunnelHostSupervisor<'a> {
             self.retry = RetryController::new();
             if let Some(id) = desired_id {
                 self.spawn_for(id);
+            } else {
+                // No desired host: report a stopped snapshot.
+                self.set_health(Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Stopped,
+                    None,
+                    now_iso(),
+                )));
             }
             return;
         }
@@ -1671,7 +1692,18 @@ impl<'a> TunnelHostSupervisor<'a> {
         }
         let failure = cause.unwrap_or_else(host_clean_exit_failure);
         let state = self.retry.fail(&failure, crate::time::now_ms(), 0.5);
-        if state.paused {
+        let paused = state.paused;
+        self.set_health(Some(DevtunnelHealth::from_failure(
+            if paused {
+                DevtunnelState::Paused
+            } else {
+                DevtunnelState::Retrying
+            },
+            failure,
+            Some(state),
+            now_iso(),
+        )));
+        if paused {
             if let Some(slot) = self.current.as_mut() {
                 slot.paused = true;
             }
@@ -1686,6 +1718,11 @@ impl<'a> TunnelHostSupervisor<'a> {
     fn spawn_for(&mut self, id: String) {
         match (self.spawn_host)(&id) {
             Ok(process) => {
+                self.set_health(Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Running,
+                    Some(now_iso()),
+                    now_iso(),
+                )));
                 self.current = Some(HostSlot {
                     tunnel_id: id,
                     process: Some(process),
@@ -1694,10 +1731,21 @@ impl<'a> TunnelHostSupervisor<'a> {
             }
             Err(failure) => {
                 let state = self.retry.fail(&failure, crate::time::now_ms(), 0.5);
+                let paused = state.paused;
+                self.set_health(Some(DevtunnelHealth::from_failure(
+                    if paused {
+                        DevtunnelState::Paused
+                    } else {
+                        DevtunnelState::Retrying
+                    },
+                    failure,
+                    Some(state),
+                    now_iso(),
+                )));
                 self.current = Some(HostSlot {
                     tunnel_id: id,
                     process: None,
-                    paused: state.paused,
+                    paused,
                 });
             }
         }
@@ -1710,6 +1758,11 @@ impl<'a> TunnelHostSupervisor<'a> {
                 proc.stop();
             }
         }
+        self.set_health(Some(DevtunnelHealth::healthy(
+            DevtunnelState::Stopped,
+            None,
+            now_iso(),
+        )));
     }
 }
 
@@ -1983,11 +2036,13 @@ pub async fn run_ingest_daemon(
     // dead or stale ingest. `on_change` (below) is wired into every connection.
     let status_registry = registry.clone();
     let status_env = config_env.clone();
+    let status_health = supervisor.health_handle();
     let write_status: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         let status = crate::ingest_status::IngestStatus {
             pid: std::process::id(),
             updated_at: crate::time::now_ms(),
             connections: status_registry.connected_snapshot(crate::time::now_ms()),
+            devtunnel: status_health.lock().unwrap().clone(),
         };
         let _ = crate::ingest_status::write_ingest_status(&status, &status_env);
     });

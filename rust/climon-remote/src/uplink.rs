@@ -35,8 +35,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::client_id::default_client_id;
 use crate::devtunnel::{
-    DevtunnelErrorCode, DevtunnelFailure, DevtunnelGateway, DevtunnelOperation,
-    DevtunnelRetryClass, RetryController,
+    DevtunnelErrorCode, DevtunnelFailure, DevtunnelGateway, DevtunnelHealth, DevtunnelOperation,
+    DevtunnelRetryClass, DevtunnelState, RetryController,
 };
 use crate::discovery::{discover_dashboard, DashboardLocation, DiscoveryDeps};
 use crate::keepalive::mux_idle_timeout_ms;
@@ -375,6 +375,11 @@ async fn reconcile(bridge: &mut Bridge) {
         connected_at: bridge.connected_at,
         session_count: bridge.advertised.len() as u32,
         last_error: None,
+        devtunnel: Some(DevtunnelHealth::healthy(
+            DevtunnelState::Running,
+            None,
+            climon_store::paths::now_iso(),
+        )),
     };
     let _ = crate::uplink_status::write_uplink_status(&status, &bridge.config_env);
 }
@@ -576,6 +581,11 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
                     connected_at,
                     session_count: live_session_count(&store_env),
                     last_error: None,
+                    devtunnel: Some(DevtunnelHealth::healthy(
+                        DevtunnelState::Running,
+                        None,
+                        climon_store::paths::now_iso(),
+                    )),
                 };
                 let _ = crate::uplink_status::write_uplink_status(&status, &cfg);
             }
@@ -710,24 +720,45 @@ const DISCOVERY_POLL_SECS: u64 = 30;
 /// until the target changes (actionable/permanent).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReconnectAction {
-    Backoff { delay_ms: u64 },
-    Pause { reason: String },
+    Backoff {
+        delay_ms: u64,
+        health: DevtunnelHealth,
+    },
+    Pause {
+        reason: String,
+        health: DevtunnelHealth,
+    },
 }
 
 /// Records a failure against the controller and decides whether to reconnect
 /// with capped backoff or pause. Jitter is fixed at `0.5` (multiplier `1.0`) so
 /// the sequence is deterministic; the controller pauses non-transient failures.
+/// The classified failure + retry state are captured once into a
+/// [`DevtunnelHealth`] snapshot so the beacon never rebuilds failure strings.
 fn plan_reconnect(controller: &mut RetryController, failure: &DevtunnelFailure) -> ReconnectAction {
     let now_ms = crate::time::now_ms();
     let state = controller.fail(failure, now_ms, 0.5);
+    let probed_at = climon_store::paths::now_iso();
     if state.paused {
+        let health = DevtunnelHealth::from_failure(
+            DevtunnelState::Paused,
+            failure.clone(),
+            Some(state),
+            probed_at,
+        );
         ReconnectAction::Pause {
             reason: failure.summary.clone(),
+            health,
         }
     } else {
-        ReconnectAction::Backoff {
-            delay_ms: controller.backoff_delay_ms(state.attempt, failure.retry_after_ms, 0.5),
-        }
+        let delay_ms = controller.backoff_delay_ms(state.attempt, failure.retry_after_ms, 0.5);
+        let health = DevtunnelHealth::from_failure(
+            DevtunnelState::Retrying,
+            failure.clone(),
+            Some(state),
+            probed_at,
+        );
+        ReconnectAction::Backoff { delay_ms, health }
     }
 }
 
@@ -993,7 +1024,15 @@ fn write_supervisor_status(
     connected_at: Option<u64>,
     session_count: u32,
     last_error: Option<String>,
+    devtunnel: Option<DevtunnelHealth>,
 ) {
+    // Keep `last_error` populated for pre-devtunnel readers: fall back to the
+    // health snapshot's failure summary when the caller did not pass one.
+    let last_error = last_error.or_else(|| {
+        devtunnel
+            .as_ref()
+            .and_then(|h| h.last_failure.as_ref().map(|f| f.summary.clone()))
+    });
     let status = crate::uplink_status::UplinkStatus {
         pid: std::process::id(),
         updated_at: crate::time::now_ms(),
@@ -1002,6 +1041,7 @@ fn write_supervisor_status(
         connected_at,
         session_count,
         last_error,
+        devtunnel,
     };
     let _ = crate::uplink_status::write_uplink_status(&status, config_env);
 }
@@ -1184,6 +1224,11 @@ async fn run_target_bridge(
             None,
             0,
             None,
+            Some(DevtunnelHealth::healthy(
+                DevtunnelState::Starting,
+                None,
+                climon_store::paths::now_iso(),
+            )),
         );
 
         // Wait for the forwarded port to become reachable while also watching for
@@ -1235,6 +1280,11 @@ async fn run_target_bridge(
                 Some(connected_at),
                 live_session_count(&store_env),
                 None,
+                Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Running,
+                    Some(climon_store::paths::now_iso()),
+                    climon_store::paths::now_iso(),
+                )),
             );
             let bridge = run_uplink_bridge(
                 channel,
@@ -1290,13 +1340,29 @@ async fn apply_reconnect(
     target: Option<crate::uplink_status::UplinkTarget>,
 ) -> bool {
     match action {
-        ReconnectAction::Pause { reason } => {
-            write_supervisor_status(config_env, "paused", target, None, 0, Some(reason));
+        ReconnectAction::Pause { reason, health } => {
+            write_supervisor_status(
+                config_env,
+                "paused",
+                target,
+                None,
+                0,
+                Some(reason),
+                Some(health),
+            );
             cancel.cancelled().await;
             true
         }
-        ReconnectAction::Backoff { delay_ms } => {
-            write_supervisor_status(config_env, "reconnecting", target, None, 0, None);
+        ReconnectAction::Backoff { delay_ms, health } => {
+            write_supervisor_status(
+                config_env,
+                "reconnecting",
+                target,
+                None,
+                0,
+                None,
+                Some(health),
+            );
             sleep_backoff_or_cancel(cancel, delay_ms).await
         }
     }
@@ -1335,7 +1401,19 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         let config = resolve_uplink_config(&config_env, cwd);
         if !enabled && peer_home.is_none() {
             reconcile_targets(&mut supervisor.active, &[], &mut |_| unreachable!());
-            write_supervisor_status(&config_env, "disconnected", None, None, 0, None);
+            write_supervisor_status(
+                &config_env,
+                "disconnected",
+                None,
+                None,
+                0,
+                None,
+                Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Stopped,
+                    None,
+                    climon_store::paths::now_iso(),
+                )),
+            );
             return 0;
         }
 
@@ -1402,7 +1480,19 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         };
         reconcile_targets(&mut supervisor.active, &desired, &mut spawn);
         if supervisor.active.is_empty() {
-            write_supervisor_status(&config_env, "disconnected", None, None, 0, None);
+            write_supervisor_status(
+                &config_env,
+                "disconnected",
+                None,
+                None,
+                0,
+                None,
+                Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Stopped,
+                    None,
+                    climon_store::paths::now_iso(),
+                )),
+            );
         }
         tokio::time::sleep(Duration::from_secs(DISCOVERY_POLL_SECS)).await;
     }
@@ -1842,12 +1932,12 @@ mod tests {
         );
         assert_eq!(network.code, DevtunnelErrorCode::NetworkUnavailable);
         match plan_reconnect(&mut controller, &network) {
-            ReconnectAction::Backoff { delay_ms } => assert_eq!(delay_ms, 1000),
+            ReconnectAction::Backoff { delay_ms, .. } => assert_eq!(delay_ms, 1000),
             other => panic!("expected backoff for transient failure, got {other:?}"),
         }
         // Second transient failure escalates the capped-exponential delay.
         match plan_reconnect(&mut controller, &network) {
-            ReconnectAction::Backoff { delay_ms } => assert_eq!(delay_ms, 2000),
+            ReconnectAction::Backoff { delay_ms, .. } => assert_eq!(delay_ms, 2000),
             other => panic!("expected escalated backoff, got {other:?}"),
         }
     }
