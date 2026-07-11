@@ -349,8 +349,9 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "session.ipcTransport",
     type: "string",
     defaultValue: "local",
-    purpose: "IPC transport used by session daemons. Defaults to owner-only local sockets/pipes; set to 'tcp' for authenticated loopback TCP when local socket paths are unavailable.",
+    purpose: "Transport for per-session daemon IPC. 'local' (default) uses an owner-only Unix domain socket (macOS/Linux/WSL) or Windows named pipe; 'tcp' uses an authenticated loopback TCP fallback for when local socket paths are unavailable. All transports require the mutual-HMAC handshake, so 'tcp' is not a security downgrade.",
     scope: ["client", "daemon"],
+    globalOnly: true,
     acceptInput: true,
     validate: (value: unknown) => {
       if (typeof value !== "string") {

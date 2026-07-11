@@ -512,11 +512,12 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         ConfigSetting::new(
             "session.ipcTransport",
             String,
-            "IPC transport used by session daemons. Defaults to owner-only local sockets/pipes; set to 'tcp' for authenticated loopback TCP when local socket paths are unavailable.",
+            "Transport for per-session daemon IPC. 'local' (default) uses an owner-only Unix domain socket (macOS/Linux/WSL) or Windows named pipe; 'tcp' uses an authenticated loopback TCP fallback for when local socket paths are unavailable. All transports require the mutual-HMAC handshake, so 'tcp' is not a security downgrade.",
             vec![Client, Daemon],
         )
         .default(Value::from("local"))
         .accept_input()
+        .global_only()
         .with_validate(v_session_ipc_transport),
         ConfigSetting::new(
             "session.terminalProgram",

@@ -61,6 +61,7 @@ result-tracking row.
 | — | Dashboard preferences (shared theme picker + key-bar pin) | [dashboard-preferences.md](dashboard-preferences.md) |
 | — | Per-session theme + default theme (CLI `--theme`, Edit/New dialogs, live inheritance) | [per-session-theme.md](per-session-theme.md) |
 | — | Windows — no console-window popups from remote child processes (`devtunnel`/`tasklist`/`taskkill`/peer discovery) | [windows-no-console-popups.md](windows-no-console-popups.md) |
+| — | Security — authenticated session IPC (owner-only local transport + mutual-HMAC handshake, CWE-306) | [security-session-ipc-authentication.md](security-session-ipc-authentication.md) |
 | — | Security — WebSocket attach Origin validation | [security-ws-attach-origin.md](security-ws-attach-origin.md) |
 | — | Security DNS-rebinding guard for dashboard reads/delete | [security-dns-rebind.md](security-dns-rebind.md) |
 | — | Security — project-local config global-only settings | [security-config-global-only.md](security-config-global-only.md) |

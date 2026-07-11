@@ -2,8 +2,8 @@
 
 climon is a built-in, cross-platform session manager. There are three roles: the
 **launcher/client**, the per-session **daemon**, and the **dashboard server**.
-They are decoupled through the filesystem (session metadata) and per-session
-sockets.
+They are decoupled through the filesystem (session metadata and owner-only IPC
+credentials) and authenticated per-session IPC endpoints.
 
 > **Client = Rust, server = Bun.** The shipped
 > `climon` *client* (launcher, attach client, `run`/`shell`/`ls`/`kill`,
@@ -24,14 +24,14 @@ sockets.
 ```
 climon <cmd>  ──spawn(detached)──►  session daemon  ──portable-pty──►  user command
      │  (local attach client)            │  owns PTY + scrollback ring buffer
-     │  raw-mode stdin/stdout            │  listens on per-session socket
+     │  raw-mode stdin/stdout            │  listens on authenticated IPC endpoint
      │  static-screen attention det.     │  (single writer of session metadata)
-     └──────── IPC socket ───────────────┤  applies client attention frames
+     └──── authenticated IPC endpoint ───┤  applies client attention frames
                                           │  writes ~/.climon/sessions/<id>.json
 climon server (Bun.serve)                 │  persists final buffer + status on exit
      │  scans ~/.climon/sessions/*.json   │
      │  fs.watch → SSE status updates     │
-     │  WS /api/sessions/:id/attach ──────┘  (bridges browser ⇆ daemon socket)
+     │  WS /api/sessions/:id/attach ──────┘  (authenticates, then bridges browser ⇆ daemon)
      └─ serves React + Fluent UI dashboard (bundled xterm.js, no iframe)
 ```
 
@@ -55,32 +55,42 @@ Launched as `climon __session <id>`, detached from the launcher. It:
 1. Reads the session metadata file.
 2. Spawns the PTY and **synchronously** attaches `onData`/`onExit`.
 3. Patches metadata to `running` with its PID.
-4. Listens on the per-session socket (`createServer`), replaying the scrollback
-   buffer to each new client.
-5. Appends PTY output to a ring buffer (~256 KB),
+4. Creates `sessions/<id>.ipc-lock/`, binds an owner-only local endpoint (Unix
+   socket on macOS/Linux/WSL, Windows named pipe) or authenticated loopback-TCP
+   fallback, then publishes the owner-only `.ipc-auth` sidecar and metadata.
+5. Authenticates every peer with the per-session HMAC credential before replaying
+   the scrollback buffer to that client.
+6. Appends PTY output to a ring buffer (~256 KB),
    broadcasts it to connected clients, and applies attention transitions
    reported by the attached client (it is the single writer of session
    metadata).
-6. Scans PTY output for terminal titles (`OSC 0`/`OSC 2`) and progress
+7. Scans PTY output for terminal titles (`OSC 0`/`OSC 2`) and progress
    (`OSC 9;4`, the ConEmu/Windows-Terminal taskbar-progress sequence),
    debounces them, and persists the latest `terminalTitle`/`progress` to
    metadata. Both are passthrough — the bytes are forwarded to the client
    untouched. The dashboard renders `progress` per session (a determinate bar,
    spinner, or error/warning icon).
-7. On PTY exit: persists final scrollback, patches metadata to
+8. On PTY exit: persists final scrollback, patches metadata to
    `completed`/`failed` with the exit code, notifies clients, and shuts down.
 
 Because the daemon owns the PTY, the dashboard server can come and go freely.
 
 ### IPC framing (`rust/climon-proto/`)
 
-A length-prefixed binary protocol over the socket:
+A length-prefixed binary protocol over the authenticated endpoint:
 `[4-byte BE length][1-byte type][payload]`. Types: `Output`, `Input`, `Resize`,
-`Exit`, `Replay`, `PtySize`, `Attention`, `Control`, `TakeControl`.
+`Exit`, `Replay`, `PtySize`, `Attention`, `Control`, `TakeControl`, and the
+pre-session auth frames (`AuthChallenge`, `AuthResponse`, `AuthOk`,
+`AuthError`, `AuthProbeOk`).
 `FrameDecoder` reassembles frames split across chunks. Every surface — the local
 terminal, a browser dashboard, or an installed PWA — attaches with a stable
 `viewerId` and a `kind` (`terminal`, `dashboard`, or `pwa`) and reports its own
 viewport with `Resize` frames.
+
+Before any PTY frame is accepted or replayed, the client and daemon complete a
+mutual HMAC-SHA-256 handshake keyed by
+`$CLIMON_HOME/sessions/<id>.ipc-auth`. `Session` purpose connections attach and
+bridge terminal I/O; `Probe` purpose connections prove liveness only.
 
 The daemon tracks exactly **one controller** at a time, and the shared PTY grid
 always matches the controller's size — there is no clamping, so whoever holds
@@ -101,15 +111,18 @@ swallows every keystroke except the take-control action.
 
 ### Local client (`rust/climon-cli/src/client.rs`)
 
-Connects to the daemon socket, puts stdin in raw mode, forwards keystrokes as
-`Input` frames, renders `Output`/`Replay` to stdout, sends `Resize` on terminal
-resize, and detaches on **Ctrl-\ then d** without stopping the command.
+Reads the session's `.ipc-auth` sidecar, authenticates to the daemon endpoint,
+puts stdin in raw mode, forwards keystrokes as `Input` frames, renders
+`Output`/`Replay` to stdout, sends `Resize` on terminal resize, and detaches on
+**Ctrl-\ then d** without stopping the command.
 
 ### Launcher (`rust/climon-cli` launcher module)
 
-`startMonitoredCommand` writes metadata, spawns the daemon (logging its output to
-`~/.climon/sessions/<id>.log`), waits for the socket, prints the dashboard URL,
-then attaches the local client. Also implements `attach`, `ls`, and `kill`.
+`startMonitoredCommand` writes initial metadata, spawns the daemon (logging its
+output to `~/.climon/sessions/<id>.log`), waits until the daemon has taken the
+ownership lock, bound the endpoint, and published its `.ipc-auth` sidecar plus
+metadata, prints the dashboard URL, then attaches the local client. Also
+implements `attach`, `ls`, and `kill`.
 
 ### Dashboard server (`src/server/server.ts`)
 
@@ -152,9 +165,10 @@ A `Bun.serve` server, stateless with respect to PTYs:
 - `GET /api/sessions/:id/scrollback` — final output for completed sessions.
 - `GET /api/events` — Server-Sent Events; a debounced `fs.watch` on the sessions
   directory pushes updated lists.
-- `WS /api/sessions/:id/attach` — bridges the browser WebSocket to the daemon
-  socket, translating between the JSON browser protocol and the binary frame
-  protocol.
+- `WS /api/sessions/:id/attach` — the server reads the owner-only IPC credential,
+  authenticates to the daemon endpoint, then bridges the browser WebSocket to the
+  daemon, translating between the JSON browser protocol and the binary frame
+  protocol. The credential and auth frames are never forwarded to the browser.
 - `GET /assets/app.js` — the bundled React + Fluent UI dashboard. In the compiled
   binary it is served from the base64-embedded copy; running from source it is
   built on demand with `Bun.build` (`src/server/web-build.ts`) and cached.
@@ -304,11 +318,13 @@ for C.
 | `config.jsonc` | server host/port, terminal/theme/attention settings, feature flags (legacy `config.json` is read and migrated) |
 | `server.json` | running dashboard server state: `{ pid, port, ingest? }` (discovery/stop; read by a peer OS for WSL<->Windows discovery) |
 | `sessions/<id>.json` | session metadata |
+| `sessions/<id>.ipc-auth` | owner-only IPC credential sidecar: protocol version, generation, endpoint, credential |
+| `sessions/<id>.ipc-lock/` | exclusive daemon ownership lock directory (atomic `mkdir`) |
 | `sessions/<id>.scrollback` | final captured output |
 | `sessions/<id>.log` | daemon raw stdout/stderr (uncaught crash output) |
 | `logs/<role>/*.log` | structured pino NDJSON logs per role (server/client/daemon/ingest/uplink) |
-| `sock/<id>.sock` | per-session IPC socket (POSIX) |
-| `\\.\pipe\climon-<id>` | per-session IPC pipe (Windows) |
+| `sock/<id>.sock` | owner-only per-session IPC socket (POSIX local transport) |
+| `\\.\pipe\climon-<id>` | same-user per-session IPC pipe (Windows local transport) |
 | `push/vapid.json` | server VAPID keypair for Web Push (auto-created) |
 | `push/subscriptions.json` | browser push subscriptions (deduped by endpoint) |
 
