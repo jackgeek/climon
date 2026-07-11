@@ -289,6 +289,19 @@ pub fn plan_uplink_start(config: &UplinkStartConfig, probe: &DevtunnelProbe) -> 
             warning: None,
         };
     }
+    if probe.timed_out {
+        // Dev Tunnels stalled instead of answering. We can't tell healthy from
+        // broken, so spawn best-effort (the detached uplink retries discovery
+        // with capped backoff and reports state via `climon remotes`) and warn
+        // the user rather than hang or fail silently.
+        return UplinkStartPlan {
+            should_spawn: true,
+            warning: Some(
+                "climon: Dev Tunnels didn't respond within 5s; starting remote monitoring anyway. If sessions don't appear on the remote dashboard, check `climon remotes` or run `devtunnel user login`.\n"
+                    .to_string(),
+            ),
+        };
+    }
     if !probe.available {
         return UplinkStartPlan {
             should_spawn: false,
@@ -943,7 +956,58 @@ mod tests {
         );
     }
 
-    // Serialize tests that mutate process-global state (cwd / CLIMON_HOME via
+    #[test]
+    fn plan_uplink_spawns_best_effort_on_probe_timeout() {
+        let plan = plan_uplink_start(
+            &UplinkStartConfig {
+                enabled: true,
+                host: None,
+                tunnel_id: Some("spiffy-chair-c2lj709.eun1".to_string()),
+                port: None,
+            },
+            &DevtunnelProbe {
+                available: false,
+                authenticated: false,
+                timed_out: true,
+            },
+        );
+        assert!(plan.should_spawn, "timeout should still spawn best-effort");
+        let warning = plan.warning.expect("timeout must warn the user");
+        assert!(
+            warning.contains("didn't respond within 5s"),
+            "warning should explain the timeout, got: {warning}"
+        );
+        assert!(
+            warning.contains("climon remotes"),
+            "warning should point at `climon remotes`, got: {warning}"
+        );
+    }
+
+    #[test]
+    fn plan_uplink_ignores_timeout_for_direct_host() {
+        // A direct host+port never needs devtunnel, so a timeout is irrelevant:
+        // spawn directly with no warning.
+        let plan = plan_uplink_start(
+            &UplinkStartConfig {
+                enabled: true,
+                host: Some("172.30.192.1".to_string()),
+                tunnel_id: None,
+                port: Some(3132),
+            },
+            &DevtunnelProbe {
+                available: false,
+                authenticated: false,
+                timed_out: true,
+            },
+        );
+        assert_eq!(
+            plan,
+            UplinkStartPlan {
+                should_spawn: true,
+                warning: None
+            }
+        );
+    }
     // StoreEnv::from_env is avoided by using explicit envs, but keep a lock for
     // any env-touching helpers).
     static LOCK: Mutex<()> = Mutex::new(());
