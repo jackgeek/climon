@@ -207,6 +207,7 @@ version = "0.1.0"
 dependencies = [
  "climon-proto",
  "getrandom 0.4.3",
+ "hex",
  "human_id",
  "libc",
  "serde",
