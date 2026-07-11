@@ -10,9 +10,9 @@ Climon uses Microsoft Dev Tunnels for two related products:
 
 - **Tunnel Link:** the Bun dashboard server exposes the local dashboard through an
   authenticated dev tunnel.
-- **Remote sessions:** the Bun server creates and hosts the home ingest tunnel,
-  while the Rust client discovers tunnels and runs the remote `connect`, `host`,
-  and port-inspection operations.
+- **Remote sessions:** the Bun server creates/configures the home ingest tunnel,
+  while the Rust ingest daemon hosts it and the Rust client discovers tunnels and
+  runs the remote `connect`, `host`, and port-inspection operations.
 
 Dev-tunnel policy is not centralized today. The Bun dashboard tunnel manager,
 server-side remote helpers, Rust launcher, Rust discovery, Rust uplink, and Rust
@@ -66,7 +66,6 @@ by:
 
 - Dashboard Tunnel Link;
 - ingest-tunnel creation and port management;
-- server-side ingest tunnel hosting;
 - availability and authentication probes.
 
 Dashboard and remote managers retain product-specific lifecycle responsibilities,
@@ -82,7 +81,7 @@ One Rust module owns every client-side `devtunnel` command and process used by:
 - labeled ingest-tunnel discovery;
 - tunnel port inspection;
 - uplink `connect`;
-- ingest `host`;
+- ingest-tunnel `host`;
 - process output capture and supervision.
 
 The launcher, discovery, uplink, and ingest modules consume typed gateway results.
@@ -343,12 +342,11 @@ dashboard instead of only being written to stderr or debug logs.
    - Make the menu always visible.
    - Add the state-driven dialog, README install link, details, and Retry.
 3. **Server-side ingest**
-   - Route ingest creation, port reconciliation, and hosting through the Bun
-     gateway.
+   - Route ingest creation and port reconciliation through the Bun gateway.
    - Expose startup and runtime health in remote status.
 4. **Rust remotes**
-   - Route launcher probes, discovery, port inspection, connect, and host through
-     the Rust gateway.
+   - Route launcher probes, discovery, port inspection, connect, and ingest host
+     through the Rust gateway.
    - Replace empty/silent failure behavior with typed status and retry policy.
    - Render the state in `climon remotes`.
 5. **Cleanup**
