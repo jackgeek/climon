@@ -154,6 +154,10 @@ struct HostState {
     /// notice be re-centered when the local console is resized while displaced,
     /// instead of being stranded off-centre or scrolled away. Cleared on restore.
     local_notice_size: Option<(u16, u16)>,
+    /// The pending leg of a two-leg repaint jiggle, if one is in progress. Set
+    /// by `request_jiggle` (local restore + non-local same-size take-control),
+    /// consumed one leg per tick by the restore thread.
+    pending_jiggle: Option<JiggleLeg>,
 
     exited: bool,
     exit_code: Option<i32>,
@@ -445,6 +449,15 @@ impl HostState {
         self.controller_id = Some(vid.to_string());
         self.set_pty_size(cols, rows);
         self.broadcast_control();
+    }
+
+    /// Schedule a two-leg repaint jiggle (Leg 1 next tick). Coalesces: a request
+    /// while a jiggle is already in progress is a no-op, so overlapping restore /
+    /// take-control events cannot stack extra resizes.
+    fn request_jiggle(&mut self) {
+        if self.pending_jiggle.is_none() {
+            self.pending_jiggle = Some(JiggleLeg::Away);
+        }
     }
 
     /// Processes a chunk of in-process local-terminal stdin. While the local
@@ -771,6 +784,7 @@ pub fn run_session_host(
         local_output_suppressed: false,
         local_restore_at: None,
         local_notice_size: None,
+        pending_jiggle: None,
         exited: false,
         exit_code: None,
         scrollback: climon_pty::Scrollback::new(SCROLLBACK_CAP),
@@ -1440,34 +1454,31 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
                 s.local_output_suppressed = false;
                 s.local_restore_at = None;
                 s.local_notice_size = None;
-
-                // Advise the wrapped command to repaint its *authoritative*
-                // screen on top of the shadow baseline: jiggle the PTY one row
-                // away and back, forcing a real size change so SIGWINCH (Unix) /
-                // a ConPTY resize (Windows) makes the app redraw. Capture the
-                // resizer + current size, then DROP the lock and jiggle *after*
-                // unsuppressing — otherwise the app's repaint burst is either
-                // swallowed by the suppression gate or blocked behind this lock,
-                // and it must land after the shadow repaint so the app's state
-                // ends up on top. The net size change is zero, so grid/metadata
-                // are intentionally left untouched (we drive the raw resizer,
-                // not apply_resize).
-                let resizer = s.resizer.clone();
-                let cols = s.applied_cols;
-                let rows = s.applied_rows;
-                drop(s);
-                resizer.resize(cols, jiggle_rows(rows));
-                // Re-read the live size under the lock for the return leg so a
-                // controller/viewer resize that lands during the jiggle window
-                // is not clobbered by the now-stale captured size. Restoring to
-                // the current applied size keeps the PTY, grid, and metadata in
-                // lock-step (set_pty_size is the only other writer of these).
-                let (back_cols, back_rows) = {
-                    let s = state.lock().unwrap();
-                    (s.applied_cols, s.applied_rows)
-                };
-                resizer.resize(back_cols, back_rows);
+                // Ask the wrapped command to repaint its *authoritative* screen on
+                // top of the shadow baseline. The jiggle driver below runs it
+                // after unsuppressing (this same tick starts Leg 1), so the app's
+                // repaint burst is not swallowed by the suppression gate.
+                s.request_jiggle();
             }
+        }
+        // Jiggle driver: run one leg of a pending size jiggle per 25 ms tick. The
+        // inter-tick gap is the load-bearing settle delay — two resizes closer
+        // together coalesce (Node re-reads winsize only after both land and sees
+        // no net change), so the intermediate size would never be observed. Leg 1
+        // drives a both-dimension off-size (busts frame-caching TUIs like Ink);
+        // Leg 2 returns to the *current* live size, re-read under the lock so a
+        // concurrent controller/viewer resize is never clobbered by a stale
+        // value (keeps PTY / grid / metadata in lock-step). We drive the raw
+        // resizer, not apply_resize, because the net size change is zero.
+        if let Some(leg) = s.pending_jiggle {
+            let resizer = s.resizer.clone();
+            let (cols, rows) = match leg {
+                JiggleLeg::Away => jiggle_size(s.applied_cols, s.applied_rows),
+                JiggleLeg::Back => (s.applied_cols, s.applied_rows),
+            };
+            s.pending_jiggle = leg.next();
+            drop(s);
+            resizer.resize(cols, rows);
         }
     })
 }
@@ -1915,7 +1926,9 @@ mod writer_thread_tests {
 
 #[cfg(test)]
 mod restore_decision_tests {
-    use super::{jiggle_rows, jiggle_size, local_restore_decision, JiggleLeg, LocalRestoreDecision};
+    use super::{
+        jiggle_rows, jiggle_size, local_restore_decision, JiggleLeg, LocalRestoreDecision,
+    };
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1987,7 +2000,13 @@ mod restore_decision_tests {
 
     #[test]
     fn jiggle_size_is_never_equal_to_input() {
-        for (cols, rows) in [(1u16, 1u16), (1, 24), (80, 24), (200, 50), (u16::MAX, u16::MAX)] {
+        for (cols, rows) in [
+            (1u16, 1u16),
+            (1, 24),
+            (80, 24),
+            (200, 50),
+            (u16::MAX, u16::MAX),
+        ] {
             assert_ne!(jiggle_size(cols, rows), (cols, rows));
         }
     }
