@@ -731,8 +731,12 @@ mod tests {
     fn entry_rejects_backslash_rooted_name_even_if_file_exists_in_staging() {
         let staged = minimal_staged();
         // '\' is a valid filename character on Unix — create it to ensure
-        // old is_file() would succeed.
-        std::fs::write(staged.root().join("\\evil"), b"content").unwrap();
+        // old is_file() would succeed. The leading backslash is a filename
+        // byte here (not a path separator), so the join deliberately lands the
+        // file inside staging rather than replacing the root.
+        #[allow(clippy::join_absolute_paths)]
+        let evil = staged.root().join("\\evil");
+        std::fs::write(evil, b"content").unwrap();
 
         let err = staged.entry("\\evil").unwrap_err();
         assert_eq!(err.kind(), &ArtifactErrorKind::Io);
