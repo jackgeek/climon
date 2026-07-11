@@ -139,12 +139,12 @@ mod tests {
     }
 
     #[test]
-    fn copies_install_as_climon_and_siblings() {
+    fn copies_climon_and_siblings() {
         let root = temp_root();
         let source_dir = root.join("src");
         let install_dir = root.join(".local").join("bin");
         fs::create_dir_all(&source_dir).unwrap();
-        fs::write(source_dir.join("install"), "client").unwrap();
+        fs::write(source_dir.join("climon"), "client").unwrap();
         fs::write(source_dir.join("climon-server"), "server").unwrap();
 
         install_binaries(&source_dir, &install_dir, InstallBinariesOptions::default()).unwrap();
@@ -166,7 +166,7 @@ mod tests {
         let source_dir = root.join("src");
         let install_dir = root.join(".local").join("bin");
         fs::create_dir_all(&source_dir).unwrap();
-        fs::write(source_dir.join("install"), "client").unwrap();
+        fs::write(source_dir.join("climon"), "client").unwrap();
 
         let err = install_binaries(&source_dir, &install_dir, InstallBinariesOptions::default())
             .unwrap_err();
@@ -204,7 +204,7 @@ mod tests {
         let source_dir = root.join("src");
         let install_dir = root.join(".local").join("bin");
         fs::create_dir_all(&source_dir).unwrap();
-        fs::write(source_dir.join("install"), "client").unwrap();
+        fs::write(source_dir.join("climon"), "client").unwrap();
         fs::write(source_dir.join("climon-server"), "server").unwrap();
 
         let climon_attempts = Cell::new(0);
@@ -335,7 +335,7 @@ mod tests {
         let source_dir = root.join("src");
         let install_dir = root.join(".local").join("bin");
         fs::create_dir_all(&source_dir).unwrap();
-        for name in ["install", "climon-server"] {
+        for name in ["climon", "climon-server"] {
             let p = source_dir.join(name);
             fs::write(&p, "bin").unwrap();
             set_quarantine(&p);

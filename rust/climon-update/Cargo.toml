@@ -6,6 +6,13 @@ license.workspace = true
 description = "climon self-update: Ed25519 verify, manifest, atomic no-kill binary swap (Rust port of the TS client updater)"
 build = "build.rs"
 
+[features]
+# Dev/test only: allows `climon update` to read its manifest URL from the
+# CLIMON_TEST_MANIFEST_URL env var instead of the hardcoded production URL.
+# NEVER enabled by scripts/compile.ts or .github/workflows/release.yml — shipped
+# binaries physically lack the override code.
+test-update-endpoint = []
+
 [lib]
 name = "climon_update"
 path = "src/lib.rs"
