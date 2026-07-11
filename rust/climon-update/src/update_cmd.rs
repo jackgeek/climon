@@ -1,17 +1,13 @@
-//! `climon update` core: download, verify, and apply. Port of
-//! `src/update/update-cmd.ts`.
+//! `climon update` core: select, verify, stage, and delegate installation.
 //!
 //! Never kills a process for the expected outcomes; returns a structured status.
 
-use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::Path;
+use std::process::{Command, ExitStatus};
 
-use crate::download::{download_text, download_to_file, MAX_ARTIFACT_BYTES, MAX_TEXT_BYTES};
-use crate::install_manifest::install_files_for_platform;
+use crate::artifact::{stage_release_artifact, ArtifactErrorKind};
 use crate::manifest::{artifact_key, is_newer, Manifest};
-use crate::pointer::{client_dll_name, server_exe_name, write_pointer};
-use crate::swap::{cleanup_old_files, remove_orphan_files, replace_file_atomic};
-use crate::verify::verify_signature;
 
 /// Outcome status of an update attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +15,6 @@ pub enum UpdateStatus {
     Updated,
     UpToDate,
     VerifyFailed,
-    Deferred,
     NoArtifact,
 }
 
@@ -43,17 +38,44 @@ pub struct UpdateCommandOptions<'a> {
 const MSG_UP_TO_DATE: &str = "climon is already up to date";
 const MSG_VERIFY_FAILED: &str =
     "Update aborted: signature verification failed. No changes were made.";
-const MSG_DEFERRED: &str =
-    "Update could not be applied right now (files in use). Will retry later.";
 
-/// Files that earlier versions installed but newer releases no longer ship.
-/// Deleted from the install dir on a successful update.
-const REMOVED_FILES: &[&str] = &["climon-beta"];
+/// Executes the verified installer entrypoint.
+pub trait InstallerRunner {
+    fn run(&mut self, program: &Path, args: &[OsString]) -> Result<ExitStatus, String>;
+}
 
-/// Downloads, verifies, and applies an update without ever killing a process.
-/// Returns a structured status; only unexpected I/O errors propagate as `Err`.
+/// Runs the installer directly, without a shell.
+pub struct CommandInstallerRunner;
+
+impl InstallerRunner for CommandInstallerRunner {
+    fn run(&mut self, program: &Path, args: &[OsString]) -> Result<ExitStatus, String> {
+        Command::new(program)
+            .args(args)
+            .status()
+            .map_err(|e| format!("run installer {} failed: {e}", program.display()))
+    }
+}
+
+fn installer_name(platform: &str) -> &'static str {
+    if platform == "win32" {
+        "install.exe"
+    } else {
+        "install"
+    }
+}
+
+fn format_installer_failure(status: ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("installer exited with code {code}"),
+        None => "installer terminated without an exit code".to_string(),
+    }
+}
+
+/// Downloads and verifies a complete release ZIP, stages it safely, and delegates
+/// validation and placement to the release's stable installer entrypoint.
 pub fn run_update_command(
     opts: &UpdateCommandOptions,
+    runner: &mut dyn InstallerRunner,
     print: &mut dyn FnMut(&str),
 ) -> Result<UpdateResult, String> {
     if !is_newer(opts.manifest, opts.current_version) {
@@ -65,97 +87,46 @@ pub fn run_update_command(
     }
 
     let key = artifact_key(opts.platform, opts.arch);
-    let artifact = match opts.manifest.artifacts.get(&key) {
-        Some(a) => a,
-        None => {
-            return Ok(UpdateResult {
-                status: UpdateStatus::NoArtifact,
-                version: None,
-            })
-        }
-    };
-
-    let work = tempfile::tempdir().map_err(|e| format!("temp dir failed: {e}"))?;
-    let zip_path = work.path().join("artifact.zip");
-    let downloaded = download_to_file(&artifact.url, &zip_path, MAX_ARTIFACT_BYTES)?;
-    let sig_b64 = download_text(&artifact.sig, MAX_TEXT_BYTES)?;
-    let zip_bytes = downloaded;
-
-    if !verify_signature(&zip_bytes, &sig_b64, opts.public_key_b64) {
-        print(&format!("{MSG_VERIFY_FAILED}\n"));
+    if !opts.manifest.artifacts.contains_key(&key) {
         return Ok(UpdateResult {
-            status: UpdateStatus::VerifyFailed,
+            status: UpdateStatus::NoArtifact,
             version: None,
         });
     }
 
-    let unzipped = unzip(&zip_bytes)?;
-    let files = install_files_for_platform(opts.platform);
-    let new_version = &opts.manifest.version;
-
-    if opts.platform == "win32" {
-        if should_migrate_legacy(opts.install_dir, &unzipped) {
-            // Bridge migration: extract the release to a temp dir and run the
-            // bundled dedicated installer headless. It displaces the legacy
-            // climon.exe -> .old (renaming a running exe is permitted on
-            // Windows, even the self-image when `climon update` is the caller),
-            // writes the client/server stubs, versioned .dll/.exe, and pointers.
-            migrate_via_bundled_installer(opts.install_dir, &unzipped, new_version, print)?;
+    let staged = match stage_release_artifact(
+        opts.manifest,
+        opts.platform,
+        opts.arch,
+        opts.public_key_b64,
+    ) {
+        Ok(staged) => staged,
+        Err(error) if error.kind() == &ArtifactErrorKind::VerifyFailed => {
+            print(&format!("{MSG_VERIFY_FAILED}\n"));
             return Ok(UpdateResult {
-                status: UpdateStatus::Updated,
-                version: Some(new_version.clone()),
+                status: UpdateStatus::VerifyFailed,
+                version: None,
             });
         }
-        // Windows: write additive versioned files, fsync, then flip pointers.
-        // Never touches the stubs, so an update is never Deferred by a lock.
-        for f in &files {
-            let data = match unzipped.get(&f.source) {
-                Some(d) => d,
-                None => continue,
-            };
-            let (dest_name, base) = if f.source == "climon.dll" {
-                (client_dll_name(new_version), "climon")
-            } else if f.source == "climon-server.exe" {
-                (server_exe_name(new_version), "climon-server")
-            } else {
-                continue;
-            };
-            write_versioned_file(opts.install_dir, &dest_name, data)?;
-            write_pointer(opts.install_dir, base, new_version)?;
-        }
-        crate::reaper::reap_superseded(opts.install_dir);
-        print(&format!(
-            "Update applied. Restart terminals (or the server) to use {new_version}.\n"
-        ));
-        return Ok(UpdateResult {
-            status: UpdateStatus::Updated,
-            version: Some(new_version.clone()),
-        });
+        Err(error) => return Err(error.to_string()),
+    };
+    let installer = staged
+        .entry(installer_name(opts.platform))
+        .map_err(|e| e.to_string())?;
+    let args = vec![
+        OsString::from("--apply-update-v1"),
+        OsString::from("--dir"),
+        opts.install_dir.as_os_str().to_owned(),
+        OsString::from("--source"),
+        staged.root().as_os_str().to_owned(),
+        OsString::from("--version"),
+        OsString::from(&opts.manifest.version),
+    ];
+    let status = runner.run(&installer, &args)?;
+    if !status.success() {
+        return Err(format_installer_failure(status));
     }
 
-    // Unix: existing rename-over swap.
-    let mut deferred = false;
-    for f in &files {
-        let data = match unzipped.get(&f.source) {
-            Some(d) => d,
-            None => continue, // optional files (e.g. future locale packs) may be absent
-        };
-        let result = replace_file_atomic(opts.install_dir, &f.dest, data)?;
-        if result.deferred {
-            deferred = true;
-        }
-    }
-    let dests: Vec<String> = files.iter().map(|f| f.dest.clone()).collect();
-    cleanup_old_files(opts.install_dir, &dests);
-
-    if deferred {
-        print(&format!("{MSG_DEFERRED}\n"));
-        return Ok(UpdateResult {
-            status: UpdateStatus::Deferred,
-            version: Some(new_version.clone()),
-        });
-    }
-    remove_orphan_files(opts.install_dir, REMOVED_FILES);
     print(&format!(
         "Update applied. Start new sessions (or restart the server) to use {}.\n",
         opts.manifest.version
@@ -166,128 +137,6 @@ pub fn run_update_command(
     })
 }
 
-/// True when the current install is the legacy layout (no `climon.version`
-/// pointer) AND the downloaded release is stub-model (carries `climon.dll`) and
-/// bundles the dedicated installer (`install.exe`). Windows-only in practice;
-/// harmless elsewhere. Gates the one-time bridge migration.
-fn should_migrate_legacy(install_dir: &Path, unzipped: &HashMap<String, Vec<u8>>) -> bool {
-    !install_dir.join("climon.version").exists()
-        && unzipped.contains_key("climon.dll")
-        && unzipped.contains_key("install.exe")
-}
-
-/// Extracts every unzipped release entry into a temp dir and runs
-/// `install.exe --migrate --dir <install_dir> --source <temp_dir>` to convert a
-/// legacy install to the stub layout. The temp dir is created inside
-/// `install_dir` so the installer reads local files. Errors propagate; on
-/// installer non-zero exit, returns Err (the caller reports failure and the
-/// legacy install is left untouched because the installer only mutates on
-/// success).
-fn migrate_via_bundled_installer(
-    install_dir: &Path,
-    unzipped: &HashMap<String, Vec<u8>>,
-    new_version: &str,
-    print: &mut dyn FnMut(&str),
-) -> Result<(), String> {
-    let pid = std::process::id();
-    let now = crate::clock::now_ms();
-    let staging = install_dir.join(format!(".climon-migrate-{pid}-{now}"));
-    std::fs::create_dir_all(&staging)
-        .map_err(|e| format!("create staging {} failed: {e}", staging.display()))?;
-    for (name, bytes) in unzipped {
-        let dest = staging.join(name);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        std::fs::write(&dest, bytes)
-            .map_err(|e| format!("stage {} failed: {e}", dest.display()))?;
-    }
-    let installer = staging.join("install.exe");
-    print(&format!(
-        "Migrating this install to the new binary layout for {new_version}...\n"
-    ));
-    let status = std::process::Command::new(&installer)
-        .arg("--migrate")
-        .arg("--dir")
-        .arg(install_dir)
-        .arg("--source")
-        .arg(&staging)
-        .status()
-        .map_err(|e| format!("run migrate installer failed: {e}"))?;
-    // Best-effort cleanup of staging (installer already copied what it needs).
-    let _ = std::fs::remove_dir_all(&staging);
-    if !status.success() {
-        return Err(format!(
-            "migration installer exited with {:?}",
-            status.code()
-        ));
-    }
-    print(&format!(
-        "Migration complete. Restart terminals to use {new_version}.\n"
-    ));
-    Ok(())
-}
-
-/// Writes `bytes` to `dir/name` via temp + fsync + rename. Skips if the target
-/// already exists with identical bytes (idempotent re-apply).
-fn write_versioned_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
-    use std::io::Write as _;
-    let target = dir.join(name);
-    if let Ok(existing) = std::fs::read(&target) {
-        if existing == bytes {
-            return Ok(());
-        }
-    }
-    let pid = std::process::id();
-    let now = crate::clock::now_ms();
-    let tmp = dir.join(format!("{name}.tmp-{pid}-{now}"));
-    let mut file =
-        std::fs::File::create(&tmp).map_err(|e| format!("create {} failed: {e}", tmp.display()))?;
-    file.write_all(bytes)
-        .map_err(|e| format!("write {} failed: {e}", tmp.display()))?;
-    file.sync_all()
-        .map_err(|e| format!("fsync {} failed: {e}", tmp.display()))?;
-    drop(file);
-    std::fs::rename(&tmp, &target).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("rename to {} failed: {e}", target.display())
-    })
-}
-
-/// Extracts all regular-file entries from a ZIP archive into a `name → bytes`
-/// map. Backed by [`crate::artifact::extract_zip`] for safe path handling;
-/// recursive directory traversal rebuilds the map with forward-slash keys
-/// matching the original ZIP entry names.
-fn unzip(bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
-    let dir = tempfile::tempdir().map_err(|e| format!("temp dir: {e}"))?;
-    crate::artifact::extract_zip(bytes, dir.path()).map_err(|e| e.to_string())?;
-    collect_extracted_files(dir.path(), dir.path())
-}
-
-/// Recursively walks `dir`, collecting file contents keyed by path relative to
-/// `root` with forward-slash separators. Only regular files are collected;
-/// directories are traversed but not included in the output.
-fn collect_extracted_files(root: &Path, dir: &Path) -> Result<HashMap<String, Vec<u8>>, String> {
-    let mut out = HashMap::new();
-    for entry in std::fs::read_dir(dir).map_err(|e| format!("readdir {}: {e}", dir.display()))? {
-        let e = entry.map_err(|e| format!("dir entry: {e}"))?;
-        let p = e.path();
-        if p.is_dir() {
-            let sub = collect_extracted_files(root, &p)?;
-            out.extend(sub);
-        } else if p.is_file() {
-            let rel = p
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            let data = std::fs::read(&p).map_err(|e| format!("read {}: {e}", p.display()))?;
-            out.insert(rel, data);
-        }
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,8 +144,11 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use ed25519_dalek::{Signer, SigningKey};
     use std::collections::BTreeMap;
+    use std::ffi::{OsStr, OsString};
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::path::PathBuf;
+    use std::process::ExitStatus;
     use zip::write::SimpleFileOptions;
 
     fn node_arch() -> &'static str {
@@ -309,7 +161,11 @@ mod tests {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             let opts =
                 SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-            for (name, data) in [("climon", "new-binary"), ("climon-server", "new-server")] {
+            for (name, data) in [
+                ("install", "verified-installer"),
+                ("climon", "new-binary"),
+                ("climon-server", "new-server"),
+            ] {
                 w.start_file(name, opts).unwrap();
                 w.write_all(data.as_bytes()).unwrap();
             }
@@ -359,15 +215,7 @@ mod tests {
         STANDARD.encode(signing.sign(bytes).to_bytes())
     }
 
-    fn install_dir() -> tempfile::TempDir {
-        let d = tempfile::tempdir().unwrap();
-        std::fs::write(d.path().join("climon"), "old-binary").unwrap();
-        std::fs::write(d.path().join("climon-server"), "old-server").unwrap();
-        std::fs::write(d.path().join("climon-beta"), "old-beta").unwrap();
-        d
-    }
-
-    fn manifest(port: u16, zip_path: &str, encryption: Option<&str>) -> Manifest {
+    fn manifest(port: u16, zip_path: &str) -> Manifest {
         let base = format!("http://127.0.0.1:{port}");
         let mut artifacts = BTreeMap::new();
         artifacts.insert(
@@ -378,20 +226,58 @@ mod tests {
             },
         );
         Manifest {
-            version: "0.99.0".to_string(),
-            encryption: encryption.map(|s| s.to_string()),
+            version: "9.9.0".to_string(),
+            encryption: None,
             artifacts,
         }
     }
 
+    struct RecordingRunner {
+        calls: Vec<(PathBuf, Vec<OsString>)>,
+        status: Option<ExitStatus>,
+        source_contained_program: bool,
+    }
+
+    impl RecordingRunner {
+        fn returning(status: ExitStatus) -> Self {
+            Self {
+                calls: Vec::new(),
+                status: Some(status),
+                source_contained_program: false,
+            }
+        }
+    }
+
+    impl InstallerRunner for RecordingRunner {
+        fn run(&mut self, program: &Path, args: &[OsString]) -> Result<ExitStatus, String> {
+            let source = PathBuf::from(&args[4]);
+            self.source_contained_program =
+                program == source.join(installer_name("linux")).canonicalize().unwrap();
+            self.calls.push((program.to_path_buf(), args.to_vec()));
+            Ok(self.status.take().unwrap())
+        }
+    }
+
+    #[cfg(unix)]
+    fn exit_status(code: i32) -> ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatus::from_raw(code << 8)
+    }
+
+    #[cfg(windows)]
+    fn exit_status(code: u32) -> ExitStatus {
+        use std::os::windows::process::ExitStatusExt;
+        ExitStatus::from_raw(code)
+    }
+
     #[test]
-    fn verified_update_replaces_install_files_on_unix() {
+    fn verified_update_invokes_stable_installer_with_exact_protocol_args() {
         let (signing, pub_b64) = keypair();
         let zip = make_zip();
         let sig = sign(&signing, &zip);
         let port = serve("/artifact.zip", zip, sig);
-        let dir = install_dir();
-        let m = manifest(port, "/artifact.zip", None);
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest(port, "/artifact.zip");
         let opts = UpdateCommandOptions {
             install_dir: dir.path(),
             current_version: "0.12.1",
@@ -400,30 +286,37 @@ mod tests {
             platform: "linux",
             arch: node_arch(),
         };
-        let res = run_update_command(&opts, &mut |_| {}).unwrap();
+        let mut runner = RecordingRunner::returning(exit_status(0));
+
+        let res = run_update_command(&opts, &mut runner, &mut |_| {}).unwrap();
+
         assert_eq!(res.status, UpdateStatus::Updated);
+        assert_eq!(runner.calls.len(), 1);
+        assert!(runner.source_contained_program);
+        let (program, args) = &runner.calls[0];
+        assert_eq!(program.file_name(), Some(OsStr::new("install")));
         assert_eq!(
-            std::fs::read(dir.path().join("climon")).unwrap(),
-            b"new-binary"
-        );
-        assert_eq!(
-            std::fs::read(dir.path().join("climon-server")).unwrap(),
-            b"new-server"
-        );
-        assert!(
-            !dir.path().join("climon-beta").exists(),
-            "orphaned climon-beta should be removed on update"
+            args,
+            &vec![
+                OsString::from("--apply-update-v1"),
+                OsString::from("--dir"),
+                dir.path().as_os_str().to_owned(),
+                OsString::from("--source"),
+                args[4].clone(),
+                OsString::from("--version"),
+                OsString::from("9.9.0"),
+            ]
         );
     }
 
     #[test]
-    fn tampered_artifact_is_rejected_and_files_are_unchanged() {
+    fn signature_failure_never_launches_installer() {
         let (signing, _pub) = keypair();
         let zip = make_zip();
         let sig = sign(&signing, &zip);
         let port = serve("/artifact.zip", zip, sig);
-        let dir = install_dir();
-        let m = manifest(port, "/artifact.zip", None);
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest(port, "/artifact.zip");
         let opts = UpdateCommandOptions {
             install_dir: dir.path(),
             current_version: "0.12.1",
@@ -432,17 +325,41 @@ mod tests {
             platform: "linux",
             arch: node_arch(),
         };
-        let res = run_update_command(&opts, &mut |_| {}).unwrap();
+        let mut runner = RecordingRunner::returning(exit_status(0));
+
+        let res = run_update_command(&opts, &mut runner, &mut |_| {}).unwrap();
+
         assert_eq!(res.status, UpdateStatus::VerifyFailed);
-        assert_eq!(
-            std::fs::read(dir.path().join("climon")).unwrap(),
-            b"old-binary"
-        );
+        assert!(runner.calls.is_empty());
+    }
+
+    #[test]
+    fn installer_exit_code_is_reported_as_update_failure() {
+        let (signing, pub_b64) = keypair();
+        let zip = make_zip();
+        let sig = sign(&signing, &zip);
+        let port = serve("/artifact.zip", zip, sig);
+        let dir = tempfile::tempdir().unwrap();
+        let m = manifest(port, "/artifact.zip");
+        let opts = UpdateCommandOptions {
+            install_dir: dir.path(),
+            current_version: "0.12.1",
+            manifest: &m,
+            public_key_b64: &pub_b64,
+            platform: "linux",
+            arch: node_arch(),
+        };
+        let mut runner = RecordingRunner::returning(exit_status(17));
+
+        let error = run_update_command(&opts, &mut runner, &mut |_| {}).unwrap_err();
+
+        assert!(error.contains("installer exited with code 17"), "{error}");
+        assert_eq!(runner.calls.len(), 1);
     }
 
     #[test]
     fn already_up_to_date_is_a_no_op() {
-        let dir = install_dir();
+        let dir = tempfile::tempdir().unwrap();
         let m = Manifest {
             version: "0.99.0".to_string(),
             encryption: None,
@@ -456,35 +373,9 @@ mod tests {
             platform: "linux",
             arch: node_arch(),
         };
-        let res = run_update_command(&opts, &mut |_| {}).unwrap();
+        let mut runner = RecordingRunner::returning(exit_status(0));
+        let res = run_update_command(&opts, &mut runner, &mut |_| {}).unwrap();
         assert_eq!(res.status, UpdateStatus::UpToDate);
-    }
-
-    #[test]
-    fn windows_versioned_write_is_idempotent() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        write_versioned_file(dir, "climon-3.2.1.dll", b"AAA").unwrap();
-        // Second identical write is a no-op (does not error, keeps content).
-        write_versioned_file(dir, "climon-3.2.1.dll", b"AAA").unwrap();
-        assert_eq!(std::fs::read(dir.join("climon-3.2.1.dll")).unwrap(), b"AAA");
-    }
-
-    #[test]
-    fn detects_legacy_install_receiving_stub_model_release() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        // Legacy install: single climon.exe, no climon.version pointer.
-        std::fs::write(dir.join("climon.exe"), b"legacy-client").unwrap();
-
-        let mut unzipped = std::collections::HashMap::new();
-        unzipped.insert("climon.dll".to_string(), b"new-client".to_vec());
-        unzipped.insert("install.exe".to_string(), b"installer".to_vec());
-
-        assert!(should_migrate_legacy(dir, &unzipped));
-
-        // A stub install (pointer present) is NOT migrated.
-        std::fs::write(dir.join("climon.version"), b"3.2.1\n").unwrap();
-        assert!(!should_migrate_legacy(dir, &unzipped));
+        assert!(runner.calls.is_empty());
     }
 }

@@ -8,7 +8,9 @@ use crate::check::DEFAULT_MANIFEST_URL;
 use crate::manifest::fetch_manifest;
 use crate::pubkey::UPDATE_PUBLIC_KEY_B64;
 use crate::state::clear_available_version;
-use crate::update_cmd::{run_update_command, UpdateCommandOptions, UpdateStatus};
+use crate::update_cmd::{
+    run_update_command, CommandInstallerRunner, UpdateCommandOptions, UpdateStatus,
+};
 use crate::version::VERSION;
 
 /// Resolves the manifest URL for `climon update`.
@@ -32,7 +34,7 @@ fn resolve_manifest_url() -> &'static str {
 }
 
 /// `climon update` entrypoint: resolves the install dir and applies an update.
-/// Returns the process exit code (0 success/up-to-date/deferred; 1 on failure).
+/// Returns the process exit code (0 success/up-to-date; 1 on failure).
 pub fn run_update_cli(_argv: &[String], env: &Env) -> i32 {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
@@ -60,7 +62,8 @@ pub fn run_update_cli(_argv: &[String], env: &Env) -> i32 {
         arch: crate::manifest::current_node_arch(),
     };
 
-    let result = match run_update_command(&opts, &mut |s| print!("{s}")) {
+    let mut runner = CommandInstallerRunner;
+    let result = match run_update_command(&opts, &mut runner, &mut |s| print!("{s}")) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("climon update failed: {e}");

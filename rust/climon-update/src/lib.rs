@@ -3,8 +3,7 @@
 //!
 //! The Ed25519 detached signature scheme and embedded update public key match
 //! the Bun release tooling **byte-for-byte**, so a Rust client can verify
-//! artifacts produced by the existing release pipeline. The self-swap is atomic
-//! and never kills running sessions or the running process.
+//! artifacts produced by the existing release pipeline.
 //!
 //! Modules mirror their TS source files:
 //! - [`verify`]          <- `src/update/verify.ts`
@@ -14,14 +13,12 @@ pub mod artifact;
 pub mod check;
 pub mod clock;
 pub mod download;
-pub mod install_manifest;
 pub mod launch_hooks;
 pub mod manifest;
 pub mod pointer;
 pub mod pubkey;
 pub mod reaper;
 pub mod state;
-pub mod swap;
 pub mod update_cli;
 pub mod update_cmd;
 pub mod verify;
