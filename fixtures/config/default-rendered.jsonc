@@ -41,7 +41,9 @@
     // Specifies the default accent color for new sessions. Accepts ANSI color names (red, green, etc.), 'none', or 'auto' for automatic assignment.
     "color": "auto",
     // Default sort priority (0-1000) for new sessions. Lower numbers sort first within each status group.
-    "priority": 500
+    "priority": 500,
+    // IPC transport used by session daemons. Defaults to owner-only local sockets/pipes; set to 'tcp' for authenticated loopback TCP when local socket paths are unavailable.
+    "ipcTransport": "local"
   },
   "tunnelLink": {
     // Interval in seconds between keep-alive pings sent through the Tunnel Link dev tunnel relay to prevent idle disconnection. Set to 0 to disable keep-alive pings.

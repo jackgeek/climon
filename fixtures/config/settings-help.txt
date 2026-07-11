@@ -145,6 +145,11 @@
     Default sort priority (0-1000) for new sessions. Lower numbers sort first within
     each status group.
 
+  session.ipcTransport
+    Type: string; Default: local; Scope: client, daemon
+    IPC transport used by session daemons. Defaults to owner-only local sockets/pipes;
+    set to 'tcp' for authenticated loopback TCP when local socket paths are unavailable.
+
   session.terminalProgram
     Type: string; Default: unset; Scope: client
     Command template used to open a terminal window for a non-headless (visible) session

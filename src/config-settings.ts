@@ -346,6 +346,22 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "session.ipcTransport",
+    type: "string",
+    defaultValue: "local",
+    purpose: "IPC transport used by session daemons. Defaults to owner-only local sockets/pipes; set to 'tcp' for authenticated loopback TCP when local socket paths are unavailable.",
+    scope: ["client", "daemon"],
+    acceptInput: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "string") {
+        throw new Error("session.ipcTransport must be a string");
+      }
+      if (value !== "local" && value !== "tcp") {
+        throw new Error("session.ipcTransport must be one of: local, tcp");
+      }
+    }
+  },
+  {
     path: "session.terminalProgram",
     type: "string",
     purpose:

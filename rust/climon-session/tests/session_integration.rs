@@ -29,17 +29,19 @@
 #![cfg(unix)]
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use climon_proto::auth::Purpose;
 use climon_proto::frame::{
     encode_json_frame, parse_json_payload, ExitPayload, FrameDecoder, FrameType, PtySizePayload,
     ResizePayload,
 };
 use climon_proto::meta::{PriorityReason, SessionMeta, SessionStatus};
+use climon_session::auth::client_handshake;
 use climon_session::socket::{
     allocate_loopback_port, connect_session_socket, format_session_socket_ref,
     wait_for_session_socket, SessionStream,
@@ -73,7 +75,42 @@ fn scratch_home(tag: &str) -> PathBuf {
         .join("climon-session-test-tmp")
         .join(format!("{tag}-{}-{nanos}-{n}", std::process::id()));
     std::fs::create_dir_all(home.join("sessions")).unwrap();
+    write_test_config(&home, None);
     home
+}
+
+fn write_test_config(home: &Path, idle_seconds: Option<u64>) {
+    let attention = idle_seconds
+        .map(|seconds| format!(", \"attention\": {{ \"idleSeconds\": {seconds} }}"))
+        .unwrap_or_default();
+    std::fs::write(
+        home.join("config.jsonc"),
+        format!("{{ \"session\": {{ \"ipcTransport\": \"tcp\" }}{attention} }}\n"),
+    )
+    .unwrap();
+}
+
+fn connect_authenticated_session(
+    home: &Path,
+    id: &str,
+    timeout: Duration,
+) -> Box<dyn SessionStream> {
+    let env = Env::with_home(home);
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Some(record) = climon_store::ipc_auth::read(&env, id).unwrap() {
+            wait_for_session_socket(&record.endpoint, timeout).expect("socket up");
+            let mut stream = connect_session_socket(&record.endpoint).expect("connect");
+            let credential = record.credential_bytes().unwrap();
+            client_handshake(&mut *stream, &credential, Purpose::Session).unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            return stream;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("IPC auth sidecar not published");
 }
 
 fn base_meta(id: &str, home: &PathBuf, command: Vec<String>) -> SessionMeta {
@@ -167,7 +204,6 @@ fn streams_initial_frames_and_completes() {
         &home,
         vec!["sh".into(), "-c".into(), "printf hello; sleep 1.5".into()],
     );
-    let socket_ref = meta.socket_path.clone();
 
     let host_home = home.clone();
     let host = thread::spawn(move || {
@@ -175,11 +211,7 @@ fn streams_initial_frames_and_completes() {
         run_session_host(id, meta, SessionHostOptions { headless: true }).unwrap()
     });
 
-    wait_for_session_socket(&socket_ref, Duration::from_secs(3)).expect("socket up");
-    let mut stream = connect_session_socket(&socket_ref).expect("connect");
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    let mut stream = connect_authenticated_session(&home, id, Duration::from_secs(3));
 
     let mut decoder = FrameDecoder::new();
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -281,7 +313,6 @@ fn viewer_resize_broadcasts_pty_size() {
 
     let id = "golf-hotel-india";
     let meta = base_meta(id, &home, vec!["sh".into(), "-c".into(), "sleep 2".into()]);
-    let socket_ref = meta.socket_path.clone();
 
     let host_home = home.clone();
     let host = thread::spawn(move || {
@@ -289,11 +320,7 @@ fn viewer_resize_broadcasts_pty_size() {
         run_session_host(id, meta, SessionHostOptions { headless: true }).unwrap()
     });
 
-    wait_for_session_socket(&socket_ref, Duration::from_secs(3)).expect("socket up");
-    let mut stream = connect_session_socket(&socket_ref).expect("connect");
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    let mut stream = connect_authenticated_session(&home, id, Duration::from_secs(3));
 
     // Send a viewer resize larger than the host; the PTY grows to fit it.
     let resize = encode_json_frame(
@@ -329,16 +356,11 @@ fn input_clears_attention_via_three_state_patch() {
     let home = scratch_home("attention-clear");
     std::env::set_var("CLIMON_HOME", &home);
     // Drive the idle detector quickly: flag attention after ~1s of a static screen.
-    std::fs::write(
-        home.join("config.jsonc"),
-        "{ \"attention\": { \"idleSeconds\": 1 } }\n",
-    )
-    .unwrap();
+    write_test_config(&home, Some(1));
 
     let id = "juliet-kilo-lima";
     // `sleep` produces no output, so the screen stays static and goes idle.
     let meta = base_meta(id, &home, vec!["sh".into(), "-c".into(), "sleep 8".into()]);
-    let socket_ref = meta.socket_path.clone();
 
     let host_home = home.clone();
     let host = thread::spawn(move || {
@@ -346,11 +368,7 @@ fn input_clears_attention_via_three_state_patch() {
         run_session_host(id, meta, SessionHostOptions { headless: true }).unwrap()
     });
 
-    wait_for_session_socket(&socket_ref, Duration::from_secs(3)).expect("socket up");
-    let mut stream = connect_session_socket(&socket_ref).expect("connect");
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    let mut stream = connect_authenticated_session(&home, id, Duration::from_secs(3));
 
     let env = Env::with_home(&home);
 
@@ -410,15 +428,10 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
     let home = scratch_home("ack-sticky");
     std::env::set_var("CLIMON_HOME", &home);
     // Flag attention quickly so the test stays short.
-    std::fs::write(
-        home.join("config.jsonc"),
-        "{ \"attention\": { \"idleSeconds\": 1 } }\n",
-    )
-    .unwrap();
+    write_test_config(&home, Some(1));
 
     let id = "mike-november-oscar";
     let meta = base_meta(id, &home, vec!["sh".into(), "-c".into(), "sleep 10".into()]);
-    let socket_ref = meta.socket_path.clone();
 
     let host_home = home.clone();
     let host = thread::spawn(move || {
@@ -426,11 +439,7 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
         run_session_host(id, meta, SessionHostOptions { headless: true }).unwrap()
     });
 
-    wait_for_session_socket(&socket_ref, Duration::from_secs(3)).expect("socket up");
-    let mut stream = connect_session_socket(&socket_ref).expect("connect");
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+    let mut stream = connect_authenticated_session(&home, id, Duration::from_secs(3));
 
     let env = Env::with_home(&home);
 

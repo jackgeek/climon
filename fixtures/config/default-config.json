@@ -26,7 +26,8 @@
   },
   "session": {
     "color": "auto",
-    "priority": 500
+    "priority": 500,
+    "ipcTransport": "local"
   },
   "tunnelLink": {
     "keepAlive": 60
