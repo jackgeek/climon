@@ -534,12 +534,33 @@ impl DevtunnelGateway {
     /// returned so callers can stream and classify the eventual exit. Mirrors
     /// `spawnHost`.
     pub fn spawn_host(&self, id: &str) -> Result<SpawnedDevtunnelProcess, DevtunnelFailure> {
-        let operation = DevtunnelOperation::HostTunnel;
+        self.spawn_long_running(
+            DevtunnelOperation::HostTunnel,
+            vec!["host".to_string(), id.to_string()],
+        )
+    }
+
+    /// Spawns the long-running `devtunnel connect <id>` process used by the
+    /// uplink to reach a remote ingest tunnel. Spawn failures are classified into
+    /// a [`DevtunnelFailure`]; on success the captured stdio is returned so the
+    /// caller can stream and classify the eventual exit.
+    pub fn spawn_connect(&self, id: &str) -> Result<SpawnedDevtunnelProcess, DevtunnelFailure> {
+        self.spawn_long_running(
+            DevtunnelOperation::ConnectTunnel,
+            vec!["connect".to_string(), id.to_string()],
+        )
+    }
+
+    fn spawn_long_running(
+        &self,
+        operation: DevtunnelOperation,
+        args: Vec<String>,
+    ) -> Result<SpawnedDevtunnelProcess, DevtunnelFailure> {
         if self.disabled() {
             return Err(self.classify(operation, &Self::disabled_result(), false));
         }
         let env = devtunnel_env(&self.env);
-        match (self.spawner)("devtunnel", vec!["host".to_string(), id.to_string()], env) {
+        match (self.spawner)("devtunnel", args, env) {
             Ok(mut child) => match (child.stdout.take(), child.stderr.take()) {
                 (Some(stdout), Some(stderr)) => Ok(SpawnedDevtunnelProcess {
                     child,
@@ -554,7 +575,7 @@ impl DevtunnelGateway {
                         &RunResult {
                             status: 127,
                             stdout: String::new(),
-                            stderr: "failed to capture devtunnel host stdio".to_string(),
+                            stderr: "failed to capture devtunnel process stdio".to_string(),
                             spawn_error: Some("EPIPE".to_string()),
                         },
                         false,

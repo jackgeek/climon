@@ -2,6 +2,10 @@
 //! `climon.dll` cdylib. Moved out of `main.rs` so both build targets dispatch
 //! through one entrypoint. Port of `src/index.ts` main().
 
+// Task 8: the ingest host spawn closure returns the large typed
+// `DevtunnelFailure`; allow the lint crate-consistent with gateway.rs.
+#![allow(clippy::result_large_err)]
+
 use std::io::{BufRead, Write};
 
 use crate::args::{help_text, parse_args, ParsedCommand};
@@ -390,10 +394,13 @@ fn run_ingest_entry() -> i32 {
             stop_signal.notify_one();
         });
 
+        let host_gateway = climon_remote::devtunnel::DevtunnelGateway::new();
         let deps = IngestDaemonDeps {
             spawn_uplink: Box::new(spawn_uplink_detached),
             stop_local_server: Box::new(|| {}),
-            spawn_host: Box::new(|id: &str| climon_remote::ingest::spawn_devtunnel_host(id)),
+            spawn_host: Box::new(move |id: &str| {
+                climon_remote::ingest::spawn_devtunnel_host(&host_gateway, id)
+            }),
         };
         match run_ingest_daemon(config_env, store_env, stop, deps).await {
             Ok(IngestExit::AlreadyRunning) => 0,

@@ -60,17 +60,7 @@ impl RetryController {
             };
         }
         self.attempt += 1;
-        let factor = if self.attempt > 63 {
-            u64::MAX
-        } else {
-            1u64 << (self.attempt - 1)
-        };
-        let raw = self.cap_ms.min(self.base_ms.saturating_mul(factor));
-        let jittered = (raw as f64 * (0.8 + jitter * 0.4)).round() as u64;
-        let delay = match failure.retry_after_ms {
-            Some(retry_after) => jittered.max(retry_after),
-            None => jittered,
-        };
+        let delay = self.backoff_delay_ms(self.attempt, failure.retry_after_ms, jitter);
         DevtunnelRetryState {
             attempt: self.attempt,
             next_retry_at: Some(iso_from_ms(now_ms.saturating_add(delay))),
@@ -85,6 +75,27 @@ impl RetryController {
             attempt: 0,
             next_retry_at: None,
             paused: false,
+        }
+    }
+
+    /// The capped-exponential backoff delay (in milliseconds) for the given
+    /// attempt number, applying the same jitter and `retry_after_ms` floor as
+    /// [`RetryController::fail`]. Callers that sleep locally (rather than
+    /// persisting a `next_retry_at` timestamp) use this to honor the controller's
+    /// policy without duplicating the formula.
+    pub fn backoff_delay_ms(&self, attempt: u32, retry_after_ms: Option<u64>, jitter: f64) -> u64 {
+        let factor = if attempt == 0 {
+            1
+        } else if attempt > 63 {
+            u64::MAX
+        } else {
+            1u64 << (attempt - 1)
+        };
+        let raw = self.cap_ms.min(self.base_ms.saturating_mul(factor));
+        let jittered = (raw as f64 * (0.8 + jitter * 0.4)).round() as u64;
+        match retry_after_ms {
+            Some(retry_after) => jittered.max(retry_after),
+            None => jittered,
         }
     }
 
