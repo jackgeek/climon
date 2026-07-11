@@ -5,7 +5,6 @@
     "port": 3131
   },
   "terminal": {
-    "clampBrowserToHost": false,
     "detachPrefix": 28
   },
   "hotKeys": {

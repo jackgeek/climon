@@ -234,12 +234,10 @@ user-facing `license` command is documented in help.
 3. Confirm the terminal detaches and returns to your original shell while the
    session keeps running.
 4. `climon ls` → the session is still `running`.
-5. (Restore-clamped variant) Re-attach is out of Phase 8 scope; verify only the
-   detach key handling here.
 
 **Expected:** The `Ctrl-\ d` chord detaches without killing the session; the
-prefix byte is consumed and not forwarded to the PTY. `Ctrl-\ c` is the
-restore-clamped detach. The session continues under its daemon.
+prefix byte is consumed and not forwarded to the PTY. The session continues under
+its daemon.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|

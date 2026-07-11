@@ -76,9 +76,7 @@ mock.module("@fluentui/react-components", () => ({
 }));
 
 mock.module("@fluentui/react-icons", () => ({
-  ...iconStubs,
-  LockClosed16Regular: () => createElement("span", { "data-icon": "lock-closed" }),
-  LockOpen16Regular: () => createElement("span", { "data-icon": "lock-open" })
+  ...iconStubs
 }));
 
 const { SessionItem, sessionAccessibleLabel, sessionDisplayTitle } = await import(
@@ -283,8 +281,7 @@ describe("SessionItem terminated controls", () => {
           onMaximize: () => {},
           onNew: () => {},
           onPauseToggle: () => {},
-          onSelect: () => {},
-          viewMode: "fill"
+          onSelect: () => {}
         })
       );
 
@@ -292,9 +289,8 @@ describe("SessionItem terminated controls", () => {
       expect(markup).not.toContain("Edit session");
       expect(markup).not.toContain("Pause session");
       expect(markup).not.toContain("Resume session");
-      expect(markup).not.toContain("Clamp terminal size");
-      expect(markup).not.toContain('data-icon="lock-open"');
-      expect(markup).not.toContain('data-icon="lock-closed"');
+      expect(markup).not.toContain("Take control");
+      expect(markup).not.toContain('data-icon="take-control"');
       expect(markup).toContain("Close session");
     }
   });
@@ -324,95 +320,31 @@ describe("SessionItem open terminal ordering", () => {
   });
 });
 
-describe("SessionItem clamp lock", () => {
-  const lockProps = {
-    compact: false,
-    onClose: () => {},
-    onEdit: () => {},
-    onMaximize: () => {},
-    onNew: () => {},
-    onPauseToggle: () => {},
-    onSelect: () => {}
-  };
-
-  test("shows a closed lock for the active clamped session", () => {
+describe("SessionItem take control", () => {
+  test("never renders a take-control button (auto-take-control replaced it)", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionItem, {
-        ...lockProps,
+        compact: false,
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onPauseToggle: () => {},
+        onSelect: () => {},
         active: true,
-        session: makeSession(),
-        viewMode: "clamped"
+        session: makeSession()
       })
     );
 
-    expect(markup).toContain('data-icon="lock-closed"');
-    expect(markup).not.toContain('data-icon="lock-open"');
+    expect(markup).not.toContain('data-icon="take-control"');
+    expect(markup).not.toContain("Take control");
   });
 
-  test("shows an open lock for the active fill session", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SessionItem, {
-        ...lockProps,
-        active: true,
-        session: makeSession(),
-        viewMode: "fill"
-      })
-    );
-
-    expect(markup).toContain('data-icon="lock-open"');
-    expect(markup).not.toContain('data-icon="lock-closed"');
-  });
-
-  test("forces a closed lock when locked even if the mode is fill", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SessionItem, {
-        ...lockProps,
-        active: true,
-        session: makeSession(),
-        viewMode: "fill",
-        viewModeLocked: true
-      })
-    );
-
-    expect(markup).toContain('data-icon="lock-closed"');
-    expect(markup).not.toContain('data-icon="lock-open"');
-    expect(markup).not.toContain('data-disabled="true"');
-  });
-
-  test("keeps the lock enabled for the active session", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SessionItem, {
-        ...lockProps,
-        active: true,
-        session: makeSession(),
-        viewMode: "clamped"
-      })
-    );
-
-    expect(markup).not.toContain('data-disabled="true"');
-  });
-
-  test("renders the lock for inactive live sessions so hover can reveal it", () => {
-    const markup = renderToStaticMarkup(
-      createElement(SessionItem, {
-        ...lockProps,
-        active: false,
-        session: makeSession(),
-        viewMode: "fill"
-      })
-    );
-
-    expect(markup).not.toContain('data-icon="lock-closed"');
-    expect(markup).toContain('data-icon="lock-open"');
-  });
-
-  test("reveals the lock on hover like the other actions, but keeps it visible on mobile", () => {
+  test("source no longer references the take-control button plumbing", () => {
     const source = readFileSync("src/web/components/SessionItem.tsx", "utf8");
 
-    expect(source).toContain('":hover .climon-lock": { display: "inline-flex" }');
-    expect(source).toContain('mergeClasses("climon-lock", styles.lockBtn)');
-    expect(source).toMatch(
-      /lockBtn:\s*\{[\s\S]*?display:\s*"none"[\s\S]*?\[MOBILE_MEDIA_QUERY_RULE\][\s\S]*?display:\s*"inline-flex"/
-    );
+    expect(source).not.toContain("climon-take-control");
+    expect(source).not.toContain("onTakeControl");
+    expect(source).not.toContain("lockBtn");
   });
 });

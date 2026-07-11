@@ -18,7 +18,6 @@ describe("config settings registry", () => {
       "version",
       "server.host",
       "server.port",
-      "terminal.clampBrowserToHost",
       "terminal.detachPrefix",
       "hotKeys.focusTopSession",
       "dashboard.theme",
@@ -95,7 +94,6 @@ describe("config settings registry", () => {
       version: 1,
       server: { host: "127.0.0.1", port: 3131 },
       terminal: {
-        clampBrowserToHost: false,
         detachPrefix: 0x1c
       },
       hotKeys: { focusTopSession: "Alt+J" },
@@ -178,7 +176,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(42);
+    expect(allConfigKeys().length).toBe(41);
   });
 
   test("coerces values through registry validators", () => {

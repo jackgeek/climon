@@ -61,10 +61,6 @@ describe("config defaults", () => {
     expect("token" in config.server).toBe(false);
   });
 
-  test("does not clamp browser to host terminal size by default", () => {
-    expect(defaultConfig().terminal.clampBrowserToHost).toBe(false);
-  });
-
   test("default config sets session color to auto", () => {
     expect(defaultConfig().session?.color).toBe("auto");
   });

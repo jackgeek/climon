@@ -19,7 +19,7 @@ import {
   refreshTerminalRender,
   refreshTerminalForReplay,
   resetTerminalForSession,
-  shouldRequestReplayForAuthoritativeMode,
+  shouldForwardTerminalData,
   shouldReconnectLiveAttachment,
   shouldHandleWheelAsScrollback,
   TerminalView,
@@ -41,10 +41,8 @@ describe("TerminalView", () => {
       createElement(TerminalView, {
         accentColor: "blue",
         maximized: false,
-        onViewModeChange: () => {},
         session: null,
         visible: false,
-        viewMode: "clamped",
         fontSize: 13,
         xtermTheme: { background: "#0d1117" },
         onFontSizeChange: () => {},
@@ -60,7 +58,7 @@ describe("TerminalView", () => {
   test("refits when the selected session changes even if terminal chrome is unchanged", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
-    expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);");
+    expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible]);");
   });
 
   test("reattaches live sessions after the dashboard server reconnects", () => {
@@ -70,29 +68,17 @@ describe("TerminalView", () => {
     expect(source).toContain("}, [attachKey(session, visible), serverConnected, serverReconnectToken]);");
   });
 
-  test("fully resets and replays on server reconnect so mouse-tracking modes are restored", () => {
+  test("tracks the server reconnect token so a bumped token drives a fresh attach", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
-    expect(source).toContain(
-      "const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;"
-    );
     expect(source).toContain("lastServerReconnectTokenRef.current = serverReconnectToken;");
-    // A reconnect re-queues the user's clamp/fill mode so the full reset + replay
-    // path (the daemon's replay carries the authoritative mouse private-mode
-    // suffix) restores mouse tracking after the socket reopens.
-    expect(source).toContain(
-      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
-    );
   });
 
-  test("pauses reconnect retries while the server is unavailable and restores the selected mode afterward", () => {
+  test("pauses reconnect retries while the server is unavailable", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("serverConnected: boolean;");
     expect(source).toContain("if (!visible || !serverConnected) {\n        return;\n      }");
-    expect(source).toContain(
-      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
-    );
     expect(source).toContain("serverConnectedRef.current");
   });
 
@@ -110,20 +96,12 @@ describe("TerminalView", () => {
     );
   });
 
-  test("requests a replay after mode-change resize so scrollback is rebuilt for the new PTY size", () => {
+  test("requests a replay after a grid-change resize so scrollback is rebuilt for the new PTY size", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("replayAfterNextResizeRef.current = true;");
-    expect(source).toContain("message.mode = viewModeRef.current;");
     expect(source).toContain('ws.send(JSON.stringify({ type: "replay" }));');
     expect(source).toContain('} else if (msg.type === "replay") {\n            awaitingReplayRef.current = true;\n          }');
-  });
-
-  test("requests a replay for daemon-reported mode changes after initial replay", () => {
-    expect(shouldRequestReplayForAuthoritativeMode("clamped", "fill", true)).toBe(true);
-    expect(shouldRequestReplayForAuthoritativeMode("fill", "clamped", true)).toBe(true);
-    expect(shouldRequestReplayForAuthoritativeMode("fill", "fill", true)).toBe(false);
-    expect(shouldRequestReplayForAuthoritativeMode("clamped", "fill", false)).toBe(false);
   });
 
   test("refreshes the renderer when a hidden terminal becomes visible", () => {
@@ -329,6 +307,37 @@ describe("TerminalView", () => {
 
     expect(focusCalls).toBe(1);
     expect(refreshCalls).toBe(1);
+  });
+
+  test("forwards live terminal data but suppresses xterm-generated replay responses", () => {
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: true,
+        replayWriteInProgress: false
+      })
+    ).toBe(true);
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: false,
+        replayWriteInProgress: false
+      })
+    ).toBe(false);
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: true,
+        replayWriteInProgress: true
+      })
+    ).toBe(false);
+    expect(
+      shouldForwardTerminalData({
+        displaced: true,
+        initialReplayComplete: true,
+        replayWriteInProgress: false
+      })
+    ).toBe(false);
   });
 
   test("captures the full terminal buffer as text, dropping trailing blank rows", async () => {
@@ -623,5 +632,80 @@ describe("TerminalHandle refresh", () => {
     expect(source).toContain("refresh: () => void;");
     // Imperative handle wires it to the repaint-only function (no refit).
     expect(source).toContain("refresh: () => refreshTerminalRender(termRef.current)");
+  });
+});
+
+describe("TerminalView control handoff", () => {
+  test("defers the displaced overlay to avoid a take-control handoff flash", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // The displaced gating ref updates immediately, but the visual overlay is
+    // scheduled behind a short delay so a fast handoff never flashes the dialog.
+    expect(source).toContain("scheduleDisplacedOverlay()");
+    expect(source).toContain("DISPLACED_OVERLAY_DELAY_MS");
+    // Gaining control cancels any pending overlay and shows the terminal at once.
+    expect(source).toContain("cancelDisplacedOverlay();\n              applyDisplacedUi(state);");
+    // The overlay is only revealed if we are still displaced when the delay ends.
+    expect(source).toContain("if (displacedRef.current) {\n        setDisplayState(\"displaced\");");
+  });
+
+  test("reclaims control when the window regains focus or visibility", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Edge-triggered focus/visibility listeners re-arm take-control for the
+    // currently attached session (bug: dashboards should take over on focus).
+    expect(source).toContain('window.addEventListener("focus", reclaimOnFocus)');
+    expect(source).toContain('document.addEventListener("visibilitychange", reclaimOnFocus)');
+    expect(source).toContain("armTakeControl(sessionId)");
+    // Skip reclaiming when we already hold control to avoid redundant churn.
+    expect(source).toContain("if (controllerIdRef.current === viewerIdRef.current) {");
+  });
+
+  test("controller does not refit on self-caused grid changes (no resize feedback loop)", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // The refit-on-control decision is gated on shouldRefitOnControlFrame, which
+    // only fires on the displaced->controlling transition -- never on the grid
+    // changes the controller itself causes. Regression guard for the mobile PWA
+    // resize storm where refitting on every control frame looped forever.
+    expect(source).toContain("if (shouldRefitOnControlFrame({ state, wasDisplaced })) {");
+    // The old size-diff trigger must be gone.
+    expect(source).not.toContain("const gridChanged =");
+    expect(source).not.toContain("(gridChanged || wasDisplaced)");
+  });
+
+  test("terminal flex items can shrink from a larger controller grid to a smaller viewport", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // xterm's current canvas width contributes an intrinsic min-content width.
+    // Without minWidth: 0 on both flex items, a terminal sized by a larger
+    // controller makes FitAddon measure that stale width instead of the smaller
+    // dashboard viewport, so the grid remains off the right edge.
+    expect(source).toMatch(/wrapper:\s*\{[\s\S]*?minWidth:\s*0[\s\S]*?\n\s*\},\n\s*root:/);
+    expect(source).toMatch(/root:\s*\{[\s\S]*?minWidth:\s*0[\s\S]*?\n\s*padding:/);
+  });
+
+  test("focusing the terminal repaints but never refits (no focus->resize spiral)", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Focus is not a geometry change: refitting on focus lets xterm's focus
+    // churn (helper-textarea re-focus on refresh/resize) re-fire focusin at the
+    // double-rAF cadence, driving an unbounded shrinking resize spiral when the
+    // dashboard takes control. The focus/onFocusCapture path must repaint only.
+    expect(source).toContain("function repaintActiveTerminal(): void {");
+    // onFocusCapture (fires on every focusin bubbling from xterm) must repaint,
+    // never refit.
+    expect(source).toContain("onFocusCapture={repaintActiveTerminal}");
+    expect(source).not.toContain("onFocusCapture={refreshActiveTerminal}");
+    // Clicking to focus repaints stale glyphs too, but must not refit either.
+    expect(source).toContain("focusTerminalPane(termRef.current, repaintActiveTerminal)");
+    expect(source).not.toContain("focusTerminalPane(termRef.current, refreshActiveTerminal)");
+    // The refresh+refit helper survives for the post-replay settle, where a
+    // genuine geometry fit is wanted after the captured grid renders.
+    expect(source).toContain("function refreshActiveTerminal(): void {");
+    expect(source).toContain("refreshActiveTerminal\n            );");
+  });
+
+  test("redundant resize reports are suppressed via shouldSendResize", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Viewport jitter must not spam identical PTY resizes; only real size
+    // changes (or a replay-carrying resize) are sent.
+    expect(source).toContain("if (!shouldSendResize({ last: lastSentSizeRef.current, next: { cols, rows }, requestReplay })) {");
+    expect(source).toContain("lastSentSizeRef.current = { cols, rows };");
   });
 });

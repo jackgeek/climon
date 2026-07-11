@@ -6,17 +6,13 @@ import {
   Pause16Regular,
   Play16Regular,
   Settings16Regular,
-  LockClosed16Regular,
-  LockOpen16Regular,
   ErrorCircle16Filled,
   Warning16Filled,
   ArrowSync16Regular
 } from "@fluentui/react-icons";
 import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import type { SessionMeta, TerminalProgress } from "../../types.js";
-import type { TerminalResizeMode } from "../../ipc/frame.js";
 import { isLiveStatus } from "../api.js";
-import { clampSizeMenuLabel } from "../view-mode.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { bottomRowRightOffsets } from "./session-item-layout.js";
@@ -33,8 +29,7 @@ const useStyles = makeStyles({
     ":hover .climon-close": { display: "inline-flex" },
     ":hover .climon-new": { display: "inline-flex" },
     ":hover .climon-edit": { display: "inline-flex" },
-    ":hover .climon-pause": { display: "inline-flex" },
-    ":hover .climon-lock": { display: "inline-flex" }
+    ":hover .climon-pause": { display: "inline-flex" }
   },
   compactRoot: {
     minHeight: "54px",
@@ -129,11 +124,6 @@ const useStyles = makeStyles({
     bottom: "8px",
     display: "none"
   },
-  lockBtn: {
-    position: "absolute",
-    bottom: "8px",
-    display: "none"
-  },
   maximize: {
     display: "none",
     marginTop: "8px",
@@ -211,9 +201,6 @@ interface Props {
   onEdit: (session: SessionMeta) => void;
   onPauseToggle: (session: SessionMeta) => void;
   onMaximize: (id: string) => void;
-  viewMode?: TerminalResizeMode;
-  viewModeLocked?: boolean;
-  onViewModeToggle?: () => void;
   stateIconNoMotion?: boolean;
 }
 
@@ -306,9 +293,6 @@ export function SessionItem({
   onEdit,
   onPauseToggle,
   onMaximize,
-  viewMode,
-  viewModeLocked = false,
-  onViewModeToggle,
   stateIconNoMotion = false
 }: Props) {
   const styles = useStyles();
@@ -385,21 +369,6 @@ export function SessionItem({
           onClick={(e) => {
             e.stopPropagation();
             onEdit(session);
-          }}
-        />
-      )}
-      {showLiveControls && (
-        <Button
-          className={mergeClasses("climon-lock", styles.lockBtn)}
-          style={{ right: `${rightOffsets.lock}px` }}
-          appearance="subtle"
-          size="small"
-          icon={viewMode === "fill" && !viewModeLocked ? <LockOpen16Regular /> : <LockClosed16Regular />}
-          title={clampSizeMenuLabel}
-          aria-label={clampSizeMenuLabel}
-          onClick={(e) => {
-            e.stopPropagation();
-            onViewModeToggle?.();
           }}
         />
       )}

@@ -7,9 +7,7 @@ import {
   FrameType,
   parseJsonPayload,
   type ResizePayload,
-  type AttentionPayload,
-  type TerminalModePayload,
-  type TerminalWarningPayload
+  type AttentionPayload
 } from "../src/ipc/frame.js";
 
 describe("frame codec", () => {
@@ -73,31 +71,16 @@ describe("frame codec", () => {
     expect(parseJsonPayload<{ name: string }>(decoded[0].payload)).toEqual({ name: "dev server" });
   });
 
-  test("round-trips a terminal mode frame", () => {
-    const frame = encodeJsonFrame(FrameType.TerminalMode, { mode: "clamped" });
-    const decoded = new FrameDecoder().push(frame);
-    expect(decoded).toHaveLength(1);
-    expect(decoded[0].type).toBe(FrameType.TerminalMode);
-    expect(parseJsonPayload<TerminalModePayload>(decoded[0].payload)).toEqual({ mode: "clamped" });
+  test("round-trips a Control frame", () => {
+    const frame = encodeJsonFrame(FrameType.Control, { controllerId: "local", cols: 80, rows: 24 });
+    const [decoded] = new FrameDecoder().push(frame);
+    expect(decoded.type).toBe(FrameType.Control);
+    expect(JSON.parse(decoded.payload.toString())).toEqual({ controllerId: "local", cols: 80, rows: 24 });
   });
 
-  test("round-trips a host-only terminal warning frame", () => {
-    const frame = encodeJsonFrame(FrameType.TerminalWarning, {
-      kind: "overgrown",
-      cols: 140,
-      rows: 40,
-      hostCols: 80,
-      hostRows: 24
-    });
-    const decoded = new FrameDecoder().push(frame);
-    expect(decoded).toHaveLength(1);
-    expect(decoded[0].type).toBe(FrameType.TerminalWarning);
-    expect(parseJsonPayload<TerminalWarningPayload>(decoded[0].payload)).toEqual({
-      kind: "overgrown",
-      cols: 140,
-      rows: 40,
-      hostCols: 80,
-      hostRows: 24
-    });
+  test("resize payload carries surface identity", () => {
+    const frame = encodeJsonFrame(FrameType.Resize, { cols: 120, rows: 40, kind: "dashboard", viewerId: "abc" });
+    const [decoded] = new FrameDecoder().push(frame);
+    expect(JSON.parse(decoded.payload.toString())).toEqual({ cols: 120, rows: 40, kind: "dashboard", viewerId: "abc" });
   });
 });

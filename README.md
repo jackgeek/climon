@@ -314,7 +314,6 @@ Common settings:
 | `server.host`                 | `127.0.0.1` | Dashboard bind address. **Never change this** — see the security warning below. |
 | `server.port`                 | `3131`      | Dashboard port.                                         |
 | `attention.idleSeconds`       | `10`        | Idle seconds before a session is flagged for attention. |
-| `terminal.clampBrowserToHost` | `false`     | Clamp browser viewer resizes to the host terminal size. |
 | `dashboard.theme`             | `Default`   | Terminal colour theme (also settable from the ☰ menu). |
 | `session.color`               | `auto`      | Default accent colour for new sessions.                 |
 | `session.priority`            | `500`       | Default sort priority for new sessions.                 |
@@ -374,6 +373,14 @@ From the phone you get the same fully interactive web terminal, so you can check
 on and drive your sessions remotely. If the tunnel sign-in expires, relaunch the
 PWA — its launch reruns the tunnel sign-in — and it never stores tunnel
 credentials of its own in the browser.
+
+When several surfaces view the same session at once — your local terminal, the
+desktop dashboard, and your phone — they share one live terminal and only one is
+**in control** of its size at a time. A viewer that's too small to show the
+controller's grid is blanked behind a *"being viewed on a climon dashboard"*
+screen with a **Take control** button; tap the session's **maximize** button (or
+press **Space** in a displaced local terminal) to take control and resize the
+shared terminal to fit your view. See [docs/usage.md](docs/usage.md).
 
 > **PWA works best in Chrome or Edge on mobile.** On iOS, install and open the
 > PWA from **Chrome** (or Edge). iOS **Safari** currently can't complete the

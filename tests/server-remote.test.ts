@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
 import { readServerStateFromDir, getServerStatePath, serializeServerState } from "../src/server-state.js";
-import { computeRemotesActive } from "../src/server/server.js";
+import { browserResizePayload, computeRemotesActive } from "../src/server/server.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
@@ -17,6 +17,16 @@ test("remotes are active when wslBridge or remotes flag is enabled", () => {
   expect(computeRemotesActive({ feature: { wslBridge: "enabled" } } as never)).toBe(true);
   expect(computeRemotesActive({ feature: { remotes: "enabled" } } as never)).toBe(true);
   expect(computeRemotesActive({ feature: { remoteSpawn: "enabled" } } as never)).toBe(false);
+});
+
+test("browserResizePayload carries kind and viewerId, not source/mode", () => {
+  expect(browserResizePayload({ cols: 100, rows: 40, kind: "dashboard", viewerId: "v1" })).toEqual({
+    cols: 100,
+    rows: 40,
+    kind: "dashboard",
+    viewerId: "v1"
+  });
+  expect(browserResizePayload({ cols: 0, rows: 40 })).toBeNull();
 });
 
 describe("buildInterimWslExposureWarning", () => {
@@ -121,7 +131,7 @@ describe("buildHealthPayload", () => {
   const baseConfig = {
     version: 1 as const,
     server: { host: "127.0.0.1", port: 3131 },
-    terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+    terminal: { detachPrefix: 28 },
     attention: { idleSeconds: 30 },
     hotKeys: { focusTopSession: "Alt+J" },
     feature: { remotes: "enabled" as const }
@@ -563,7 +573,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" }
     };
@@ -591,7 +601,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" },
       remote: { enabled: true, tunnelId: "uplink", ingestHost: "localhost" }
@@ -623,7 +633,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" }
     };
@@ -648,7 +658,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" },
       remote: {
