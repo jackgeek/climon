@@ -1408,6 +1408,33 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
                 s.local_output_suppressed = false;
                 s.local_restore_at = None;
                 s.local_notice_size = None;
+
+                // Advise the wrapped command to repaint its *authoritative*
+                // screen on top of the shadow baseline: jiggle the PTY one row
+                // away and back, forcing a real size change so SIGWINCH (Unix) /
+                // a ConPTY resize (Windows) makes the app redraw. Capture the
+                // resizer + current size, then DROP the lock and jiggle *after*
+                // unsuppressing — otherwise the app's repaint burst is either
+                // swallowed by the suppression gate or blocked behind this lock,
+                // and it must land after the shadow repaint so the app's state
+                // ends up on top. The net size change is zero, so grid/metadata
+                // are intentionally left untouched (we drive the raw resizer,
+                // not apply_resize).
+                let resizer = s.resizer.clone();
+                let cols = s.applied_cols;
+                let rows = s.applied_rows;
+                drop(s);
+                resizer.resize(cols, jiggle_rows(rows));
+                // Re-read the live size under the lock for the return leg so a
+                // controller/viewer resize that lands during the jiggle window
+                // is not clobbered by the now-stale captured size. Restoring to
+                // the current applied size keeps the PTY, grid, and metadata in
+                // lock-step (set_pty_size is the only other writer of these).
+                let (back_cols, back_rows) = {
+                    let s = state.lock().unwrap();
+                    (s.applied_cols, s.applied_rows)
+                };
+                resizer.resize(back_cols, back_rows);
             }
         }
     })
@@ -1890,6 +1917,26 @@ mod restore_decision_tests {
             local_restore_decision(Some(past), now, false),
             LocalRestoreDecision::Repaint
         );
+    }
+
+    #[test]
+    fn jiggle_rows_steps_down_when_room() {
+        assert_eq!(jiggle_rows(24), 23);
+        assert_eq!(jiggle_rows(2), 1);
+    }
+
+    #[test]
+    fn jiggle_rows_steps_up_at_minimum() {
+        // rows == 1 cannot step down (resize clamps to >= 1, which would be a
+        // no-op the de-dupe swallows), so step up instead to force a change.
+        assert_eq!(jiggle_rows(1), 2);
+    }
+
+    #[test]
+    fn jiggle_rows_is_never_equal_to_input() {
+        for rows in [1u16, 2, 24, 50, 200, u16::MAX - 1] {
+            assert_ne!(jiggle_rows(rows), rows);
+        }
     }
 
     #[test]
