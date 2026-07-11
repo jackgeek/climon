@@ -297,6 +297,21 @@ describe("scheduleTerminalRefit", () => {
 });
 
 describe("tab refocus terminal refresh", () => {
+  test("arms take-control on page return before the terminal WebSocket reattaches", () => {
+    const source = readFileSync("src/web/App.tsx", "utf8");
+
+    const onVisibilityStart = source.indexOf("const onVisibility = ");
+    const onVisibilityEnd = source.indexOf("document.addEventListener(\"visibilitychange\"", onVisibilityStart);
+    const onVisibilityBody = source.slice(onVisibilityStart, onVisibilityEnd);
+
+    // Hiding the page tears down the terminal WebSocket. On return the native
+    // visibility event runs before React reattaches, so App must arm the active
+    // viewed session now; TerminalView flushes the pending takeover on socket open.
+    expect(onVisibilityBody).toContain("if (activeId && (!isMobile || maximized)) {");
+    expect(onVisibilityBody).toContain("term.armTakeControl(activeId);");
+    expect(source).toContain("}, [activeId, armReconnectOverlay, isMobile, maximized]);");
+  });
+
   test("repaints on refocus and focuses only on desktop", () => {
     const source = readFileSync("src/web/App.tsx", "utf8");
 
@@ -322,8 +337,8 @@ describe("tab refocus terminal refresh", () => {
     expect(elseIdx).toBeGreaterThan(refreshIdx);
     expect(focusIdx).toBeGreaterThan(elseIdx);
 
-    // The handler reads isMobile, so it must be a dependency of the effect.
-    expect(source).toContain("}, [armReconnectOverlay, isMobile]);");
+    // Every value read by the handler must be a dependency of the effect.
+    expect(source).toContain("}, [activeId, armReconnectOverlay, isMobile, maximized]);");
   });
 });
 

@@ -214,6 +214,14 @@ export function canRefitTerminalForSession(
   return isLiveStatus(session.status) && initialReplayComplete;
 }
 
+export function shouldForwardTerminalData(state: {
+  displaced: boolean;
+  initialReplayComplete: boolean;
+  replayWriteInProgress: boolean;
+}): boolean {
+  return !state.displaced && state.initialReplayComplete && !state.replayWriteInProgress;
+}
+
 export function completeInitialReplay(
   replayGeneration: number,
   currentGeneration: number,
@@ -362,10 +370,12 @@ const useStyles = makeStyles({
     position: "relative",
     display: "flex",
     flex: "1 1 auto",
+    minWidth: 0,
     minHeight: 0
   },
   root: {
     flex: "1 1 auto",
+    minWidth: 0,
     minHeight: 0,
     padding: "8px",
     "& .xterm-viewport": {
@@ -459,6 +469,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const awaitingReplayRef = useRef(false);
+  const replayWriteInProgressRef = useRef(false);
   const replayAfterNextResizeRef = useRef(false);
   const lastServerReconnectTokenRef = useRef(serverReconnectToken);
   const onLiveInteractionRef = useRef(onLiveInteraction);
@@ -669,13 +680,24 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     });
   }
 
+  // Repaint the viewport without touching geometry. Focus is not a resize, so
+  // the focus path must never refit: refitting on focus lets xterm's own focus
+  // churn (it re-focuses its helper textarea when the grid is refreshed/resized)
+  // re-fire focusin, which would call refit() again on the next double-rAF --
+  // an unbounded shrinking resize spiral once a surface takes control.
+  function repaintActiveTerminal(): void {
+    refreshTerminalRender(termRef.current);
+  }
+
+  // Repaint AND refit. Reserved for events that actually change (or settle) the
+  // grid geometry -- e.g. the post-replay settle -- never for focus.
   function refreshActiveTerminal(): void {
     refreshTerminalRender(termRef.current);
     refit();
   }
 
   function focusActiveTerminal(): void {
-    focusTerminalPane(termRef.current, refreshActiveTerminal);
+    focusTerminalPane(termRef.current, repaintActiveTerminal);
   }
 
   function clearReconnectTimer(): void {
@@ -692,6 +714,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     attachmentGenerationRef.current++;
     initialReplayCompleteRef.current = true;
     awaitingReplayRef.current = false;
+    replayWriteInProgressRef.current = false;
     replayAfterNextResizeRef.current = false;
     if (wsRef.current) {
       try {
@@ -874,7 +897,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             // scrollback without a full reset so mouse-tracking modes survive.
             refreshTerminalForReplay(term);
           }
+          replayWriteInProgressRef.current = true;
           term.write(data, () => {
+            replayWriteInProgressRef.current = false;
             completeInitialReplay(
               attachmentGeneration,
               attachmentGenerationRef.current,
@@ -996,9 +1021,16 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // Register input handling once and route to the current socket. Registering
     // this per-connection would duplicate every keystroke.
     const dataDisposable = term.onData((data) => {
-      // While displaced the terminal is blanked and non-interactive; the only
-      // control is the overlay's Take control button, so swallow all keystrokes.
-      if (displacedRef.current) {
+      // xterm emits onData not only for user input, but also for device-query
+      // responses generated while parsing output. Historical queries in a replay
+      // must not be answered back into the live PTY, where an unprepared shell
+      // would echo the OSC palette response as visible garbage.
+      const forwardAllowed = shouldForwardTerminalData({
+        displaced: displacedRef.current,
+        initialReplayComplete: initialReplayCompleteRef.current,
+        replayWriteInProgress: replayWriteInProgressRef.current
+      });
+      if (!forwardAllowed) {
         return;
       }
       const liveSession = selectedSessionRef.current;
@@ -1140,7 +1172,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             : {})
         }}
         onClick={focusActiveTerminal}
-        onFocusCapture={refreshActiveTerminal}
+        onFocusCapture={repaintActiveTerminal}
       />
       {displayState === "displaced" && (
         <div className={styles.overlay}>

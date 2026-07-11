@@ -142,6 +142,26 @@ pub fn build_mouse_private_mode_replay_suffix(
     suffix
 }
 
+/// Builds a local-terminal mode synchronization sequence. Clear every tracked
+/// mouse mode first because the physical terminal may have missed disables
+/// while its output was suppressed, then re-enable the modes active on the PTY.
+pub fn build_mouse_private_mode_restore_suffix(
+    mode_state: &HashMap<String, bool>,
+    tracked_modes: &[&str],
+) -> Vec<u8> {
+    let mut suffix = Vec::new();
+    for mode in tracked_modes {
+        suffix.extend_from_slice(ESC_CSI_PRIVATE_MODE_PREFIX);
+        suffix.extend_from_slice(mode.as_bytes());
+        suffix.push(b'l');
+    }
+    suffix.extend_from_slice(&build_mouse_private_mode_replay_suffix(
+        mode_state,
+        tracked_modes,
+    ));
+    suffix
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +229,16 @@ mod tests {
         state.insert("1002".to_string(), false);
         let suffix = build_mouse_private_mode_replay_suffix(&state, TRACKED_MOUSE_PRIVATE_MODES);
         assert_eq!(suffix, b"\x1b[?1000h\x1b[?1006h");
+    }
+
+    #[test]
+    fn builds_a_local_restore_suffix_that_clears_stale_mouse_modes() {
+        let mut state = HashMap::new();
+        state.insert("1006".to_string(), true);
+        let suffix = build_mouse_private_mode_restore_suffix(&state, TRACKED_MOUSE_PRIVATE_MODES);
+        assert_eq!(
+            suffix,
+            b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?1006h"
+        );
     }
 }

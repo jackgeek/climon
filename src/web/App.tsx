@@ -1092,6 +1092,13 @@ export function App() {
           if (!term) {
             return;
           }
+          // Hiding the page tears down the terminal WebSocket. The native
+          // visibility event runs before React's visible reattachment completes,
+          // so arm the viewed session now; TerminalView queues the request and
+          // flushes it when the new socket opens.
+          if (activeId && (!isMobile || maximized)) {
+            term.armTakeControl(activeId);
+          }
           if (isMobile) {
             term.refresh();
           } else {
@@ -1102,7 +1109,7 @@ export function App() {
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [armReconnectOverlay, isMobile]);
+  }, [activeId, armReconnectOverlay, isMobile, maximized]);
 
   // The terminal panel is a flex child that shrinks the terminal pane when
   // shown. xterm does not reflow to the smaller pane on its own, so refit it

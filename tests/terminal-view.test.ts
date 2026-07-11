@@ -19,6 +19,7 @@ import {
   refreshTerminalRender,
   refreshTerminalForReplay,
   resetTerminalForSession,
+  shouldForwardTerminalData,
   shouldReconnectLiveAttachment,
   shouldHandleWheelAsScrollback,
   TerminalView,
@@ -306,6 +307,37 @@ describe("TerminalView", () => {
 
     expect(focusCalls).toBe(1);
     expect(refreshCalls).toBe(1);
+  });
+
+  test("forwards live terminal data but suppresses xterm-generated replay responses", () => {
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: true,
+        replayWriteInProgress: false
+      })
+    ).toBe(true);
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: false,
+        replayWriteInProgress: false
+      })
+    ).toBe(false);
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: true,
+        replayWriteInProgress: true
+      })
+    ).toBe(false);
+    expect(
+      shouldForwardTerminalData({
+        displaced: true,
+        initialReplayComplete: true,
+        replayWriteInProgress: false
+      })
+    ).toBe(false);
   });
 
   test("captures the full terminal buffer as text, dropping trailing blank rows", async () => {
@@ -637,6 +669,36 @@ describe("TerminalView control handoff", () => {
     // The old size-diff trigger must be gone.
     expect(source).not.toContain("const gridChanged =");
     expect(source).not.toContain("(gridChanged || wasDisplaced)");
+  });
+
+  test("terminal flex items can shrink from a larger controller grid to a smaller viewport", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // xterm's current canvas width contributes an intrinsic min-content width.
+    // Without minWidth: 0 on both flex items, a terminal sized by a larger
+    // controller makes FitAddon measure that stale width instead of the smaller
+    // dashboard viewport, so the grid remains off the right edge.
+    expect(source).toMatch(/wrapper:\s*\{[\s\S]*?minWidth:\s*0[\s\S]*?\n\s*\},\n\s*root:/);
+    expect(source).toMatch(/root:\s*\{[\s\S]*?minWidth:\s*0[\s\S]*?\n\s*padding:/);
+  });
+
+  test("focusing the terminal repaints but never refits (no focus->resize spiral)", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Focus is not a geometry change: refitting on focus lets xterm's focus
+    // churn (helper-textarea re-focus on refresh/resize) re-fire focusin at the
+    // double-rAF cadence, driving an unbounded shrinking resize spiral when the
+    // dashboard takes control. The focus/onFocusCapture path must repaint only.
+    expect(source).toContain("function repaintActiveTerminal(): void {");
+    // onFocusCapture (fires on every focusin bubbling from xterm) must repaint,
+    // never refit.
+    expect(source).toContain("onFocusCapture={repaintActiveTerminal}");
+    expect(source).not.toContain("onFocusCapture={refreshActiveTerminal}");
+    // Clicking to focus repaints stale glyphs too, but must not refit either.
+    expect(source).toContain("focusTerminalPane(termRef.current, repaintActiveTerminal)");
+    expect(source).not.toContain("focusTerminalPane(termRef.current, refreshActiveTerminal)");
+    // The refresh+refit helper survives for the post-replay settle, where a
+    // genuine geometry fit is wanted after the captured grid renders.
+    expect(source).toContain("function refreshActiveTerminal(): void {");
+    expect(source).toContain("refreshActiveTerminal\n            );");
   });
 
   test("redundant resize reports are suppressed via shouldSendResize", () => {

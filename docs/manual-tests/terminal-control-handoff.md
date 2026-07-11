@@ -58,7 +58,8 @@ or button) cancels the pending overlay the moment control is (re)gained, so the
 > displacement, Space take-control, focus reclaim, the no-flash handoff, and the
 > browser/PWA cases (TCH-3, TCH-5, TCH-6, TCH-7, TCH-8) work on all platforms.
 
-Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
+Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/fingerprint.rs`,
+`rust/climon-session/src/host.rs`, `rust/climon-session/src/replay.rs`,
 `rust/climon-cli/src/client.rs`, `rust/climon-proto/src/frame.rs`,
 `src/web/control-state.ts`, `src/web/components/TerminalView.tsx`,
 `src/web/components/SessionItem.tsx`, `src/web/App.tsx`.
@@ -272,12 +273,21 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
 - **Platforms:** phone PWA (authoritative); desktop browser.
 - **Result:** _(version / date / tester / pass|fail / notes)_
 
-## TCH-10 — Reclaim preserves scrollback history and colors
+## TCH-10 — Reclaim preserves scrollback history, colors, and right-edge cells
 
-- **Feature:** clean restore on reclaim — the displaced notice and the take-control
+- **Feature:** clean restore on reclaim. The displaced notice and the take-control
   repaint clear only the visible viewport (never `\e[2J`) and reset SGR before every
   erase, so reclaiming preserves scrollback above the viewport and leaves no color
-  bleed (`render_local_displaced` + `HeadlessGrid::render_screen`).
+  bleed (`render_local_displaced` + `HeadlessGrid::render_screen`). The reclaim
+  repaint itself is **not** taken from the controller-sized idle grid — that grid
+  may have been narrowed by a smaller dashboard controller, and resizing a
+  `vt100::Screen` narrower permanently discards the cells beyond the new right
+  edge, so simply widening it back later cannot recover them. Instead the local
+  restore watcher rebuilds a **fresh grid at the local terminal's own host
+  dimensions** from the bounded raw PTY replay buffer and renders that
+  (`render_screen_from_replay` in `rust/climon-session/src/fingerprint.rs`), so a
+  narrower dashboard controller can never permanently clip content the local
+  terminal is wide enough to show.
 - **Preconditions:** climon rebuilt from this branch and a **new** session started
   (the daemon runs the binary it was launched from); a running `climon server`
   dashboard.
@@ -289,14 +299,106 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/host.rs`,
      `for i in $(seq 1 200); do printf '\e[44mline %s\e[0m\n' "$i"; done`
      (PowerShell: `1..200 | % { Write-Host $_ -ForegroundColor Blue }`).
   2. Scroll back in the local terminal and confirm the earlier lines are visible.
-  3. Open the session in a browser and take control so the local terminal is
-     displaced (shows the *"being viewed on a climon dashboard"* notice; output
-     pauses).
-  4. In the local terminal, press **Space** to reclaim control.
+  3. In a terminal at least 80 columns wide, print a static wide line with a
+     right-edge marker, e.g.
+     `printf 'left side%*sRIGHT_EDGE\n' 60 ""` (pad so `RIGHT_EDGE` lands near
+     column 70–80), and confirm it is fully visible, unclipped, in the local
+     terminal.
+  4. Open the session in a browser and resize that browser window/dashboard pane
+     **narrower** than the local terminal (e.g. under 60 columns), then take
+     control from the dashboard so the local terminal is displaced (shows the
+     *"being viewed on a climon dashboard"* notice; output pauses).
+  5. In the local terminal, press **Space** to reclaim control.
 - **Expected result:** After ~250 ms the local terminal returns to the session's
-  current state. Scrollback above the viewport is intact — scrolling up still shows
-  the pre-displace lines. No background/foreground color bleeds into the erased rows
-  or the shell prompt. The prompt is left on the last content row.
+  current state at its own (wider) size. Scrollback above the viewport is
+  intact — scrolling up still shows the pre-displace lines. No background/
+  foreground color bleeds into the erased rows or the shell prompt. The prompt is
+  left on the last content row. The wide line's right-hand `RIGHT_EDGE` marker is
+  still fully visible after reclaim — it must **not** be clipped or blank just
+  because the dashboard controller that briefly held control was narrower than
+  the local terminal.
 - **Platforms:** macOS, Linux, Windows (Windows Terminal authoritative for the
   scrollback/`\e[2J` semantics; also spot-check conhost).
+- **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-11 — Desktop dashboard does not resize-spiral when it takes control
+
+- **Feature:** focusing the terminal repaints stale glyphs but never refits, so
+  xterm's focus churn (it re-focuses its helper textarea whenever the grid is
+  refreshed/resized) cannot re-fire `focusin` → `refit` → resize in an unbounded
+  loop. The focus/`onFocusCapture` path calls `repaintActiveTerminal` (repaint
+  only); the refresh+refit helper is reserved for the post-replay settle.
+  Regression fix for the desktop control-handoff resize spiral (~40 ms cadence,
+  columns drifting).
+- **Preconditions:** dashboard server running (restart it after building so the
+  in-memory `app.js` is rebuilt from source); a running local `climon bash`.
+- **Config-matrix cell:** default config; desktop browser cell (single tab).
+- **Steps:**
+  1. Start an attached session (`climon bash`) from a desktop console.
+  2. Open the dashboard in **one** desktop browser tab (close any other dashboard
+     tabs/PWAs so no stale viewer surfaces fight for control).
+  3. Open DevTools → Network/Console, then click the session in the sidebar so the
+     dashboard takes control (the local terminal shows its displaced notice).
+  4. Leave the terminal idle and focused for ~30 s; then click into the terminal
+     and type. Watch the terminal width and the `resize` WebSocket frames.
+- **Expected result:** On taking control the dashboard sizes the terminal once to
+  its viewport and then **settles**. There is **no** stream of `resize` frames at
+  a ~40 ms cadence, **no** monotonic column shrink, and the terminal does **not**
+  overflow off the right edge. Focusing/clicking the terminal repaints it (no
+  stale glyphs) without emitting a resize. The local terminal stays quietly
+  displaced (no fighting).
+- **Platforms:** macOS, Linux, Windows (desktop browsers).
+- **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-12 — Reclaim synchronizes mouse tracking; teardown while displaced cannot poison the local terminal
+
+- **Feature:** mouse tracking is state in the physical terminal emulator, not in
+  climon. While local output is suppressed, a program (e.g. Copilot) can disable
+  or change mouse-tracking private modes (`1000`, `1002`, `1003`, `1005`, `1006`,
+  `1015`) only on the dashboards that are actually receiving output; the
+  physical local terminal misses those controls and can be left in a stale
+  enabled mode. `build_mouse_private_mode_restore_suffix()`
+  (`rust/climon-session/src/replay.rs`) fixes reclaim by first **clearing every
+  tracked mode**, then **re-enabling only the modes currently active** in
+  authoritative daemon state, prefixed onto the local restore repaint. Session
+  teardown runs the same clear (with no re-enables) once the PTY reader drains,
+  so exiting the session while a dashboard is in control also cannot leave the
+  physical local terminal stuck reporting mouse events.
+- **Preconditions:** climon rebuilt from this branch and a **new** session
+  started (the daemon runs the binary it was launched from); a running
+  `climon server` dashboard; a program that enables mouse tracking (e.g.
+  Copilot, or any full-screen TUI/mouse-reporting app) available in the shell.
+- **Config-matrix cell:** default config; two-dashboard browser cell.
+- **Steps (reclaim path):**
+  1. Start an attached session (e.g. `climon bash`).
+  2. Run the mouse-tracking program (e.g. start Copilot) so it enables mouse
+     reporting in the shared PTY.
+  3. Open the session in two separate dashboard browser tabs/windows
+     (dashboard1 and dashboard2).
+  4. Take control from dashboard1, then take control from dashboard2 (control
+     now moves dashboard1 → dashboard2 while the local terminal stays
+     displaced throughout).
+  5. While dashboard2 controls, exit the mouse-tracking program (e.g. quit
+     Copilot) so the shell returns to a normal prompt.
+  6. In the local terminal, press **Space** to reclaim control.
+  7. Move the mouse over the local terminal and try an ordinary click-drag
+     text selection.
+- **Expected result:** After reclaim there is **no** visible mouse-report
+  garbage (no stray escape-looking text) printed as you move the mouse, and
+  ordinary click-drag text selection in the local terminal works normally, as
+  if mouse tracking had never been enabled remotely.
+- **Steps (exit-while-displaced path):**
+  1. Repeat steps 1–4 above (mouse tracking enabled, control handed
+     dashboard1 → dashboard2, local terminal displaced).
+  2. While dashboard2 (or any dashboard) still controls the session, terminate
+     the climon session itself (e.g. exit the shell or kill the `climon`
+     process) instead of exiting only the mouse-tracking program.
+  3. Move the mouse over the now-idle local terminal and try an ordinary
+     click-drag text selection.
+- **Expected result:** After climon exits, the local terminal is back to a
+  normal terminal mode: no mouse-report garbage appears when moving the mouse,
+  and ordinary click-drag text selection works. The terminal must **not**
+  require a manual `reset` or restart to recover.
+- **Platforms:** macOS, Linux, Windows (Windows Terminal authoritative; also
+  spot-check conhost since ConPTY mediates mouse-mode escapes differently).
 - **Result:** _(version / date / tester / pass|fail / notes)_

@@ -32,11 +32,11 @@ use crate::attention::fingerprint_body;
 use crate::attention::should_apply_user_attention_acknowledgement;
 use crate::control::{choose_controller, Surface};
 use crate::error::{SessionError, SessionResult};
-use crate::fingerprint::HeadlessGrid;
+use crate::fingerprint::{render_screen_from_replay, HeadlessGrid};
 use crate::idle::ScreenIdleDetector;
 use crate::replay::{
-    build_mouse_private_mode_replay_suffix, track_mouse_private_modes_from_output,
-    TRACKED_MOUSE_PRIVATE_MODES,
+    build_mouse_private_mode_replay_suffix, build_mouse_private_mode_restore_suffix,
+    track_mouse_private_modes_from_output, TRACKED_MOUSE_PRIVATE_MODES,
 };
 use crate::socket::{
     cleanup_session_socket, listen_on_session_socket, SessionListener, SessionStream,
@@ -56,67 +56,17 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// screen is rendered when the watcher fires, so it reflects the latest output.
 const LOCAL_RESTORE_DELAY: Duration = Duration::from_millis(250);
 
-/// Returns whether the `CLIMON_DEBUG_RESTORE` restore diagnostics are enabled
-/// (any non-empty, non-`0` value). Cached for the process lifetime.
-fn debug_restore_enabled() -> bool {
-    use std::sync::OnceLock;
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| {
-        std::env::var("CLIMON_DEBUG_RESTORE")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-    })
-}
-
-/// Appends a timestamped line to `$CLIMON_HOME/logs/restore-debug.log` when the
-/// `CLIMON_DEBUG_RESTORE` diagnostics are enabled. Best-effort: silently ignores
-/// any IO error. Used to capture the exact sizes and bytes around a Fill-mode
-/// restore so one Windows run reveals the corruption source.
-fn debug_restore_log(env: &StoreEnv, line: &str) {
-    if !debug_restore_enabled() {
-        return;
-    }
-    let dir = env.logs_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("restore-debug.log"))
-    {
-        let _ = writeln!(f, "{} {}", now_iso(), line);
-    }
-}
-
-/// Escapes control bytes for the restore debug log and caps the length so a
-/// large repaint burst does not flood the log.
-fn debug_escape(bytes: &[u8], cap: usize) -> String {
-    let mut s = String::new();
-    for &b in bytes.iter().take(cap) {
-        match b {
-            0x1b => s.push_str("\\e"),
-            b'\r' => s.push_str("\\r"),
-            b'\n' => s.push_str("\\n"),
-            b'\t' => s.push_str("\\t"),
-            0x20..=0x7e => s.push(b as char),
-            other => s.push_str(&format!("\\x{other:02x}")),
-        }
-    }
-    if bytes.len() > cap {
-        s.push_str(&format!("...(+{} bytes)", bytes.len() - cap));
-    }
-    s
-}
-
-/// Reads the *real* local console size for the restore diagnostics. On Windows
-/// this is `GetConsoleScreenBufferInfo`'s visible viewport (a null handle falls
-/// back to `STD_OUTPUT_HANDLE`); on Unix it reads stdin's `TIOCGWINSZ`.
+/// Reads the *real* local console size for the displaced-notice renderer. On
+/// Windows this is `GetConsoleScreenBufferInfo`'s visible viewport (a null
+/// handle falls back to `STD_OUTPUT_HANDLE`); on Unix it reads stdin's
+/// `TIOCGWINSZ`.
 #[cfg(windows)]
-fn debug_console_size() -> (u16, u16) {
+fn local_console_size() -> (u16, u16) {
     climon_pty::terminal_size(std::ptr::null_mut())
 }
 
 #[cfg(unix)]
-fn debug_console_size() -> (u16, u16) {
+fn local_console_size() -> (u16, u16) {
     climon_pty::terminal_size(0)
 }
 
@@ -204,11 +154,6 @@ struct HostState {
     /// notice be re-centered when the local console is resized while displaced,
     /// instead of being stranded off-centre or scrolled away. Cleared on restore.
     local_notice_size: Option<(u16, u16)>,
-    /// Diagnostics-only (`CLIMON_DEBUG_RESTORE`): while set, the reader thread
-    /// logs every chunk it writes to the local terminal so a single Windows run
-    /// captures the PTY's post-unsuppress live output (the suspected ConPTY
-    /// resize-repaint corrupter). Set by the restore watcher when it fires.
-    local_debug_capture_until: Option<Instant>,
 
     exited: bool,
     exit_code: Option<i32>,
@@ -395,28 +340,6 @@ impl HostState {
             let needs_render =
                 !self.local_output_suppressed || self.local_notice_size != Some(notice_size);
             if needs_render {
-                if !self.local_output_suppressed {
-                    let grid_lines: Vec<String> = self
-                        .grid
-                        .visible_lines()
-                        .into_iter()
-                        .filter(|l| !l.trim().is_empty())
-                        .take(6)
-                        .collect();
-                    debug_restore_log(
-                        &self.env,
-                        &format!(
-                            "displace-suppress host={}x{} applied={}x{} controller={:?} real_console={:?} grid_nonempty_lines={:?}",
-                            self.host_cols,
-                            self.host_rows,
-                            self.applied_cols,
-                            self.applied_rows,
-                            self.controller_id,
-                            debug_console_size(),
-                            grid_lines,
-                        ),
-                    );
-                }
                 // Render the notice at the *real console* size so it is centered
                 // on what the user sees, not the (possibly larger) controller grid.
                 write_local_stdout(render_local_displaced(notice_size.0, notice_size.1).as_bytes());
@@ -427,18 +350,6 @@ impl HostState {
             // Controller grid now fits the local console: schedule the deferred
             // repaint.
             self.local_restore_at = Some(Instant::now() + LOCAL_RESTORE_DELAY);
-            debug_restore_log(
-                &self.env,
-                &format!(
-                    "restore-schedule host={}x{} applied={}x{} real_console={:?} delay={}ms",
-                    self.host_cols,
-                    self.host_rows,
-                    self.applied_cols,
-                    self.applied_rows,
-                    debug_console_size(),
-                    LOCAL_RESTORE_DELAY.as_millis(),
-                ),
-            );
         }
     }
 
@@ -546,18 +457,6 @@ impl HostState {
     fn local_stdin(&mut self, buf: &[u8]) -> Vec<u8> {
         let has_take_control = buf.contains(&LOCAL_TAKE_CONTROL_KEY);
         let action = local_stdin_action(has_take_control, self.local_output_suppressed);
-        debug_restore_log(
-            &self.env,
-            &format!(
-                "local_stdin n={} first={:?} has_take_control={} suppressed={} controller={:?} action={:?}",
-                buf.len(),
-                &buf[..buf.len().min(16)],
-                has_take_control,
-                self.local_output_suppressed,
-                self.controller_id,
-                action,
-            ),
-        );
         match action {
             LocalStdinAction::TakeControl => {
                 self.take_control("local");
@@ -872,7 +771,6 @@ pub fn run_session_host(
         local_output_suppressed: false,
         local_restore_at: None,
         local_notice_size: None,
-        local_debug_capture_until: None,
         exited: false,
         exit_code: None,
         scrollback: climon_pty::Scrollback::new(SCROLLBACK_CAP),
@@ -924,38 +822,11 @@ pub fn run_session_host(
     // attached; headless daemons have no local screen to restore.
     let local_attached = state.lock().unwrap().local_attached;
     let restore_handle = if local_attached {
-        if debug_restore_enabled() {
-            let logfile = env.logs_dir().join("restore-debug.log");
-            // Visible confirmation that the flag is active and where the log
-            // lives, so a missing log immediately means "env var not set / not
-            // an attached console" rather than "nothing happened yet".
-            eprintln!(
-                "[climon] CLIMON_DEBUG_RESTORE active -> {}",
-                logfile.display()
-            );
-            let (hc, hr) = {
-                let s = state.lock().unwrap();
-                (s.host_cols, s.host_rows)
-            };
-            debug_restore_log(
-                &env,
-                &format!(
-                    "session-start id={id} local_attached=true host={hc}x{hr} real_console={:?}",
-                    debug_console_size(),
-                ),
-            );
-        }
         Some(spawn_restore_thread(
             Arc::clone(&state),
             Arc::clone(&shutdown),
         ))
     } else {
-        if debug_restore_enabled() {
-            eprintln!(
-                "[climon] CLIMON_DEBUG_RESTORE set but session is not an attached console; \
-                 no restore diagnostics will be written"
-            );
-        }
         None
     };
 
@@ -1077,6 +948,12 @@ pub fn run_session_host(
     }
     let _ = title_handle.join();
     let _ = reader_handle.join();
+    if local_attached {
+        write_local_stdout(&build_mouse_private_mode_restore_suffix(
+            &HashMap::new(),
+            TRACKED_MOUSE_PRIVATE_MODES,
+        ));
+    }
     for h in conn_threads.lock().unwrap().drain(..) {
         let _ = h.join();
     }
@@ -1092,7 +969,7 @@ pub fn run_session_host(
 /// pauses local output until control returns (preserving the Windows ConPTY
 /// corruption guard).
 fn render_local_displaced(_cols: u16, _rows: u16) -> String {
-    let (w, h) = debug_console_size();
+    let (w, h) = local_console_size();
     // Clear only the *visible* viewport, never `\e[2J`: on Windows Terminal (and
     // others) `\e[2J` clears scrollback. `\e[H` homes the cursor and `\e[J`
     // (erase-below) then clears from there to the end of the visible screen — the
@@ -1157,28 +1034,7 @@ fn spawn_reader_thread(
                 s.scrollback.append(data);
                 s.grid.write(data);
                 s.broadcast(&frame);
-                let suppressed = s.local_output_suppressed;
-                // Diagnostics: while suppression is pending or just after a
-                // restore, log every chunk so one Windows run reveals whether
-                // ConPTY's live output (not our repaint) corrupts the screen.
-                if debug_restore_enabled() {
-                    let pending = s.local_restore_at.is_some();
-                    let in_window = s
-                        .local_debug_capture_until
-                        .map(|t| Instant::now() < t)
-                        .unwrap_or(false);
-                    if pending || in_window {
-                        debug_restore_log(
-                            &s.env,
-                            &format!(
-                                "reader-chunk suppressed={suppressed} pending={pending} window={in_window} n={}: {}",
-                                data.len(),
-                                debug_escape(data, 2048),
-                            ),
-                        );
-                    }
-                }
-                suppressed
+                s.local_output_suppressed
             };
             // Skip the local write while a controlling surface has grown the
             // shared PTY beyond this terminal: the oversized output would
@@ -1305,22 +1161,37 @@ fn spawn_connection_reader(
             for frame in decoder.push(&buf[..n]) {
                 match frame.frame_type {
                     FrameType::Input => {
-                        {
+                        let allowed = {
                             let mut s = state.lock().unwrap();
-                            let fp = s.fingerprint();
-                            s.apply_attention(
-                                AttentionPayload {
-                                    needs_attention: false,
-                                    reason: Some("input".to_string()),
-                                    attention_matched_at: None,
-                                },
-                                AttentionSource::User,
-                                &fp,
-                            );
+                            let viewer_id = s
+                                .clients
+                                .get(&client_id)
+                                .map(|client| client.viewer_id.clone());
+                            let controller_id = s.controller_id.clone();
+                            if !socket_client_controls_input(
+                                controller_id.as_deref(),
+                                viewer_id.as_deref(),
+                            ) {
+                                false
+                            } else {
+                                let fp = s.fingerprint();
+                                s.apply_attention(
+                                    AttentionPayload {
+                                        needs_attention: false,
+                                        reason: Some("input".to_string()),
+                                        attention_matched_at: None,
+                                    },
+                                    AttentionSource::User,
+                                    &fp,
+                                );
+                                true
+                            }
+                        };
+                        if allowed {
+                            let mut w = pty_writer.lock().unwrap();
+                            let _ = w.write_all(&frame.payload);
+                            let _ = w.flush();
                         }
-                        let mut w = pty_writer.lock().unwrap();
-                        let _ = w.write_all(&frame.payload);
-                        let _ = w.flush();
                     }
                     FrameType::Resize => {
                         if let Ok(mut size) = parse_json_payload::<ResizePayload>(&frame.payload) {
@@ -1470,6 +1341,16 @@ fn local_displaced_by_controller(controller_id: Option<&str>) -> bool {
     matches!(controller_id, Some(id) if id != "local")
 }
 
+fn socket_client_controls_input(
+    controller_id: Option<&str>,
+    client_viewer_id: Option<&str>,
+) -> bool {
+    matches!(
+        (controller_id, client_viewer_id),
+        (Some(controller), Some(viewer)) if controller == viewer
+    )
+}
+
 fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(25));
@@ -1487,58 +1368,28 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
                 // A surface re-grew the shared PTY during the delay.
                 // Stay suppressed; the next genuine restore transition reschedules
                 // via `update_local_displaced`.
-                if debug_restore_enabled() {
-                    debug_restore_log(
-                        &s.env,
-                        &format!(
-                            "restore-skip-overgrown host={}x{} applied={}x{} real_console={:?}",
-                            s.host_cols,
-                            s.host_rows,
-                            s.applied_cols,
-                            s.applied_rows,
-                            debug_console_size(),
-                        ),
-                    );
-                }
                 s.local_restore_at = None;
             }
             LocalRestoreDecision::Repaint => {
-                // Repaint the local terminal from the parsed grid's *current*
-                // screen, not the raw scrollback: on Windows ConPTY the raw
-                // byte stream is a sequence of absolute-positioned screen diffs
-                // that stack on top of each other (corrupt/blank) when replayed
-                // in bulk to a cleared console. `render_screen()` emits a clean,
-                // self-contained repaint (clear + positioned rows + cursor).
+                // Rebuild a fresh host-sized grid from the raw PTY shadow before
+                // repainting. The controller-sized idle grid may have been
+                // narrowed by a dashboard, and vt100::set_size permanently drops
+                // cells beyond that narrower edge. Parsing the shadow recovers
+                // those cells while still avoiding direct raw ConPTY replay:
+                // render_screen_from_replay() emits one clean viewport repaint.
                 // Write it while still holding the lock and only then unsuppress,
                 // so the reader thread cannot interleave a live chunk between
                 // resuming output and the repaint landing.
-                let out = s.grid.render_screen();
-                if debug_restore_enabled() {
-                    let non_empty: Vec<String> = s
-                        .grid
-                        .visible_lines()
-                        .into_iter()
-                        .filter(|l| !l.trim().is_empty())
-                        .take(6)
-                        .collect();
-                    debug_restore_log(
-                        &s.env,
-                        &format!(
-                            "restore-fire host={}x{} applied={}x{} real_console={:?} grid_nonempty_lines={:?} render(len={}): {}",
-                            s.host_cols,
-                            s.host_rows,
-                            s.applied_cols,
-                            s.applied_rows,
-                            debug_console_size(),
-                            non_empty,
-                            out.len(),
-                            debug_escape(&out, 4096),
-                        ),
-                    );
-                    // Capture the PTY's live output for a window after we
-                    // unsuppress, to catch ConPTY's late resize-repaint.
-                    s.local_debug_capture_until = Some(Instant::now() + Duration::from_secs(2));
-                }
+                let replay = s.scrollback.snapshot();
+                let mut out = build_mouse_private_mode_restore_suffix(
+                    &s.mouse_mode_state,
+                    TRACKED_MOUSE_PRIVATE_MODES,
+                );
+                out.extend_from_slice(&render_screen_from_replay(
+                    &replay,
+                    s.host_cols.max(1),
+                    s.host_rows.max(1),
+                ));
                 write_local_stdout(&out);
                 s.local_output_suppressed = false;
                 s.local_restore_at = None;
@@ -2069,6 +1920,29 @@ mod local_stdin_tests {
     #[test]
     fn ordinary_input_is_forwarded_when_controlling() {
         assert_eq!(local_stdin_action(false, false), LocalStdinAction::Forward);
+    }
+}
+
+#[cfg(test)]
+mod socket_input_tests {
+    use super::socket_client_controls_input;
+
+    #[test]
+    fn only_the_named_controller_may_send_socket_input() {
+        assert!(socket_client_controls_input(
+            Some("dashboard-a"),
+            Some("dashboard-a")
+        ));
+        assert!(!socket_client_controls_input(
+            Some("dashboard-a"),
+            Some("dashboard-b")
+        ));
+        assert!(!socket_client_controls_input(
+            Some("local"),
+            Some("dashboard-a")
+        ));
+        assert!(!socket_client_controls_input(None, Some("dashboard-a")));
+        assert!(!socket_client_controls_input(Some("dashboard-a"), None));
     }
 }
 

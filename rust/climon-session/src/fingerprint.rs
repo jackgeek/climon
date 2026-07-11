@@ -148,6 +148,20 @@ impl HeadlessGrid {
     }
 }
 
+/// Rebuilds a screen at the requested size from the bounded raw PTY shadow,
+/// then emits the same viewport-only repaint as [`HeadlessGrid::render_screen`].
+///
+/// This is used for local-terminal restore because the controller-sized idle
+/// grid may have been narrowed by a dashboard, permanently discarding cells to
+/// the right of that dashboard's edge. Parsing the shadow into a fresh
+/// host-sized grid recovers those cells without replaying raw PTY/ConPTY diffs
+/// directly to the real console.
+pub(crate) fn render_screen_from_replay(replay: &[u8], cols: u16, rows: u16) -> Vec<u8> {
+    let mut grid = HeadlessGrid::new(cols, rows);
+    grid.write(replay);
+    grid.render_screen()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +224,28 @@ mod tests {
         assert!(
             repaint.contains("PS C:\\>"),
             "prompt lost across shrink/grow resize; repaint={repaint:?}"
+        );
+    }
+
+    #[test]
+    fn right_hand_cells_survive_shrink_then_grow_resize() {
+        // Repro of the local restore clipping bug: a wide static line is visible
+        // in the local terminal, a narrower dashboard takes control, then the
+        // local terminal reclaims its original width. The controller-sized idle
+        // grid permanently discards cells to the right of the dashboard edge, so
+        // restore must rebuild a fresh host-sized grid from the raw PTY shadow.
+        let replay = b"left side                                              RIGHT_EDGE";
+        let mut grid = HeadlessGrid::new(80, 4);
+        grid.write(replay);
+
+        grid.resize(20, 4);
+        grid.resize(80, 4);
+
+        let repaint =
+            String::from_utf8_lossy(&render_screen_from_replay(replay, 80, 4)).to_string();
+        assert!(
+            repaint.contains("RIGHT_EDGE"),
+            "host-sized replay restore lost right-hand cells; repaint={repaint:?}"
         );
     }
 
