@@ -112,6 +112,8 @@ fn base_meta(id: &str, home: &PathBuf, command: Vec<String>) -> SessionMeta {
         terminal_title: None,
         attention_snippet: None,
         progress: None,
+        ipc_protocol_version: None,
+        ipc_generation: None,
     };
     // The launcher writes the initial meta file before the host starts.
     let env = Env::with_home(home);

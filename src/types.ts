@@ -225,6 +225,10 @@ export interface SessionMeta {
   attentionSnippet?: string;
   /** Latest terminal progress (OSC 9;4) reported by a program inside the PTY; absent/null = none. */
   progress?: TerminalProgress | null;
+  /** IPC protocol version published by the live daemon; absent for sessions that predate IPC auth. */
+  ipcProtocolVersion?: number;
+  /** IPC generation token published by the live daemon; absent for legacy sessions. */
+  ipcGeneration?: string;
 }
 
 export interface SessionMetaPatch {

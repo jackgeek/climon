@@ -155,6 +155,8 @@ pub fn spawn_headless_session(
         terminal_title: None,
         attention_snippet: None,
         progress: None,
+        ipc_protocol_version: None,
+        ipc_generation: None,
     };
     write_session_meta(store_env, &meta).map_err(|e| e.to_string())?;
     spawn_daemon(&id, store_env).map_err(|e| e.to_string())?;

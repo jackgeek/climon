@@ -157,6 +157,10 @@ pub struct SessionMeta {
     pub attention_snippet: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<TerminalProgress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_protocol_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_generation: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +230,10 @@ pub struct SessionMetaPatch {
         skip_serializing_if = "Option::is_none"
     )]
     pub progress: Option<Option<TerminalProgress>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_protocol_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipc_generation: Option<String>,
 }
 
 /// serde helper that distinguishes an absent field (`None`) from an explicit
@@ -458,5 +466,21 @@ mod tests {
         let patch = SessionMetaPatch::default();
         let json = serde_json::to_string(&patch).unwrap();
         assert!(!json.contains("progress"));
+    }
+
+    #[test]
+    fn ipc_fields_default_to_none_and_survive_roundtrip() {
+        let base = minimal_json();
+        let with_ipc = base.replace(
+            "\"lastActivityAt\":\"t\"",
+            "\"lastActivityAt\":\"t\",\"ipcProtocolVersion\":1,\"ipcGeneration\":\"abc\"",
+        );
+        let meta: SessionMeta = serde_json::from_str(&with_ipc).unwrap();
+        assert_eq!(meta.ipc_protocol_version, Some(1));
+        assert_eq!(meta.ipc_generation.as_deref(), Some("abc"));
+        // Absent fields deserialize to None (backward compatible).
+        let legacy: SessionMeta = serde_json::from_str(base).unwrap();
+        assert_eq!(legacy.ipc_protocol_version, None);
+        assert_eq!(legacy.ipc_generation, None);
     }
 }
