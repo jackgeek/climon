@@ -21,9 +21,9 @@ ConPTY overgrown-repaint deferral is only a restore-time rendering safety, not
 the displaced trigger.)
 
 - Local terminal (displaced) message: *"This session is being viewed on a climon
-  dashboard."* with *"Press Space to take control and resize it to this
-  terminal."* Press **Space** (`0x20`) to take control; the terminal repaints
-  immediately (it requests a fresh replay on regaining control, so an idle
+  dashboard."* with *"Press Space to take control."* Press **Space** (`0x20`) to
+  take control; the terminal repaints immediately and resizes to fit the local
+  terminal (it requests a fresh replay on regaining control, so an idle
   screen is never left blank). Space is the take-control key *only while
   displaced* — once the local terminal controls the grid, Space is ordinary
   shell input. (Ctrl+T is avoided because host terminals and browsers commonly
