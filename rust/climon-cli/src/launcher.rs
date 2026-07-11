@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use climon_config::config::{
     ensure_climon_home, load_config, resolve_config_setting, Env as ConfigEnv,
@@ -343,6 +344,12 @@ fn config_u16(env: &ConfigEnv, cwd: &Path, key: &str) -> Option<u16> {
     }
 }
 
+/// Total wall-clock budget for the launch-time Dev Tunnels probe
+/// (`detect()` + `show_user()`). Long enough for a healthy network round-trip,
+/// short enough that a stalled `devtunnel` never feels like a hang. On elapse
+/// the probe reports `timed_out` and the launcher spawns the uplink best-effort.
+const DEVTUNNEL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Best-effort synchronous Dev Tunnels probe over the shared gateway. Reports
 /// CLI availability and sign-in state so launch planning can distinguish
 /// missing-CLI from logged-out. Mirrors `detectDevtunnel` + `showUser`.
@@ -361,20 +368,30 @@ fn probe_devtunnel_sync() -> DevtunnelProbe {
         }
     };
     runtime.block_on(async {
-        let gateway = DevtunnelGateway::new();
-        let detected = gateway.detect().await;
-        if !detected.available {
-            return DevtunnelProbe {
+        let probe = async {
+            let gateway = DevtunnelGateway::new();
+            let detected = gateway.detect().await;
+            if !detected.available {
+                return DevtunnelProbe {
+                    available: false,
+                    authenticated: false,
+                    timed_out: false,
+                };
+            }
+            let user = gateway.show_user().await;
+            DevtunnelProbe {
+                available: true,
+                authenticated: user.authenticated,
+                timed_out: false,
+            }
+        };
+        match tokio::time::timeout(DEVTUNNEL_PROBE_TIMEOUT, probe).await {
+            Ok(result) => result,
+            Err(_) => DevtunnelProbe {
                 available: false,
                 authenticated: false,
-                timed_out: false,
-            };
-        }
-        let user = gateway.show_user().await;
-        DevtunnelProbe {
-            available: true,
-            authenticated: user.authenticated,
-            timed_out: false,
+                timed_out: true,
+            },
         }
     })
 }
