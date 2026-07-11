@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, saveConfig } from "../src/config.js";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import {
@@ -162,6 +162,23 @@ describe("config migration", () => {
     await rm(home, { recursive: true, force: true });
   });
 
+  test("loadConfig ignores an invalid session.priority", async () => {
+    const home = await makeTestHome("climon-priority-invalid-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await writeFile(
+      join(home, "config.json"),
+      JSON.stringify({
+        version: 1,
+        session: { priority: 1001 }
+      })
+    );
+
+    const config = await loadConfig(env);
+
+    expect(config.session?.priority).toBe(500);
+    await rm(home, { recursive: true, force: true });
+  });
+
   test("loadConfig accepts a sparse global config written by climon config", async () => {
     const home = await makeTestHome("climon-sparse-global-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
@@ -275,6 +292,58 @@ describe("config jsonc paths and migration", () => {
     const config = await loadConfig(env);
     expect(config.server.port).toBe(9999);
     expect(config.session?.color).toBe("blue");
+    await rm(home, { recursive: true, force: true });
+  });
+
+  test("loadConfig preserves registered and unknown sections", async () => {
+    const home = await makeTestHome("climon-jsonc-lossless-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        version: 1,
+        server: {
+          host: "127.0.0.1",
+          port: 3131,
+          futureServerKey: "keep-nested"
+        },
+        dashboard: { theme: "Dracula", keyBarPinned: false },
+        tunnelLink: { keepAlive: 45 },
+        logging: { level: "debug" },
+        telemetry: { enabled: true },
+        update: {
+          auto: true,
+          lastCheck: "2026-07-11T12:00:00.000Z",
+          availableVersion: "9.9.9"
+        },
+        install: { id: "install-123" },
+        futureSection: { enabled: true, value: "keep-top-level" }
+      })
+    );
+
+    const config = await loadConfig(env);
+    config.server.host = "0.0.0.0";
+    await saveConfig(config, env);
+    const reloaded = await loadConfig(env);
+    const losslessConfig = reloaded as typeof reloaded & {
+      server: typeof reloaded.server & { futureServerKey: string };
+      futureSection: { enabled: boolean; value: string };
+    };
+
+    expect(losslessConfig.dashboard).toEqual({ theme: "Dracula", keyBarPinned: false });
+    expect(losslessConfig.tunnelLink).toEqual({ keepAlive: 45 });
+    expect(losslessConfig.logging).toEqual({ level: "debug" });
+    expect(losslessConfig.telemetry).toEqual({ enabled: true });
+    expect(losslessConfig.update).toEqual({
+      auto: true,
+      lastCheck: "2026-07-11T12:00:00.000Z",
+      availableVersion: "9.9.9"
+    });
+    expect(losslessConfig.install).toEqual({ id: "install-123" });
+    expect(losslessConfig.futureSection).toEqual({ enabled: true, value: "keep-top-level" });
+    expect(losslessConfig.server.futureServerKey).toBe("keep-nested");
+    expect(losslessConfig.server.host).toBe("0.0.0.0");
+
     await rm(home, { recursive: true, force: true });
   });
 
