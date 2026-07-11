@@ -28,6 +28,7 @@
 //! omitted.
 
 pub mod attention;
+pub mod auth;
 pub mod control;
 pub mod error;
 pub mod fingerprint;
