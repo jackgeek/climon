@@ -398,7 +398,10 @@ mod tests {
         assert!(out.contains("tunnel_quota_exhausted"));
         assert!(out.contains("Delete an unused tunnel with `devtunnel delete`."));
         assert!(out.contains("2026-07-11T13:00:00.000Z"));
-        assert!(out.contains("paused"));
+        assert!(
+            out.contains("retry: paused"),
+            "actionable failure must render the paused retry line: {out}"
+        );
         assert!(
             !out.contains("raw stderr: quota exhausted"),
             "human output must not leak technical detail: {out}"
