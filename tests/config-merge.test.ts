@@ -94,7 +94,9 @@ describe("config merge helpers", () => {
       server: { host: string };
     }>('{"server":{"host":"127.0.0.1"}}');
 
-    const next = applyConfigDelta(latest, delta);
+    const next = applyConfigDelta(latest, delta) as {
+      server: { "__proto__": { marker: string } };
+    };
     expect(Object.prototype.hasOwnProperty.call(next.server, "__proto__")).toBe(true);
     expect(next.server["__proto__"]).toEqual({ marker: "added" });
     expect(Object.getPrototypeOf(next.server)).toBe(Object.prototype);
@@ -162,7 +164,9 @@ describe("config merge helpers", () => {
       server: { host: string; token: string };
     }>('{"server":{"host":"127.0.0.1","token":"keep"}}');
 
-    const next = applyConfigDelta(latest, delta);
+    const next = applyConfigDelta(latest, delta) as {
+      server: { "__proto__": { marker: string }; token: string };
+    };
     expect(Object.prototype.hasOwnProperty.call(next.server, "__proto__")).toBe(true);
     expect(next.server["__proto__"]).toEqual({ marker: "new" });
     expect(next.server.token).toBe("keep");
