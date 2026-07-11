@@ -21,6 +21,24 @@ use std::path::{Path, PathBuf};
 /// Direct launcher used to resume the newly installed client after recovery.
 pub type RecoveryClientLauncher<'a> = dyn FnMut(&Path, &[OsString]) -> Result<i32, String> + 'a;
 
+const WINDOWS_RECOVERY_SUCCESS: &str = "A critical climon update was applied successfully.";
+const WINDOWS_RECOVERY_RERUN: &str = "Please rerun your climon command.";
+const WINDOWS_REPAIR_GUIDANCE: &str = "Run the current install.ps1 to repair climon.";
+
+/// Injectable Windows bootstrap-recovery operations.
+pub trait WindowsRecoveryRuntime {
+    fn wait_for_bootstrap(&mut self, pid: u32) -> Result<(), String>;
+    fn apply_update(&mut self, args: &ApplyUpdateArgs) -> Result<(), String>;
+    fn launch_fallback(
+        &mut self,
+        program: &Path,
+        original_args: &[OsString],
+    ) -> Result<i32, String>;
+    fn cleanup_staging(&mut self, source: &Path);
+    fn print(&mut self, message: &str);
+    fn eprint(&mut self, message: &str);
+}
+
 /// Arguments for the `--apply-update-v1` operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyUpdateArgs {
@@ -60,15 +78,16 @@ pub enum UpdateOperation {
 /// Returns `Err` when an update flag is present but the arguments are invalid
 /// (missing values, duplicates, unknown flags within the operation, etc.).
 pub fn parse_update_operation(args: &[OsString]) -> Result<Option<UpdateOperation>, String> {
-    let has_apply = args.iter().any(|a| a == "--apply-update-v1");
-    let has_recover = args.iter().any(|a| a == "--recover-bootstrap-v1");
-
-    if !has_apply && !has_recover {
+    let Some(operation) = args.first() else {
         return Ok(None);
-    }
-    if has_apply && has_recover {
-        return Err("Cannot specify both --apply-update-v1 and --recover-bootstrap-v1".to_string());
-    }
+    };
+    let has_recover = if operation == "--apply-update-v1" {
+        false
+    } else if operation == "--recover-bootstrap-v1" {
+        true
+    } else {
+        return Ok(None);
+    };
 
     let mut dir: Option<PathBuf> = None;
     let mut source: Option<PathBuf> = None;
@@ -77,12 +96,13 @@ pub fn parse_update_operation(args: &[OsString]) -> Result<Option<UpdateOperatio
     let mut fallback: Option<PathBuf> = None;
     let mut original_args: Vec<OsString> = Vec::new();
 
-    let mut i = 0;
+    let mut i = 1;
     while i < args.len() {
         let arg = &args[i];
         if arg == "--apply-update-v1" || arg == "--recover-bootstrap-v1" {
-            i += 1;
-            continue;
+            return Err(
+                "Cannot specify both --apply-update-v1 and --recover-bootstrap-v1".to_string(),
+            );
         }
         if arg == "--dir" {
             if dir.is_some() {
@@ -284,6 +304,279 @@ pub fn run_recover_bootstrap(
         &args.apply.dir.join(installed_client_name()),
         &args.original_args,
     )
+}
+
+fn strict_windows_fallback(args: &RecoverBootstrapArgs) -> Result<&Path, String> {
+    let expected = args.apply.dir.join("climon.exe.old");
+    match args.fallback.as_deref() {
+        Some(path) if path == expected => Ok(path),
+        Some(path) => Err(format!(
+            "Recovery fallback must be the local legacy client {} but received {}",
+            expected.display(),
+            path.display()
+        )),
+        None => Err(format!(
+            "Recovery fallback is required and must be {}",
+            expected.display()
+        )),
+    }
+}
+
+fn original_command_is_update(args: &RecoverBootstrapArgs) -> bool {
+    args.original_args
+        .first()
+        .is_some_and(|arg| arg == "update" || arg == "--update")
+}
+
+/// Runs Windows recovery through injected process and placement operations.
+///
+/// The bootstrap PID is always waited before source validation or install
+/// mutation. Failures resume only the strictly local legacy client, except that
+/// an original `update` command is never allowed to recurse into that updater.
+pub fn run_windows_recovery_with_runtime<R: WindowsRecoveryRuntime>(
+    args: &RecoverBootstrapArgs,
+    runtime: &mut R,
+) -> i32 {
+    let recovery = (|| {
+        let pid = args
+            .bootstrap_pid
+            .ok_or_else(|| "--bootstrap-pid is required for Windows recovery".to_string())?;
+        runtime.wait_for_bootstrap(pid)?;
+        runtime.apply_update(&args.apply)?;
+        runtime.print(WINDOWS_RECOVERY_SUCCESS);
+        runtime.print(WINDOWS_RECOVERY_RERUN);
+        Ok::<i32, String>(0)
+    })();
+
+    let code = match recovery {
+        Ok(code) => code,
+        Err(error) if original_command_is_update(args) => {
+            runtime.eprint(&format!(
+                "Windows bootstrap recovery failed: {error}\nPlease retry climon update."
+            ));
+            1
+        }
+        Err(error) => match strict_windows_fallback(args) {
+            Ok(fallback) => match runtime.launch_fallback(fallback, &args.original_args) {
+                Ok(code) => code,
+                Err(fallback_error) => {
+                    runtime.eprint(&format!(
+                        "Windows bootstrap recovery failed: {error}\nThe local fallback {} could not be run: {fallback_error}\n{WINDOWS_REPAIR_GUIDANCE}",
+                        fallback.display()
+                    ));
+                    1
+                }
+            },
+            Err(fallback_error) => {
+                runtime.eprint(&format!(
+                    "Windows bootstrap recovery failed: {error}\n{fallback_error}\n{WINDOWS_REPAIR_GUIDANCE}"
+                ));
+                1
+            }
+        },
+    };
+
+    if args.apply.source != args.apply.dir && !args.apply.dir.starts_with(&args.apply.source) {
+        runtime.cleanup_staging(&args.apply.source);
+    }
+    code
+}
+
+#[cfg(windows)]
+struct ProductionWindowsRecoveryRuntime<'a> {
+    installer_build_version: &'a str,
+    client_stub: &'a [u8],
+    server_stub: &'a [u8],
+}
+
+#[cfg(windows)]
+impl WindowsRecoveryRuntime for ProductionWindowsRecoveryRuntime<'_> {
+    fn wait_for_bootstrap(&mut self, pid: u32) -> Result<(), String> {
+        wait_for_windows_process(pid)
+    }
+
+    fn apply_update(&mut self, args: &ApplyUpdateArgs) -> Result<(), String> {
+        apply_windows_recovery(
+            args,
+            self.installer_build_version,
+            self.client_stub,
+            self.server_stub,
+        )
+    }
+
+    fn launch_fallback(
+        &mut self,
+        program: &Path,
+        original_args: &[OsString],
+    ) -> Result<i32, String> {
+        if !program.is_file() {
+            return Err(format!("{} does not exist", program.display()));
+        }
+        let status = std::process::Command::new(program)
+            .args(original_args)
+            .status()
+            .map_err(|error| {
+                format!(
+                    "launch local fallback {} failed: {error}",
+                    program.display()
+                )
+            })?;
+        Ok(status.code().unwrap_or(1))
+    }
+
+    fn cleanup_staging(&mut self, source: &Path) {
+        let _ = std::fs::remove_dir_all(source);
+    }
+
+    fn print(&mut self, message: &str) {
+        println!("{message}");
+    }
+
+    fn eprint(&mut self, message: &str) {
+        eprintln!("{message}");
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_windows_process(pid: u32) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, WAIT_FAILED, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE,
+    };
+
+    if pid == 0 {
+        return Err("bootstrap PID must not be zero".to_string());
+    }
+
+    // SAFETY: OpenProcess receives a concrete PID and synchronization-only
+    // access. Any returned handle is closed on every path below.
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        // OpenProcess documents ERROR_INVALID_PARAMETER when the nonzero PID no
+        // longer identifies a process. That means the exact bootstrap has
+        // already exited and it is safe to proceed. All other errors are real
+        // wait failures and must remain visible.
+        let error = unsafe { GetLastError() };
+        if error == ERROR_INVALID_PARAMETER {
+            return Ok(());
+        }
+        return Err(format!(
+            "open bootstrap process {pid} failed: {}",
+            std::io::Error::from_raw_os_error(error as i32)
+        ));
+    }
+
+    // SAFETY: `handle` is a valid process handle opened above.
+    let wait_result = unsafe { WaitForSingleObject(handle, INFINITE) };
+    let wait_error = if wait_result == WAIT_FAILED {
+        Some(unsafe { GetLastError() })
+    } else {
+        None
+    };
+    // SAFETY: `handle` is owned by this function and closed exactly once.
+    let close_result = unsafe { CloseHandle(handle) };
+
+    if let Some(error) = wait_error {
+        return Err(format!(
+            "wait for bootstrap process {pid} failed: {}",
+            std::io::Error::from_raw_os_error(error as i32)
+        ));
+    }
+    if wait_result != WAIT_OBJECT_0 {
+        return Err(format!(
+            "wait for bootstrap process {pid} returned unexpected status {wait_result}"
+        ));
+    }
+    if close_result == 0 {
+        let error = unsafe { GetLastError() };
+        return Err(format!(
+            "close bootstrap process {pid} handle failed: {}",
+            std::io::Error::from_raw_os_error(error as i32)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn apply_windows_recovery(
+    args: &ApplyUpdateArgs,
+    installer_build_version: &str,
+    client_stub: &[u8],
+    server_stub: &[u8],
+) -> Result<(), String> {
+    if args.version != installer_build_version {
+        return Err(format!(
+            "Version mismatch: installer is {} but update requests {}",
+            installer_build_version, args.version
+        ));
+    }
+    if !args.source.is_dir() {
+        return Err(format!(
+            "Source directory does not exist: {}",
+            args.source.display()
+        ));
+    }
+    validate_source_payloads(&args.source)?;
+
+    let client_dll = std::fs::read(args.source.join("climon.dll"))
+        .map_err(|error| format!("read climon.dll: {error}"))?;
+    let server_exe = std::fs::read(args.source.join("climon-server.exe"))
+        .map_err(|error| format!("read climon-server.exe: {error}"))?;
+
+    let fallback = args.dir.join("climon.exe.old");
+    with_preserved_windows_fallback(&fallback, || {
+        crate::files::place_windows_layout_with_options(
+            &args.dir,
+            &args.version,
+            client_stub,
+            server_stub,
+            &client_dll,
+            &server_exe,
+            crate::files::InstallBinariesOptions::default(),
+        )
+        .map_err(|error| error.message)
+    })
+}
+
+#[cfg(any(windows, test))]
+fn with_preserved_windows_fallback<T>(
+    fallback: &Path,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let fallback_bytes = std::fs::read(fallback)
+        .map_err(|error| format!("read local fallback {} failed: {error}", fallback.display()))?;
+    let result = operation();
+    match std::fs::write(fallback, fallback_bytes) {
+        Ok(()) => result,
+        Err(restore_error) => match result {
+            Ok(_) => Err(format!(
+                "restore local fallback {} failed: {restore_error}",
+                fallback.display()
+            )),
+            Err(operation_error) => Err(format!(
+                "{operation_error}; restore local fallback {} failed: {restore_error}",
+                fallback.display()
+            )),
+        },
+    }
+}
+
+/// Native Windows recovery entrypoint used by the installer dispatch.
+#[cfg(windows)]
+pub fn run_recover_bootstrap_windows(
+    args: &RecoverBootstrapArgs,
+    installer_build_version: &str,
+    client_stub: &[u8],
+    server_stub: &[u8],
+) -> i32 {
+    let mut runtime = ProductionWindowsRecoveryRuntime {
+        installer_build_version,
+        client_stub,
+        server_stub,
+    };
+    run_windows_recovery_with_runtime(args, &mut runtime)
 }
 
 #[cfg(unix)]
@@ -588,6 +881,86 @@ mod tests {
         OsString::from(s)
     }
 
+    struct FakeWindowsRecovery {
+        events: Vec<String>,
+        wait_result: Result<(), String>,
+        apply_result: Result<(), String>,
+        fallback_result: Result<i32, String>,
+        fallback_launches: Vec<(PathBuf, Vec<OsString>)>,
+        output: Vec<String>,
+        errors: Vec<String>,
+        remove_staging: bool,
+    }
+
+    impl Default for FakeWindowsRecovery {
+        fn default() -> Self {
+            Self {
+                events: Vec::new(),
+                wait_result: Ok(()),
+                apply_result: Ok(()),
+                fallback_result: Ok(0),
+                fallback_launches: Vec::new(),
+                output: Vec::new(),
+                errors: Vec::new(),
+                remove_staging: false,
+            }
+        }
+    }
+
+    impl WindowsRecoveryRuntime for FakeWindowsRecovery {
+        fn wait_for_bootstrap(&mut self, pid: u32) -> Result<(), String> {
+            self.events.push(format!("wait-pid:{pid}"));
+            self.wait_result.clone()
+        }
+
+        fn apply_update(&mut self, _args: &ApplyUpdateArgs) -> Result<(), String> {
+            self.events.push("apply".to_string());
+            self.apply_result.clone()
+        }
+
+        fn launch_fallback(
+            &mut self,
+            program: &Path,
+            original_args: &[OsString],
+        ) -> Result<i32, String> {
+            self.events.push("fallback".to_string());
+            self.fallback_launches
+                .push((program.to_path_buf(), original_args.to_vec()));
+            self.fallback_result.clone()
+        }
+
+        fn cleanup_staging(&mut self, source: &Path) {
+            self.events.push("cleanup-staging".to_string());
+            if self.remove_staging {
+                fs::remove_dir_all(source).ok();
+            }
+        }
+
+        fn print(&mut self, message: &str) {
+            self.events.push("print".to_string());
+            self.output.push(message.to_string());
+        }
+
+        fn eprint(&mut self, message: &str) {
+            self.events.push("eprint".to_string());
+            self.errors.push(message.to_string());
+        }
+    }
+
+    fn windows_recover_args(root: &Path, original_args: Vec<OsString>) -> RecoverBootstrapArgs {
+        let dir = root.join("install");
+        RecoverBootstrapArgs {
+            apply: ApplyUpdateArgs {
+                dir: dir.clone(),
+                source: root.join("stage"),
+                version: "3.2.1".to_string(),
+            },
+            bootstrap_pid: Some(12345),
+            fallback: Some(dir.join("climon.exe.old")),
+            original_args,
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Parser tests
     // -----------------------------------------------------------------------
@@ -675,6 +1048,43 @@ mod tests {
                 fallback: None,
                 original_args: vec![],
             }))
+        );
+    }
+
+    #[test]
+    fn windows_recovery_parser_keeps_operation_like_original_args_opaque() {
+        let args = vec![
+            os("--recover-bootstrap-v1"),
+            os("--dir"),
+            os("/opt/climon"),
+            os("--source"),
+            os("/stage"),
+            os("--version"),
+            os("3.2.1"),
+            os("--original-arg"),
+            os("--apply-update-v1"),
+            os("--original-arg"),
+            os("--recover-bootstrap-v1"),
+        ];
+
+        let parsed = parse_update_operation(&args).unwrap();
+
+        assert_eq!(
+            parsed,
+            Some(UpdateOperation::Recover(RecoverBootstrapArgs {
+                apply: ApplyUpdateArgs {
+                    dir: PathBuf::from("/opt/climon"),
+                    source: PathBuf::from("/stage"),
+                    version: "3.2.1".to_string(),
+                },
+                bootstrap_pid: None,
+                fallback: None,
+                original_args: vec![os("--apply-update-v1"), os("--recover-bootstrap-v1")],
+            }))
+        );
+        assert_eq!(
+            parse_update_operation(&[os("session"), os("--recover-bootstrap-v1")]).unwrap(),
+            None
         );
     }
 
@@ -1466,6 +1876,198 @@ mod tests {
 
         assert_eq!(code, 23);
         assert_eq!(fs::read_to_string(marker).unwrap(), "session\n--verbose\n");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn windows_recovery_waits_for_exact_pid_before_validation_or_mutation() {
+        let root = temp_root("windows-recovery-wait-order");
+        let args = windows_recover_args(&root, vec![os("session")]);
+        let mut runtime = FakeWindowsRecovery::default();
+
+        let code = run_windows_recovery_with_runtime(&args, &mut runtime);
+
+        assert_eq!(code, 0);
+        assert_eq!(runtime.events.first().unwrap(), "wait-pid:12345");
+        assert!(
+            runtime
+                .events
+                .iter()
+                .position(|event| event == "wait-pid:12345")
+                < runtime.events.iter().position(|event| event == "apply")
+        );
+
+        let mut failed_wait = FakeWindowsRecovery {
+            wait_result: Err("wait failed".to_string()),
+            fallback_result: Ok(42),
+            ..FakeWindowsRecovery::default()
+        };
+        let code = run_windows_recovery_with_runtime(&args, &mut failed_wait);
+        assert_eq!(code, 42);
+        assert_eq!(failed_wait.events.first().unwrap(), "wait-pid:12345");
+        assert!(!failed_wait.events.iter().any(|event| event == "apply"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn windows_recovery_placement_failure_runs_strict_local_fallback_with_raw_args() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = temp_root("windows-recovery-fallback");
+        let raw_arg = OsString::from_vec(vec![b'-', 0xff]);
+        let args =
+            windows_recover_args(&root, vec![os("session"), raw_arg.clone(), os("--verbose")]);
+        let mut runtime = FakeWindowsRecovery {
+            apply_result: Err("placement failed".to_string()),
+            fallback_result: Ok(42),
+            ..FakeWindowsRecovery::default()
+        };
+
+        let code = run_windows_recovery_with_runtime(&args, &mut runtime);
+
+        assert_eq!(code, 42);
+        assert_eq!(
+            runtime.fallback_launches,
+            vec![(
+                root.join("install/climon.exe.old"),
+                vec![os("session"), raw_arg, os("--verbose")],
+            )]
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn windows_recovery_update_failure_is_retryable_and_never_calls_fallback() {
+        let root = temp_root("windows-recovery-update-no-fallback");
+        for command in ["update", "--update"] {
+            let args = windows_recover_args(&root, vec![os(command), os("--verbose")]);
+            let mut runtime = FakeWindowsRecovery {
+                apply_result: Err("placement failed".to_string()),
+                ..FakeWindowsRecovery::default()
+            };
+
+            let code = run_windows_recovery_with_runtime(&args, &mut runtime);
+
+            assert_ne!(code, 0);
+            assert!(runtime.fallback_launches.is_empty());
+            assert_eq!(runtime.errors.len(), 1);
+            assert!(runtime.errors[0].contains("retry"), "{}", runtime.errors[0]);
+        }
+
+        let non_update = windows_recover_args(&root, vec![os("session"), os("update")]);
+        let mut runtime = FakeWindowsRecovery {
+            apply_result: Err("placement failed".to_string()),
+            fallback_result: Ok(42),
+            ..FakeWindowsRecovery::default()
+        };
+        assert_eq!(
+            run_windows_recovery_with_runtime(&non_update, &mut runtime),
+            42
+        );
+        assert_eq!(runtime.fallback_launches.len(), 1);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn windows_recovery_missing_old_prints_install_ps1_guidance_and_fails() {
+        let root = temp_root("windows-recovery-missing-old");
+        let args = windows_recover_args(&root, vec![os("session")]);
+        let mut runtime = FakeWindowsRecovery {
+            apply_result: Err("placement failed".to_string()),
+            fallback_result: Err("not found".to_string()),
+            ..FakeWindowsRecovery::default()
+        };
+
+        let code = run_windows_recovery_with_runtime(&args, &mut runtime);
+
+        assert_ne!(code, 0);
+        assert_eq!(runtime.errors.len(), 1);
+        assert!(
+            runtime.errors[0].contains("install.ps1"),
+            "{}",
+            runtime.errors[0]
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn windows_recovery_rejects_nonlocal_fallback_protocol_input() {
+        let root = temp_root("windows-recovery-strict-fallback");
+        let mut args = windows_recover_args(&root, vec![os("session")]);
+        args.fallback = Some(root.join("network-controlled.exe"));
+        let mut runtime = FakeWindowsRecovery {
+            apply_result: Err("placement failed".to_string()),
+            fallback_result: Ok(42),
+            ..FakeWindowsRecovery::default()
+        };
+
+        let code = run_windows_recovery_with_runtime(&args, &mut runtime);
+
+        assert_ne!(code, 0);
+        assert!(runtime.fallback_launches.is_empty());
+        assert!(runtime.errors[0].contains("install.ps1"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn windows_recovery_success_prints_rerun_message_and_cleans_only_staging() {
+        let root = temp_root("windows-recovery-success");
+        let args = windows_recover_args(&root, vec![os("session")]);
+        fs::create_dir_all(&args.apply.source).unwrap();
+        fs::create_dir_all(&args.apply.dir).unwrap();
+        let old = args.apply.dir.join("climon.exe.old");
+        fs::write(&old, b"old client").unwrap();
+        let mut runtime = FakeWindowsRecovery {
+            remove_staging: true,
+            ..FakeWindowsRecovery::default()
+        };
+
+        let code = run_windows_recovery_with_runtime(&args, &mut runtime);
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            runtime.output,
+            vec![
+                "A critical climon update was applied successfully.",
+                "Please rerun your climon command.",
+            ]
+        );
+        assert!(!args.apply.source.exists());
+        assert!(old.exists());
+        assert_eq!(runtime.events.last().unwrap(), "cleanup-staging");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn windows_recovery_preserves_old_fallback_across_successful_placement() {
+        let root = temp_root("windows-recovery-preserve-old-success");
+        let fallback = root.join("climon.exe.old");
+        fs::write(&fallback, b"legacy client").unwrap();
+
+        let result: Result<(), String> = with_preserved_windows_fallback(&fallback, || {
+            fs::write(&fallback, b"displaced bootstrap").unwrap();
+            Ok(())
+        });
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(fs::read(&fallback).unwrap(), b"legacy client");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn windows_recovery_preserves_old_fallback_across_failed_placement() {
+        let root = temp_root("windows-recovery-preserve-old-failure");
+        let fallback = root.join("climon.exe.old");
+        fs::write(&fallback, b"legacy client").unwrap();
+
+        let result: Result<(), String> = with_preserved_windows_fallback(&fallback, || {
+            fs::write(&fallback, b"displaced bootstrap").unwrap();
+            Err("placement failed".to_string())
+        });
+
+        assert_eq!(result, Err("placement failed".to_string()));
+        assert_eq!(fs::read(&fallback).unwrap(), b"legacy client");
         fs::remove_dir_all(&root).ok();
     }
 

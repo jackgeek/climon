@@ -40,19 +40,25 @@ pub enum BootstrapError {
     Staging(String),
     /// Verified staging succeeded, but validation or recovery execution failed.
     Recovery(String),
+    /// Recovery was spawned, so the bootstrap must not start a second client.
+    PostHandoff(String),
 }
 
 impl fmt::Display for BootstrapError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Staging(message) | Self::Recovery(message) => formatter.write_str(message),
+            Self::Staging(message) | Self::Recovery(message) | Self::PostHandoff(message) => {
+                formatter.write_str(message)
+            }
         }
     }
 }
 
 const UNIX_RECOVERY_GUIDANCE: &str = "climon must complete a one-time critical update and requires a network connection.\nReconnect and rerun this command, or run the current install.sh to repair climon.";
+const WINDOWS_REPAIR_GUIDANCE: &str = "Run the current install.ps1 to repair climon.";
 
 /// Inputs needed to bootstrap a legacy updater invocation.
+#[derive(Clone, Copy)]
 pub struct BootstrapRequest<'a> {
     pub current_exe: &'a Path,
     pub original_args: &'a [OsString],
@@ -219,6 +225,17 @@ pub fn run_legacy_bootstrap_with_runtime<R: BootstrapRuntime>(
         OsString::from("--version"),
         OsString::from(&manifest.version),
     ];
+    if request.platform == RecoveryPlatform::Windows {
+        recovery_args.extend([
+            OsString::from("--bootstrap-pid"),
+            OsString::from(std::process::id().to_string()),
+            OsString::from("--fallback"),
+            request
+                .current_exe
+                .with_file_name("climon.exe.old")
+                .into_os_string(),
+        ]);
+    }
     for arg in request.original_args {
         recovery_args.push(OsString::from("--original-arg"));
         recovery_args.push(arg.clone());
@@ -230,7 +247,7 @@ pub fn run_legacy_bootstrap_with_runtime<R: BootstrapRuntime>(
         .map_err(BootstrapError::Recovery)?;
     match launch {
         RecoveryLaunch::Detached => {
-            staging.persist().map_err(BootstrapError::Recovery)?;
+            staging.persist().map_err(BootstrapError::PostHandoff)?;
             Ok(0)
         }
         RecoveryLaunch::Synchronous(code) => Ok(code),
@@ -276,6 +293,39 @@ fn run_legacy_bootstrap_entry_with_runtime<R: BootstrapRuntime>(
             eprint(UNIX_RECOVERY_GUIDANCE);
             1
         }
+        Err(error @ (BootstrapError::Staging(_) | BootstrapError::Recovery(_)))
+            if request.platform == RecoveryPlatform::Windows =>
+        {
+            if request
+                .original_args
+                .first()
+                .is_some_and(|arg| arg == "update" || arg == "--update")
+            {
+                eprint(&format!(
+                    "climon critical update recovery failed: {error}\nPlease retry climon update."
+                ));
+                return 1;
+            }
+
+            let fallback = request.current_exe.with_file_name("climon.exe.old");
+            match runtime.launch_recovery(&fallback, request.original_args, false) {
+                Ok(RecoveryLaunch::Synchronous(code)) => code,
+                Ok(RecoveryLaunch::Detached) => {
+                    eprint(&format!(
+                        "climon bootstrap failed: {error}\nThe local fallback {} did not return an exit code.\n{WINDOWS_REPAIR_GUIDANCE}",
+                        fallback.display()
+                    ));
+                    1
+                }
+                Err(fallback_error) => {
+                    eprint(&format!(
+                        "climon bootstrap failed: {error}\nThe local fallback {} could not be run: {fallback_error}\n{WINDOWS_REPAIR_GUIDANCE}",
+                        fallback.display()
+                    ));
+                    1
+                }
+            }
+        }
         Err(error) => {
             eprint(&format!("climon bootstrap failed: {error}"));
             1
@@ -287,7 +337,7 @@ fn run_legacy_bootstrap_entry_with_runtime<R: BootstrapRuntime>(
 mod tests {
     use super::*;
     use crate::manifest::{Manifest, ManifestArtifact};
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::{BTreeMap, HashSet, VecDeque};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
@@ -344,6 +394,7 @@ mod tests {
         entries: HashSet<String>,
         launch_error: Option<String>,
         launch_result: Option<RecoveryLaunch>,
+        launch_results: VecDeque<Result<RecoveryLaunch, String>>,
     }
 
     impl FakeRuntime {
@@ -355,6 +406,7 @@ mod tests {
                 entries: entries.iter().map(|name| (*name).to_string()).collect(),
                 launch_error: None,
                 launch_result: None,
+                launch_results: VecDeque::new(),
             }
         }
     }
@@ -403,6 +455,9 @@ mod tests {
                 .launches
                 .push((program.to_path_buf(), args.to_vec(), detached));
             state.events.push("launch");
+            if let Some(result) = self.launch_results.pop_front() {
+                return result;
+            }
             if let Some(error) = &self.launch_error {
                 return Err(error.clone());
             }
@@ -583,22 +638,30 @@ mod tests {
                     "install"
                 })
             );
-            assert_eq!(
-                args,
-                &vec![
-                    OsString::from("--recover-bootstrap-v1"),
-                    OsString::from("--dir"),
-                    OsString::from("/installed"),
-                    OsString::from("--source"),
-                    OsString::from("/verified-stage"),
-                    OsString::from("--version"),
-                    OsString::from("2.0.0"),
-                    OsString::from("--original-arg"),
-                    OsString::from("session"),
-                    OsString::from("--original-arg"),
-                    original_args[1].clone(),
-                ]
-            );
+            let mut expected_args = vec![
+                OsString::from("--recover-bootstrap-v1"),
+                OsString::from("--dir"),
+                OsString::from("/installed"),
+                OsString::from("--source"),
+                OsString::from("/verified-stage"),
+                OsString::from("--version"),
+                OsString::from("2.0.0"),
+            ];
+            if expected_detached {
+                expected_args.extend([
+                    OsString::from("--bootstrap-pid"),
+                    OsString::from(std::process::id().to_string()),
+                    OsString::from("--fallback"),
+                    OsString::from("/installed/climon.exe.old"),
+                ]);
+            }
+            expected_args.extend([
+                OsString::from("--original-arg"),
+                OsString::from("session"),
+                OsString::from("--original-arg"),
+                original_args[1].clone(),
+            ]);
+            assert_eq!(args, &expected_args);
             assert_eq!(*detached, expected_detached);
             assert_eq!(state.persists, usize::from(expected_detached));
             assert_eq!(
@@ -722,5 +785,209 @@ mod tests {
         let state = runtime.state.lock().unwrap();
         assert_eq!(state.events, vec!["launch"]);
         assert_eq!(state.persists, 0);
+    }
+
+    #[test]
+    fn windows_bootstrap_detached_handoff_includes_pid_fallback_and_raw_original_args() {
+        let raw_arg = non_utf8_original_arg();
+        let original_args = vec![OsString::from("session"), raw_arg.clone()];
+        let mut runtime = FakeRuntime::new(&["install.exe", "climon.dll", "climon-server.exe"]);
+
+        let code = run_legacy_bootstrap_with_runtime(
+            request(
+                Path::new("/installed/climon.exe"),
+                &original_args,
+                RecoveryPlatform::Windows,
+                "win32",
+            ),
+            &mut runtime,
+        )
+        .unwrap();
+
+        assert_eq!(code, 0);
+        let state = runtime.state.lock().unwrap();
+        assert_eq!(state.events, vec!["launch", "persist"]);
+        assert_eq!(state.persists, 1);
+        assert_eq!(
+            state.launches,
+            vec![(
+                PathBuf::from("/verified-stage/install.exe"),
+                vec![
+                    OsString::from("--recover-bootstrap-v1"),
+                    OsString::from("--dir"),
+                    OsString::from("/installed"),
+                    OsString::from("--source"),
+                    OsString::from("/verified-stage"),
+                    OsString::from("--version"),
+                    OsString::from("2.0.0"),
+                    OsString::from("--bootstrap-pid"),
+                    OsString::from(std::process::id().to_string()),
+                    OsString::from("--fallback"),
+                    OsString::from("/installed/climon.exe.old"),
+                    OsString::from("--original-arg"),
+                    OsString::from("session"),
+                    OsString::from("--original-arg"),
+                    raw_arg,
+                ],
+                true,
+            )]
+        );
+    }
+
+    #[test]
+    fn windows_bootstrap_pre_handoff_failure_runs_local_fallback_with_exact_exit_code() {
+        let raw_arg = non_utf8_original_arg();
+        let original_args = vec![OsString::from("session"), raw_arg.clone()];
+        let mut runtime = FakeRuntime::new(&["install.exe", "climon.dll", "climon-server.exe"]);
+        runtime.manifest = Err("offline".to_string());
+        runtime.launch_result = Some(RecoveryLaunch::Synchronous(42));
+        let mut output = Vec::new();
+
+        let code = run_legacy_bootstrap_entry_with_runtime(
+            request(
+                Path::new("/installed/climon.exe"),
+                &original_args,
+                RecoveryPlatform::Windows,
+                "win32",
+            ),
+            &mut runtime,
+            &mut |message| output.push(message.to_string()),
+        );
+
+        assert_eq!(code, 42);
+        let state = runtime.state.lock().unwrap();
+        assert_eq!(
+            state.launches,
+            vec![(
+                PathBuf::from("/installed/climon.exe.old"),
+                vec![OsString::from("session"), raw_arg],
+                false,
+            )]
+        );
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn windows_bootstrap_update_failure_is_retryable_and_never_falls_back() {
+        for command in ["update", "--update"] {
+            let mut runtime = FakeRuntime::new(&["install.exe", "climon.dll", "climon-server.exe"]);
+            runtime.manifest = Err("offline".to_string());
+            let mut output = Vec::new();
+
+            let code = run_legacy_bootstrap_entry_with_runtime(
+                request(
+                    Path::new("/installed/climon.exe"),
+                    &[OsString::from(command)],
+                    RecoveryPlatform::Windows,
+                    "win32",
+                ),
+                &mut runtime,
+                &mut |message| output.push(message.to_string()),
+            );
+
+            assert_ne!(code, 0);
+            assert!(runtime.state.lock().unwrap().launches.is_empty());
+            assert_eq!(output.len(), 1);
+            assert!(output[0].contains("retry"), "{}", output[0]);
+        }
+    }
+
+    #[test]
+    fn windows_bootstrap_missing_fallback_prints_install_ps1_repair_guidance() {
+        let mut runtime = FakeRuntime::new(&["install.exe", "climon.dll", "climon-server.exe"]);
+        runtime.manifest = Err("offline".to_string());
+        runtime.launch_error = Some("not found".to_string());
+        let mut output = Vec::new();
+
+        let code = run_legacy_bootstrap_entry_with_runtime(
+            request(
+                Path::new("/installed/climon.exe"),
+                &[OsString::from("session")],
+                RecoveryPlatform::Windows,
+                "win32",
+            ),
+            &mut runtime,
+            &mut |message| output.push(message.to_string()),
+        );
+
+        assert_ne!(code, 0);
+        assert_eq!(
+            runtime.state.lock().unwrap().launches[0].0,
+            PathBuf::from("/installed/climon.exe.old")
+        );
+        assert_eq!(output.len(), 1);
+        assert!(output[0].contains("install.ps1"), "{}", output[0]);
+    }
+
+    #[test]
+    fn windows_bootstrap_fetch_verify_stage_and_spawn_failures_use_fallback_only_for_non_update() {
+        #[derive(Clone, Copy)]
+        enum Failure {
+            Fetch,
+            Verify,
+            StagedPayload,
+            Spawn,
+        }
+
+        for failure in [
+            Failure::Fetch,
+            Failure::Verify,
+            Failure::StagedPayload,
+            Failure::Spawn,
+        ] {
+            for command in ["session", "update"] {
+                let mut runtime =
+                    FakeRuntime::new(&["install.exe", "climon.dll", "climon-server.exe"]);
+                match failure {
+                    Failure::Fetch => runtime.manifest = Err("offline".to_string()),
+                    Failure::Verify => {
+                        runtime.stage_error = Some("signature verification failed".to_string())
+                    }
+                    Failure::StagedPayload => {
+                        runtime.entries.remove("climon-server.exe");
+                    }
+                    Failure::Spawn => {
+                        runtime
+                            .launch_results
+                            .push_back(Err("spawn failed".to_string()));
+                    }
+                }
+                runtime
+                    .launch_results
+                    .push_back(Ok(RecoveryLaunch::Synchronous(42)));
+                let mut output = Vec::new();
+
+                let code = run_legacy_bootstrap_entry_with_runtime(
+                    request(
+                        Path::new("/installed/climon.exe"),
+                        &[OsString::from(command)],
+                        RecoveryPlatform::Windows,
+                        "win32",
+                    ),
+                    &mut runtime,
+                    &mut |message| output.push(message.to_string()),
+                );
+
+                let state = runtime.state.lock().unwrap();
+                if command == "update" {
+                    assert_ne!(code, 0);
+                    assert!(state
+                        .launches
+                        .iter()
+                        .all(|(program, _, _)| program != Path::new("/installed/climon.exe.old")));
+                    assert!(output[0].contains("retry"), "{}", output[0]);
+                } else {
+                    assert_eq!(code, 42);
+                    assert_eq!(
+                        state.launches.last().unwrap(),
+                        &(
+                            PathBuf::from("/installed/climon.exe.old"),
+                            vec![OsString::from("session")],
+                            false,
+                        )
+                    );
+                }
+            }
+        }
     }
 }
