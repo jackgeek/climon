@@ -154,6 +154,10 @@ struct HostState {
     /// notice be re-centered when the local console is resized while displaced,
     /// instead of being stranded off-centre or scrolled away. Cleared on restore.
     local_notice_size: Option<(u16, u16)>,
+    /// The pending leg of a two-leg repaint jiggle, if one is in progress. Set
+    /// by `request_jiggle` (local restore + non-local same-size take-control),
+    /// consumed one leg per tick by the restore thread.
+    pending_jiggle: Option<JiggleLeg>,
 
     exited: bool,
     exit_code: Option<i32>,
@@ -443,8 +447,27 @@ impl HostState {
             return;
         };
         self.controller_id = Some(vid.to_string());
+        let before = (self.applied_cols, self.applied_rows);
         self.set_pty_size(cols, rows);
+        // A genuine size change already delivered SIGWINCH / a ConPTY resize, so
+        // the app re-rendered live. Only when a *non-local* surface takes control
+        // at the exact current size (no SIGWINCH) does the app need a nudge to
+        // repaint. The local terminal is excluded: its repaint is driven by the
+        // restore watcher after unsuppressing, so jiggling here would fire while
+        // local output is still suppressed and be swallowed.
+        if vid != "local" && (self.applied_cols, self.applied_rows) == before {
+            self.request_jiggle();
+        }
         self.broadcast_control();
+    }
+
+    /// Schedule a two-leg repaint jiggle (Leg 1 next tick). Coalesces: a request
+    /// while a jiggle is already in progress is a no-op, so overlapping restore /
+    /// take-control events cannot stack extra resizes.
+    fn request_jiggle(&mut self) {
+        if self.pending_jiggle.is_none() {
+            self.pending_jiggle = Some(JiggleLeg::Away);
+        }
     }
 
     /// Processes a chunk of in-process local-terminal stdin. While the local
@@ -771,6 +794,7 @@ pub fn run_session_host(
         local_output_suppressed: false,
         local_restore_at: None,
         local_notice_size: None,
+        pending_jiggle: None,
         exited: false,
         exit_code: None,
         scrollback: climon_pty::Scrollback::new(SCROLLBACK_CAP),
@@ -1351,6 +1375,52 @@ fn socket_client_controls_input(
     )
 }
 
+/// The intermediate PTY height for a restore jiggle: one row away from `rows`,
+/// so the resize is always a real (non-deduped) change that forces the wrapped
+/// command to repaint. Steps down normally, but up when `rows <= 1` because
+/// `PtyResizer::resize` clamps to `>= 1` and the de-dupe would otherwise swallow
+/// a no-op resize. `jiggle_size` pairs this with a one-column shrink so both
+/// dimensions change.
+fn jiggle_rows(rows: u16) -> u16 {
+    if rows > 1 {
+        rows - 1
+    } else {
+        rows + 1
+    }
+}
+
+/// The intermediate PTY size for a restore jiggle: one column narrower (never
+/// wider, so the PTY never transiently overgrows the real local console — the
+/// Windows ConPTY corruption guard) and one row away (via `jiggle_rows`).
+/// Changing *both* dimensions guarantees a real `winsize` difference the wrapped
+/// command detects, and the column change busts the frame cache of TUIs (e.g.
+/// Ink/`copilot`) that skip a redraw when the new frame is byte-identical to the
+/// last. Columns clamp at `1`; rows always change, so the result never equals
+/// the input.
+fn jiggle_size(cols: u16, rows: u16) -> (u16, u16) {
+    (cols.saturating_sub(1).max(1), jiggle_rows(rows))
+}
+
+/// Which leg of a two-leg repaint jiggle runs next. Leg 1 (`Away`) drives the
+/// PTY to `jiggle_size`; Leg 2 (`Back`) returns it to the current live size. The
+/// legs run on consecutive restore-thread ticks so the ~25 ms gap between them
+/// is observable (a shorter gap coalesces and the app never samples the
+/// intermediate size).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum JiggleLeg {
+    Away,
+    Back,
+}
+
+impl JiggleLeg {
+    fn next(self) -> Option<JiggleLeg> {
+        match self {
+            JiggleLeg::Away => Some(JiggleLeg::Back),
+            JiggleLeg::Back => None,
+        }
+    }
+}
+
 fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(25));
@@ -1394,7 +1464,31 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
                 s.local_output_suppressed = false;
                 s.local_restore_at = None;
                 s.local_notice_size = None;
+                // Ask the wrapped command to repaint its *authoritative* screen on
+                // top of the shadow baseline. The jiggle driver below runs it
+                // after unsuppressing (this same tick starts Leg 1), so the app's
+                // repaint burst is not swallowed by the suppression gate.
+                s.request_jiggle();
             }
+        }
+        // Jiggle driver: run one leg of a pending size jiggle per 25 ms tick. The
+        // inter-tick gap is the load-bearing settle delay — two resizes closer
+        // together coalesce (Node re-reads winsize only after both land and sees
+        // no net change), so the intermediate size would never be observed. Leg 1
+        // drives a both-dimension off-size (busts frame-caching TUIs like Ink);
+        // Leg 2 returns to the *current* live size, re-read under the lock so a
+        // concurrent controller/viewer resize is never clobbered by a stale
+        // value (keeps PTY / grid / metadata in lock-step). We drive the raw
+        // resizer, not apply_resize, because the net size change is zero.
+        if let Some(leg) = s.pending_jiggle {
+            let resizer = s.resizer.clone();
+            let (cols, rows) = match leg {
+                JiggleLeg::Away => jiggle_size(s.applied_cols, s.applied_rows),
+                JiggleLeg::Back => (s.applied_cols, s.applied_rows),
+            };
+            s.pending_jiggle = leg.next();
+            drop(s);
+            resizer.resize(cols, rows);
         }
     })
 }
@@ -1842,7 +1936,9 @@ mod writer_thread_tests {
 
 #[cfg(test)]
 mod restore_decision_tests {
-    use super::{local_restore_decision, LocalRestoreDecision};
+    use super::{
+        jiggle_rows, jiggle_size, local_restore_decision, JiggleLeg, LocalRestoreDecision,
+    };
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1876,6 +1972,59 @@ mod restore_decision_tests {
             local_restore_decision(Some(past), now, false),
             LocalRestoreDecision::Repaint
         );
+    }
+
+    #[test]
+    fn jiggle_rows_steps_down_when_room() {
+        assert_eq!(jiggle_rows(24), 23);
+        assert_eq!(jiggle_rows(2), 1);
+    }
+
+    #[test]
+    fn jiggle_rows_steps_up_at_minimum() {
+        // rows == 1 cannot step down (resize clamps to >= 1, which would be a
+        // no-op the de-dupe swallows), so step up instead to force a change.
+        assert_eq!(jiggle_rows(1), 2);
+    }
+
+    #[test]
+    fn jiggle_rows_is_never_equal_to_input() {
+        for rows in [1u16, 2, 24, 50, 200, u16::MAX - 1] {
+            assert_ne!(jiggle_rows(rows), rows);
+        }
+    }
+
+    #[test]
+    fn jiggle_size_shrinks_columns_and_rows() {
+        assert_eq!(jiggle_size(80, 24), (79, 23));
+        assert_eq!(jiggle_size(2, 2), (1, 1));
+    }
+
+    #[test]
+    fn jiggle_size_clamps_columns_at_minimum() {
+        // cols cannot shrink below 1; rows step up from 1. At least one dim
+        // always changes, so the resize is never a no-op the de-dupe swallows.
+        assert_eq!(jiggle_size(1, 1), (1, 2));
+        assert_eq!(jiggle_size(1, 50), (1, 49));
+    }
+
+    #[test]
+    fn jiggle_size_is_never_equal_to_input() {
+        for (cols, rows) in [
+            (1u16, 1u16),
+            (1, 24),
+            (80, 24),
+            (200, 50),
+            (u16::MAX, u16::MAX),
+        ] {
+            assert_ne!(jiggle_size(cols, rows), (cols, rows));
+        }
+    }
+
+    #[test]
+    fn jiggle_leg_advances_away_to_back_to_done() {
+        assert_eq!(JiggleLeg::Away.next(), Some(JiggleLeg::Back));
+        assert_eq!(JiggleLeg::Back.next(), None);
     }
 
     #[test]
