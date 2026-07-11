@@ -470,6 +470,12 @@ the existing `devtunnel connect` → `devtunnel port list` → `run_uplink_bridg
 path, and the poll reconciles additions/removals without disturbing other live
 targets.
 
+At session launch the client runs a synchronous Dev Tunnels probe (CLI
+availability + sign-in) before spawning the uplink. This probe is bounded by a
+5-second timeout: if `devtunnel` stalls, the launcher warns the user and spawns
+the uplink best-effort rather than blocking session start
+(`rust/climon-cli/src/launcher.rs` `probe_devtunnel_sync`, `plan_uplink_start`).
+
 ## Dev-tunnel gateway (runtime-local boundary + shared failure contract)
 
 Every `devtunnel` invocation is funnelled through a per-runtime **gateway** so
