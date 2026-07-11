@@ -83,6 +83,12 @@ layout knowledge retained by the client.
 Already-released clients cannot use the new protocol. They will copy the new
 installer over `climon[.exe]`.
 
+This first hop remains authenticated. Already-released clients download the
+detached signature and verify the Ed25519 signature over the complete release
+ZIP before extracting or copying `install[.exe]`. The new archive must preserve
+that exact signed-artifact contract, so an old client never installs or executes
+an unauthenticated bootstrap.
+
 The dedicated installer therefore selects its mode from its executable basename:
 
 - `install` or `install.exe`: normal installer mode;
@@ -93,14 +99,26 @@ Recovery-bootstrap mode:
 
 1. captures the original arguments;
 2. fetches the canonical release manifest;
-3. downloads and verifies the current artifact;
-4. safely stages the artifact;
-5. validates that its installer and required platform payloads exist;
-6. invokes the staged installer through a recovery operation.
+3. downloads the current artifact and its detached signature;
+4. independently verifies the Ed25519 signature over the complete artifact
+   using the embedded update public key;
+5. refuses to extract or execute any downloaded content if verification fails;
+6. safely stages the verified artifact;
+7. validates that its installer and required platform payloads exist;
+8. invokes the staged installer through a recovery operation.
 
 This bootstrap redownload is intentional. The old updater discarded or ignored
 files it did not understand, so the renamed installer cannot rely on the
 original extraction directory.
+
+The two verifications protect separate downloads:
+
+1. the old client authenticates the archive containing the bootstrap before it
+   replaces `climon[.exe]`;
+2. the bootstrap authenticates the newly downloaded canonical archive before it
+   executes the staged installer.
+
+There is no unsigned installer execution path in either phase.
 
 Production bootstrap builds use only the canonical manifest endpoint. The
 existing compiled-out test endpoint feature may be forwarded to the installer
@@ -175,6 +193,10 @@ once in `climon-update` and reused by:
 
 Security requirements:
 
+- preserve the already-shipped client's first-hop verification contract: one
+  detached Ed25519 signature authenticates the complete release ZIP, including
+  `install[.exe]`;
+- independently verify the bootstrap's redownload with the embedded public key;
 - preserve manifest, signature, and artifact byte caps;
 - reject absolute paths, parent traversal, platform prefixes, and unsafe ZIP
   entries;
@@ -258,6 +280,10 @@ archive entry used by the installer.
 ### All platforms
 
 - fresh installation still succeeds from the same public archive;
+- a real legacy client rejects a tampered first-hop archive before replacing
+  `climon[.exe]`;
+- the recovery bootstrap rejects a tampered redownload before extraction or
+  installer execution;
 - signature failure leaves the installation untouched;
 - installer non-zero exits propagate as update failures;
 - test endpoint hooks remain absent from production workflow configuration;
