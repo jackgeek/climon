@@ -342,6 +342,18 @@ fn run_link(argv: &[String]) -> i32 {
 
 /// `climon __uplink`: run the devbox uplink supervisor on a tokio runtime.
 fn run_uplink_entry() -> i32 {
+    // The detached uplink is otherwise a black box (stdout/stderr routed to null
+    // by the spawner). Install a file logger for the `uplink` role so its
+    // connect/reconcile/attach lifecycle is recorded under
+    // `$CLIMON_HOME/logs/uplink/` for diagnosing "session visible but terminal
+    // blank in the dashboard" reports.
+    let _ = init_logger(
+        LogRole::Uplink,
+        LoggerInitOptions {
+            version: Some(VERSION.to_string()),
+            ..Default::default()
+        },
+    );
     let config_env = ConfigEnv::real();
     let store_env = StoreEnv::from_env();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

@@ -52,6 +52,16 @@ use climon_session::socket::{connect_session_socket, SessionStream};
 /// Default keepalive interval in seconds. Mirrors `DEFAULT_KEEPALIVE_SECONDS`.
 pub const DEFAULT_KEEPALIVE_SECONDS: f64 = 60.0;
 
+/// Opportunistic uplink logger. Returns a `uplink`-component child of the root
+/// logger **only when a logger has been initialized** (i.e. the real detached
+/// `__uplink` process, which installs the `Uplink` role logger). In unit tests
+/// no root logger is installed, so this is a no-op and never creates a stray log
+/// file. Use to record connect/reconcile/attach lifecycle for diagnosing remote
+/// "session visible but terminal blank" reports.
+fn ulog() -> Option<climon_logging::logger::Logger> {
+    climon_logging::logger::try_get_logger().map(|l| l.child("uplink"))
+}
+
 /// The resolved uplink target. Mirrors `UplinkConfig`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UplinkConfig {
@@ -403,6 +413,19 @@ async fn reconcile(bridge: &mut Bridge) {
         None => encode_control(&snapshot),
     };
     bridge.write(frame);
+    if let Some(l) = ulog() {
+        let added = current.difference(&bridge.advertised).count();
+        let removed = bridge.advertised.difference(&current).count();
+        l.log_with(
+            climon_logging::level::LogLevel::Debug,
+            serde_json::json!({
+                "advertised": current.len(),
+                "added": added,
+                "removed": removed,
+            }),
+            "uplink reconciled local sessions to dashboard",
+        );
+    }
     bridge.advertised = current;
 
     // Refresh the status beacon's session count + updatedAt while connected so
@@ -433,13 +456,52 @@ async fn attach(bridge: &Bridge, session_id: &str) {
     }
     let meta = match read_session_meta(&bridge.store_env, session_id) {
         Ok(Some(m)) => m,
-        _ => return,
+        other => {
+            if let Some(l) = ulog() {
+                let detail = match other {
+                    Ok(None) => "no metadata file".to_string(),
+                    Err(e) => e.to_string(),
+                    Ok(Some(_)) => unreachable!(),
+                };
+                l.log_with(
+                    climon_logging::level::LogLevel::Warn,
+                    serde_json::json!({ "sessionId": session_id, "error": detail }),
+                    "uplink attach aborted: session metadata unavailable",
+                );
+            }
+            return;
+        }
     };
     let (reader, writer) =
         match connect_session_pair(&bridge.store_env, session_id, &meta.socket_path) {
             Ok(pair) => pair,
-            Err(_) => return,
+            Err(e) => {
+                // The dashboard requested this session's terminal but the
+                // authenticated connect to the local daemon socket failed. This
+                // is the most likely cause of a "session listed but terminal
+                // blank in the dashboard" report, so record it loudly.
+                if let Some(l) = ulog() {
+                    l.log_with(
+                        climon_logging::level::LogLevel::Error,
+                        serde_json::json!({
+                            "sessionId": session_id,
+                            "socketPath": meta.socket_path,
+                            "errorKind": format!("{:?}", e.kind()),
+                            "error": e.to_string(),
+                        }),
+                        "uplink attach failed: could not open authenticated session socket",
+                    );
+                }
+                return;
+            }
         };
+    if let Some(l) = ulog() {
+        l.log_with(
+            climon_logging::level::LogLevel::Info,
+            serde_json::json!({ "sessionId": session_id }),
+            "uplink attached: streaming session output to dashboard",
+        );
+    }
     let active = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let (writer_tx, writer_rx) = std::sync::mpsc::channel::<Vec<u8>>();
 
@@ -464,17 +526,25 @@ async fn attach(bridge: &Bridge, session_id: &str) {
         let mut reader = reader;
         std::thread::spawn(move || {
             let mut buf = [0u8; 64 * 1024];
+            let mut forwarded: u64 = 0;
+            let reason: &str;
             loop {
                 if !active_reader.load(std::sync::atomic::Ordering::Relaxed) {
+                    reason = "detached";
                     break;
                 }
                 match reader.read(&mut buf) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        reason = "eof";
+                        break;
+                    }
                     Ok(n) => {
                         if let Ok(frame) = encode_data(&id, &buf[..n]) {
                             if send_tx.send(frame).is_err() {
+                                reason = "channel-closed";
                                 break;
                             }
+                            forwarded += n as u64;
                         }
                     }
                     Err(ref e)
@@ -483,8 +553,22 @@ async fn attach(bridge: &Bridge, session_id: &str) {
                     {
                         continue;
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        reason = "read-error";
+                        break;
+                    }
                 }
+            }
+            if let Some(l) = ulog() {
+                l.log_with(
+                    climon_logging::level::LogLevel::Info,
+                    serde_json::json!({
+                        "sessionId": id,
+                        "bytesForwarded": forwarded,
+                        "reason": reason,
+                    }),
+                    "uplink attach reader ended",
+                );
             }
             // Best-effort removal so a future attach can reconnect.
             if let Ok(mut map) = attached.try_lock() {
@@ -1327,6 +1411,13 @@ async fn run_target_bridge(
                     climon_store::paths::now_iso(),
                 )),
             );
+            if let Some(l) = ulog() {
+                l.log_with(
+                    climon_logging::level::LogLevel::Info,
+                    serde_json::json!({ "target": target, "host": host, "port": port }),
+                    "uplink connected to ingest channel",
+                );
+            }
             let bridge = run_uplink_bridge(
                 channel,
                 UplinkBridgeOptions {
@@ -1342,6 +1433,13 @@ async fn run_target_bridge(
             tokio::select! {
                 _ = cancel.cancelled() => { conn_kill(&mut conn).await; return; }
                 _ = bridge => {}
+            }
+            if let Some(l) = ulog() {
+                l.log_with(
+                    climon_logging::level::LogLevel::Warn,
+                    serde_json::json!({ "target": target }),
+                    "uplink ingest channel closed; will reconnect",
+                );
             }
         }
 
@@ -1451,6 +1549,16 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
     };
     if dbg {
         eprintln!("[uplink] singleton acquired; entering supervisor loop");
+    }
+    if let Some(l) = ulog() {
+        l.log_with(
+            climon_logging::level::LogLevel::Info,
+            serde_json::json!({
+                "remoteEnabled": enabled_at_entry,
+                "peerHome": peer_home,
+            }),
+            "uplink supervisor started",
+        );
     }
 
     let client_id = ensure_client_id(&config_env, cwd);

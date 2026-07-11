@@ -86,6 +86,7 @@ result-tracking row.
 | — | Smart Notifications — attention notification body from fuzzy-extracted terminal output snippet | [smart-notifications.md](smart-notifications.md) |
 | — | Remote uplink/ingest singleton — OS advisory lock immune to PID recycling (fixes silent uplink exit) | [singleton-lock-pid-recycle.md](singleton-lock-pid-recycle.md) |
 | — | Uplink advertises sessions created after it connects (sessions-dir watcher re-reconcile) | [uplink-advertise-new-sessions.md](uplink-advertise-new-sessions.md) |
+| — | Uplink writes a diagnostic log + records the attach lifecycle (fixes silent blank-terminal-in-dashboard) | [uplink-attach-logging.md](uplink-attach-logging.md) |
 | — | Remote host self-managed ingest tunnel — stable `climon-ingest` dev tunnel id, label, non-secret description, restart reuse | [phase18-remote-host-tunnel.md](phase18-remote-host-tunnel.md) |
 | — | Terminal viewport fit — terminal re-fits its pane instead of locking to the host grid (addon-fit/xterm version-mismatch regression) | [terminal-viewport-fit.md](terminal-viewport-fit.md) |
 | — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |

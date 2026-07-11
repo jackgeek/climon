@@ -260,6 +260,16 @@ pub fn get_logger() -> Logger {
     init_logger(LogRole::Client, LoggerInitOptions::default())
 }
 
+/// Returns the root logger **only if** it has already been initialized, without
+/// the lazy default-client fallback of [`get_logger`]. Callers that want to log
+/// opportunistically (e.g. the detached uplink, which must not create a stray
+/// `client` log file when running inside unit tests) use this to no-op until a
+/// role logger is installed.
+pub fn try_get_logger() -> Option<Logger> {
+    let guard = ROOT.lock().unwrap_or_else(|p| p.into_inner());
+    guard.as_ref().cloned()
+}
+
 /// Returns a child logger tagged with a `component` name. Mirrors `child`.
 pub fn child(component: &str) -> Logger {
     get_logger().child(component)
@@ -329,6 +339,27 @@ mod tests {
 
     fn env_for(home: &Path) -> Env {
         Env::from_pairs([("CLIMON_HOME", home.to_str().unwrap())])
+    }
+
+    #[test]
+    fn try_get_logger_is_none_until_initialized() {
+        let _guard = crate::test_lock();
+        reset_logger_for_tests();
+        // No lazy fallback: opportunistic callers (the detached uplink) must
+        // no-op rather than create a stray `client` log file.
+        assert!(try_get_logger().is_none());
+        let home = temp_home();
+        init_logger(
+            LogRole::Uplink,
+            LoggerInitOptions {
+                env: Some(env_for(&home)),
+                ..Default::default()
+            },
+        );
+        assert!(try_get_logger().is_some());
+        reset_logger_for_tests();
+        assert!(try_get_logger().is_none());
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
