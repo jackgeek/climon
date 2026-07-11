@@ -240,18 +240,18 @@ async function writeCompleteConfig(
 }
 
 export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  const current = config as unknown as Record<string, unknown>;
+  const callerState = cloneConfigValue(config as unknown as Record<string, unknown>);
   const golden = configGoldenSnapshots.get(config);
-  let toWrite = current;
+  let toWrite = callerState;
   if (golden) {
-    const delta = diffConfig(golden, current);
+    const delta = diffConfig(golden, callerState);
     const latest = await loadConfigInternal(env);
     toWrite = delta
       ? applyConfigDelta(latest as unknown as Record<string, unknown>, delta)
       : latest as unknown as Record<string, unknown>;
   }
   await writeCompleteConfig(toWrite, env);
-  if (golden) configGoldenSnapshots.set(config, cloneConfigValue(current));
+  if (golden) configGoldenSnapshots.set(config, callerState);
 }
 
 export async function assertConfigReadable(env: NodeJS.ProcessEnv = process.env): Promise<void> {

@@ -572,6 +572,30 @@ describe("config three-way saves", () => {
     await rm(home, { recursive: true, force: true });
   });
 
+  test("persists caller mutations made while an earlier save is pending", async () => {
+    const home = await makeTestHome("climon-three-way-pending-");
+    const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
+    await writeFile(
+      join(home, "config.jsonc"),
+      JSON.stringify({
+        version: 1,
+        server: { host: "127.0.0.1", port: 3131 }
+      })
+    );
+
+    const config = await loadConfig(env);
+    config.server.port = 4001;
+    const pending = saveConfig(config, env);
+    config.server.host = "0.0.0.0";
+    await pending;
+    await saveConfig(config, env);
+
+    const reloaded = await loadConfig(env);
+    expect(reloaded.server.port).toBe(4001);
+    expect(reloaded.server.host).toBe("0.0.0.0");
+    await rm(home, { recursive: true, force: true });
+  });
+
   test("fully replaces config objects that were not returned by loadConfig", async () => {
     const home = await makeTestHome("climon-three-way-untracked-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
