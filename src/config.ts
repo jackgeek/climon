@@ -120,10 +120,6 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isValidSessionPriority(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 1000;
-}
-
 /** Reads and parses a config file at the given path using JSONC parser. */
 async function readConfigRecordFromPath(path: string): Promise<Record<string, unknown>> {
   const raw = await readFile(path, "utf8");
@@ -161,7 +157,7 @@ async function loadConfigInternal(env: NodeJS.ProcessEnv): Promise<ClimonConfig>
     session: {
       ...(defaults.session ?? {}),
       ...parsedSession,
-      priority: isValidSessionPriority(parsedSession.priority)
+      priority: typeof parsedSession.priority === "number"
         ? parsedSession.priority
         : defaults.session?.priority
     },

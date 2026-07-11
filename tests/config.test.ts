@@ -162,7 +162,7 @@ describe("config migration", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  test("loadConfig ignores an invalid session.priority", async () => {
+  test("loadConfig preserves numeric session.priority values", async () => {
     const home = await makeTestHome("climon-priority-invalid-");
     const env = { CLIMON_HOME: home } as NodeJS.ProcessEnv;
     await writeFile(
@@ -175,7 +175,7 @@ describe("config migration", () => {
 
     const config = await loadConfig(env);
 
-    expect(config.session?.priority).toBe(500);
+    expect(config.session?.priority).toBe(1001);
     await rm(home, { recursive: true, force: true });
   });
 
