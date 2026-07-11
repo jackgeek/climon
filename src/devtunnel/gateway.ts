@@ -141,7 +141,6 @@ export function createDevtunnelGateway(deps: DevtunnelGatewayDeps = {}): Devtunn
       const result = await runner("devtunnel", ["--version"]);
       if (result.status !== 0) {
         const failure = classify("detect", result, now());
-        if (failure.code === "cli_missing") return health({ available: false, lastFailure: failure }, now());
         return health({ available: false, lastFailure: failure }, now());
       }
       return health({ available: true, version: result.stdout.trim() || undefined }, now());

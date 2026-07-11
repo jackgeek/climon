@@ -147,7 +147,7 @@ export async function ensureIngestTunnel(
 
   let existingId: string;
   try {
-    existingId = parseTunnelId(JSON.stringify(await gateway.showTunnel(desiredId))) ?? desiredId;
+    existingId = tunnelIdFromParsed(await gateway.showTunnel(desiredId)) ?? desiredId;
   } catch {
     return createTunnel(ingestPort, { env, gateway });
   }
@@ -237,10 +237,14 @@ export async function reconcileTunnelPort(
   return { changed: true, port: actualPort };
 }
 
+function tunnelIdFromParsed(obj: unknown): string | undefined {
+  const o = obj as { tunnelId?: string; tunnel?: { tunnelId?: string } } | null;
+  return o?.tunnelId ?? o?.tunnel?.tunnelId;
+}
+
 function parseTunnelId(stdout: string): string | undefined {
   try {
-    const obj = JSON.parse(stdout) as { tunnelId?: string; tunnel?: { tunnelId?: string } };
-    return obj.tunnelId ?? obj.tunnel?.tunnelId;
+    return tunnelIdFromParsed(JSON.parse(stdout));
   } catch {
     const m = stdout.match(/\b([a-z0-9]{6,})\b/i);
     return m?.[1];

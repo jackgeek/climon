@@ -86,6 +86,46 @@ describe("DevtunnelGateway", () => {
     expect(exitFailure?.code).toBe("service_unavailable");
   });
 
+  test("process wrapper reports lifecycle and guards against double exit", () => {
+    let rawHandlers: RawDevtunnelProcessHandlers | undefined;
+    let rawAlive = true;
+    let stopCalls = 0;
+    const exits: (DevtunnelFailure | undefined)[] = [];
+    const proc = startDevtunnelProcess(
+      "devtunnel",
+      ["host", "climon-test"],
+      (_cmd, _args, handlers) => {
+        rawHandlers = handlers;
+        return {
+          stop: () => {
+            stopCalls += 1;
+            rawAlive = false;
+          },
+          isAlive: () => rawAlive
+        };
+      },
+      {
+        onStdout: () => {},
+        onStderr: () => {},
+        onExit: (failure) => exits.push(failure)
+      }
+    );
+
+    expect(proc.isAlive()).toBe(true);
+
+    rawHandlers?.onExit({ status: 0, stdout: "", stderr: "" });
+    expect(proc.isAlive()).toBe(false);
+    expect(exits).toEqual([undefined]);
+
+    // A second exit signal must be ignored.
+    rawHandlers?.onExit({ status: 1, stdout: "", stderr: "boom" });
+    expect(exits).toEqual([undefined]);
+
+    // stop() after exit is a no-op (does not re-enter the raw process).
+    proc.stop();
+    expect(stopCalls).toBe(0);
+  });
+
   test("sanitizes technical detail before failures leave the gateway", async () => {
     const gateway = createDevtunnelGateway({
       runner: runnerFrom(() => ({
