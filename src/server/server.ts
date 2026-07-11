@@ -38,13 +38,14 @@ import { ensureSpawnSecret } from "../remote/spawn-secret.js";
 import { requestRemoteSpawn } from "./remote-spawn-client.js";
 import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
-import { detectDevtunnel, ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
+import { ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
 import { createDashboardTunnelManager } from "./dashboard-tunnel.js";
-import { DevtunnelError } from "../devtunnel/types.js";
+import { createDevtunnelGateway } from "../devtunnel/gateway.js";
+import { DevtunnelError, type DevtunnelFailure, type DevtunnelHealth } from "../devtunnel/types.js";
 import { runPromote } from "./promote.js";
 import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
@@ -1233,6 +1234,22 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     await saveConfig(config);
   }
 
+  // One shared gateway drives ingest tunnel setup and remote status health so
+  // detect/create/port operations reuse a single devtunnel wiring. (The Dashboard
+  // Tunnel Link manager keeps building its own gateway: its `spawnHost` routes
+  // `devtunnel host` output through construction-time process handlers, which a
+  // pre-built shared instance cannot carry — see dashboard-tunnel.ts.)
+  const devtunnel = createDevtunnelGateway();
+  // The most recent ingest tunnel failure (startup or explicit retry), surfaced
+  // in /api/remote/status so the dashboard can render remediation + retry.
+  let lastIngestFailure: DevtunnelFailure | undefined;
+  async function currentDevtunnelHealth(): Promise<DevtunnelHealth> {
+    const detected = await devtunnel.detect();
+    return lastIngestFailure && !detected.lastFailure
+      ? { ...detected, lastFailure: lastIngestFailure }
+      : detected;
+  }
+
   // Created only after the port is finalized so the tunnel maps and hosts the
   // port this server actually bound. Creating it earlier (with the requested
   // port) means a restart that shifts to the next free port — common during a
@@ -1263,12 +1280,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   startupLog("cleaning up stale sessions");
   await cleanupStaleSessions();
   if (remotesActive) {
-    if ((await detectDevtunnel()).available) {
+    if ((await devtunnel.detect()).available) {
       try {
         const ingestPort = await resolveIngestPort();
-        const ensured = await ensureIngestTunnel(ingestPort);
+        const ensured = await ensureIngestTunnel(ingestPort, { gateway: devtunnel });
+        lastIngestFailure = undefined;
         startupLog(`ensured ingest tunnel ${ensured.tunnelId} (port ${ensured.ingestPort})`);
       } catch (error) {
+        if (error instanceof DevtunnelError) lastIngestFailure = error.failure;
         startupLog(`ingest tunnel ensure failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     } else {
@@ -1297,8 +1316,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       const beacon = await readIngestState();
       const livePort = beacon?.port ?? await resolveIngestPort();
       startupLog(`resolved ingest port: ${livePort} (source: ${beacon ? "ingest.json" : "fallback"})`);
-      const reconcile = await reconcileTunnelPort(livePort);
-      if (reconcile.changed) {
+      const reconcile = await reconcileTunnelPort(livePort, { gateway: devtunnel });
+      if (reconcile.failure) {
+        lastIngestFailure = reconcile.failure;
+        startupLog(`tunnel port reconcile failed: ${reconcile.failure.code}`);
+      } else if (reconcile.changed) {
         startupLog(`reconciled tunnel port mapping → ${reconcile.port}${reconcile.recreated ? " (tunnel recreated)" : ""}`);
       } else {
         startupLog(`tunnel port mapping already correct (port ${reconcile.port})`);
@@ -1621,16 +1643,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       if (url.pathname === "/api/remote/status" && request.method === "GET") {
         if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
-        const detect = await detectDevtunnel();
+        const health = await currentDevtunnelHealth();
         const state = await readRemoteHostState();
         const remoteSpawn = isFeatureEnabled(config, "remoteSpawn");
         const spawnSecret = remoteSpawn ? await ensureSpawnSecret(process.env) : undefined;
         return Response.json({
-          devtunnelAvailable: detect.available,
-          version: detect.version,
+          devtunnelAvailable: health.available,
+          version: health.version,
+          devtunnel: health,
           ingestPort: await resolveIngestPort(),
           tunnel: state ? { id: state.tunnelId } : undefined,
-          canHost: state?.canHost ?? detect.available,
+          canHost: state?.canHost ?? health.available,
           remoteSpawn,
           spawnSecret
         });
@@ -1710,37 +1733,77 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         } catch {
           return new Response("Invalid JSON body", { status: 400 });
         }
-        const detect = await detectDevtunnel();
+        const health = await currentDevtunnelHealth();
         const ingestPort = await resolveIngestPort();
         try {
           if (body.mode === "auto") {
-            if (!detect.available) {
+            if (!health.available) {
               return new Response("devtunnel CLI not available on this machine.", { status: 400 });
             }
-            await ensureIngestTunnel(ingestPort);
+            await ensureIngestTunnel(ingestPort, { gateway: devtunnel });
+            lastIngestFailure = undefined;
           } else {
             const tunnelId = parseTunnelInput(typeof body.tunnelInput === "string" ? body.tunnelInput : "");
             if (!tunnelId) return new Response("Invalid tunnel id or URL.", { status: 400 });
             await useManualTunnel(
               { tunnelId, ingestPort },
-              { devtunnelAvailable: detect.available }
+              { devtunnelAvailable: health.available }
             );
           }
         } catch (error) {
-          return new Response(error instanceof Error ? error.message : "Tunnel error", { status: 500 });
+          if (error instanceof DevtunnelError) lastIngestFailure = error.failure;
+          return devtunnelErrorResponse(error);
         }
         await ensureIngestDaemon();
         // Reconcile port mapping in case the ingest bound to a different port.
         const beaconForReconcile = await readIngestState();
         const livePort = beaconForReconcile?.port ?? await resolveIngestPort();
-        await reconcileTunnelPort(livePort);
+        const reconciled = await reconcileTunnelPort(livePort, { gateway: devtunnel });
+        if (reconciled.failure) lastIngestFailure = reconciled.failure;
         const state = await readRemoteHostState();
+        const refreshed = await currentDevtunnelHealth();
         return Response.json({
-          devtunnelAvailable: detect.available,
-          version: detect.version,
+          devtunnelAvailable: refreshed.available,
+          version: refreshed.version,
+          devtunnel: refreshed,
           ingestPort: livePort,
           tunnel: state ? { id: state.tunnelId } : undefined,
-          canHost: state?.canHost ?? detect.available
+          canHost: state?.canHost ?? refreshed.available
+        });
+      }
+
+      if (url.pathname === "/api/remote/tunnel/retry" && request.method === "POST") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        const ingestPort = await resolveIngestPort();
+        try {
+          await ensureIngestTunnel(ingestPort, { gateway: devtunnel });
+          lastIngestFailure = undefined;
+        } catch (error) {
+          if (error instanceof DevtunnelError) lastIngestFailure = error.failure;
+          return devtunnelErrorResponse(error);
+        }
+        // Only start/reconcile ingest once the tunnel setup has succeeded.
+        await ensureIngestDaemon();
+        const beacon = await readIngestState();
+        const livePort = beacon?.port ?? await resolveIngestPort();
+        const reconciled = await reconcileTunnelPort(livePort, { gateway: devtunnel });
+        if (reconciled.failure) lastIngestFailure = reconciled.failure;
+        const state = await readRemoteHostState();
+        const refreshed = await currentDevtunnelHealth();
+        return Response.json({
+          devtunnelAvailable: refreshed.available,
+          version: refreshed.version,
+          devtunnel: refreshed,
+          ingestPort: livePort,
+          tunnel: state ? { id: state.tunnelId } : undefined,
+          canHost: state?.canHost ?? refreshed.available
         });
       }
 

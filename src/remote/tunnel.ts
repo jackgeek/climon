@@ -20,6 +20,7 @@ import {
   type Runner,
   type RunResult
 } from "../devtunnel/gateway.js";
+import { DevtunnelError, type DevtunnelFailure } from "../devtunnel/types.js";
 import { ensureInstallId } from "../setup/install-id.js";
 import { VERSION } from "../version.js";
 import type { RemoteHostState } from "./ingest.js";
@@ -132,8 +133,11 @@ export async function createTunnel(
 
 /**
  * Idempotently ensures the host's stable-id ingest tunnel exists and is recorded
- * as the desired hosting state. Reuses the tunnel if `devtunnel show` finds it;
- * otherwise creates it (with label + description). Safe to call on every startup.
+ * as the desired hosting state. Reuses the tunnel when `devtunnel show` finds it;
+ * only a `tunnel_not_found` failure triggers creation. Any other gateway failure
+ * (not signed in, quota exhausted, network/transient) propagates as a
+ * {@link DevtunnelError} and NO success-shaped `remote-host.json` is written, so
+ * the previous desired state is left intact and the failure can be surfaced.
  */
 export async function ensureIngestTunnel(
   ingestPort: number,
@@ -148,19 +152,17 @@ export async function ensureIngestTunnel(
   let existingId: string;
   try {
     existingId = tunnelIdFromParsed(await gateway.showTunnel(desiredId)) ?? desiredId;
-  } catch {
-    return createTunnel(ingestPort, { env, gateway });
+  } catch (error) {
+    if (error instanceof DevtunnelError && error.failure.code === "tunnel_not_found") {
+      return createTunnel(ingestPort, { env, gateway });
+    }
+    throw error;
   }
 
-  // Best-effort in the reuse path: the port mapping usually already exists.
-  // The gateway swallows port_conflict; tolerate other errors here too so a
-  // transient port-create failure never aborts an otherwise-valid reuse.
-  // Task 6 surfaces ingest port failures through normalized health instead.
-  try {
-    await gateway.createPort(existingId, ingestPort);
-  } catch {
-    // Preserve the previous fire-and-forget reuse behavior.
-  }
+  // Reuse path: the port mapping usually already exists (the gateway swallows a
+  // pre-existing `port_conflict`). Any other port failure propagates so a broken
+  // ingest port surfaces as normalized health instead of a false success.
+  await gateway.createPort(existingId, ingestPort);
 
   const state: RemoteHostState = { tunnelId: existingId, ingestPort, canHost: true };
   await writeRemoteHostState(state, env);
@@ -192,6 +194,11 @@ export interface ReconcileResult {
   port: number;
   /** If reconciliation failed and the tunnel was recreated from scratch. */
   recreated?: boolean;
+  /**
+   * The typed failure when the port could neither be remapped nor recreated.
+   * The last valid desired state is left intact (no success-shaped write).
+   */
+  failure?: DevtunnelFailure;
 }
 
 /**
@@ -199,6 +206,8 @@ export interface ReconcileResult {
  * If the port in remote-host.json differs from the live ingest port, updates
  * the devtunnel port mapping (delete old, create new). If the port update fails
  * (e.g. the tunnel was deleted externally), falls back to full tunnel recreation.
+ * If recreation also fails, records the typed failure and leaves the previously
+ * recorded desired state untouched rather than persisting a success-shaped file.
  * No-op if there is no configured tunnel or the ports already match.
  */
 export async function reconcileTunnelPort(
@@ -221,13 +230,19 @@ export async function reconcileTunnelPort(
     }
     try {
       await gateway.createPort(state.tunnelId, actualPort);
-    } catch {
+    } catch (portError) {
       try {
         const fresh = await createTunnel(actualPort, { env, gateway });
         return { changed: true, port: fresh.ingestPort, recreated: true };
-      } catch {
-        // If even recreation fails, just update the state file so the port
-        // is recorded correctly for `devtunnel host` next time.
+      } catch (recreateError) {
+        // Neither remap nor recreate worked: surface the typed failure and leave
+        // the last valid desired state (and its port) intact.
+        const failure = recreateError instanceof DevtunnelError
+          ? recreateError.failure
+          : portError instanceof DevtunnelError
+            ? portError.failure
+            : undefined;
+        return { changed: false, port: state.ingestPort, failure };
       }
     }
   }

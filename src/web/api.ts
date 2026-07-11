@@ -403,6 +403,8 @@ export interface RemoteTunnelInfo {
 export interface RemoteStatus {
   devtunnelAvailable: boolean;
   version?: string;
+  /** Latest normalized gateway health, including any last ingest failure. */
+  devtunnel: DevtunnelHealth;
   ingestPort: number;
   tunnel?: RemoteTunnelInfo;
   canHost: boolean;
@@ -416,6 +418,31 @@ export async function fetchRemoteStatus(): Promise<RemoteStatus> {
     throw new Error(`Failed to load remote status (${res.status})`);
   }
   return (await res.json()) as RemoteStatus;
+}
+
+/** Parses a remote-tunnel response, raising {@link DevtunnelApiError} on a structured failure. */
+async function readRemoteStatusResponse(res: Response): Promise<RemoteStatus> {
+  const text = await res.text();
+  let body: RemoteStatus | { error: DevtunnelFailure } | undefined;
+  try {
+    body = text ? (JSON.parse(text) as RemoteStatus | { error: DevtunnelFailure }) : undefined;
+  } catch {
+    body = undefined;
+  }
+  if (!res.ok) {
+    const failure = (body as { error?: DevtunnelFailure } | undefined)?.error;
+    throw new DevtunnelApiError(failure ?? unexpectedFailure(res, text));
+  }
+  return body as RemoteStatus;
+}
+
+/** Re-runs ingest tunnel setup and returns the refreshed remote status. */
+export function retryRemoteTunnel(): Promise<RemoteStatus> {
+  return fetch(withQuery("/api/remote/tunnel/retry"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}"
+  }).then(readRemoteStatusResponse);
 }
 
 export interface SetupScriptParams {
