@@ -601,6 +601,53 @@ describe("createDashboardTunnelManager", () => {
     expect(pingCount).toBe(afterClose);
   });
 
+  test("a recreated tunnel survives the discarded host's delayed intentional exit", async () => {
+    let verifyCount = 0;
+    // Captures the discarded host's exit so the test can fire it AFTER the
+    // replacement host is live, reproducing the async-exit clobber.
+    const deferredExits: Array<() => void> = [];
+    const manager = createManager({
+      port: 3131,
+      // The first host fails verification (forcing one recreation); the second passes.
+      verifyTunnel: async () => {
+        verifyCount += 1;
+        return verifyCount > 1;
+      },
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
+        if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        let alive = true;
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return {
+          // Defer the exit callback: a real SIGTERM'd host exits asynchronously,
+          // sometimes after the replacement host is already assigned.
+          stop: () => {
+            if (!alive) return;
+            alive = false;
+            deferredExits.push(() => handlers.onExit(1));
+          },
+          isAlive: () => alive
+        };
+      }
+    });
+
+    const started = await manager.ensure();
+    expect(started.running).toBe(true);
+    // Flush the discarded host's exit now that the replacement is live.
+    for (const fire of deferredExits.splice(0)) fire();
+    const after = await manager.status();
+
+    expect(after.running).toBe(true);
+    expect(after.state).toBe("running");
+    expect(after.lastFailure).toBeUndefined();
+
+    await manager.close();
+  });
+
   test("close reports stopped even when killing the host triggers a nonzero exit", async () => {
     const manager = createManager({
       port: 3131,

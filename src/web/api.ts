@@ -303,11 +303,32 @@ export class DevtunnelApiError extends Error {
 }
 
 async function readDevtunnelResponse(res: Response): Promise<DashboardTunnelStatus> {
-  const body = (await res.json()) as DashboardTunnelStatus | { error: DevtunnelFailure };
+  const text = await res.text();
+  let body: DashboardTunnelStatus | { error: DevtunnelFailure } | undefined;
+  try {
+    body = text ? (JSON.parse(text) as DashboardTunnelStatus | { error: DevtunnelFailure }) : undefined;
+  } catch {
+    body = undefined;
+  }
   if (!res.ok) {
-    throw new DevtunnelApiError((body as { error: DevtunnelFailure }).error);
+    const failure = (body as { error?: DevtunnelFailure } | undefined)?.error;
+    throw new DevtunnelApiError(failure ?? unexpectedFailure(res, text));
   }
   return body as DashboardTunnelStatus;
+}
+
+/** Synthesizes a structured failure for a non-JSON error body (e.g. a guard 403). */
+function unexpectedFailure(res: Response, text: string): DevtunnelFailure {
+  return {
+    code: "unknown",
+    operation: "detect",
+    summary: text.trim() || `Tunnel Link request failed (${res.status}).`,
+    remediation: "Try again from the machine running the dashboard.",
+    technicalDetail: `HTTP ${res.status}`,
+    occurredAt: new Date().toISOString(),
+    retryClass: "unknown",
+    retryable: false
+  };
 }
 
 export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatus> {

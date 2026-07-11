@@ -280,11 +280,14 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
       url = parseDashboardTunnelUrl(text, options.port) ?? url;
     },
     onExit: (failure) => {
-      host = undefined;
       if (intentionalStops > 0) {
+        // A deliberate stop (close/recreation) already cleared `host`; never let
+        // its async exit null a host that may have been reassigned since, and
+        // never record it as a crash.
         intentionalStops -= 1;
         return;
       }
+      host = undefined;
       if (failure) {
         lastHostExitFailure = failure;
         lastFailure = failure;
