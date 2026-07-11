@@ -1,5 +1,8 @@
 import type { AnsiColor, SessionColorMode, SessionMeta } from "../types.js";
 import type { FeatureFlagState } from "../features.js";
+import type { DevtunnelFailure, DevtunnelHealth, DevtunnelRetryState } from "../devtunnel/types.js";
+
+type DevtunnelHealthState = DevtunnelHealth["state"];
 
 const DEV_TUNNELS_HOST_SUFFIX = ".devtunnels.ms";
 export const TUNNEL_SKIP_ANTI_PHISHING_PARAM = "X-Tunnel-Skip-AntiPhishing-Page";
@@ -284,6 +287,27 @@ export interface DashboardTunnelStatus {
   tunnelId?: string;
   version?: string;
   expiresAt?: string;
+  /** Structured mirror of `devtunnelAvailable` from the gateway health model. */
+  available?: boolean;
+  state?: DevtunnelHealthState;
+  lastFailure?: DevtunnelFailure;
+  retry?: DevtunnelRetryState;
+}
+
+/** Raised by the Tunnel Link client when a request returns a structured failure. */
+export class DevtunnelApiError extends Error {
+  constructor(public readonly failure: DevtunnelFailure) {
+    super(failure.summary);
+    this.name = "DevtunnelApiError";
+  }
+}
+
+async function readDevtunnelResponse(res: Response): Promise<DashboardTunnelStatus> {
+  const body = (await res.json()) as DashboardTunnelStatus | { error: DevtunnelFailure };
+  if (!res.ok) {
+    throw new DevtunnelApiError((body as { error: DevtunnelFailure }).error);
+  }
+  return body as DashboardTunnelStatus;
 }
 
 export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatus> {
@@ -295,15 +319,19 @@ export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatu
 }
 
 export async function ensureDashboardTunnel(): Promise<DashboardTunnelStatus> {
-  const res = await fetch(withQuery("/api/dashboard-tunnel"), {
+  return fetch(withQuery("/api/dashboard-tunnel"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}"
-  });
-  if (!res.ok) {
-    throw new Error((await res.text()) || `Failed to start Tunnel Link (${res.status})`);
-  }
-  return (await res.json()) as DashboardTunnelStatus;
+  }).then(readDevtunnelResponse);
+}
+
+export function retryDashboardTunnel(): Promise<DashboardTunnelStatus> {
+  return fetch(withQuery("/api/dashboard-tunnel/retry"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}"
+  }).then(readDevtunnelResponse);
 }
 
 export async function closeDashboardTunnel(): Promise<void> {

@@ -43,7 +43,8 @@ import { connectSessionSocket } from "../session-socket.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
-import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
+import { createDashboardTunnelManager } from "./dashboard-tunnel.js";
+import { DevtunnelError } from "../devtunnel/types.js";
 import { runPromote } from "./promote.js";
 import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
@@ -1041,6 +1042,24 @@ async function persistDashboardTunnelEnabled(enabled: boolean): Promise<void> {
   }
 }
 
+/**
+ * Maps a {@link DevtunnelError} to an HTTP response carrying the structured
+ * failure so the dashboard can render remediation and drive an explicit retry.
+ * Non-DevtunnelError values fall back to a generic 500.
+ */
+function devtunnelErrorResponse(error: unknown): Response {
+  if (!(error instanceof DevtunnelError)) {
+    return Response.json({ error: { code: "unknown", summary: "Tunnel Link error" } }, { status: 500 });
+  }
+  const status = error.failure.code === "not_authenticated" ? 401
+    : error.failure.code === "cli_missing" ? 503
+    : error.failure.code === "permission_denied" ? 403
+    : error.failure.code === "tunnel_quota_exhausted" ? 409
+    : error.failure.retryClass === "transient" ? 503
+    : 500;
+  return Response.json({ error: error.failure }, { status });
+}
+
 function startupLog(message: string): void {
   logMsg(getLogger(), "debug", "server.startup_log_detail", { detail: message });
 }
@@ -1636,8 +1655,25 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           await persistDashboardTunnelEnabled(true);
           return Response.json(info);
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Tunnel Link error";
-          return new Response(message, { status: message === dashboardTunnelAuthMessage ? 401 : 500 });
+          return devtunnelErrorResponse(error);
+        }
+      }
+
+      if (url.pathname === "/api/dashboard-tunnel/retry" && request.method === "POST") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        try {
+          const info = await dashboardTunnel.retry();
+          await persistDashboardTunnelEnabled(true);
+          return Response.json(info);
+        } catch (error) {
+          return devtunnelErrorResponse(error);
         }
       }
 
