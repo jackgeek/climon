@@ -1769,6 +1769,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
               { tunnelId, ingestPort },
               { devtunnelAvailable: health.available }
             );
+            lastIngestFailure = undefined;
           }
         } catch (error) {
           if (error instanceof DevtunnelError) lastIngestFailure = error.failure;
