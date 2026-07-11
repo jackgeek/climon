@@ -601,6 +601,43 @@ describe("createDashboardTunnelManager", () => {
     expect(pingCount).toBe(afterClose);
   });
 
+  test("close reports stopped even when killing the host triggers a nonzero exit", async () => {
+    const manager = createManager({
+      port: 3131,
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
+        if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        let alive = true;
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return {
+          // A killed `devtunnel host` exits nonzero; the exit fires after stop().
+          stop: () => {
+            if (!alive) return;
+            alive = false;
+            handlers.onExit(1);
+          },
+          isAlive: () => alive
+        };
+      }
+    });
+
+    await manager.ensure();
+    await manager.close();
+    // Let any queued exit callback run.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const status = await manager.status();
+
+    expect(status.running).toBe(false);
+    expect(status.state).toBe("stopped");
+    expect(status.lastFailure).toBeUndefined();
+    expect(status.retry?.paused ?? false).toBe(false);
+  });
+
   test("restarts the host process when the watchdog observes a break", async () => {
     const hostCommands: string[] = [];
     let firstStop: (() => void) | undefined;
@@ -755,8 +792,11 @@ describe("createDashboardTunnelManager", () => {
           handlers.onStdout("Ready: https://reused-tunnel-3131.eun1.devtunnels.ms/");
         }
         return {
+          // A killed host exits nonzero after stop(), matching the real spawner.
           stop: () => {
+            if (!alive) return;
             alive = false;
+            handlers.onExit(1);
           },
           isAlive: () => alive
         };

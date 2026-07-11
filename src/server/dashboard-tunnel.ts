@@ -265,6 +265,10 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   let startupStdout = "";
   let startupStderr = "";
   let lastHostExitFailure: DevtunnelFailure | undefined;
+  // Number of pending host exits that were triggered by us (close/recreation) and
+  // must NOT be recorded as failures. The host exits asynchronously after stop(),
+  // so we tag intentional stops here and consume the tag in onExit.
+  let intentionalStops = 0;
 
   const hostHandlers: DevtunnelProcessHandlers = {
     onStdout: (text) => {
@@ -277,6 +281,10 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     },
     onExit: (failure) => {
       host = undefined;
+      if (intentionalStops > 0) {
+        intentionalStops -= 1;
+        return;
+      }
       if (failure) {
         lastHostExitFailure = failure;
         lastFailure = failure;
@@ -285,6 +293,20 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
       }
     }
   };
+
+  /**
+   * Stops the running host as a deliberate action (close or recreation). The
+   * ensuing async exit is suppressed so it is not mistaken for a crash that would
+   * flip the manager into a retrying/paused state.
+   */
+  function stopHostIntentionally(): void {
+    const current = host;
+    host = undefined;
+    if (current?.isAlive()) {
+      intentionalStops += 1;
+    }
+    current?.stop();
+  }
 
   const gateway: DevtunnelGateway =
     typeof options.gateway === "function"
@@ -447,8 +469,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   }
 
   async function discardTunnel(id: string): Promise<void> {
-    host?.stop();
-    host = undefined;
+    stopHostIntentionally();
     await deleteTunnel(id);
     tunnelId = undefined;
     cluster = undefined;
@@ -597,8 +618,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
           clearInterval(keepAlive);
           keepAlive = undefined;
         }
-        host?.stop();
-        host = undefined;
+        stopHostIntentionally();
         url = undefined;
         managerState = "stopped";
       } finally {
