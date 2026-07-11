@@ -166,7 +166,9 @@ impl InputProcessor {
 /// `render_local_displaced`.
 pub fn render_local_displaced(cols: u16, rows: u16) -> String {
     let (w, h) = (cols.max(1), rows.max(1));
-    let mut out = String::from("\x1b[2J\x1b[H");
+    // Reset SGR, home, and erase only to the end of the visible viewport
+    // (never `\e[2J`, which clears scrollback on Windows Terminal and others).
+    let mut out = String::from("\x1b[m\x1b[H\x1b[J");
     let msg = "This session is being viewed on a climon dashboard.";
     let hint = "Press Space to take control and resize it to this terminal.";
     let row = (h / 2).max(1);
@@ -215,8 +217,11 @@ pub fn consume_frame<W: Write>(
                     let _ = out.flush();
                 } else if gate.take_just_restored() {
                     // Regained control: clear the notice and request a replay so
-                    // the current screen repaints immediately.
-                    let _ = out.write_all(b"\x1b[2J\x1b[H");
+                    // the current screen repaints immediately. Reset SGR, home,
+                    // and erase only to the end of the visible viewport (never
+                    // `\e[2J`, which clears scrollback on Windows Terminal and
+                    // others).
+                    let _ = out.write_all(b"\x1b[m\x1b[H\x1b[J");
                     let _ = out.flush();
                     return true;
                 }
@@ -681,5 +686,64 @@ mod tests {
         assert!(!gate.is_displaced());
         assert!(gate.take_just_restored());
         assert_eq!(gate.write_pty_output(b"shown"), Some(b"shown".to_vec()));
+    }
+
+    #[test]
+    fn render_local_displaced_never_clears_scrollback() {
+        // Regression: the displaced notice must never emit `\e[2J` (clears
+        // scrollback on Windows Terminal and others). It must reset SGR, home
+        // the cursor, and erase only to the end of the visible viewport
+        // (`\e[m\e[H\e[J`), mirroring the daemon's `render_local_displaced`.
+        let out = render_local_displaced(80, 24);
+        assert!(
+            !out.contains("\x1b[2J"),
+            "displaced notice must never emit \\e[2J (nukes scrollback); got {out:?}"
+        );
+        assert!(
+            out.starts_with("\x1b[m\x1b[H\x1b[J"),
+            "displaced notice must start with reset-SGR + home + erase-to-end \
+             (\\e[m\\e[H\\e[J); got {out:?}"
+        );
+    }
+
+    #[test]
+    fn consume_frame_reclaim_clear_never_clears_scrollback() {
+        // Regression: when this terminal regains control, the clear written
+        // ahead of the replay must never emit `\e[2J` (clears scrollback on
+        // Windows Terminal and others). It must reset SGR, home the cursor,
+        // and erase only to the end of the visible viewport (`\e[m\e[H\e[J`).
+        let mut gate = LocalTerminalOutputGate::new("terminal-1");
+        gate.apply_control("dashboard-abc"); // displaced first, so restore edge can fire
+        let mut exit_code = 0;
+        let mut out: Vec<u8> = Vec::new();
+        let frame = encode_json_frame(
+            FrameType::Control,
+            &ControlPayload {
+                controller_id: "terminal-1".to_string(),
+                cols: 80,
+                rows: 24,
+            },
+        );
+        // Strip the frame header: consume_frame takes only the decoded payload.
+        let decoded = FrameDecoder::new().push(&frame);
+        let decoded = decoded.into_iter().next().unwrap();
+        let just_restored = consume_frame(
+            decoded.frame_type,
+            &decoded.payload,
+            &mut gate,
+            &mut out,
+            &mut exit_code,
+        );
+        assert!(just_restored, "expected the restore edge to fire");
+        let out = String::from_utf8_lossy(&out).to_string();
+        assert!(
+            !out.contains("\x1b[2J"),
+            "reclaim clear must never emit \\e[2J (nukes scrollback); got {out:?}"
+        );
+        assert!(
+            out.starts_with("\x1b[m\x1b[H\x1b[J"),
+            "reclaim clear must start with reset-SGR + home + erase-to-end \
+             (\\e[m\\e[H\\e[J); got {out:?}"
+        );
     }
 }
