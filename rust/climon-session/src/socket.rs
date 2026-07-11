@@ -336,7 +336,8 @@ mod win_pipe {
     use std::time::Duration;
     use windows_sys::Win32::Foundation::{
         CloseHandle, DuplicateHandle, LocalFree, DUPLICATE_SAME_ACCESS, ERROR_BROKEN_PIPE,
-        ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+        ERROR_NO_DATA, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
@@ -358,6 +359,10 @@ mod win_pipe {
     use windows_sys::Win32::System::IO::OVERLAPPED;
 
     const PIPE_BUFFER: u32 = 64 * 1024;
+
+    struct SendHandle(HANDLE);
+    // The handle is an opaque OS resource; moving it across threads is sound.
+    unsafe impl Send for SendHandle {}
 
     /// Encodes a pipe name to a null-terminated wide string for the Win32 API.
     fn wide(name: &str) -> Vec<u16> {
@@ -492,24 +497,30 @@ mod win_pipe {
     // PipeListener
     // -----------------------------------------------------------------------
 
-    /// A named-pipe listener. The pipe name is reserved exclusively via
-    /// `FILE_FLAG_FIRST_PIPE_INSTANCE` during `bind`; per-connection instances
-    /// are created in `accept`.
+    /// A named-pipe listener. The first pipe instance is reserved exclusively via
+    /// `FILE_FLAG_FIRST_PIPE_INSTANCE` during `bind` and held until the first
+    /// `accept`; later connections create fresh instances.
     pub struct PipeListener {
         name: String,
+        /// The first pipe instance, created with FILE_FLAG_FIRST_PIPE_INSTANCE at
+        /// bind time to reserve the name exclusively. Held until the first accept
+        /// consumes it (so the name is continuously owned, closing the pre-accept
+        /// hijack window); closed on Drop if the listener is dropped before any
+        /// connection is served.
+        first: std::sync::Mutex<Option<SendHandle>>,
     }
 
     impl PipeListener {
-        /// Reserves the pipe name by probe-creating a first instance, then
-        /// closing it.  If the name is already owned by another process
-        /// `CreateNamedPipeW` with `FIRST_PIPE_INSTANCE` fails, giving the
-        /// exclusive-owner guarantee.
+        /// Reserves the pipe name by creating and holding the first instance. If
+        /// the name is already owned by another process, `CreateNamedPipeW` with
+        /// `FIRST_PIPE_INSTANCE` fails, giving the exclusive-owner guarantee.
         pub fn bind(name: &str) -> io::Result<Self> {
             let listener = PipeListener {
                 name: name.to_string(),
+                first: std::sync::Mutex::new(None),
             };
             let h = listener.create_instance(true)?;
-            unsafe { CloseHandle(h) };
+            *listener.first.lock().unwrap() = Some(SendHandle(h));
             Ok(listener)
         }
 
@@ -538,10 +549,14 @@ mod win_pipe {
             Ok(handle)
         }
 
-        /// Blocks until a client connects.  Creates a new pipe instance per
-        /// connection (the server side of the pipe).
+        /// Blocks until a client connects. Uses the reserved first pipe instance
+        /// for the first connection, then creates a new server-side instance per
+        /// connection.
         pub fn accept(&self) -> io::Result<PipeStream> {
-            let handle = self.create_instance(false)?;
+            let handle = match self.first.lock().unwrap().take() {
+                Some(SendHandle(h)) => h,
+                None => self.create_instance(false)?,
+            };
             let connected = unsafe { ConnectNamedPipe(handle, ptr::null_mut::<OVERLAPPED>()) };
             if connected == 0 {
                 let err = io::Error::last_os_error();
@@ -553,6 +568,16 @@ mod win_pipe {
                 // CreateNamedPipeW and ConnectNamedPipe — that's fine.
             }
             Ok(PipeStream { handle })
+        }
+    }
+
+    impl Drop for PipeListener {
+        fn drop(&mut self) {
+            if let Some(SendHandle(h)) = self.first.lock().unwrap().take() {
+                unsafe {
+                    CloseHandle(h);
+                }
+            }
         }
     }
 
@@ -583,6 +608,9 @@ mod win_pipe {
                 let err = io::Error::last_os_error();
                 if err.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) {
                     return Ok(0); // EOF
+                }
+                if err.raw_os_error() == Some(ERROR_NO_DATA as i32) {
+                    return Err(io::Error::new(io::ErrorKind::WouldBlock, err));
                 }
                 return Err(err);
             }
