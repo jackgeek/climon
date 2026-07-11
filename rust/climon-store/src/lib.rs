@@ -24,3 +24,4 @@ pub(crate) mod test_support;
 
 pub use error::{StoreError, StoreResult};
 pub use paths::Env;
+pub use session_id::validate_session_id;
