@@ -668,12 +668,7 @@ mod tests {
     async fn run_command_inherits_parent_environment() {
         // Intentionally pass an empty env map: PATH must be inherited, not wiped.
         let env: HashMap<String, String> = HashMap::new();
-        let result = run_command(
-            "/bin/sh",
-            &s(&["-c", "printf %s \"$PATH\""]),
-            &env,
-        )
-        .await;
+        let result = run_command("/bin/sh", &s(&["-c", "printf %s \"$PATH\""]), &env).await;
         assert_eq!(result.status, 0);
         assert!(
             !result.stdout.is_empty(),

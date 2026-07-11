@@ -1475,7 +1475,10 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
             Vec::new()
         };
         if dbg {
-            eprintln!("[uplink] discovery returned {} ingest host(s)", discovered.len());
+            eprintln!(
+                "[uplink] discovery returned {} ingest host(s)",
+                discovered.len()
+            );
         }
         let explicit_host = if config.enabled {
             config.host.clone().zip(config.port)
@@ -1506,7 +1509,10 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
             },
         ));
         if dbg {
-            eprintln!("[uplink] computed {} desired target(s): {desired:?}", desired.len());
+            eprintln!(
+                "[uplink] computed {} desired target(s): {desired:?}",
+                desired.len()
+            );
         }
 
         let ce = config_env.clone();
