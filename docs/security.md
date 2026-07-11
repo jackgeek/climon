@@ -433,9 +433,14 @@ When applying an update (`climon update`, or the background path when
 
 1. fetches the manifest and downloads the artifact and its detached signature
    (downloads are size-capped to bound resource use),
-2. verifies the signature against the **embedded public key** before touching
-   any file, and
-3. rejects tampered or unverifiable downloads, making **no changes**.
+2. verifies the Ed25519 signature over the **complete** release ZIP — which
+   includes the installer `install[.exe]` — against the **embedded public key**
+   before touching any file,
+3. rejects tampered or unverifiable downloads, making **no changes**, and
+4. only then safely extracts the verified archive to a staging directory and
+   invokes the new release's installer, which owns all binary placement and
+   layout migration. No extracted file is executed before verification, and safe
+   extraction rejects absolute paths, parent-traversal, and symlink entries.
 
 The private signing key is never logged or written to disk in CI, and is kept
 out of the environment of `curl | bash` and `bun install` steps so a compromised
@@ -456,21 +461,49 @@ boundary is integrity, not confidentiality:
 If signature verification fails, the client rejects the download and makes no
 changes. Legacy manifests that still contain an `encryption` field are parsed
 tolerantly, but current clients do not decrypt artifacts and current releases do
-not publish encrypted update assets. A one-time bridge release can be published
-to `jackgeek/climon-releases` so old clients that still poll that repository
-receive a final signed plaintext manifest whose artifact URLs point at
-`jackgeek/climon`; see [deployment.md](./deployment.md#legacy-update-bridge).
+not publish encrypted update assets.
+
+### Signed universal bootstrap for legacy installs
+
+Already-installed legacy clients still copy the new `install[.exe]` over their own
+`climon[.exe]`. That migration to the installer-owned layout is authenticated by
+**two independent signed hops over two separate downloads**:
+
+1. the already-released client verifies the Ed25519 signature over the complete
+   release ZIP (including `install[.exe]`) before it replaces `climon[.exe]`;
+2. the renamed binary, dispatched into recovery-bootstrap mode by its executable
+   basename, **independently re-downloads** the canonical release and re-verifies
+   its Ed25519 signature with the embedded public key before extracting or
+   executing anything.
+
+There is no unsigned installer execution path in either hop, and safe extraction
+rejects traversal and symlink entries in both. On Windows the offline fallback
+target is the locally derived `<install-dir>\climon.exe.old`; it is resolved from
+the install directory and is **never** manifest-controlled. Arguments are passed
+directly to the installer process, never through a shell.
+
+Production binaries lack the test-endpoint override entirely: the dev-only
+`test-update-endpoint` cargo feature (and its `CLIMON_UPDATE_PUBKEY_B64` build
+override) is compiled out of shipped builds, so a production client ignores
+`CLIMON_TEST_MANIFEST_URL`, only ever contacts the canonical release endpoint,
+and always embeds the real update public key.
 
 ## Non-destructive update guarantee
 
-The updater **never kills running climon processes** — not sessions, daemons, or
-the dashboard server. It replaces binaries using:
+climon self-update **never kills running climon processes** — not sessions,
+daemons, or the dashboard server. The client updater only stages and verifies the
+archive; the new release's installer then places binaries so that running
+processes are never disturbed:
 
 - **Unix:** atomic rename-over. Running processes keep the old inode/code; new
   invocations use the new binary.
-- **Windows:** displace the target to a `.old` sibling, then rename the verified
-  temp file into place; on EBUSY/EPERM/EACCES it **defers** rather than killing
-  the holder, and restores the displaced binary if the final rename fails.
+- **Windows:** the installer writes fresh versioned payloads, displaces the locked
+  `climon.exe` / `climon-server.exe` stubs to their `.old` siblings and rewrites
+  them, then atomically flips the `climon.version` / `climon-server.version`
+  pointers. Renaming a running executable is allowed on Windows and the
+  version-specific code lives in the DLL, so it never has to kill or wait on a
+  process holding the running binary; superseded versioned files are reaped later
+  once Windows releases their locks.
 
 Already-running sessions continue on the old code; newly started sessions and a
 restarted server pick up the new version.

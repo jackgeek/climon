@@ -193,8 +193,10 @@ self-updates:
   and replaces the older `install`→`climon` rename plus `climon-alpha` sentinel
   self-install path.
 - **`rust/climon-update`** — manifest fetch, update-state throttling,
-  downloads, detached-signature verification, non-destructive binary swaps,
-  background checks, and the `climon update` command. Its build script reads
+  downloads, detached-signature verification, safe extraction/staging of the
+  verified archive, invoking the new release's installer, background checks, and
+  the `climon update` command. It does not place binaries or choose on-disk
+  layouts itself — the installer owns that. Its build script reads
   `src/update/pubkey.ts`, which remains the shared Ed25519 public-key source of
   truth for the Bun release tooling and Rust updater.
 
@@ -204,9 +206,12 @@ launch hooks show a banner from the cached `update.availableVersion` and spawn a
 throttled background check that refreshes that cache (and, when `update.auto` is
 on, applies the update). `climon update` resolves the manifest, downloads the
 artifact + detached signature, verifies the signature against the embedded
-public key, and only then performs the atomic swap — never killing running
-processes. Signing tooling lives in `scripts/gen-update-keys.ts` and
-`scripts/sign-release.ts`, wired into `.github/workflows/release.yml`.
+public key, safely stages the verified archive, and only then invokes the new
+release's `install[.exe]` through the stable `--apply-update-v1` protocol; the
+installer validates the archive, places binaries, migrates any legacy layout, and
+cleans up — the update never kills running processes. Signing tooling lives in
+`scripts/gen-update-keys.ts` and `scripts/sign-release.ts`, wired into
+`.github/workflows/release.yml`.
 
 
 ### Binary lifecycle and release layout
@@ -225,16 +230,18 @@ server side mirrors the layout with `climon-server.exe` as the stable stub,
 stub falls back to the highest-semver matching versioned artifact in the install
 directory.
 
-This avoids overwriting a locked `climon.exe` during self-update. Windows updates
-write fresh versioned payload names, flip the pointer files atomically, and leave
-already-running terminals on the old DLL until they exit; new launches pick up the
-new pointer. The reaper, run opportunistically on interactive launch and from
-`climon cleanup`, deletes superseded versioned artifacts once Windows releases
-the file locks and skips anything still in use.
+This avoids overwriting a locked `climon.exe` during self-update. On update the
+installer writes fresh versioned payload names, flips the pointer files
+atomically, and leaves already-running terminals on the old DLL until they exit;
+new launches pick up the new pointer. The reaper, run opportunistically on
+interactive launch and from `climon cleanup`, deletes superseded versioned
+artifacts once Windows releases the file locks and skips anything still in use.
 
 On **Unix**, the client remains the `climon` executable built from `climon-cli`.
-Updates continue to use the existing rename-over swap model because POSIX allows
-replacing an executable while old processes keep their inode.
+On update the installer replaces it with the existing rename-over model because
+POSIX allows replacing an executable while old processes keep their inode. The
+client updater stages and verifies the archive but never performs the swap
+itself.
 
 For pre-release verification, `climon-update` carries a dev-only, compiled-out
 `test-update-endpoint` cargo feature: when enabled it lets `climon update` read
@@ -246,43 +253,58 @@ only when `CLIMON_TEST_UPDATE_ENDPOINT=1`; neither the feature nor any override
 is enabled by the default `compile.ts` path or `.github/workflows/release.yml`,
 so shipped binaries physically lack the override and always embed the real key.
 The `scripts/upgrade-test-harness.ts` end-to-end harness composes these to
-exercise the Windows migration/update paths (bridge→stub, stub→stub, idempotent
-`--migrate`, and brick recovery) on a real Windows box.
+exercise the cross-platform legacy→current direct migration and current
+stub→stub / Unix update paths on real Windows, macOS, and Linux hosts. It builds
+the actual released v3.1.3 updater from a detached worktree so the real
+first-hop behavior is exercised, with `tests/upgrade-harness.test.ts` as its unit
+companion.
 
 
-### Migrating existing Windows installs (bridge release)
+### Migrating existing legacy installs (signed universal bootstrap)
 
-Legacy Windows installs are a single `climon.exe` with no `climon.version`
-pointer. Shipping the stub model directly would brick them, so migration happens
-over two releases:
+Already-released clients hard-code the old archive contract: they read
+`install[.exe]` from the new archive and copy those bytes over their own
+installed `climon[.exe]`, then copy `climon-server[.exe]` themselves. The
+dedicated installer changed the meaning of `install[.exe]`, so those clients can
+no longer be trusted to understand the current layout. Rather than staging the
+change through an intermediate bridge release, legacy Windows, macOS, and Linux
+installs migrate **directly** to the current installer-owned layout ("C") the
+first time they update.
 
-1. **Bridge release (legacy packaging + migration-aware updater).** Cut this tag
-   from a state that still packages the legacy layout: `scripts/compile.ts` and
-   `.github/workflows/release.yml` must still emit `install.exe` as the legacy
-   client, before the stub-model packaging flip is part of the tagged commit. Old
-   installs auto-update to it exactly as before. Its only new content is the
-   migration branch in `climon-update` and installer `--migrate` mode. It does
-   not ship `climon.dll` or the dedicated installer layout.
-2. **First stub release ("C") — full stub model.** Cut this tag after the
-   packaging flip: the zip carries `install.exe` as the dedicated installer plus
-   `climon.dll` and `climon-server.exe`. When a bridge install updates to C, the
-   bridge updater sees `climon.dll` in the release, recognizes that the install
-   is still legacy because no pointer file exists, and runs
-   `install.exe --migrate` to convert it in place.
+The pipeline is:
 
-Do not publish C until the bridge has had time to roll out. A very old install
-that never received the bridge and jumps straight to C will brick because its
-pre-migration updater copies C's dedicated installer over `climon.exe`; such
-installs must re-run `install.ps1`, whose installer legacy-upgrade path restores
-a working stub layout.
+```text
+client updater: check -> download -> verify -> safe stage -> invoke installer
+installer: validate -> migrate/place -> cleanup
+legacy bootstrap: signed first hop -> signed redownload -> recovery installer
+```
 
-For release engineering, the migration code must be present in the bridge tag,
-but the packaging flip must not be. In practice, tag the bridge from a commit
-that includes the migration-aware updater/installer changes but reverts or
-excludes the Phase 5 packaging changes, then land the packaging flip and tag C.
-Alternatively, land everything on `dev`, cut the bridge from a branch where
-`scripts/compile.ts` still emits the legacy layout, then merge the packaging flip
-for C.
+The first hop stays authenticated: an already-released client verifies the
+Ed25519 signature over the **complete** release ZIP (which includes
+`install[.exe]`) before it copies `install[.exe]` over `climon[.exe]`. On the
+next run, that renamed binary dispatches by its executable basename (via
+`rust/climon-setup`): `install[.exe]` runs installer mode, `climon[.exe]` runs
+recovery-bootstrap mode, and any other name fails closed. Recovery-bootstrap mode
+independently re-downloads the canonical release and re-verifies its Ed25519
+signature (a second, separate signed hop) before safely staging it and invoking
+the staged installer through a recovery operation. No unsigned file is ever
+extracted or executed in either hop.
+
+- **Unix (macOS/Linux) recovery is synchronous.** The bootstrap lets the
+  installer apply the current Unix layout via rename-over, then launches
+  `<dir>/climon` with the user's original arguments and returns its exact exit
+  code (128+signal on signal death), so the original `climon` command resumes
+  automatically. If the one-time migration cannot reach the network, it prints a
+  clear message that it requires a network connection and that re-running
+  `install.sh` is the manual recovery path, without partially mutating the install.
+- **Windows recovery is detached.** The bootstrap spawns a detached recovery
+  process (no console window, null stdio) that waits for the exact bootstrap PID
+  to exit before mutating files, repairs to the stub/versioned layout, keeps
+  `climon.exe.old` as a locally derived fallback, and prompts the user to rerun
+  their `climon` command; it does not auto-resume. An original `update` command
+  never recurses into the old updater on failure — if the bootstrap cannot run and
+  `climon.exe.old` is present a normal command falls back to it, and if `.old` is
+  missing the guidance is to re-run `install.ps1`.
 
 ## Data locations (`$CLIMON_HOME`, default `~/.climon`)
 

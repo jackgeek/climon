@@ -2,8 +2,8 @@
   {
     "version": "3.2.0",
     "changes": [
-      "Make Windows self-updates safe while climon is running by using stable stubs, versioned payloads, and a dedicated installer",
-      "Roll out the Windows stub layout through a bridge release before the first stub release so existing installs can migrate safely"
+      "Migrate existing Windows, macOS, and Linux installs directly to installer-owned updates without requiring an intermediate release",
+      "Make every future update use the new release's signed installer, preventing old clients from dictating new binary layouts"
     ]
   },
   {
