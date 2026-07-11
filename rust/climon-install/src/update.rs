@@ -328,6 +328,19 @@ fn original_command_is_update(args: &RecoverBootstrapArgs) -> bool {
         .is_some_and(|arg| arg == "update" || arg == "--update")
 }
 
+fn should_cleanup_staging(source: &Path, install_dir: &Path) -> bool {
+    let (Ok(source), Ok(install_dir)) = (
+        std::fs::canonicalize(source),
+        std::fs::canonicalize(install_dir),
+    ) else {
+        return false;
+    };
+    source.is_dir()
+        && install_dir.is_dir()
+        && source != install_dir
+        && !install_dir.starts_with(source)
+}
+
 /// Runs Windows recovery through injected process and placement operations.
 ///
 /// The bootstrap PID is always waited before source validation or install
@@ -376,7 +389,7 @@ pub fn run_windows_recovery_with_runtime<R: WindowsRecoveryRuntime>(
         },
     };
 
-    if args.apply.source != args.apply.dir && !args.apply.dir.starts_with(&args.apply.source) {
+    if should_cleanup_staging(&args.apply.source, &args.apply.dir) {
         runtime.cleanup_staging(&args.apply.source);
     }
     code
@@ -545,9 +558,20 @@ fn with_preserved_windows_fallback<T>(
     fallback: &Path,
     operation: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
-    let fallback_bytes = std::fs::read(fallback)
-        .map_err(|error| format!("read local fallback {} failed: {error}", fallback.display()))?;
+    let fallback_bytes = match std::fs::read(fallback) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "read local fallback {} failed: {error}",
+                fallback.display()
+            ));
+        }
+    };
     let result = operation();
+    let Some(fallback_bytes) = fallback_bytes else {
+        return result;
+    };
     match std::fs::write(fallback, fallback_bytes) {
         Ok(()) => result,
         Err(restore_error) => match result {
@@ -890,6 +914,7 @@ mod tests {
         output: Vec<String>,
         errors: Vec<String>,
         remove_staging: bool,
+        apply_layout: bool,
     }
 
     impl Default for FakeWindowsRecovery {
@@ -903,6 +928,7 @@ mod tests {
                 output: Vec::new(),
                 errors: Vec::new(),
                 remove_staging: false,
+                apply_layout: false,
             }
         }
     }
@@ -913,8 +939,22 @@ mod tests {
             self.wait_result.clone()
         }
 
-        fn apply_update(&mut self, _args: &ApplyUpdateArgs) -> Result<(), String> {
+        fn apply_update(&mut self, args: &ApplyUpdateArgs) -> Result<(), String> {
             self.events.push("apply".to_string());
+            if self.apply_layout {
+                let fallback = args.dir.join("climon.exe.old");
+                return with_preserved_windows_fallback(&fallback, || {
+                    fs::create_dir_all(&args.dir).map_err(|error| error.to_string())?;
+                    fs::write(args.dir.join("climon.exe"), b"new bootstrap")
+                        .map_err(|error| error.to_string())?;
+                    fs::write(args.dir.join("climon.dll"), b"new client")
+                        .map_err(|error| error.to_string())?;
+                    fs::write(args.dir.join("climon-server.exe"), b"new server")
+                        .map_err(|error| error.to_string())?;
+                    fs::write(args.dir.join(".version"), &args.version)
+                        .map_err(|error| error.to_string())
+                });
+            }
             self.apply_result.clone()
         }
 
@@ -2040,6 +2080,97 @@ mod tests {
     }
 
     #[test]
+    fn windows_recovery_applies_without_existing_old_fallback() {
+        let root = temp_root("windows-recovery-no-existing-old");
+        let args = windows_recover_args(&root, vec![os("session")]);
+        fs::create_dir_all(&args.apply.source).unwrap();
+        let fallback = args.apply.dir.join("climon.exe.old");
+        assert!(!fallback.exists());
+        let mut runtime = FakeWindowsRecovery {
+            apply_layout: true,
+            ..FakeWindowsRecovery::default()
+        };
+
+        let code = run_windows_recovery_with_runtime(&args, &mut runtime);
+
+        assert_eq!(code, 0);
+        assert!(runtime.fallback_launches.is_empty());
+        assert_eq!(
+            runtime.output,
+            vec![
+                "A critical climon update was applied successfully.",
+                "Please rerun your climon command.",
+            ]
+        );
+        assert_eq!(
+            fs::read(args.apply.dir.join("climon.exe")).unwrap(),
+            b"new bootstrap"
+        );
+        assert_eq!(
+            fs::read(args.apply.dir.join("climon.dll")).unwrap(),
+            b"new client"
+        );
+        assert_eq!(
+            fs::read(args.apply.dir.join("climon-server.exe")).unwrap(),
+            b"new server"
+        );
+        assert_eq!(
+            fs::read_to_string(args.apply.dir.join(".version")).unwrap(),
+            "3.2.1"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn cleanup_skips_source_resolving_to_install_dir() {
+        let root = temp_root("windows-recovery-cleanup-equal-alias");
+        let install = root.join("install");
+        fs::create_dir_all(&install).unwrap();
+        let source_alias = install.join("..").join("install");
+
+        assert!(!should_cleanup_staging(&source_alias, &install));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn cleanup_skips_source_containing_install_dir_through_parent_alias() {
+        let root = temp_root("windows-recovery-cleanup-parent-alias");
+        let source = root.join("stage");
+        let alias_child = source.join("alias-child");
+        let install = source.join("install");
+        fs::create_dir_all(&alias_child).unwrap();
+        fs::create_dir_all(&install).unwrap();
+        let source_alias = alias_child.join("..");
+
+        assert!(!should_cleanup_staging(&source_alias, &install));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn cleanup_skips_when_either_path_cannot_be_resolved() {
+        let root = temp_root("windows-recovery-cleanup-unresolved");
+        let source = root.join("stage");
+        let install = root.join("install");
+        fs::create_dir_all(&source).unwrap();
+
+        assert!(!should_cleanup_staging(&source, &install));
+        assert!(!should_cleanup_staging(&root.join("missing"), &source));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn cleanup_allows_distinct_existing_staging_directory() {
+        let root = temp_root("windows-recovery-cleanup-distinct");
+        let source = root.join("stage");
+        let install = root.join("install");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&install).unwrap();
+
+        assert!(should_cleanup_staging(&source, &install));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn windows_recovery_preserves_old_fallback_across_successful_placement() {
         let root = temp_root("windows-recovery-preserve-old-success");
         let fallback = root.join("climon.exe.old");
@@ -2068,6 +2199,24 @@ mod tests {
 
         assert_eq!(result, Err("placement failed".to_string()));
         assert_eq!(fs::read(&fallback).unwrap(), b"legacy client");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn windows_recovery_reports_non_missing_fallback_read_errors() {
+        let root = temp_root("windows-recovery-fallback-read-error");
+        let fallback = root.join("climon.exe.old");
+        fs::create_dir_all(&fallback).unwrap();
+        let operation_called = RefCell::new(false);
+
+        let error = with_preserved_windows_fallback(&fallback, || {
+            *operation_called.borrow_mut() = true;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(error.contains("read local fallback"), "{error}");
+        assert!(!*operation_called.borrow());
         fs::remove_dir_all(&root).ok();
     }
 
