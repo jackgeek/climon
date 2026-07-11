@@ -10,6 +10,9 @@ build = "build.rs"
 name = "install"
 path = "src/main.rs"
 
+[features]
+test-update-endpoint = ["climon-update/test-update-endpoint"]
+
 [dependencies]
 climon-install = { path = "../climon-install", version = "0.1.0" }
 climon-update = { path = "../climon-update", version = "0.1.0" }

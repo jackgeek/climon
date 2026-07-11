@@ -46,16 +46,13 @@ const serverEntrypoint = resolve(projectRoot, "src/server.ts");
 const embeddedAssetsPath = resolve(projectRoot, "src/server/embedded-assets.ts");
 
 const assembleMode = process.env.CLIMON_ASSEMBLE === "1";
-// Host-only, test-only: emit the pre-Feature-2 "bridge" layout (full standalone
-// climon[.exe] + climon-server[.exe], no installer, no DLL) for the upgrade-test
+// Host-only, test-only: emit the pinned legacy layout required by the upgrade
 // harness. Never set by the release pipeline. Ignored in assemble mode.
 const legacyLayoutMode = process.env.CLIMON_LEGACY_LAYOUT === "1" && !assembleMode;
-// Dev/test only: build the served clients with climon-update's test-update-endpoint
-// feature so `climon update` honors CLIMON_TEST_MANIFEST_URL. Set ONLY by the
-// upgrade-test harness (scripts/upgrade-test-harness.ts); never by the release
-// pipeline. Inert (no feature) unless CLIMON_TEST_UPDATE_ENDPOINT=1.
 const testUpdateEndpoint = process.env.CLIMON_TEST_UPDATE_ENDPOINT === "1";
-const clientFeatureArgs = testUpdateEndpoint ? ["--features", "test-update-endpoint"] : [];
+const testEndpointArgs = testUpdateEndpoint
+  ? ["--features", "test-update-endpoint"]
+  : [];
 
 /**
  * `bun build` flags that activate the embedded-asset code path in
@@ -102,7 +99,7 @@ type ZipEntry = {
  * Default (stub model): `install[.exe]` + client (`climon.dll` on Windows / `climon`
  * on Unix) + `climon-server[.exe]`.
  *
- * `legacy: true` returns the pre-Feature-2 bridge layout used ONLY by the upgrade-test
+ * `legacy: true` returns the pinned legacy layout used ONLY by the upgrade-test
  * harness: the full standalone client (`climon[.exe]`) + `climon-server[.exe]`, with no
  * installer and no DLL. The absence of `install.exe`+`climon.dll` is what marks a release
  * as non-stub-model to `should_migrate_legacy`.
@@ -230,11 +227,11 @@ function readStagedInstaller(platform: string): Uint8Array {
 /** Builds the host Rust client with cargo and returns its bytes (local mode). */
 async function buildHostRustClient(platform: string): Promise<Uint8Array> {
   const isWindows = platform.startsWith("windows");
-  // Legacy/bridge layout ships the full standalone client on every platform,
+  // The legacy layout ships the full standalone client on every platform,
   // including Windows (it carries the migration-aware updater via climon_cli::run).
   if (legacyLayoutMode) {
     console.log(`→ Building standalone Rust client (cargo, ${platform}, legacy layout)...`);
-    await $`cargo build --release -p climon-cli ${clientFeatureArgs}`.cwd(rustDir);
+    await $`cargo build --release -p climon-cli ${testEndpointArgs}`.cwd(rustDir);
     const builtName = isWindows ? "climon.exe" : "climon";
     const built = resolve(rustDir, "target", "release", builtName);
     if (!existsSync(built)) {
@@ -244,14 +241,14 @@ async function buildHostRustClient(platform: string): Promise<Uint8Array> {
   }
   console.log(`→ Building Rust client (cargo, ${platform})...`);
   if (isWindows) {
-    await $`cargo build --release -p climon-dll ${clientFeatureArgs}`.cwd(rustDir);
+    await $`cargo build --release -p climon-dll ${testEndpointArgs}`.cwd(rustDir);
     const built = resolve(rustDir, "target", "release", "climon.dll");
     if (!existsSync(built)) {
       throw new Error(`Expected cargo to produce ${built} but it was not found`);
     }
     return new Uint8Array(readFileSync(built));
   }
-  await $`cargo build --release -p climon-cli ${clientFeatureArgs}`.cwd(rustDir);
+  await $`cargo build --release -p climon-cli ${testEndpointArgs}`.cwd(rustDir);
   const built = resolve(rustDir, "target", "release", "climon");
   if (!existsSync(built)) {
     throw new Error(`Expected cargo to produce ${built} but it was not found`);
@@ -284,7 +281,7 @@ async function buildHostInstaller(platform: string): Promise<Uint8Array> {
       ),
     };
   }
-  await $`cargo build --release -p climon-setup`
+  await $`cargo build --release -p climon-setup ${testEndpointArgs}`
     .env({ ...process.env, ...stubEnv })
     .cwd(rustDir);
   const built = resolve(rustDir, "target", "release", `install${exe}`);

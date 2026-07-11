@@ -13,9 +13,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use climon_install::manifest::{install_files_for_platform, Platform};
 
 use crate::artifact::{stage_release_artifact, StagedArtifact};
-use crate::check::DEFAULT_MANIFEST_URL;
 use crate::manifest::{current_node_arch, current_node_platform, fetch_manifest, Manifest};
 use crate::pubkey::UPDATE_PUBLIC_KEY_B64;
+use crate::update_cli::resolve_manifest_url;
 
 /// Process-launch behavior required by the host platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,11 +110,15 @@ impl BootstrapStaging for StagedArtifact {
 /// Production bootstrap runtime using the canonical manifest and update key.
 pub struct ProductionBootstrapRuntime;
 
+fn bootstrap_manifest_url() -> &'static str {
+    resolve_manifest_url()
+}
+
 impl BootstrapRuntime for ProductionBootstrapRuntime {
     type Staging = StagedArtifact;
 
     fn fetch_manifest(&mut self) -> Result<Manifest, String> {
-        fetch_manifest(DEFAULT_MANIFEST_URL)
+        fetch_manifest(bootstrap_manifest_url())
     }
 
     fn stage_release(
@@ -336,11 +340,35 @@ fn run_legacy_bootstrap_entry_with_runtime<R: BootstrapRuntime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::check::DEFAULT_MANIFEST_URL;
     use crate::manifest::{Manifest, ManifestArtifact};
     use std::collections::{BTreeMap, HashSet, VecDeque};
     use std::ffi::OsString;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+
+    #[cfg(not(feature = "test-update-endpoint"))]
+    #[test]
+    fn production_bootstrap_ignores_test_manifest_url_without_feature() {
+        std::env::set_var(
+            "CLIMON_TEST_MANIFEST_URL",
+            "http://127.0.0.1:9/manifest.json",
+        );
+        assert_eq!(bootstrap_manifest_url(), DEFAULT_MANIFEST_URL);
+        std::env::remove_var("CLIMON_TEST_MANIFEST_URL");
+    }
+
+    #[cfg(feature = "test-update-endpoint")]
+    #[test]
+    fn production_bootstrap_honors_test_manifest_url_with_feature() {
+        std::env::set_var(
+            "CLIMON_TEST_MANIFEST_URL",
+            "http://127.0.0.1:9/manifest.json",
+        );
+        assert_eq!(bootstrap_manifest_url(), "http://127.0.0.1:9/manifest.json");
+        std::env::remove_var("CLIMON_TEST_MANIFEST_URL");
+        assert_eq!(bootstrap_manifest_url(), DEFAULT_MANIFEST_URL);
+    }
 
     #[derive(Default)]
     struct RuntimeState {

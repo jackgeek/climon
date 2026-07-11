@@ -10,7 +10,7 @@ describe("zipEntryNamesForPlatform", () => {
     ]);
   });
 
-  test("includes install, climon, and climon-server in the macOS zip", () => {
+  test("includes install, climon, and climon-server in macOS zips", () => {
     expect(zipEntryNamesForPlatform("darwin-x64")).toEqual([
       "install",
       "climon",
@@ -24,7 +24,7 @@ describe("zipEntryNamesForPlatform", () => {
     ]);
   });
 
-  test("includes install, climon, and climon-server in Linux zips", () => {
+  test("includes install, climon, and climon-server in the Linux x64 zip", () => {
     expect(zipEntryNamesForPlatform("linux-x64")).toEqual([
       "install",
       "climon",

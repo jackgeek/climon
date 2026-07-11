@@ -9,8 +9,8 @@ build = "build.rs"
 [features]
 # Dev/test only: allows `climon update` to read its manifest URL from the
 # CLIMON_TEST_MANIFEST_URL env var instead of the hardcoded production URL.
-# NEVER enabled by scripts/compile.ts or .github/workflows/release.yml — shipped
-# binaries physically lack the override code.
+# Enabled by scripts/compile.ts only for explicit local upgrade-harness builds.
+# Release builds physically lack the override code.
 test-update-endpoint = []
 
 [lib]

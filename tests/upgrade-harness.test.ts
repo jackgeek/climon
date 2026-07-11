@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { zipEntryNamesForPlatform } from "../scripts/compile.js";
@@ -20,6 +20,32 @@ describe("legacy layout packaging", () => {
   test("stub Windows zip is unchanged (install.exe + climon.dll + server)", () => {
     const names = zipEntryNamesForPlatform("windows-x64");
     expect(names).toEqual(["install.exe", "climon.dll", "climon-server.exe"]);
+  });
+});
+
+describe("test update endpoint isolation", () => {
+  test("release workflow never enables the test endpoint", () => {
+    const release = readFileSync(".github/workflows/release.yml", "utf8");
+    expect(release).not.toContain("CLIMON_TEST_UPDATE_ENDPOINT");
+    expect(release).not.toContain("test-update-endpoint");
+  });
+
+  test("compile requires explicit opt-in and forwards it to clients and setup", () => {
+    const compile = readFileSync("scripts/compile.ts", "utf8");
+    expect(compile).toContain(
+      'const testUpdateEndpoint = process.env.CLIMON_TEST_UPDATE_ENDPOINT === "1";'
+    );
+    expect(compile).toContain("const testEndpointArgs = testUpdateEndpoint");
+    expect(compile).toContain('? ["--features", "test-update-endpoint"]');
+    expect(compile).toContain(
+      "cargo build --release -p climon-cli ${testEndpointArgs}"
+    );
+    expect(compile).toContain(
+      "cargo build --release -p climon-dll ${testEndpointArgs}"
+    );
+    expect(compile).toContain(
+      "cargo build --release -p climon-setup ${testEndpointArgs}"
+    );
   });
 });
 
