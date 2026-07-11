@@ -1355,13 +1355,45 @@ fn socket_client_controls_input(
 /// so the resize is always a real (non-deduped) change that forces the wrapped
 /// command to repaint. Steps down normally, but up when `rows <= 1` because
 /// `PtyResizer::resize` clamps to `>= 1` and the de-dupe would otherwise swallow
-/// a no-op resize. We jiggle rows (not cols) so wrapped lines are not reflowed —
-/// only a single line is dropped/added.
+/// a no-op resize. `jiggle_size` pairs this with a one-column shrink so both
+/// dimensions change.
 fn jiggle_rows(rows: u16) -> u16 {
     if rows > 1 {
         rows - 1
     } else {
         rows + 1
+    }
+}
+
+/// The intermediate PTY size for a restore jiggle: one column narrower (never
+/// wider, so the PTY never transiently overgrows the real local console — the
+/// Windows ConPTY corruption guard) and one row away (via `jiggle_rows`).
+/// Changing *both* dimensions guarantees a real `winsize` difference the wrapped
+/// command detects, and the column change busts the frame cache of TUIs (e.g.
+/// Ink/`copilot`) that skip a redraw when the new frame is byte-identical to the
+/// last. Columns clamp at `1`; rows always change, so the result never equals
+/// the input.
+fn jiggle_size(cols: u16, rows: u16) -> (u16, u16) {
+    (cols.saturating_sub(1).max(1), jiggle_rows(rows))
+}
+
+/// Which leg of a two-leg repaint jiggle runs next. Leg 1 (`Away`) drives the
+/// PTY to `jiggle_size`; Leg 2 (`Back`) returns it to the current live size. The
+/// legs run on consecutive restore-thread ticks so the ~25 ms gap between them
+/// is observable (a shorter gap coalesces and the app never samples the
+/// intermediate size).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum JiggleLeg {
+    Away,
+    Back,
+}
+
+impl JiggleLeg {
+    fn next(self) -> Option<JiggleLeg> {
+        match self {
+            JiggleLeg::Away => Some(JiggleLeg::Back),
+            JiggleLeg::Back => None,
+        }
     }
 }
 
@@ -1883,7 +1915,7 @@ mod writer_thread_tests {
 
 #[cfg(test)]
 mod restore_decision_tests {
-    use super::{jiggle_rows, local_restore_decision, LocalRestoreDecision};
+    use super::{jiggle_rows, jiggle_size, local_restore_decision, JiggleLeg, LocalRestoreDecision};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1937,6 +1969,33 @@ mod restore_decision_tests {
         for rows in [1u16, 2, 24, 50, 200, u16::MAX - 1] {
             assert_ne!(jiggle_rows(rows), rows);
         }
+    }
+
+    #[test]
+    fn jiggle_size_shrinks_columns_and_rows() {
+        assert_eq!(jiggle_size(80, 24), (79, 23));
+        assert_eq!(jiggle_size(2, 2), (1, 1));
+    }
+
+    #[test]
+    fn jiggle_size_clamps_columns_at_minimum() {
+        // cols cannot shrink below 1; rows step up from 1. At least one dim
+        // always changes, so the resize is never a no-op the de-dupe swallows.
+        assert_eq!(jiggle_size(1, 1), (1, 2));
+        assert_eq!(jiggle_size(1, 50), (1, 49));
+    }
+
+    #[test]
+    fn jiggle_size_is_never_equal_to_input() {
+        for (cols, rows) in [(1u16, 1u16), (1, 24), (80, 24), (200, 50), (u16::MAX, u16::MAX)] {
+            assert_ne!(jiggle_size(cols, rows), (cols, rows));
+        }
+    }
+
+    #[test]
+    fn jiggle_leg_advances_away_to_back_to_done() {
+        assert_eq!(JiggleLeg::Away.next(), Some(JiggleLeg::Back));
+        assert_eq!(JiggleLeg::Back.next(), None);
     }
 
     #[test]
