@@ -69,16 +69,16 @@ present:
 7. Spawn the staged `install.exe` in recovery mode with:
    - the target installation directory;
    - the staging directory;
-   - the bootstrap process ID to wait for;
-   - the original argument vector to resume after migration.
+   - the bootstrap process ID to wait for.
 8. Exit immediately so Windows releases the `climon.exe` file lock.
 9. The child installer waits for the bootstrap PID to exit, installs the stable
    client/server stubs, versioned payloads, and pointer files, removes temporary
-   state, then launches the repaired `climon.exe` with the original arguments.
+   state, then prints a prominent message that a critical update was applied and
+   the user must rerun `climon`.
 
 The recovery mode is idempotent. If another process completes migration first,
-the child validates the resulting pointer layout and resumes the command
-without rewriting it.
+the child validates the resulting pointer layout and prints the same rerun
+message without rewriting it.
 
 ## Offline and failure fallback
 
@@ -171,7 +171,8 @@ manifest, verification, and staging logic should be reused from
 - valid and invalid bootstrap archive layouts;
 - signature rejection leaves the install unchanged;
 - bounded download failures invoke legacy fallback;
-- child installer launch arguments preserve arbitrary original arguments;
+- successful recovery does not relaunch or resume the original command;
+- successful recovery prints the critical-update rerun message;
 - recovery waits for the bootstrap PID before replacing `climon.exe`;
 - concurrent/idempotent recovery;
 - missing `climon.exe.old` error handling;
@@ -182,9 +183,10 @@ manifest, verification, and staging logic should be reused from
 
 1. Install a real legacy release.
 2. Update it directly to the first stub release with no bridge.
-3. Run `climon --version`; verify bootstrap migration completes and the original
-   command resumes.
-4. Verify the final stub, versioned DLL/server payloads, and pointer files.
+3. Run `climon --version`; verify bootstrap migration completes, the command is
+   not resumed, and the critical-update rerun message is shown.
+4. Rerun `climon --version`, then verify the final stub, versioned DLL/server
+   payloads, and pointer files.
 5. Repeat with network disabled after the old updater places the bootstrap;
    verify `climon.exe.old` runs and normal legacy commands remain available.
 6. Restore network and retry; verify migration succeeds.
