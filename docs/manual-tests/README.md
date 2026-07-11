@@ -49,7 +49,7 @@ result-tracking row.
 | — | Mobile active-session layout order — Open terminal button between title and status/client meta | [mobile-open-terminal-order.md](mobile-open-terminal-order.md) |
 | — | WSL bridge feature flag — config-driven remotes ingest + explicit bridge opt-in | [phase14-wsl-bridge-feature-flag.md](phase14-wsl-bridge-feature-flag.md) |
 | — | Ingest Rust cutover — production Rust ingest, control-plane parity, ghost GC, gate #3, hardening | [phase15-ingest-rust-cutover.md](phase15-ingest-rust-cutover.md) |
-| — | Remotes visibility — `ingest-status.json`/`uplink-status.json` beacons, `climon remotes` (`--watch`/`--json`), loopback `GET /api/remotes` + SSE, dashboard "Remote hosts" panel, hello identity sanitization | [phase16-remotes-visibility.md](phase16-remotes-visibility.md) |
+| — | Remotes visibility — `ingest-status.json`/`uplink-status.json` beacons, `climon remotes` (`--watch`/`--json`), hello identity sanitization | [phase16-remotes-visibility.md](phase16-remotes-visibility.md) |
 | — | Legacy Bun client removal — Rust client plus maintained Bun dashboard/server workflow | [phase17-legacy-client-removal.md](phase17-legacy-client-removal.md) |
 | — | Remote devbox auto-discovery + multi-target fan-out | [phase18-remote-discovery.md](phase18-remote-discovery.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
@@ -65,6 +65,7 @@ result-tracking row.
 | — | Security — project-local config global-only settings | [security-config-global-only.md](security-config-global-only.md) |
 | — | Interactive install opt-ins default to Yes (telemetry + auto-update prompts) | [optin-default-yes.md](optin-default-yes.md) |
 | — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
+| — | Windows binary lifecycle — dedicated installer, stub/versioned layout, and bridge migration | [windows-binary-lifecycle.md](windows-binary-lifecycle.md) |
 | — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
 | — | Tunnel Link start reliability — patient relay-propagation health check + verified self-heal recreation | [tunnel-link-reliability.md](tunnel-link-reliability.md) |
 | — | MIT license transition — `climon license`, one-time upgrade notice, no notice on fresh installs | [mit-license-transition.md](mit-license-transition.md) |
@@ -76,6 +77,7 @@ result-tracking row.
 | — | App Insights connection string source — env var / embedded constant only, never climon config | [appinsights-connection-source.md](appinsights-connection-source.md) |
 | — | Terminal font-size repaint — viewport repaints cleanly on font-size change without waiting for focus | [terminal-font-size-repaint.md](terminal-font-size-repaint.md) |
 | — | Terminal title as session subtitle — capture PTY OSC 0/2 title, drop name→title | [terminal-title-subtitle.md](terminal-title-subtitle.md) |
+| — | Terminal control handoff — one shared PTY, single controller, follow/displaced surfaces, Space / maximize Take control, priority fallback | [terminal-control-handoff.md](terminal-control-handoff.md) |
 | — | Terminal progress indicator — capture PTY OSC 9;4 progress, per-session bar/spinner/error/warning on the list (+ `dashboard.stateIconNoMotion`) | [terminal-progress-indicator.md](terminal-progress-indicator.md) |
 | — | Terminal selection / copy (touch) — Select button captures full scrollback into a monospaced textarea for native copy, with a strip-decorations toggle | [terminal-select-mode.md](terminal-select-mode.md) |
 | — | `bun run build` builds the Rust client + on-demand rustup bootstrap when cargo is missing | [build-all-rust-toolchain.md](build-all-rust-toolchain.md) |
@@ -84,6 +86,7 @@ result-tracking row.
 | — | Uplink advertises sessions created after it connects (sessions-dir watcher re-reconcile) | [uplink-advertise-new-sessions.md](uplink-advertise-new-sessions.md) |
 | — | Remote host self-managed ingest tunnel — stable `climon-ingest` dev tunnel id, label, non-secret description, restart reuse | [phase18-remote-host-tunnel.md](phase18-remote-host-tunnel.md) |
 | — | Terminal viewport fit — terminal re-fits its pane instead of locking to the host grid (addon-fit/xterm version-mismatch regression) | [terminal-viewport-fit.md](terminal-viewport-fit.md) |
+| — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |
 
 ## Recording results
 

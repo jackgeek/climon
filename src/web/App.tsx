@@ -36,9 +36,7 @@ import {
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
   probeTunnelAuth,
-  fetchRemotes,
   postPushPresence,
-  type RemotesResponse,
   type DashboardTunnelStatus
 } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -47,7 +45,6 @@ import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { EditSessionDialog } from "./components/EditSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
-import { RemoteHostsPanel } from "./components/RemoteHostsPanel.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
 import { TerminalView, type TerminalHandle, stripTerminalDecorations } from "./components/TerminalView.js";
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
@@ -76,8 +73,6 @@ import {
   writeBrowserNotificationsEnabled
 } from "./attentionAlerts.js";
 import { StatusBadge } from "./components/StatusBadge.js";
-import type { TerminalResizeMode } from "../ipc/frame.js";
-import { toggleViewMode } from "./view-mode.js";
 import { InstallPwaDialog } from "./components/InstallPwaDialog.js";
 import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa, reauthenticateTunnel } from "./pwa/pwaContext.js";
 import {
@@ -570,21 +565,11 @@ export function App() {
   const [features, setFeatures] = useState<FeatureFlagsMap>({});
   const [focusTopSessionShortcut, setFocusTopSessionShortcut] = useState<string>("Alt+J");
   const [remoteOpen, setRemoteOpen] = useState(false);
-  const [remoteHostsOpen, setRemoteHostsOpen] = useState(false);
-  const [remotes, setRemotes] = useState<RemotesResponse>({
-    connections: [],
-    ingestRunning: false,
-    remotesActive: false
-  });
   const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
   const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);
   const [tunnelLinkError, setTunnelLinkError] = useState("");
   const [tunnelLinkCopied, setTunnelLinkCopied] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
-  const [activeViewMode, setActiveViewMode] = useState<{ sessionId: string | null; mode: TerminalResizeMode }>({
-    sessionId: null,
-    mode: "fill"
-  });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const [pwaInstallOpen, setPwaInstallOpen] = useState(false);
@@ -930,13 +915,6 @@ export function App() {
         // Ignore malformed payloads; the next event will reconcile.
       }
     });
-    es.addEventListener("remotes", (ev) => {
-      try {
-        setRemotes(JSON.parse((ev as MessageEvent).data) as RemotesResponse);
-      } catch {
-        // Ignore malformed payloads; the next event will reconcile.
-      }
-    });
     void fetchSessions()
       .then((loadedSessions) => {
         applySessionsRefresh(loadedSessions);
@@ -1114,6 +1092,13 @@ export function App() {
           if (!term) {
             return;
           }
+          // Hiding the page tears down the terminal WebSocket. The native
+          // visibility event runs before React's visible reattachment completes,
+          // so arm the viewed session now; TerminalView queues the request and
+          // flushes it when the new socket opens.
+          if (activeId && (!isMobile || maximized)) {
+            term.armTakeControl(activeId);
+          }
           if (isMobile) {
             term.refresh();
           } else {
@@ -1124,7 +1109,7 @@ export function App() {
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [armReconnectOverlay, isMobile]);
+  }, [activeId, armReconnectOverlay, isMobile, maximized]);
 
   // The terminal panel is a flex child that shrinks the terminal pane when
   // shown. xterm does not reflow to the smaller pane on its own, so refit it
@@ -1222,19 +1207,6 @@ export function App() {
       pendingSelectRef.current = id;
     }
   }
-
-  // The active session's mode, tagged with the session it belongs to. It is
-  // `null` right after switching sessions (before the new session's daemon
-  // reports its mode) so callers never act on a stale value.
-  const authoritativeViewMode = activeViewMode.sessionId === activeId ? activeViewMode.mode : null;
-
-  const requestViewMode = useCallback(
-    (mode: TerminalResizeMode): void => {
-      setActiveViewMode({ sessionId: activeId, mode });
-      terminalRef.current?.setViewMode(mode);
-    },
-    [activeId]
-  );
 
   // Selecting a session on desktop moves keyboard focus into the terminal so
   // the user can start typing immediately. On mobile the terminal is offscreen
@@ -1473,7 +1445,14 @@ export function App() {
           collapsed={sidebarCompact}
           collapsible={!isMobile}
           onCollapsedChange={handleSidebarCollapsedChange}
-          onSelect={handleSelect}
+          onSelect={(id) => {
+            handleSelect(id);
+            // Actively choosing a session on desktop takes control of it, so the
+            // dashboard drives the grid without the user hunting for a button.
+            if (!isMobile) {
+              terminalRef.current?.armTakeControl(id);
+            }
+          }}
           onClose={(id) => requestClose(id)}
           onNew={() => {
             setDialogParent(null);
@@ -1491,10 +1470,6 @@ export function App() {
           onEdit={(session) => setEditTarget(session)}
           onPauseToggle={handlePauseToggle}
           onManageRemote={() => setRemoteOpen(true)}
-          onShowRemoteHosts={() => {
-            setRemoteHostsOpen(true);
-            void fetchRemotes().then(setRemotes);
-          }}
           notificationsEnabled={notificationsEnabled}
           onToggleNotifications={handleToggleNotifications}
           canInstallPwa={installAvailable}
@@ -1510,13 +1485,13 @@ export function App() {
           stateIconNoMotion={stateIconNoMotion}
           currentTheme={themeId}
           onSelectTheme={handleSelectTheme}
-          viewMode={authoritativeViewMode ?? "fill"}
-          viewModeLocked={false}
-          onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "fill"))}
           onMaximize={(id) => {
             const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
             setMaximized(true);
+            // Opening a session's terminal (the PWA "open terminal" action) takes
+            // control so the on-screen session sizes to this device.
+            terminalRef.current?.armTakeControl(id);
             const attentionMatchedAt = selected?.attentionMatchedAt;
             if (selected?.status === "needs-attention" && attentionMatchedAt) {
               requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id, attentionMatchedAt));
@@ -1538,12 +1513,6 @@ export function App() {
           accentColor={activeSession?.color}
           maximized={maximized}
           visible={terminalVisible}
-          viewMode={authoritativeViewMode ?? "fill"}
-          onViewModeChange={(mode) => {
-            if (activeId) {
-              setActiveViewMode({ sessionId: activeId, mode });
-            }
-          }}
           fontSize={fontSize}
           xtermTheme={activeTheme.xterm}
           onFontSizeChange={adjustFontSize}
@@ -1638,12 +1607,6 @@ export function App() {
         onKill={() => void handleForceKill()}
       />
       <RemoteClientDialog open={remoteOpen} onOpenChange={setRemoteOpen} />
-      <RemoteHostsPanel
-        open={remoteHostsOpen}
-        onClose={() => setRemoteHostsOpen(false)}
-        connections={remotes.connections}
-        remotesActive={remotes.remotesActive}
-      />
       <TunnelLinkDialog
         open={tunnelLinkOpen}
         status={tunnelLinkStatus}

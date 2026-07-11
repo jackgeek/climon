@@ -78,8 +78,9 @@ produces byte-identical control/data frames to the Bun `encodeControl`/
 5. Type in the devbox session; confirm output streams to the dashboard viewer.
 
 **Expected:** The session is advertised to the host (`hello` → `session-added`),
-data bridges both ways, and detaching the last browser viewer reverts viewer
-resizes. Killing the devbox session removes it from the dashboard.
+data bridges both ways, and detaching the last browser viewer hands PTY control
+back to the remaining surface by priority. Killing the devbox session removes it
+from the dashboard.
 
 ---
 

@@ -209,8 +209,16 @@ describe("scheduleTerminalRefit", () => {
     test("Insert sends raw text and clears the staging text", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
-      // Insert: raw text, then clear.
-      expect(source).toContain("onComposeInsert={(text) => {\n                  terminalRef.current?.sendInput(text);\n                  setComposeText(\"\");");
+      // Extract the onComposeInsert handler body so the assertion tolerates
+      // unrelated statements (e.g. compose-history recording) between sending
+      // the text and clearing the staging area.
+      const insertStart = source.indexOf("onComposeInsert={(text) => {");
+      expect(insertStart).toBeGreaterThan(-1);
+      const insertEnd = source.indexOf("}}", insertStart);
+      const insertBody = source.slice(insertStart, insertEnd);
+      // Insert must send the raw text and then clear the staging text.
+      expect(insertBody).toContain("terminalRef.current?.sendInput(text);");
+      expect(insertBody).toContain('setComposeText("");');
       expect(source).not.toContain("onComposeInsertRun");
     });
 
@@ -289,6 +297,21 @@ describe("scheduleTerminalRefit", () => {
 });
 
 describe("tab refocus terminal refresh", () => {
+  test("arms take-control on page return before the terminal WebSocket reattaches", () => {
+    const source = readFileSync("src/web/App.tsx", "utf8");
+
+    const onVisibilityStart = source.indexOf("const onVisibility = ");
+    const onVisibilityEnd = source.indexOf("document.addEventListener(\"visibilitychange\"", onVisibilityStart);
+    const onVisibilityBody = source.slice(onVisibilityStart, onVisibilityEnd);
+
+    // Hiding the page tears down the terminal WebSocket. On return the native
+    // visibility event runs before React reattaches, so App must arm the active
+    // viewed session now; TerminalView flushes the pending takeover on socket open.
+    expect(onVisibilityBody).toContain("if (activeId && (!isMobile || maximized)) {");
+    expect(onVisibilityBody).toContain("term.armTakeControl(activeId);");
+    expect(source).toContain("}, [activeId, armReconnectOverlay, isMobile, maximized]);");
+  });
+
   test("repaints on refocus and focuses only on desktop", () => {
     const source = readFileSync("src/web/App.tsx", "utf8");
 
@@ -314,8 +337,8 @@ describe("tab refocus terminal refresh", () => {
     expect(elseIdx).toBeGreaterThan(refreshIdx);
     expect(focusIdx).toBeGreaterThan(elseIdx);
 
-    // The handler reads isMobile, so it must be a dependency of the effect.
-    expect(source).toContain("}, [armReconnectOverlay, isMobile]);");
+    // Every value read by the handler must be a dependency of the effect.
+    expect(source).toContain("}, [activeId, armReconnectOverlay, isMobile, maximized]);");
   });
 });
 

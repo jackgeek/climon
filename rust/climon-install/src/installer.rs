@@ -3,10 +3,8 @@
 //! `src/install/linux-main.ts`) plus the runtime platform dispatch in
 //! `src/installer-bundle-entry.ts`.
 //!
-//! In the shipped Rust client, the `climon` binary itself runs the installer
-//! when a `climon-alpha` sentinel sibling is present next to the executable
-//! (see `climon-cli`'s `try_run_installer`). There is no JS installer bundle
-//! any more; the entire self-install is native.
+//! The shipped Rust client uses a dedicated `install[.exe]` installer binary.
+//! There is no JS installer bundle any more; the entire install flow is native.
 //!
 //! The orchestration ([`run_installer_main`]) is pure and unit-tested on any
 //! host via injected IO, exactly mirroring how the rest of the crate injects
@@ -318,7 +316,7 @@ mod unix {
 #[cfg(target_os = "windows")]
 mod windows_main {
     use super::*;
-    use crate::files::install_binaries as install_binaries_win;
+    use crate::files::place_windows_layout_with_options;
     use crate::files::{InstallBinariesOptions, InstallError};
     use crate::orchestrate::{update_user_path_with_io, UserPathIo};
 
@@ -332,7 +330,7 @@ mod windows_main {
             .join("climon"))
     }
 
-    fn setup_path(install_dir: &Path) -> Result<PathSetup, String> {
+    pub(super) fn setup_path(install_dir: &Path) -> Result<PathSetup, String> {
         let install_dir_str = install_dir.to_string_lossy().into_owned();
         let mut read = || crate::windows::read_user_path().unwrap_or_default();
         let mut write = |value: &str| {
@@ -356,15 +354,30 @@ mod windows_main {
         Ok(PathSetup { changed, messages })
     }
 
-    fn install_binaries_step(source_dir: &Path, install_dir: &Path) -> Result<(), String> {
+    fn install_binaries_step(
+        source_dir: &Path,
+        install_dir: &Path,
+        version: &str,
+        client_stub: &[u8],
+        server_stub: &[u8],
+    ) -> Result<(), String> {
+        let client_dll = std::fs::read(source_dir.join("climon.dll"))
+            .map_err(|e| format!("Required installer sibling is missing: climon.dll ({e})"))?;
+        let server_exe = std::fs::read(source_dir.join("climon-server.exe")).map_err(|e| {
+            format!("Required installer sibling is missing: climon-server.exe ({e})")
+        })?;
         let mut confirm =
             |error: &InstallError| confirm_kill_and_retry(&error.message, KILL_RETRY_PROMPT);
         let mut kill = || {
             let _ = crate::processes::kill_running_climon_processes();
         };
-        install_binaries_win(
-            source_dir,
+        place_windows_layout_with_options(
             install_dir,
+            version,
+            client_stub,
+            server_stub,
+            &client_dll,
+            &server_exe,
             InstallBinariesOptions {
                 copy_file: None,
                 confirm_kill_and_retry: Some(&mut confirm),
@@ -374,7 +387,12 @@ mod windows_main {
         .map_err(|e| e.message)
     }
 
-    pub fn windows_installer_main(argv: &[String], version: &str) -> Result<(), String> {
+    pub fn windows_installer_main(
+        argv: &[String],
+        version: &str,
+        client_stub: &[u8],
+        server_stub: &[u8],
+    ) -> Result<(), String> {
         use crate::onboarding::parse_setup_options;
 
         let install_dir = install_dir()?;
@@ -384,8 +402,9 @@ mod windows_main {
 
         let mut read_installed_version = crate::changelog::read_installed_version;
         let mut run_onboarding_io = |options: &SetupOptions| real_run_onboarding(&env, options);
-        let mut install_binaries =
-            |install_dir: &Path| install_binaries_step(&source_dir, install_dir);
+        let mut install_binaries = |install_dir: &Path| {
+            install_binaries_step(&source_dir, install_dir, version, client_stub, server_stub)
+        };
         let mut finalize_binaries = |_install_dir: &Path| Ok(());
         let mut write_version = |install_dir: &Path, version: &str| {
             crate::files::write_version_file(install_dir, version)
@@ -420,34 +439,57 @@ mod windows_main {
 /// Runs the platform-appropriate installer main. Mirrors the runtime platform
 /// switch in `src/installer-bundle-entry.ts`.
 #[cfg(target_os = "macos")]
-fn platform_installer_main(argv: &[String], version: &str) -> Result<(), String> {
+fn platform_installer_main(
+    argv: &[String],
+    version: &str,
+    _client_stub: &[u8],
+    _server_stub: &[u8],
+) -> Result<(), String> {
     unix::unix_installer_main(argv, unix::UnixOs::Macos, version)
 }
 
 #[cfg(target_os = "linux")]
-fn platform_installer_main(argv: &[String], version: &str) -> Result<(), String> {
+fn platform_installer_main(
+    argv: &[String],
+    version: &str,
+    _client_stub: &[u8],
+    _server_stub: &[u8],
+) -> Result<(), String> {
     unix::unix_installer_main(argv, unix::UnixOs::Linux, version)
 }
 
 #[cfg(target_os = "windows")]
-fn platform_installer_main(argv: &[String], version: &str) -> Result<(), String> {
-    windows_main::windows_installer_main(argv, version)
+fn platform_installer_main(
+    argv: &[String],
+    version: &str,
+    client_stub: &[u8],
+    server_stub: &[u8],
+) -> Result<(), String> {
+    windows_main::windows_installer_main(argv, version, client_stub, server_stub)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn platform_installer_main(_argv: &[String], _version: &str) -> Result<(), String> {
+fn platform_installer_main(
+    _argv: &[String],
+    _version: &str,
+    _client_stub: &[u8],
+    _server_stub: &[u8],
+) -> Result<(), String> {
     Err("Unsupported platform for the climon installer.".to_string())
 }
 
-/// Cross-platform self-install entrypoint invoked by the client when the
-/// `climon-alpha` sentinel is present. `version` is the client's build version
+/// Cross-platform self-install entrypoint invoked by the dedicated installer.
+/// `version` is the client's build version
 /// (the value written to `.version`). Runs the platform main under the
 /// pause-before-exit wrapper and returns the process exit code (0 on success;
 /// failures/declines exit the process from within the wrapper). Mirrors
 /// `installer-bundle-entry.ts` + `index.ts`'s `tryRunInstaller`.
-pub fn run_installer(version: &str) -> i32 {
+pub fn run_installer(version: &str, client_stub: &[u8], server_stub: &[u8]) -> i32 {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let mut main = || platform_installer_main(&argv, version);
+    if let Some(migrate) = parse_migrate_args(&argv) {
+        return run_migrate(version, client_stub, server_stub, &migrate);
+    }
+    let mut main = || platform_installer_main(&argv, version, client_stub, server_stub);
     let mut write_error = |message: &str| eprintln!("{message}");
     let mut pause = real_pause_for_exit;
     let mut exit = |code: i32| std::process::exit(code);
@@ -458,6 +500,91 @@ pub fn run_installer(version: &str) -> i32 {
         exit: &mut exit,
     });
     0
+}
+
+/// Parsed migrate-mode invocation: `--migrate --dir <path> --source <path>`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MigrateArgs {
+    pub dir: PathBuf,
+    pub source: PathBuf,
+}
+
+/// Returns `Some(MigrateArgs)` when argv requests headless migration, else None
+/// (normal interactive install). `argv` excludes the program name.
+pub fn parse_migrate_args(argv: &[String]) -> Option<MigrateArgs> {
+    if !argv.iter().any(|a| a == "--migrate") {
+        return None;
+    }
+    let mut dir = None;
+    let mut source = None;
+    let mut it = argv.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--dir" => dir = it.next().map(PathBuf::from),
+            "--source" => source = it.next().map(PathBuf::from),
+            _ => {}
+        }
+    }
+    Some(MigrateArgs {
+        dir: dir?,
+        source: source?,
+    })
+}
+
+/// Headless migration entrypoint. Reads the versioned artifacts from
+/// `args.source`, places the full Windows stub layout into `args.dir`, ensures
+/// PATH, and returns 0 on success. Unix has no legacy stub layout to migrate.
+fn run_migrate(version: &str, client_stub: &[u8], server_stub: &[u8], args: &MigrateArgs) -> i32 {
+    #[cfg(target_os = "windows")]
+    {
+        let client_dll = match std::fs::read(args.source.join("climon.dll")) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("migrate: read climon.dll: {e}");
+                return 1;
+            }
+        };
+        let server_exe = match std::fs::read(args.source.join("climon-server.exe")) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("migrate: read climon-server.exe: {e}");
+                return 1;
+            }
+        };
+        let mut confirm = |_error: &crate::files::InstallError| true;
+        let mut kill = || {
+            let _ = crate::processes::kill_running_climon_processes();
+        };
+        if let Err(e) = crate::files::place_windows_layout_with_options(
+            &args.dir,
+            version,
+            client_stub,
+            server_stub,
+            &client_dll,
+            &server_exe,
+            crate::files::InstallBinariesOptions {
+                copy_file: None,
+                confirm_kill_and_retry: Some(&mut confirm),
+                kill_running_climon_processes: Some(&mut kill),
+            },
+        ) {
+            eprintln!("migrate: place layout: {e}");
+            return 1;
+        }
+        if let Err(e) = windows_main::setup_path(&args.dir) {
+            eprintln!("migrate: PATH update: {e}");
+        }
+        eprintln!(
+            "migrate: converted {} to stub layout {version}",
+            args.dir.display()
+        );
+        0
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (version, client_stub, server_stub, args);
+        0
+    }
 }
 
 #[cfg(test)]
@@ -489,6 +616,30 @@ mod tests {
             telemetry: None,
             auto_update: None,
         }
+    }
+
+    #[test]
+    fn parse_migrate_parses_dir_and_source() {
+        let argv = vec![
+            "--migrate".to_string(),
+            "--dir".to_string(),
+            "C:/climon/bin".to_string(),
+            "--source".to_string(),
+            "C:/stage".to_string(),
+        ];
+        let migrate = parse_migrate_args(&argv).unwrap();
+        assert_eq!(migrate.dir, PathBuf::from("C:/climon/bin"));
+        assert_eq!(migrate.source, PathBuf::from("C:/stage"));
+    }
+
+    #[test]
+    fn parse_migrate_no_flag_returns_none() {
+        assert!(parse_migrate_args(&["--dir".to_string(), "x".to_string()]).is_none());
+    }
+
+    #[test]
+    fn parse_migrate_without_required_paths_returns_none() {
+        assert!(parse_migrate_args(&["--migrate".to_string()]).is_none());
     }
 
     #[test]
@@ -715,15 +866,19 @@ mod tests {
         use std::cell::Cell;
         use std::fs;
 
-        let root = std::env::temp_dir().join(format!(
-            "climon-installer-retry-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let root = std::env::current_dir()
+            .unwrap()
+            .join(".copilot-tmp")
+            .join("installer-retry-test")
+            .join(format!(
+                "{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
         let source_dir = root.join("src");
         let install_dir = root.join("bin");
         fs::create_dir_all(&source_dir).unwrap();
-        for name in ["install", "climon-server"] {
+        for name in ["climon", "climon-server"] {
             fs::write(source_dir.join(name), name).unwrap();
         }
 
@@ -795,7 +950,7 @@ mod tests {
         assert_eq!(killed.get(), 1);
         assert_eq!(
             fs::read_to_string(install_dir.join("climon")).unwrap(),
-            "install"
+            "climon"
         );
         assert!(rec
             .events()

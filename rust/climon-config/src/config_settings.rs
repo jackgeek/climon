@@ -300,13 +300,6 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         )
         .default(Value::from(3131)),
         ConfigSetting::new(
-            "terminal.clampBrowserToHost",
-            Boolean,
-            "When false (default), a browser viewer may grow the shared PTY beyond the host terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent content mangling.",
-            vec![Daemon],
-        )
-        .default(Value::from(false)),
-        ConfigSetting::new(
             "terminal.detachPrefix",
             Number,
             "Byte value of the detach key prefix (default 0x1c = Ctrl-\\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255].",
@@ -828,7 +821,6 @@ mod tests {
                 "version",
                 "server.host",
                 "server.port",
-                "terminal.clampBrowserToHost",
                 "terminal.detachPrefix",
                 "hotKeys.focusTopSession",
                 "dashboard.theme",
@@ -873,7 +865,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 42);
+        assert_eq!(all_config_keys().len(), 41);
     }
 
     #[test]
@@ -896,7 +888,7 @@ mod tests {
             json!({
                 "version": 1,
                 "server": { "host": "127.0.0.1", "port": 3131 },
-                "terminal": { "clampBrowserToHost": false, "detachPrefix": 28 },
+                "terminal": { "detachPrefix": 28 },
                 "hotKeys": { "focusTopSession": "Alt+J" },
                 "dashboard": { "theme": "Default", "keyBarPinned": true, "stateIconNoMotion": false },
                 "attention": { "idleSeconds": 10 },

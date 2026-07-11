@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["climon-proto", "climon-logging", "climon-config", "climon-store", "climon-pty", "climon-session", "climon-remote", "climon-cli", "climon-install", "climon-update"]
+members = ["climon-proto", "climon-logging", "climon-config", "climon-store", "climon-pty", "climon-session", "climon-remote", "climon-cli", "climon-install", "climon-update", "climon-stub", "climon-dll", "climon-setup"]
 
 [workspace.package]
 edition = "2021"
@@ -19,7 +19,7 @@ libc = "0.2"
 portable-pty = "0.9"
 signal-hook = "0.4"
 vt100 = "0.16"
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage",

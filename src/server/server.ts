@@ -1,5 +1,4 @@
 import { existsSync, rmSync, watch } from "node:fs";
-import { join } from "node:path";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -23,11 +22,11 @@ import {
   FrameType,
   parseJsonPayload,
   type AttentionPayload,
+  type ControlPayload,
   type ExitPayload,
   type PtySizePayload,
-  type TerminalModePayload,
   type ResizePayload,
-  type TerminalResizeMode
+  type SurfaceKind
 } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { atomicWrite, listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
@@ -578,14 +577,18 @@ export function splitCommand(command: string): string[] {
 export function browserResizePayload(message: {
   cols?: number;
   rows?: number;
-  mode?: TerminalResizeMode;
+  kind?: SurfaceKind;
+  viewerId?: string;
 }): ResizePayload | null {
   if (!message.cols || !message.rows) {
     return null;
   }
-  const payload: ResizePayload = { cols: message.cols, rows: message.rows, source: "viewer" };
-  if (message.mode === "clamped" || message.mode === "fill") {
-    payload.mode = message.mode;
+  const payload: ResizePayload = { cols: message.cols, rows: message.rows };
+  if (message.kind === "terminal" || message.kind === "dashboard" || message.kind === "pwa") {
+    payload.kind = message.kind;
+  }
+  if (typeof message.viewerId === "string") {
+    payload.viewerId = message.viewerId;
   }
   return payload;
 }
@@ -1252,29 +1255,40 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     } else {
       startupLog("devtunnel unavailable; skipping ingest tunnel ensure");
     }
-    startupLog("ensuring ingest daemon is running");
-    await ensureIngestDaemon();
-    const exposureWarning = buildInterimWslExposureWarning({
-      remotesActive,
-      wslBridgeEnabled,
-      ingestBindHost: await resolveIngestBindAddress(process.env)
-    });
-    if (exposureWarning) {
-      process.stderr.write(`${exposureWarning}\n`);
-    }
-    startupLog("ingest daemon ready");
-    // Reconcile the tunnel port mapping with the ingest's actual bound port.
-    // Read ingest.json directly — we just verified the daemon is alive, so its
-    // beacon is authoritative regardless of what isProcessAlive() returns for
-    // cross-session signal checks on Windows.
-    const beacon = await readIngestState();
-    const livePort = beacon?.port ?? await resolveIngestPort();
-    startupLog(`resolved ingest port: ${livePort} (source: ${beacon ? "ingest.json" : "fallback"})`);
-    const reconcile = await reconcileTunnelPort(livePort);
-    if (reconcile.changed) {
-      startupLog(`reconciled tunnel port mapping → ${reconcile.port}${reconcile.recreated ? " (tunnel recreated)" : ""}`);
-    } else {
-      startupLog(`tunnel port mapping already correct (port ${reconcile.port})`);
+    // A failure to bootstrap the ingest daemon (e.g. a dev checkout with no
+    // built Rust client binary, or a stale singleton from another worktree)
+    // must never take down the dashboard: bring the HTTP server up regardless
+    // so local sessions and /health stay available, and just warn.
+    try {
+      startupLog("ensuring ingest daemon is running");
+      await ensureIngestDaemon();
+      const exposureWarning = buildInterimWslExposureWarning({
+        remotesActive,
+        wslBridgeEnabled,
+        ingestBindHost: await resolveIngestBindAddress(process.env)
+      });
+      if (exposureWarning) {
+        process.stderr.write(`${exposureWarning}\n`);
+      }
+      startupLog("ingest daemon ready");
+      // Reconcile the tunnel port mapping with the ingest's actual bound port.
+      // Read ingest.json directly — we just verified the daemon is alive, so its
+      // beacon is authoritative regardless of what isProcessAlive() returns for
+      // cross-session signal checks on Windows.
+      const beacon = await readIngestState();
+      const livePort = beacon?.port ?? await resolveIngestPort();
+      startupLog(`resolved ingest port: ${livePort} (source: ${beacon ? "ingest.json" : "fallback"})`);
+      const reconcile = await reconcileTunnelPort(livePort);
+      if (reconcile.changed) {
+        startupLog(`reconciled tunnel port mapping → ${reconcile.port}${reconcile.recreated ? " (tunnel recreated)" : ""}`);
+      } else {
+        startupLog(`tunnel port mapping already correct (port ${reconcile.port})`);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      startupLog(`ingest daemon bootstrap failed: ${detail}`);
+      logMsg(getLogger(), "warn", "server.ingest_daemon_bootstrap_failed", { error: detail });
+      process.stderr.write(`climon: warning: remote ingest could not start: ${detail}\n`);
     }
   } else {
     startupLog("remotes not enabled; skipping ingest daemon");
@@ -1350,44 +1364,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }
     debounce = setTimeout(() => {
       void publishSessions();
-    }, 150);
-  });
-
-  async function readRemotesResponse() {
-    const { buildRemotesResponse } = await import("./remotes.js");
-    const path = join(getClimonHome(process.env), "ingest-status.json");
-    let status: import("./remotes.js").IngestStatusFile | undefined;
-    try {
-      status = JSON.parse(await Bun.file(path).text());
-    } catch {
-      status = undefined;
-    }
-    return buildRemotesResponse(
-      status,
-      Date.now(),
-      computeRemotesActive(config),
-      (pid) => isProcessAlive(pid)
-    );
-  }
-
-  // Live-push a `remotes` SSE event whenever the ingest rewrites its status
-  // beacon (connect/disconnect/identity/heartbeat). Staleness is recomputed by
-  // the builder, never trusted from the file.
-  let remotesDebounce: ReturnType<typeof setTimeout> | undefined;
-  const remotesWatcher = watch(getClimonHome(process.env), (_event, filename) => {
-    if (filename !== "ingest-status.json") return;
-    if (remotesDebounce) clearTimeout(remotesDebounce);
-    remotesDebounce = setTimeout(() => {
-      void readRemotesResponse().then((payload) => {
-        const data = `event: remotes\ndata: ${JSON.stringify(payload)}\n\n`;
-        for (const controller of sseClients) {
-          try {
-            controller.enqueue(encoder.encode(data));
-          } catch {
-            sseClients.delete(controller);
-          }
-        }
-      });
     }, 150);
   });
 
@@ -1639,11 +1615,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           remoteSpawn,
           spawnSecret
         });
-      }
-
-      if (url.pathname === "/api/remotes" && request.method === "GET") {
-        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
-        return Response.json(await readRemotesResponse());
       }
 
       if (url.pathname === "/api/dashboard-tunnel/status" && request.method === "GET") {
@@ -2059,7 +2030,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         const decoder = new FrameDecoder();
         (ws.data as WsData & { daemon?: Socket }).daemon = daemon;
 
-        daemon.on("data", (chunk) => {
+        daemon.on("data", (chunk: Buffer) => {
           for (const frame of decoder.push(chunk)) {
             if (frame.type === FrameType.Output) {
               ws.sendBinary(frame.payload);
@@ -2073,9 +2044,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             } else if (frame.type === FrameType.PtySize) {
               const size = parseJsonPayload<PtySizePayload>(frame.payload);
               ws.send(JSON.stringify({ type: "size", cols: size.cols, rows: size.rows }));
-            } else if (frame.type === FrameType.TerminalMode) {
-              const mode = parseJsonPayload<TerminalModePayload>(frame.payload);
-              ws.send(JSON.stringify({ type: "mode", mode: mode.mode }));
+            } else if (frame.type === FrameType.Control) {
+              const ctrl = parseJsonPayload<ControlPayload>(frame.payload);
+              ws.send(JSON.stringify({ type: "control", controllerId: ctrl.controllerId, cols: ctrl.cols, rows: ctrl.rows }));
             }
           }
         });
@@ -2096,7 +2067,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             data?: string;
             cols?: number;
             rows?: number;
-            mode?: TerminalResizeMode;
+            kind?: SurfaceKind;
+            viewerId?: string;
             needsAttention?: boolean;
             attentionMatchedAt?: string;
           };
@@ -2107,8 +2079,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             if (payload) {
               daemon.write(encodeJsonFrame(FrameType.Resize, payload));
             }
-          } else if (message.type === "mode" && (message.mode === "clamped" || message.mode === "fill")) {
-            daemon.write(encodeJsonFrame(FrameType.TerminalMode, { mode: message.mode }));
+          } else if (message.type === "takeControl") {
+            daemon.write(encodeFrame(FrameType.TakeControl));
           } else if (message.type === "attention") {
             const payload = browserAttentionPayload(message);
             if (payload) {
@@ -2173,14 +2145,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // Does NOT remove server.json (callers decide) and does NOT touch the ingest.
     const closeListenerAndStreams = async (): Promise<void> => {
       watcher.close();
-      remotesWatcher.close();
       if (debounce) {
         clearTimeout(debounce);
         debounce = undefined;
-      }
-      if (remotesDebounce) {
-        clearTimeout(remotesDebounce);
-        remotesDebounce = undefined;
       }
       for (const controller of sseClients) {
         try {

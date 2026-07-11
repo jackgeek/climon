@@ -62,10 +62,6 @@ describe("config defaults", () => {
     expect("token" in config.server).toBe(false);
   });
 
-  test("does not clamp browser to host terminal size by default", () => {
-    expect(defaultConfig().terminal.clampBrowserToHost).toBe(false);
-  });
-
   test("default config sets session color to auto", () => {
     expect(defaultConfig().session?.color).toBe("auto");
   });
@@ -521,14 +517,14 @@ describe("config three-way saves", () => {
     const first = await loadConfig(env);
     const second = await loadConfig(env);
     first.server.port = 4001;
-    second.terminal.clampBrowserToHost = true;
+    second.terminal.detachPrefix = 0x1d;
 
     await saveConfig(first, env);
     await saveConfig(second, env);
 
     const reloaded = await loadConfig(env);
     expect(reloaded.server.port).toBe(4001);
-    expect(reloaded.terminal.clampBrowserToHost).toBe(true);
+    expect(reloaded.terminal.detachPrefix).toBe(0x1d);
     expect(reloaded.install?.id).toBe("install-three-way");
     await rm(home, { recursive: true, force: true });
   });

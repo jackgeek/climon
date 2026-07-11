@@ -76,15 +76,28 @@ Because the daemon owns the PTY, the dashboard server can come and go freely.
 
 A length-prefixed binary protocol over the socket:
 `[4-byte BE length][1-byte type][payload]`. Types: `Output`, `Input`, `Resize`,
-`Exit`, `Replay`, `PtySize`, `Attention`. `FrameDecoder`
-reassembles frames split across
-chunks. `Resize` payloads carry a `source` (`host` for the local terminal,
-`viewer` for a browser); the daemon clamps `viewer` resizes to the host
-terminal's size (configurable, on by default) and broadcasts the resulting
-`PtySize` so browsers render the same grid as the terminal. When the last
-browser viewer disconnects, the daemon reverts the PTY to the host terminal's
-size so a still-attached host terminal is not left rendering into a shrunken
-grid.
+`Exit`, `Replay`, `PtySize`, `Attention`, `Control`, `TakeControl`.
+`FrameDecoder` reassembles frames split across chunks. Every surface — the local
+terminal, a browser dashboard, or an installed PWA — attaches with a stable
+`viewerId` and a `kind` (`terminal`, `dashboard`, or `pwa`) and reports its own
+viewport with `Resize` frames.
+
+The daemon tracks exactly **one controller** at a time, and the shared PTY grid
+always matches the controller's size — there is no clamping, so whoever holds
+control sets the true dimensions. On attach the local terminal is the default
+controller. Any surface can seize control by sending a `TakeControl` frame, and
+that manual choice sticks until another `TakeControl` or a disconnect. When the
+controller disconnects the daemon falls back to the highest-priority remaining
+surface — `pwa` (3) > `dashboard` (2) > `terminal` (1), ties broken by
+most-recently-connected. On every change the daemon broadcasts a `Control` frame
+`{controllerId, cols, rows}`.
+
+A surface whose own viewport is at least as large as the controller grid in both
+dimensions **follows**: it renders the (possibly smaller) grid normally and stays
+fully interactive. A surface smaller than the controller grid in either dimension
+is **displaced**: it blanks its terminal behind a centered "being viewed
+elsewhere" notice with a **Take control** affordance, sends no input, and
+swallows every keystroke except the take-control action.
 
 ### Local client (`rust/climon-cli/src/client.rs`)
 
@@ -187,15 +200,16 @@ self-updates:
 
 - **`rust/climon-cli`** — `climon setup`, telemetry/auto-update onboarding,
   server delegation, launch hooks, and CLI entrypoints.
-- **`rust/climon-install`** — native self-install from release archives. A
-  release zip's `install`/`install.exe` is the Rust client, and the tiny
-  `climon-alpha` sentinel marker triggers the native self-install when the
-  client runs beside it.
+- **`rust/climon-install`** — the dedicated cross-platform installer shipped as
+  `install`/`install.exe` in release archives. It is separate from the `climon`
+  client, places the client and server binaries, sets up PATH/onboarding state,
+  and replaces the older `install`→`climon` rename plus `climon-alpha` sentinel
+  self-install path.
 - **`rust/climon-update`** — manifest fetch, update-state throttling,
-  downloads, detached-signature verification, atomic non-destructive binary
-  swap, background checks, and the `climon update` command. Its build script
-  reads `src/update/pubkey.ts`, which remains the shared Ed25519 public-key
-  source of truth for the Bun release tooling and Rust updater.
+  downloads, detached-signature verification, non-destructive binary swaps,
+  background checks, and the `climon update` command. Its build script reads
+  `src/update/pubkey.ts`, which remains the shared Ed25519 public-key source of
+  truth for the Bun release tooling and Rust updater.
 
 **Data flow.** Installer/onboarding writes config state (`telemetry.enabled`,
 `update.auto`, `install.id`). On `shell`/`run` launches,
@@ -206,6 +220,82 @@ artifact + detached signature, verifies the signature against the embedded
 public key, and only then performs the atomic swap — never killing running
 processes. Signing tooling lives in `scripts/gen-update-keys.ts` and
 `scripts/sign-release.ts`, wired into `.github/workflows/release.yml`.
+
+
+### Binary lifecycle and release layout
+
+Release archives now contain exactly the platform installer, client payload, and
+server payload: `install[.exe]`, `climon` on Unix or `climon.dll` on Windows, and
+`climon-server[.exe]`. The installer is a dedicated Rust binary; it is not the
+client renamed to `install`, and no `climon-alpha` sentinel is used.
+
+On **Windows**, the installed `climon.exe` is a tiny stable stub embedded in and
+placed by `install.exe`. The stub reads `climon.version`, loads
+`climon-<version>.dll` in-process, and calls the exported `climon_main` ABI. The
+server side mirrors the layout with `climon-server.exe` as the stable stub,
+`climon-server-<version>.exe` as the versioned server payload, and
+`climon-server.version` as its pointer. If a pointer is missing or corrupt, the
+stub falls back to the highest-semver matching versioned artifact in the install
+directory.
+
+This avoids overwriting a locked `climon.exe` during self-update. Windows updates
+write fresh versioned payload names, flip the pointer files atomically, and leave
+already-running terminals on the old DLL until they exit; new launches pick up the
+new pointer. The reaper, run opportunistically on interactive launch and from
+`climon cleanup`, deletes superseded versioned artifacts once Windows releases
+the file locks and skips anything still in use.
+
+On **Unix**, the client remains the `climon` executable built from `climon-cli`.
+Updates continue to use the existing rename-over swap model because POSIX allows
+replacing an executable while old processes keep their inode.
+
+For pre-release verification, `climon-update` carries a dev-only, compiled-out
+`test-update-endpoint` cargo feature: when enabled it lets `climon update` read
+its manifest URL from `CLIMON_TEST_MANIFEST_URL`, and `climon-update/build.rs`
+accepts a `CLIMON_UPDATE_PUBKEY_B64` build-time override so a test client can
+trust a throwaway signing key. `scripts/compile.ts` threads the feature into the
+served client builds (`climon-cli` and the Windows `climon-dll` stub payload)
+only when `CLIMON_TEST_UPDATE_ENDPOINT=1`; neither the feature nor any override
+is enabled by the default `compile.ts` path or `.github/workflows/release.yml`,
+so shipped binaries physically lack the override and always embed the real key.
+The `scripts/upgrade-test-harness.ts` end-to-end harness composes these to
+exercise the Windows migration/update paths (bridge→stub, stub→stub, idempotent
+`--migrate`, and brick recovery) on a real Windows box.
+
+
+### Migrating existing Windows installs (bridge release)
+
+Legacy Windows installs are a single `climon.exe` with no `climon.version`
+pointer. Shipping the stub model directly would brick them, so migration happens
+over two releases:
+
+1. **Bridge release (legacy packaging + migration-aware updater).** Cut this tag
+   from a state that still packages the legacy layout: `scripts/compile.ts` and
+   `.github/workflows/release.yml` must still emit `install.exe` as the legacy
+   client, before the stub-model packaging flip is part of the tagged commit. Old
+   installs auto-update to it exactly as before. Its only new content is the
+   migration branch in `climon-update` and installer `--migrate` mode. It does
+   not ship `climon.dll` or the dedicated installer layout.
+2. **First stub release ("C") — full stub model.** Cut this tag after the
+   packaging flip: the zip carries `install.exe` as the dedicated installer plus
+   `climon.dll` and `climon-server.exe`. When a bridge install updates to C, the
+   bridge updater sees `climon.dll` in the release, recognizes that the install
+   is still legacy because no pointer file exists, and runs
+   `install.exe --migrate` to convert it in place.
+
+Do not publish C until the bridge has had time to roll out. A very old install
+that never received the bridge and jumps straight to C will brick because its
+pre-migration updater copies C's dedicated installer over `climon.exe`; such
+installs must re-run `install.ps1`, whose installer legacy-upgrade path restores
+a working stub layout.
+
+For release engineering, the migration code must be present in the bridge tag,
+but the packaging flip must not be. In practice, tag the bridge from a commit
+that includes the migration-aware updater/installer changes but reverts or
+excludes the Phase 5 packaging changes, then land the packaging flip and tag C.
+Alternatively, land everything on `dev`, cut the bridge from a branch where
+`scripts/compile.ts` still emits the legacy layout, then merge the packaging flip
+for C.
 
 ## Data locations (`$CLIMON_HOME`, default `~/.climon`)
 
@@ -403,19 +493,17 @@ ingest / uplink supervisor
         │  (single writer)
         ▼
 ingest-status.json / uplink-status.json   ($CLIMON_HOME, 0600)
-        │                         │
-        ▼                         ▼
-  climon remotes          GET /api/remotes (loopback-only)
-  (--watch / --json)              │
-                                  ▼  SSE "remotes" event
-                          dashboard "Remote hosts" menu + panel
+        │
+        ▼
+  climon remotes
+  (--watch / --json)
 ```
 
 `hello.hostname`/`hello.os` are untrusted remote input: the ingest sanitizes
 them at the trust boundary (cap `hostname` to 64 chars + strip control/ESC
 bytes; allowlist `os` to `darwin`/`win32`/`linux`, else `unknown`) before they
-are stored, so every downstream sink (`climon remotes` TTY, `--json`, the
-dashboard) only ever formats already-safe strings.
+are stored, so every downstream sink (`climon remotes` TTY, `--json`) only ever
+formats already-safe strings.
 
 ## Same-machine WSL <-> Windows discovery (`src/remote/peer.ts`, `discovery.ts`, `link.ts`)
 

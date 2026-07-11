@@ -17,9 +17,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use climon_proto::frame::{
-    encode_frame, encode_json_frame, parse_json_payload, AttentionPayload, ExitPayload,
-    FrameDecoder, FrameType, PtySizePayload, ResizePayload, ResizeSource, TerminalModePayload,
-    TerminalResizeMode, TerminalWarningPayload,
+    encode_frame, encode_json_frame, parse_json_payload, AttentionPayload, ControlPayload,
+    ExitPayload, FrameDecoder, FrameType, PtySizePayload, ResizePayload, SurfaceKind,
 };
 use climon_proto::meta::{
     PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus, TerminalProgress,
@@ -31,14 +30,14 @@ use climon_store::Env as StoreEnv;
 
 use crate::attention::fingerprint_body;
 use crate::attention::should_apply_user_attention_acknowledgement;
+use crate::control::{choose_controller, Surface};
 use crate::error::{SessionError, SessionResult};
-use crate::fingerprint::HeadlessGrid;
+use crate::fingerprint::{render_screen_from_replay, HeadlessGrid};
 use crate::idle::ScreenIdleDetector;
 use crate::replay::{
-    build_mouse_private_mode_replay_suffix, track_mouse_private_modes_from_output,
-    TRACKED_MOUSE_PRIVATE_MODES,
+    build_mouse_private_mode_replay_suffix, build_mouse_private_mode_restore_suffix,
+    track_mouse_private_modes_from_output, TRACKED_MOUSE_PRIVATE_MODES,
 };
-use crate::resize::{clamp_resize, revert_size, Dimensions, ResizeRequest};
 use crate::socket::{
     cleanup_session_socket, listen_on_session_socket, SessionListener, SessionStream,
 };
@@ -57,67 +56,17 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// screen is rendered when the watcher fires, so it reflects the latest output.
 const LOCAL_RESTORE_DELAY: Duration = Duration::from_millis(250);
 
-/// Returns whether the `CLIMON_DEBUG_RESTORE` restore diagnostics are enabled
-/// (any non-empty, non-`0` value). Cached for the process lifetime.
-fn debug_restore_enabled() -> bool {
-    use std::sync::OnceLock;
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| {
-        std::env::var("CLIMON_DEBUG_RESTORE")
-            .map(|v| !v.is_empty() && v != "0")
-            .unwrap_or(false)
-    })
-}
-
-/// Appends a timestamped line to `$CLIMON_HOME/logs/restore-debug.log` when the
-/// `CLIMON_DEBUG_RESTORE` diagnostics are enabled. Best-effort: silently ignores
-/// any IO error. Used to capture the exact sizes and bytes around a Fill-mode
-/// restore so one Windows run reveals the corruption source.
-fn debug_restore_log(env: &StoreEnv, line: &str) {
-    if !debug_restore_enabled() {
-        return;
-    }
-    let dir = env.logs_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("restore-debug.log"))
-    {
-        let _ = writeln!(f, "{} {}", now_iso(), line);
-    }
-}
-
-/// Escapes control bytes for the restore debug log and caps the length so a
-/// large repaint burst does not flood the log.
-fn debug_escape(bytes: &[u8], cap: usize) -> String {
-    let mut s = String::new();
-    for &b in bytes.iter().take(cap) {
-        match b {
-            0x1b => s.push_str("\\e"),
-            b'\r' => s.push_str("\\r"),
-            b'\n' => s.push_str("\\n"),
-            b'\t' => s.push_str("\\t"),
-            0x20..=0x7e => s.push(b as char),
-            other => s.push_str(&format!("\\x{other:02x}")),
-        }
-    }
-    if bytes.len() > cap {
-        s.push_str(&format!("...(+{} bytes)", bytes.len() - cap));
-    }
-    s
-}
-
-/// Reads the *real* local console size for the restore diagnostics. On Windows
-/// this is `GetConsoleScreenBufferInfo`'s visible viewport (a null handle falls
-/// back to `STD_OUTPUT_HANDLE`); on Unix it reads stdin's `TIOCGWINSZ`.
+/// Reads the *real* local console size for the displaced-notice renderer. On
+/// Windows this is `GetConsoleScreenBufferInfo`'s visible viewport (a null
+/// handle falls back to `STD_OUTPUT_HANDLE`); on Unix it reads stdin's
+/// `TIOCGWINSZ`.
 #[cfg(windows)]
-fn debug_console_size() -> (u16, u16) {
+fn local_console_size() -> (u16, u16) {
     climon_pty::terminal_size(std::ptr::null_mut())
 }
 
 #[cfg(unix)]
-fn debug_console_size() -> (u16, u16) {
+fn local_console_size() -> (u16, u16) {
     climon_pty::terminal_size(0)
 }
 
@@ -145,12 +94,17 @@ struct Client {
     tx: Sender<Arc<Vec<u8>>>,
     /// Whether the client has received its initial frames and joins broadcasts.
     in_clients: bool,
-    /// Acted as a host terminal (sent a `source: host` resize).
-    is_host: bool,
-    /// Acted as a browser viewer (sent a non-host resize).
-    is_viewer: bool,
-    /// Already received the overgrown warning.
-    warned: bool,
+    /// Surface class, for control priority.
+    kind: SurfaceKind,
+    /// Stable viewer id from the client's resize frames (defaults to
+    /// `client-<id>` so a dashboard that omits `viewerId` is never mistaken for
+    /// the in-process `"local"` surface).
+    viewer_id: String,
+    /// Last size this surface reported.
+    cols: u16,
+    rows: u16,
+    /// Connection sequence for controller tie-breaking (higher = more recent).
+    seq: u64,
 }
 
 /// All mutable host state, guarded by one mutex (mirrors the single-threaded TS).
@@ -161,24 +115,28 @@ struct HostState {
 
     clients: HashMap<u64, Client>,
 
-    clamp_browser_to_host: bool,
-    terminal_mode: TerminalResizeMode,
     host_cols: u16,
     host_rows: u16,
     applied_cols: u16,
     applied_rows: u16,
 
+    /// Id of the surface currently controlling the PTY grid (`None` when no
+    /// surface has resized yet). The PTY dims (`applied_cols`/`applied_rows`)
+    /// always equal this surface's last reported size.
+    controller_id: Option<String>,
+    /// Monotonic connection counter for controller tie-breaking.
+    next_seq: u64,
+
     last_attention_state: Option<bool>,
     current_attention_matched_at: Option<String>,
     current_attention_fingerprint: Option<String>,
-    host_warning_active: bool,
     /// True when an interactive local terminal is attached (non-headless, stdin
     /// and stdout are real consoles). The in-process local terminal is the
-    /// session host, so it counts as a host presence for overgrown detection
+    /// session host, so it counts as a host presence for displacement detection
     /// even though it is not a socket `Client`.
     local_attached: bool,
-    /// True while local PTY output is paused because a browser viewer grew the
-    /// shared PTY beyond the local terminal (Fill mode). Mirrors the client's
+    /// True while local PTY output is paused because a controlling surface grew
+    /// the shared PTY beyond the local terminal. Mirrors the client's
     /// `LocalTerminalOutputGate`; prevents oversized output from corrupting the
     /// local screen.
     local_output_suppressed: bool,
@@ -192,11 +150,10 @@ struct HostState {
     /// the local terminal blank. The grid is rendered at fire time, so it
     /// reflects the latest output.
     local_restore_at: Option<Instant>,
-    /// Diagnostics-only (`CLIMON_DEBUG_RESTORE`): while set, the reader thread
-    /// logs every chunk it writes to the local terminal so a single Windows run
-    /// captures the PTY's post-unsuppress live output (the suspected ConPTY
-    /// resize-repaint corrupter). Set by the restore watcher when it fires.
-    local_debug_capture_until: Option<Instant>,
+    /// Size (`cols`, `rows`) the displaced-notice was last rendered at. Lets the
+    /// notice be re-centered when the local console is resized while displaced,
+    /// instead of being stranded off-centre or scrolled away. Cleared on restore.
+    local_notice_size: Option<(u16, u16)>,
 
     exited: bool,
     exit_code: Option<i32>,
@@ -284,208 +241,157 @@ impl HostState {
         }
     }
 
-    fn broadcast_terminal_mode(&mut self) {
+    /// Snapshot of all connected surfaces (socket clients + the in-process local
+    /// terminal) for the controller decision.
+    fn surfaces(&self) -> Vec<Surface> {
+        let mut out: Vec<Surface> = self
+            .clients
+            .values()
+            .filter(|c| c.in_clients)
+            .map(|c| Surface {
+                id: c.viewer_id.clone(),
+                kind: c.kind,
+                cols: c.cols,
+                rows: c.rows,
+                seq: c.seq,
+            })
+            .collect();
+        if self.local_attached {
+            out.push(Surface {
+                id: "local".into(),
+                kind: SurfaceKind::Terminal,
+                cols: self.host_cols,
+                rows: self.host_rows,
+                seq: 0,
+            });
+        }
+        out
+    }
+
+    /// Size the controller currently dictates, if any.
+    fn controller_size(&self) -> Option<(u16, u16)> {
+        let id = self.controller_id.as_deref()?;
+        if id == "local" {
+            return Some((self.host_cols.max(1), self.host_rows.max(1)));
+        }
+        self.clients
+            .values()
+            .find(|c| c.viewer_id == id)
+            .map(|c| (c.cols.max(1), c.rows.max(1)))
+    }
+
+    /// Broadcasts the current controller + grid dims to every surface.
+    fn broadcast_control(&mut self) {
+        let (Some(id), Some((cols, rows))) = (self.controller_id.clone(), self.controller_size())
+        else {
+            return;
+        };
         let frame = encode_json_frame(
-            FrameType::TerminalMode,
-            &TerminalModePayload {
-                mode: self.terminal_mode,
+            FrameType::Control,
+            &ControlPayload {
+                controller_id: id,
+                cols,
+                rows,
             },
         );
         self.broadcast(&frame);
     }
 
-    fn write_host_warning(&mut self, payload: &TerminalWarningPayload) {
-        let frame = Arc::new(encode_json_frame(FrameType::TerminalWarning, payload));
-        let mut dead = Vec::new();
-        for (id, client) in self.clients.iter_mut() {
-            if client.is_host && !client.warned {
-                if client.tx.send(Arc::clone(&frame)).is_err() {
-                    dead.push(*id);
-                } else {
-                    client.warned = true;
-                }
-            }
-        }
-        for id in dead {
-            self.clients.remove(&id);
-        }
-    }
-
     /// Whether the shared PTY currently exceeds the local terminal's console in
-    /// either dimension. This is the *real*, mode-independent condition under
-    /// which the local Windows console corrupts: ConPTY positions its live output
-    /// absolutely for the (larger) PTY grid, so any byte it writes can land off
-    /// the bottom/right of the smaller real console. The local pause + notice and
-    /// the restore repaint are gated on this — NOT on `overgrown_warning_payload`,
-    /// which is Fill-mode-gated and only describes the dashboard-facing warning.
+    /// either dimension. This is the *real* condition under which the local
+    /// Windows console corrupts: ConPTY positions its live output absolutely for
+    /// the (larger) PTY grid, so any byte it writes can land off the
+    /// bottom/right of the smaller real console. The local pause + notice and the
+    /// restore repaint are gated on this.
     fn local_terminal_exceeded(&self) -> bool {
         self.applied_cols > self.host_cols.max(1) || self.applied_rows > self.host_rows.max(1)
     }
 
-    fn overgrown_warning_payload(&self) -> Option<TerminalWarningPayload> {
-        let has_host = self.local_attached || self.clients.values().any(|c| c.is_host);
-        let overgrown = self.terminal_mode == TerminalResizeMode::Fill
-            && has_host
-            && (self.applied_cols > self.host_cols.max(1)
-                || self.applied_rows > self.host_rows.max(1));
-        if !overgrown {
-            return None;
+    /// Pauses or restores the in-process local terminal based on whether it is
+    /// *displaced* — i.e. the controlling surface's grid is larger than the local
+    /// console in either dimension, so ConPTY's absolutely-positioned output
+    /// would corrupt the smaller real console. Level-triggered on the controller
+    /// grid vs the local size (equivalently [`local_terminal_exceeded`], since
+    /// `applied_*` tracks the controller). There is no socket `Client` for the
+    /// local terminal, so pause/resume + the on-screen notice are handled here;
+    /// the deferred repaint is driven by the restore watcher (see
+    /// `local_restore_at`).
+    fn update_local_displaced(&mut self) {
+        if !self.local_attached {
+            return;
         }
-        Some(TerminalWarningPayload::Overgrown {
-            cols: self.applied_cols,
-            rows: self.applied_rows,
-            host_cols: self.host_cols.max(1),
-            host_rows: self.host_rows.max(1),
-        })
-    }
-
-    fn update_overgrown_warning(&mut self) {
-        let payload = self.overgrown_warning_payload();
-        if let Some(payload) = &payload {
-            self.write_host_warning(payload);
-            self.host_warning_active = true;
-        } else {
-            if self.host_warning_active {
-                let frame = Arc::new(encode_json_frame(
-                    FrameType::TerminalWarning,
-                    &TerminalWarningPayload::Restored,
-                ));
-                let mut dead = Vec::new();
-                for (id, client) in self.clients.iter() {
-                    if client.is_host && client.tx.send(Arc::clone(&frame)).is_err() {
-                        dead.push(*id);
-                    }
-                }
-                for id in dead {
-                    self.clients.remove(&id);
-                }
+        // Identity-based, matching the dashboard/attach-client surfaces: the
+        // local terminal is displaced whenever some *other* surface is the
+        // controller, regardless of relative size. This keeps the model
+        // consistent everywhere (only the controller drives the grid) and lets
+        // Space reliably reclaim control from any controller, large or small.
+        // The Windows ConPTY overgrown-repaint guard is retained purely as a
+        // restore-time safety (see `local_restore_decision`).
+        let displaced = local_displaced_by_controller(self.controller_id.as_deref());
+        if displaced {
+            // Another surface controls the grid: pause local output and show the
+            // notice. Cancel any pending restore.
+            self.local_restore_at = None;
+            let notice_size = (self.host_cols.max(1), self.host_rows.max(1));
+            // Render the notice on the displaced->suppressed transition and also
+            // whenever the local console is resized while still displaced, so the
+            // centered message follows the new terminal size instead of being
+            // stranded off-centre (or scrolled away).
+            let needs_render =
+                !self.local_output_suppressed || self.local_notice_size != Some(notice_size);
+            if needs_render {
+                // Render the notice at the *real console* size so it is centered
+                // on what the user sees, not the (possibly larger) controller grid.
+                write_local_stdout(render_local_displaced(notice_size.0, notice_size.1).as_bytes());
+                self.local_output_suppressed = true;
+                self.local_notice_size = Some(notice_size);
             }
-            self.host_warning_active = false;
-            for client in self.clients.values_mut() {
-                client.warned = false;
-            }
-        }
-
-        // In-process local terminal: there is no socket `Client` to receive the
-        // warning frame and apply a gate, so pause/resume local rendering here.
-        // This is *level-triggered* on `local_terminal_exceeded()` — the real,
-        // mode-independent corruption condition (PTY larger than the local
-        // console) — rather than edge-triggered on the Fill-gated dashboard
-        // warning. Edge-triggering drifted: the local terminal could end up
-        // resumed while the PTY was still larger than the console (no notice +
-        // ConPTY corruption). Evaluating the condition itself every time keeps
-        // suppression and the notice in lock-step with the actual PTY size.
-        //
-        // On pause, print a host-appropriate notice (the in-process host has no
-        // detach chord, unlike the standalone client's `renderTerminalWarning`).
-        // On resume, the local terminal — unlike a dashboard client, which gets
-        // a fresh Replay via `write_initial_frames` on every resize/mode change
-        // — has missed all output while paused and the PTY's resize-repaint only
-        // redraws the current grid, so it must repaint. The repaint is *deferred*
-        // (see `local_restore_at`) and sourced from the parsed grid's current
-        // screen via `render_screen()` (NOT the raw scrollback, which corrupts
-        // on Windows ConPTY): the terminal stays suppressed until the restore
-        // watcher fires, so the PTY's resize-repaint burst is dropped locally and
-        // the clean grid repaint lands last instead of being clobbered.
-        if self.local_attached {
-            if self.local_terminal_exceeded() {
-                // PTY larger than the local console: pause local output and show
-                // the notice. Cancel any pending restore.
-                self.local_restore_at = None;
-                if !self.local_output_suppressed {
-                    let notice = TerminalWarningPayload::Overgrown {
-                        cols: self.applied_cols,
-                        rows: self.applied_rows,
-                        host_cols: self.host_cols.max(1),
-                        host_rows: self.host_rows.max(1),
-                    };
-                    debug_restore_log(
-                        &self.env,
-                        &format!(
-                            "overgrow-suppress host={}x{} applied={}x{} real_console={:?}",
-                            self.host_cols,
-                            self.host_rows,
-                            self.applied_cols,
-                            self.applied_rows,
-                            debug_console_size(),
-                        ),
-                    );
-                    write_local_stdout(render_host_overgrown(&notice).as_bytes());
-                    self.local_output_suppressed = true;
-                }
-            } else if self.local_output_suppressed && self.local_restore_at.is_none() {
-                // PTY now fits the local console: schedule the deferred repaint.
-                self.local_restore_at = Some(Instant::now() + LOCAL_RESTORE_DELAY);
-                debug_restore_log(
-                    &self.env,
-                    &format!(
-                        "restore-schedule host={}x{} applied={}x{} real_console={:?} delay={}ms",
-                        self.host_cols,
-                        self.host_rows,
-                        self.applied_cols,
-                        self.applied_rows,
-                        debug_console_size(),
-                        LOCAL_RESTORE_DELAY.as_millis(),
-                    ),
-                );
-            }
+        } else if self.local_output_suppressed && self.local_restore_at.is_none() {
+            // Controller grid now fits the local console: schedule the deferred
+            // repaint.
+            self.local_restore_at = Some(Instant::now() + LOCAL_RESTORE_DELAY);
         }
     }
 
-    fn apply_terminal_mode(&mut self, mode: TerminalResizeMode) {
-        let changed = mode != self.terminal_mode;
-        self.terminal_mode = mode;
-        if changed {
-            self.broadcast_terminal_mode();
-        }
-        if mode == TerminalResizeMode::Clamped {
-            self.revert_to_host_size();
-        } else {
-            self.update_overgrown_warning();
-        }
-    }
-
+    /// Records a surface's reported size and, if that surface controls the PTY
+    /// grid, drives the PTY to match. The first surface to resize claims control;
+    /// thereafter only the controller's resizes move the grid. `TakeControl`
+    /// (see [`take_control`]) is the explicit way to seize control.
     fn apply_resize(&mut self, size: ResizePayload) {
-        if size.source == Some(ResizeSource::Host) {
-            self.host_cols = size.cols.max(1);
-            self.host_rows = size.rows.max(1);
-            let has_viewer = self.clients.values().any(|c| c.is_viewer);
-            if self.terminal_mode == TerminalResizeMode::Fill && has_viewer {
-                self.update_overgrown_warning();
-                return;
-            }
+        let cols = size.cols.max(1);
+        let rows = size.rows.max(1);
+        let vid = size
+            .viewer_id
+            .clone()
+            .unwrap_or_else(|| "local".to_string());
+        let is_local = vid == "local";
+        if is_local {
+            self.host_cols = cols;
+            self.host_rows = rows;
         }
-
-        if size.source != Some(ResizeSource::Host) {
-            if let Some(mode) = size.mode {
-                if mode != self.terminal_mode {
-                    self.terminal_mode = mode;
-                    self.broadcast_terminal_mode();
-                }
-            }
+        if let Some(client) = self.clients.values_mut().find(|c| c.viewer_id == vid) {
+            client.cols = cols;
+            client.rows = rows;
         }
+        if self.controller_id.is_none() {
+            self.controller_id = Some(vid.clone());
+        }
+        if self.controller_id.as_deref() == Some(vid.as_str()) {
+            self.set_pty_size(cols, rows);
+        } else if is_local {
+            // The local console changed size while a remote surface controls the
+            // grid: re-evaluate whether the local terminal is now displaced.
+            self.update_local_displaced();
+        }
+        self.broadcast_control();
+    }
 
-        let is_host = size.source == Some(ResizeSource::Host);
-        let request = ResizeRequest {
-            cols: size.cols,
-            rows: size.rows,
-            source: size.source,
-            mode: if is_host {
-                None
-            } else {
-                Some(self.terminal_mode)
-            },
-        };
-        let Dimensions { cols, rows } = clamp_resize(
-            request,
-            Dimensions {
-                cols: self.host_cols,
-                rows: self.host_rows,
-            },
-            self.clamp_browser_to_host,
-        );
+    /// Drives the PTY/grid/metadata to `cols`x`rows` (the controller's size) and
+    /// broadcasts the new `PtySize`. Extracted so [`apply_resize`],
+    /// [`take_control`], and [`recompute_controller`] share one grid-mutation
+    /// path. Always re-checks local-terminal displacement afterwards.
+    fn set_pty_size(&mut self, cols: u16, rows: u16) {
         let changed = cols != self.applied_cols || rows != self.applied_rows;
-        let clamped_viewer = !is_host && (cols != size.cols.max(1) || rows != size.rows.max(1));
         self.applied_cols = cols;
         self.applied_rows = rows;
         self.resizer.resize(cols, rows);
@@ -498,10 +404,10 @@ impl HostState {
                 climon_logging::level::LogLevel::Debug,
                 serde_json::json!({
                     "sessionId": self.id,
-                    "event": "apply_resize",
+                    "event": "set_pty_size",
                     "cols": cols,
                     "rows": rows,
-                    "source": format!("{:?}", size.source),
+                    "controller": self.controller_id,
                     "now": now_ms,
                     "settleUntil": self.idle_detector.settle_until(),
                 }),
@@ -518,69 +424,80 @@ impl HostState {
             );
             let frame = encode_json_frame(FrameType::PtySize, &PtySizePayload { cols, rows });
             self.broadcast(&frame);
-        } else if clamped_viewer {
-            let frame = encode_json_frame(FrameType::PtySize, &PtySizePayload { cols, rows });
-            self.broadcast(&frame);
         }
-        self.update_overgrown_warning();
+        self.update_local_displaced();
     }
 
-    fn revert_to_host_size(&mut self) {
-        if self.exited {
-            return;
-        }
-        let target = revert_size(
-            Dimensions {
-                cols: self.host_cols,
-                rows: self.host_rows,
-            },
-            Dimensions {
-                cols: self.applied_cols,
-                rows: self.applied_rows,
-            },
-        );
-        let Some(target) = target else {
+    /// Promotes the surface `vid` to controller and resizes the PTY to its last
+    /// reported size. Driven by a `TakeControl` frame or the local Space chord.
+    fn take_control(&mut self, vid: &str) {
+        let size = if vid == "local" {
+            Some((self.host_cols.max(1), self.host_rows.max(1)))
+        } else {
+            self.clients
+                .values()
+                .find(|c| c.viewer_id == vid)
+                .map(|c| (c.cols.max(1), c.rows.max(1)))
+        };
+        let Some((cols, rows)) = size else {
             return;
         };
-        self.applied_cols = target.cols;
-        self.applied_rows = target.rows;
-        self.resizer.resize(target.cols, target.rows);
-        self.grid.resize(target.cols, target.rows);
-        let fp = self.fingerprint();
-        let now_ms = self.started_at.elapsed().as_millis() as i64;
-        self.idle_detector.absorb_resize(&fp, now_ms);
-        climon_logging::logger::child("idle").log_with(
-            climon_logging::level::LogLevel::Debug,
-            serde_json::json!({
-                "sessionId": self.id,
-                "event": "revert_to_host_size",
-                "cols": target.cols,
-                "rows": target.rows,
-                "now": now_ms,
-                "settleUntil": self.idle_detector.settle_until(),
-                "flagged": self.idle_detector.is_flagged(),
-                "acknowledged": self.idle_detector.is_acknowledged(),
-            }),
-            "revert absorbed",
-        );
-        let _ = climon_store::patch::patch_session_meta(
-            &self.env,
-            &self.id,
-            SessionMetaPatch {
-                cols: Some(target.cols),
-                rows: Some(target.rows),
-                ..Default::default()
-            },
-        );
-        let frame = encode_json_frame(
-            FrameType::PtySize,
-            &PtySizePayload {
-                cols: target.cols,
-                rows: target.rows,
-            },
-        );
-        self.broadcast(&frame);
-        self.update_overgrown_warning();
+        self.controller_id = Some(vid.to_string());
+        self.set_pty_size(cols, rows);
+        self.broadcast_control();
+    }
+
+    /// Processes a chunk of in-process local-terminal stdin. While the local
+    /// terminal is displaced (its output is suppressed because another surface
+    /// controls the grid) the monitored command is non-interactive: pressing
+    /// Space (0x20) reclaims control back to the local terminal, and every other
+    /// key is swallowed. When the local terminal already holds control, all input
+    /// (including Space) is forwarded unchanged to the PTY. Returns the bytes to
+    /// forward.
+    fn local_stdin(&mut self, buf: &[u8]) -> Vec<u8> {
+        let has_take_control = buf.contains(&LOCAL_TAKE_CONTROL_KEY);
+        let action = local_stdin_action(has_take_control, self.local_output_suppressed);
+        match action {
+            LocalStdinAction::TakeControl => {
+                self.take_control("local");
+                Vec::new()
+            }
+            LocalStdinAction::Swallow => Vec::new(),
+            LocalStdinAction::Forward => buf.to_vec(),
+        }
+    }
+
+    /// Re-picks a controller when the current one is gone. If the controller is
+    /// still connected this is a no-op; otherwise it falls back to
+    /// [`choose_controller`] (priority PWA > dashboard > terminal, ties by most
+    /// recent) and resizes the PTY to the new controller's size.
+    fn recompute_controller(&mut self) {
+        let still_present = self
+            .controller_id
+            .as_deref()
+            .map(|id| {
+                (id == "local" && self.local_attached)
+                    || self
+                        .clients
+                        .values()
+                        .any(|c| c.in_clients && c.viewer_id == id)
+            })
+            .unwrap_or(false);
+        if still_present {
+            return;
+        }
+        let surfaces = self.surfaces();
+        match choose_controller(&surfaces) {
+            Some(next) => {
+                let (id, cols, rows) = (next.id.clone(), next.cols.max(1), next.rows.max(1));
+                self.controller_id = Some(id);
+                self.set_pty_size(cols, rows);
+                self.broadcast_control();
+            }
+            None => {
+                self.controller_id = None;
+            }
+        }
     }
 
     fn apply_attention(
@@ -707,31 +624,31 @@ impl HostState {
             },
         );
         self.send_to_client(client_id, &pty_size);
-        let mode = encode_json_frame(
-            FrameType::TerminalMode,
-            &TerminalModePayload {
-                mode: self.terminal_mode,
-            },
-        );
-        self.send_to_client(client_id, &mode);
         let replay = encode_frame(FrameType::Replay, &self.replay_snapshot());
         self.send_to_client(client_id, &replay);
     }
 
-    /// Writes the initial frames for a client (PtySize, TerminalMode,
-    /// overgrown-warning, Replay, optional Exit/Title). Returns whether the
-    /// client was closed (post-exit path).
+    /// Writes the initial frames for a client (PtySize, Replay, then the current
+    /// Control frame, optional Exit). Assigns the connection
+    /// `seq` used for controller tie-breaking. Returns whether the client was
+    /// closed (post-exit path).
     fn write_initial_frames(&mut self, client_id: u64) -> bool {
         match self.clients.get(&client_id) {
             Some(c) if c.in_clients => return false,
             None => return true,
             _ => {}
         }
+        let seq = self.next_seq;
+        self.next_seq += 1;
         if let Some(c) = self.clients.get_mut(&client_id) {
             c.in_clients = true;
+            c.seq = seq;
         }
         self.write_replay(client_id);
-        self.update_overgrown_warning();
+        self.update_local_displaced();
+        // Tell the newly-connected client (and everyone else, harmlessly) who
+        // controls the grid and at what dims.
+        self.broadcast_control();
         if self.exited {
             if let Some(code) = self.exit_code {
                 let exit = encode_json_frame(FrameType::Exit, &ExitPayload { exit_code: code });
@@ -746,30 +663,11 @@ impl HostState {
     }
 
     fn handle_disconnect(&mut self, client_id: u64) {
-        let removed = self.clients.remove(&client_id);
-        let was_viewer = removed.as_ref().map(|c| c.is_viewer).unwrap_or(false);
-        self.update_overgrown_warning();
-        if was_viewer && !self.clients.values().any(|c| c.is_viewer) {
-            let initial_mode = if self.clamp_browser_to_host {
-                TerminalResizeMode::Clamped
-            } else {
-                TerminalResizeMode::Fill
-            };
-            if self.terminal_mode != initial_mode {
-                self.terminal_mode = initial_mode;
-                self.broadcast_terminal_mode();
-            }
-            self.revert_to_host_size();
-        }
+        self.clients.remove(&client_id);
+        // If the departing client was the controller, fall back to the next
+        // eligible surface; otherwise this is a no-op.
+        self.recompute_controller();
     }
-}
-
-fn cfg_bool(config: &serde_json::Value, section: &str, key: &str, default: bool) -> bool {
-    config
-        .get(section)
-        .and_then(|s| s.get(key))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(default)
 }
 
 fn cfg_i64(config: &serde_json::Value, section: &str, key: &str, default: i64) -> i64 {
@@ -814,18 +712,11 @@ pub fn run_session_host(
         },
     );
 
-    let clamp_browser_to_host = cfg_bool(&config, "terminal", "clampBrowserToHost", false);
     let idle_seconds = cfg_i64(&config, "attention", "idleSeconds", 10);
     let idle_enabled = idle_seconds > 0;
     let snippet_enabled =
         climon_config::features::is_feature_enabled(&config, "smartNotifications");
     let headless = options.headless;
-
-    let initial_mode = if clamp_browser_to_host {
-        TerminalResizeMode::Clamped
-    } else {
-        TerminalResizeMode::Fill
-    };
 
     // --- Spawn PTY ---
     let (file, args) = resolve_command(&meta.command)?;
@@ -867,20 +758,19 @@ pub fn run_session_host(
         id: id.to_string(),
         resizer,
         clients: HashMap::new(),
-        clamp_browser_to_host,
-        terminal_mode: initial_mode,
         host_cols: meta.cols,
         host_rows: meta.rows,
         applied_cols: meta.cols,
         applied_rows: meta.rows,
+        controller_id: None,
+        next_seq: 0,
         last_attention_state: None,
         current_attention_matched_at: None,
         current_attention_fingerprint: None,
-        host_warning_active: false,
         local_attached: false,
         local_output_suppressed: false,
         local_restore_at: None,
-        local_debug_capture_until: None,
+        local_notice_size: None,
         exited: false,
         exit_code: None,
         scrollback: climon_pty::Scrollback::new(SCROLLBACK_CAP),
@@ -927,43 +817,16 @@ pub fn run_session_host(
     );
 
     // --- Local-terminal restore watcher ---
-    // Fires the deferred clear+replay after a browser viewer shrinks back to the
-    // local size (Fill mode). Only needed when an interactive local terminal is
+    // Fires the deferred clear+replay after a controlling surface shrinks back to
+    // the local size. Only needed when an interactive local terminal is
     // attached; headless daemons have no local screen to restore.
     let local_attached = state.lock().unwrap().local_attached;
     let restore_handle = if local_attached {
-        if debug_restore_enabled() {
-            let logfile = env.logs_dir().join("restore-debug.log");
-            // Visible confirmation that the flag is active and where the log
-            // lives, so a missing log immediately means "env var not set / not
-            // an attached console" rather than "nothing happened yet".
-            eprintln!(
-                "[climon] CLIMON_DEBUG_RESTORE active -> {}",
-                logfile.display()
-            );
-            let (hc, hr) = {
-                let s = state.lock().unwrap();
-                (s.host_cols, s.host_rows)
-            };
-            debug_restore_log(
-                &env,
-                &format!(
-                    "session-start id={id} local_attached=true host={hc}x{hr} real_console={:?}",
-                    debug_console_size(),
-                ),
-            );
-        }
         Some(spawn_restore_thread(
             Arc::clone(&state),
             Arc::clone(&shutdown),
         ))
     } else {
-        if debug_restore_enabled() {
-            eprintln!(
-                "[climon] CLIMON_DEBUG_RESTORE set but session is not an attached console; \
-                 no restore diagnostics will be written"
-            );
-        }
         None
     };
 
@@ -1085,6 +948,12 @@ pub fn run_session_host(
     }
     let _ = title_handle.join();
     let _ = reader_handle.join();
+    if local_attached {
+        write_local_stdout(&build_mouse_private_mode_restore_suffix(
+            &HashMap::new(),
+            TRACKED_MOUSE_PRIVATE_MODES,
+        ));
+    }
     for h in conn_threads.lock().unwrap().drain(..) {
         let _ = h.join();
     }
@@ -1093,25 +962,29 @@ pub fn run_session_host(
     Ok(exit_code)
 }
 
-/// Renders the in-process host's overgrown-terminal notice. The standalone
-/// client uses `renderTerminalWarning` (which references the detach chord); the
-/// in-process local relay has no detach chord, so it points the user at the
-/// dashboard lock icon / browser instead.
-fn render_host_overgrown(payload: &TerminalWarningPayload) -> String {
-    match payload {
-        TerminalWarningPayload::Overgrown {
-            cols,
-            rows,
-            host_cols,
-            host_rows,
-        } => format!(
-            "\r\n\x1b[33m[climon] A browser viewer enlarged this session ({cols}x{rows}), \
-which is bigger than this local terminal ({host_cols}x{host_rows}). Local output is paused \
-to avoid corrupt rendering. Click the lock icon on the active session in the web dashboard, \
-or stop viewing the terminal in the browser, to restore it here.\x1b[0m\r\n"
-        ),
-        TerminalWarningPayload::Restored => String::new(),
+/// The centered notice shown on the in-process local terminal when it is
+/// *displaced* — the shared PTY grid is larger than this console, so a surface
+/// (dashboard/PWA) is controlling it. Clears only the *visible viewport* (never
+/// scrollback) and centers a friendly message plus the take-control hint, then
+/// pauses local output until control returns (preserving the Windows ConPTY
+/// corruption guard).
+fn render_local_displaced(_cols: u16, _rows: u16) -> String {
+    let (w, h) = local_console_size();
+    // Clear only the *visible* viewport, never `\e[2J`: on Windows Terminal (and
+    // others) `\e[2J` clears scrollback. `\e[H` homes the cursor and `\e[J`
+    // (erase-below) then clears from there to the end of the visible screen — the
+    // whole viewport — without touching scrollback above it. The notice is
+    // centered with absolute positioning, so nothing scrolls off. Reset SGR first
+    // so the cleared cells behind the notice use the default background.
+    let mut out = String::from("\x1b[m\x1b[H\x1b[J");
+    let msg = "This session is being viewed on a climon dashboard.";
+    let hint = "Press Space to take control.";
+    let row = (h / 2).max(1);
+    for (i, line) in [msg, hint].iter().enumerate() {
+        let col = ((w as usize).saturating_sub(line.len()) / 2 + 1).max(1);
+        out.push_str(&format!("\x1b[{};{}H{}", row as usize + i, col, line));
     }
+    out
 }
 
 /// Writes directly to the local terminal's stdout (locked, flushed). Used for
@@ -1161,31 +1034,10 @@ fn spawn_reader_thread(
                 s.scrollback.append(data);
                 s.grid.write(data);
                 s.broadcast(&frame);
-                let suppressed = s.local_output_suppressed;
-                // Diagnostics: while suppression is pending or just after a
-                // restore, log every chunk so one Windows run reveals whether
-                // ConPTY's live output (not our repaint) corrupts the screen.
-                if debug_restore_enabled() {
-                    let pending = s.local_restore_at.is_some();
-                    let in_window = s
-                        .local_debug_capture_until
-                        .map(|t| Instant::now() < t)
-                        .unwrap_or(false);
-                    if pending || in_window {
-                        debug_restore_log(
-                            &s.env,
-                            &format!(
-                                "reader-chunk suppressed={suppressed} pending={pending} window={in_window} n={}: {}",
-                                data.len(),
-                                debug_escape(data, 2048),
-                            ),
-                        );
-                    }
-                }
-                suppressed
+                s.local_output_suppressed
             };
-            // Skip the local write while a browser viewer has grown the shared
-            // PTY beyond this terminal (Fill mode): the oversized output would
+            // Skip the local write while a controlling surface has grown the
+            // shared PTY beyond this terminal: the oversized output would
             // corrupt/blank the local screen. Scrollback, grid, and dashboard
             // viewers above still receive every byte.
             if !headless && !suppress_local {
@@ -1230,14 +1082,16 @@ fn spawn_accept_thread(
                         Client {
                             tx,
                             in_clients: false,
-                            is_host: false,
-                            is_viewer: false,
-                            warned: false,
+                            kind: SurfaceKind::Dashboard,
+                            viewer_id: format!("client-{client_id}"),
+                            cols: 0,
+                            rows: 0,
+                            seq: 0,
                         },
                     );
                 }
                 // 10ms initial-frames timer (gives the client a chance to send
-                // its first Resize/Mode so host/viewer + size are known).
+                // its first Resize so viewer + size are known).
                 let timer_state = Arc::clone(&state);
                 let timer = thread::spawn(move || {
                     thread::sleep(Duration::from_millis(10));
@@ -1307,44 +1161,69 @@ fn spawn_connection_reader(
             for frame in decoder.push(&buf[..n]) {
                 match frame.frame_type {
                     FrameType::Input => {
-                        {
+                        let allowed = {
                             let mut s = state.lock().unwrap();
-                            let fp = s.fingerprint();
-                            s.apply_attention(
-                                AttentionPayload {
-                                    needs_attention: false,
-                                    reason: Some("input".to_string()),
-                                    attention_matched_at: None,
-                                },
-                                AttentionSource::User,
-                                &fp,
-                            );
+                            let viewer_id = s
+                                .clients
+                                .get(&client_id)
+                                .map(|client| client.viewer_id.clone());
+                            let controller_id = s.controller_id.clone();
+                            if !socket_client_controls_input(
+                                controller_id.as_deref(),
+                                viewer_id.as_deref(),
+                            ) {
+                                false
+                            } else {
+                                let fp = s.fingerprint();
+                                s.apply_attention(
+                                    AttentionPayload {
+                                        needs_attention: false,
+                                        reason: Some("input".to_string()),
+                                        attention_matched_at: None,
+                                    },
+                                    AttentionSource::User,
+                                    &fp,
+                                );
+                                true
+                            }
+                        };
+                        if allowed {
+                            let mut w = pty_writer.lock().unwrap();
+                            let _ = w.write_all(&frame.payload);
+                            let _ = w.flush();
                         }
-                        let mut w = pty_writer.lock().unwrap();
-                        let _ = w.write_all(&frame.payload);
-                        let _ = w.flush();
                     }
                     FrameType::Resize => {
-                        if let Ok(size) = parse_json_payload::<ResizePayload>(&frame.payload) {
+                        if let Ok(mut size) = parse_json_payload::<ResizePayload>(&frame.payload) {
                             let mut s = state.lock().unwrap();
-                            if size.source == Some(ResizeSource::Host) {
-                                if let Some(c) = s.clients.get_mut(&client_id) {
-                                    c.is_host = true;
+                            // Stamp this surface's class + stable id from the
+                            // resize frame, then route the resize through the
+                            // client's id so a dashboard that omits `viewerId` is
+                            // never mistaken for the in-process `"local"` surface.
+                            if let Some(c) = s.clients.get_mut(&client_id) {
+                                if let Some(kind) = size.kind {
+                                    c.kind = kind;
                                 }
-                            } else if let Some(c) = s.clients.get_mut(&client_id) {
-                                c.is_viewer = true;
+                                if let Some(vid) = size
+                                    .viewer_id
+                                    .as_ref()
+                                    .filter(|v| !v.is_empty() && v.as_str() != "local")
+                                {
+                                    c.viewer_id = vid.clone();
+                                }
+                                size.viewer_id = Some(c.viewer_id.clone());
                             }
                             s.apply_resize(size);
                             s.write_initial_frames(client_id);
                         }
                     }
-                    FrameType::TerminalMode => {
-                        if let Ok(payload) =
-                            parse_json_payload::<TerminalModePayload>(&frame.payload)
-                        {
-                            let mut s = state.lock().unwrap();
-                            s.apply_terminal_mode(payload.mode);
-                            s.write_initial_frames(client_id);
+                    FrameType::TakeControl => {
+                        let mut s = state.lock().unwrap();
+                        let vid = s.clients.get(&client_id).map(|c| c.viewer_id.clone());
+                        if let Some(vid) = vid {
+                            if !vid.is_empty() {
+                                s.take_control(&vid);
+                            }
                         }
                     }
                     FrameType::Attention => {
@@ -1369,8 +1248,8 @@ fn spawn_connection_reader(
     })
 }
 
-/// Watches for a deferred local-terminal restore (browser viewer shrank back to
-/// the local size in Fill mode) and, once `local_restore_at` elapses, repaints
+/// Watches for a deferred local-terminal restore (a controlling surface shrank
+/// back to the local size) and, once `local_restore_at` elapses, repaints
 /// the local screen from the parsed grid's current state, then resumes live
 /// output. Deferring the repaint lets the PTY's resize-repaint burst drain first
 /// (see `LOCAL_RESTORE_DELAY`), so the clean grid repaint lands last instead of
@@ -1413,6 +1292,65 @@ fn local_restore_decision(
     }
 }
 
+/// What to do with a chunk of in-process local-terminal stdin. Extracted as a
+/// pure decision so the take-control-while-displaced rule is unit-testable
+/// without a live PTY/`HostState`.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalStdinAction {
+    /// The local terminal is displaced and the chunk contained the take-control
+    /// key (Space): reclaim control back to the local terminal and swallow the
+    /// input.
+    TakeControl,
+    /// The local terminal is displaced (output suppressed by another
+    /// controller): swallow the input so the command stays non-interactive.
+    Swallow,
+    /// The local terminal holds control: forward the input unchanged to the PTY.
+    Forward,
+}
+
+/// The key that reclaims control to the in-process local terminal while it is
+/// displaced: the space bar (0x20). Ctrl+T was avoided because host terminal
+/// emulators and browsers commonly intercept it (new tab / "go to symbol") so it
+/// never reaches climon. Space is only treated as take-control while displaced;
+/// once the local terminal controls the grid, Space is ordinary input and is
+/// forwarded to the PTY (see [`local_stdin_action`]).
+const LOCAL_TAKE_CONTROL_KEY: u8 = 0x20;
+
+/// Pure decision for in-process local stdin. While displaced, the take-control
+/// key (Space) reclaims control and every other key is swallowed (the monitored
+/// command is non-interactive). While controlling, all input is forwarded --
+/// including Space, which must reach the shell as normal input.
+fn local_stdin_action(has_take_control: bool, suppressed: bool) -> LocalStdinAction {
+    if suppressed {
+        if has_take_control {
+            LocalStdinAction::TakeControl
+        } else {
+            LocalStdinAction::Swallow
+        }
+    } else {
+        LocalStdinAction::Forward
+    }
+}
+
+/// Pure decision: is the in-process local terminal displaced? Identity-based,
+/// mirroring the dashboard/attach-client surfaces — the local terminal is
+/// displaced whenever some *other* surface (not `"local"`) is the controller,
+/// regardless of relative size. With no controller yet (session start) the
+/// local terminal owns the grid, so it is not displaced.
+fn local_displaced_by_controller(controller_id: Option<&str>) -> bool {
+    matches!(controller_id, Some(id) if id != "local")
+}
+
+fn socket_client_controls_input(
+    controller_id: Option<&str>,
+    client_viewer_id: Option<&str>,
+) -> bool {
+    matches!(
+        (controller_id, client_viewer_id),
+        (Some(controller), Some(viewer)) if controller == viewer
+    )
+}
+
 fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(25));
@@ -1427,56 +1365,35 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
         match local_restore_decision(s.local_restore_at, Instant::now(), overgrown) {
             LocalRestoreDecision::NotDue => {}
             LocalRestoreDecision::SkipOvergrown => {
-                // A viewer re-grew the shared PTY during the delay (Fill mode).
+                // A surface re-grew the shared PTY during the delay.
                 // Stay suppressed; the next genuine restore transition reschedules
-                // via `update_overgrown_warning`.
-                if debug_restore_enabled() {
-                    debug_restore_log(
-                        &s.env,
-                        &format!(
-                            "restore-skip-overgrown host={}x{} applied={}x{} real_console={:?}",
-                            s.host_cols,
-                            s.host_rows,
-                            s.applied_cols,
-                            s.applied_rows,
-                            debug_console_size(),
-                        ),
-                    );
-                }
+                // via `update_local_displaced`.
                 s.local_restore_at = None;
             }
             LocalRestoreDecision::Repaint => {
-                // Repaint the local terminal from the parsed grid's *current*
-                // screen, not the raw scrollback: on Windows ConPTY the raw
-                // byte stream is a sequence of absolute-positioned screen diffs
-                // that stack on top of each other (corrupt/blank) when replayed
-                // in bulk to a cleared console. `render_screen()` emits a clean,
-                // self-contained repaint (clear + positioned rows + cursor).
+                // Rebuild a fresh host-sized grid from the raw PTY shadow before
+                // repainting. The controller-sized idle grid may have been
+                // narrowed by a dashboard, and vt100::set_size permanently drops
+                // cells beyond that narrower edge. Parsing the shadow recovers
+                // those cells while still avoiding direct raw ConPTY replay:
+                // render_screen_from_replay() emits one clean viewport repaint.
                 // Write it while still holding the lock and only then unsuppress,
                 // so the reader thread cannot interleave a live chunk between
                 // resuming output and the repaint landing.
-                let out = s.grid.render_screen();
-                if debug_restore_enabled() {
-                    debug_restore_log(
-                        &s.env,
-                        &format!(
-                            "restore-fire host={}x{} applied={}x{} real_console={:?} render(len={}): {}",
-                            s.host_cols,
-                            s.host_rows,
-                            s.applied_cols,
-                            s.applied_rows,
-                            debug_console_size(),
-                            out.len(),
-                            debug_escape(&out, 4096),
-                        ),
-                    );
-                    // Capture the PTY's live output for a window after we
-                    // unsuppress, to catch ConPTY's late resize-repaint.
-                    s.local_debug_capture_until = Some(Instant::now() + Duration::from_secs(2));
-                }
+                let replay = s.scrollback.snapshot();
+                let mut out = build_mouse_private_mode_restore_suffix(
+                    &s.mouse_mode_state,
+                    TRACKED_MOUSE_PRIVATE_MODES,
+                );
+                out.extend_from_slice(&render_screen_from_replay(
+                    &replay,
+                    s.host_cols.max(1),
+                    s.host_rows.max(1),
+                ));
                 write_local_stdout(&out);
                 s.local_output_suppressed = false;
                 s.local_restore_at = None;
+                s.local_notice_size = None;
             }
         }
     })
@@ -1629,15 +1546,19 @@ mod local_relay {
         let raw = RawMode::enable(libc::STDIN_FILENO).ok();
 
         // The in-process local terminal is the session host. Mark it attached
-        // only when stdout is also a real terminal, so overgrown-output gating
+        // only when stdout is also a real terminal, so displaced-output gating
         // (which pauses local writes) never drops bytes from a redirected
-        // stdout. See `HostState::local_attached`.
+        // stdout. See `HostState::local_attached`. The local terminal is the
+        // default controller: it owns the grid until a surface takes control.
         if unsafe { libc::isatty(libc::STDOUT_FILENO) } == 1 {
-            state.lock().unwrap().local_attached = true;
+            let mut s = state.lock().unwrap();
+            s.local_attached = true;
+            s.controller_id = Some("local".into());
         }
 
         // stdin -> pty
         let stdin_shutdown = Arc::clone(&shutdown);
+        let stdin_state = Arc::clone(&state);
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let stdin = std::io::stdin();
@@ -1651,11 +1572,17 @@ mod local_relay {
                     Ok(n) => n,
                 };
                 drop(lock);
-                let mut w = pty_writer.lock().unwrap();
-                if w.write_all(&buf[..n]).is_err() {
-                    break;
+                let forward = {
+                    let mut s = stdin_state.lock().unwrap();
+                    s.local_stdin(&buf[..n])
+                };
+                if !forward.is_empty() {
+                    let mut w = pty_writer.lock().unwrap();
+                    if w.write_all(&forward).is_err() {
+                        break;
+                    }
+                    let _ = w.flush();
                 }
-                let _ = w.flush();
             }
         });
 
@@ -1678,8 +1605,8 @@ mod local_relay {
                 s.apply_resize(ResizePayload {
                     cols,
                     rows,
-                    source: Some(ResizeSource::Host),
-                    mode: None,
+                    kind: Some(SurfaceKind::Terminal),
+                    viewer_id: Some("local".into()),
                 });
             }
         });
@@ -1783,26 +1710,29 @@ mod local_relay {
 
         // The in-process local terminal is the session host. Mark it attached
         // only when stdout is a real console (VT output enabled), so
-        // overgrown-output gating never drops bytes from a redirected stdout.
-        // See `HostState::local_attached`. Also prime the host/PTY size from the
-        // real console: the launcher's `terminal_size()` is unix-only and
-        // reports 80x24 on Windows, and the resize poller only fires on a
-        // *change*, so without this `host_cols/host_rows` (and the overgrown
-        // comparison) would be stuck at the bogus launch metadata.
+        // displaced-output gating never drops bytes from a redirected stdout.
+        // See `HostState::local_attached`. The local terminal is the default
+        // controller. Also prime the host/PTY size from the real console: the
+        // launcher's `terminal_size()` is unix-only and reports 80x24 on
+        // Windows, and the resize poller only fires on a *change*, so without
+        // this `host_cols/host_rows` (and the displacement comparison) would be
+        // stuck at the bogus launch metadata.
         if out_active {
             let (cols, rows) = terminal_size(std::ptr::null_mut());
             let mut s = state.lock().unwrap();
             s.local_attached = true;
+            s.controller_id = Some("local".into());
             s.apply_resize(ResizePayload {
                 cols,
                 rows,
-                source: Some(ResizeSource::Host),
-                mode: None,
+                kind: Some(SurfaceKind::Terminal),
+                viewer_id: Some("local".into()),
             });
         }
 
         // stdin -> pty
         let stdin_shutdown = Arc::clone(&shutdown);
+        let stdin_state = Arc::clone(&state);
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let stdin = std::io::stdin();
@@ -1816,11 +1746,17 @@ mod local_relay {
                     Ok(n) => n,
                 };
                 drop(lock);
-                let mut w = pty_writer.lock().unwrap();
-                if w.write_all(&buf[..n]).is_err() {
-                    break;
+                let forward = {
+                    let mut s = stdin_state.lock().unwrap();
+                    s.local_stdin(&buf[..n])
+                };
+                if !forward.is_empty() {
+                    let mut w = pty_writer.lock().unwrap();
+                    if w.write_all(&forward).is_err() {
+                        break;
+                    }
+                    let _ = w.flush();
                 }
-                let _ = w.flush();
             }
         });
 
@@ -1844,8 +1780,8 @@ mod local_relay {
                     s.apply_resize(ResizePayload {
                         cols: next.0,
                         rows: next.1,
-                        source: Some(ResizeSource::Host),
-                        mode: None,
+                        kind: Some(SurfaceKind::Terminal),
+                        viewer_id: Some("local".into()),
                     });
                 }
             }
@@ -1952,6 +1888,106 @@ mod restore_decision_tests {
         assert_eq!(
             local_restore_decision(Some(past), now, true),
             LocalRestoreDecision::SkipOvergrown
+        );
+    }
+}
+
+#[cfg(test)]
+mod local_stdin_tests {
+    use super::{local_stdin_action, LocalStdinAction};
+
+    #[test]
+    fn space_is_forwarded_as_normal_input_when_controlling() {
+        // Critical: when the local terminal holds control, Space (the
+        // take-control key) is ordinary shell input and MUST be forwarded, not
+        // swallowed -- otherwise the user could never type a space.
+        assert_eq!(local_stdin_action(true, false), LocalStdinAction::Forward);
+    }
+
+    #[test]
+    fn space_takes_control_when_displaced() {
+        assert_eq!(
+            local_stdin_action(true, true),
+            LocalStdinAction::TakeControl
+        );
+    }
+
+    #[test]
+    fn displaced_input_is_swallowed() {
+        assert_eq!(local_stdin_action(false, true), LocalStdinAction::Swallow);
+    }
+
+    #[test]
+    fn ordinary_input_is_forwarded_when_controlling() {
+        assert_eq!(local_stdin_action(false, false), LocalStdinAction::Forward);
+    }
+}
+
+#[cfg(test)]
+mod socket_input_tests {
+    use super::socket_client_controls_input;
+
+    #[test]
+    fn only_the_named_controller_may_send_socket_input() {
+        assert!(socket_client_controls_input(
+            Some("dashboard-a"),
+            Some("dashboard-a")
+        ));
+        assert!(!socket_client_controls_input(
+            Some("dashboard-a"),
+            Some("dashboard-b")
+        ));
+        assert!(!socket_client_controls_input(
+            Some("local"),
+            Some("dashboard-a")
+        ));
+        assert!(!socket_client_controls_input(None, Some("dashboard-a")));
+        assert!(!socket_client_controls_input(Some("dashboard-a"), None));
+    }
+}
+
+#[cfg(test)]
+mod local_displaced_tests {
+    use super::local_displaced_by_controller;
+
+    #[test]
+    fn not_displaced_when_local_is_controller() {
+        assert!(!local_displaced_by_controller(Some("local")));
+    }
+
+    #[test]
+    fn not_displaced_when_no_controller_yet() {
+        assert!(!local_displaced_by_controller(None));
+    }
+
+    #[test]
+    fn displaced_when_a_dashboard_controls_regardless_of_size() {
+        // Identity-based: any non-local controller displaces the local terminal,
+        // even a dashboard whose grid is smaller than the local console.
+        assert!(local_displaced_by_controller(Some("dashboard-abc")));
+        assert!(local_displaced_by_controller(Some("terminal-1234")));
+    }
+}
+
+#[cfg(test)]
+mod render_local_displaced_tests {
+    use super::render_local_displaced;
+
+    #[test]
+    fn hint_is_concise_press_space_to_take_control() {
+        // The take-control hint intentionally omits implementation detail
+        // (the daemon may resize the PTY, but that is not relevant to the user
+        // action). The notice must say exactly "Press Space to take control."
+        // without claiming it will resize the terminal.
+        let out = render_local_displaced(80, 24);
+        assert!(
+            out.contains("Press Space to take control."),
+            "displaced notice must contain the exact hint \"Press Space to \
+             take control.\"; got {out:?}"
+        );
+        assert!(
+            !out.contains("and resize it to this terminal"),
+            "displaced notice must not include the old resize claim; got {out:?}"
         );
     }
 }

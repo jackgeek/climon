@@ -53,13 +53,6 @@ export interface ServerConfig {
 
 export interface TerminalConfig {
   /**
-   * When true (default), a connected browser viewer cannot grow the shared PTY
-   * beyond the host terminal's dimensions. This keeps the local terminal (which
-   * renders raw PTY output and cannot reflow) and the browser showing the same
-   * content instead of the browser's larger viewport mangling the terminal.
-   */
-  clampBrowserToHost: boolean;
-  /**
    * Byte value of the detach key prefix for the local attach client (default
    * 0x1c = Ctrl-\). Press this prefix then `d` to detach without stopping the
    * command. Configurable because Ctrl-\ does not emit 0x1c under every Windows
@@ -94,6 +87,8 @@ export interface RemoteConfig {
   ingestHost?: string;
   /** Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect`. */
   tunnelId?: string;
+  /** When true (default), auto-discover live dashboard hosts via dev tunnels. */
+  discover?: boolean;
   /** Server-owned persisted dashboard tunnel id reused for tunnel link sessions. */
   dashboardTunnelId?: string;
   /** Server-owned persisted dashboard tunnel cluster reused for tunnel link sessions. */

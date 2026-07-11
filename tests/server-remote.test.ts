@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
 import { readServerStateFromDir, getServerStatePath, serializeServerState } from "../src/server-state.js";
-import { computeRemotesActive } from "../src/server/server.js";
+import { browserResizePayload, computeRemotesActive } from "../src/server/server.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
@@ -17,6 +17,16 @@ test("remotes are active when wslBridge or remotes flag is enabled", () => {
   expect(computeRemotesActive({ feature: { wslBridge: "enabled" } } as never)).toBe(true);
   expect(computeRemotesActive({ feature: { remotes: "enabled" } } as never)).toBe(true);
   expect(computeRemotesActive({ feature: { remoteSpawn: "enabled" } } as never)).toBe(false);
+});
+
+test("browserResizePayload carries kind and viewerId, not source/mode", () => {
+  expect(browserResizePayload({ cols: 100, rows: 40, kind: "dashboard", viewerId: "v1" })).toEqual({
+    cols: 100,
+    rows: 40,
+    kind: "dashboard",
+    viewerId: "v1"
+  });
+  expect(browserResizePayload({ cols: 0, rows: 40 })).toBeNull();
 });
 
 describe("buildInterimWslExposureWarning", () => {
@@ -121,7 +131,7 @@ describe("buildHealthPayload", () => {
   const baseConfig = {
     version: 1 as const,
     server: { host: "127.0.0.1", port: 3131 },
-    terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+    terminal: { detachPrefix: 28 },
     attention: { idleSeconds: 30 },
     hotKeys: { focusTopSession: "Alt+J" },
     feature: { remotes: "enabled" as const }
@@ -299,7 +309,32 @@ describe("shouldStopIngestForShutdown", () => {
 });
 
 describe("server shutdown ingest lifecycle", () => {
-  test("stops the ingest daemon on graceful shutdown even with a peer home configured", async () => {
+  // This test spawns a real detached ingest daemon, which requires the Rust
+  // `climon` client binary (via CLIMON_CLIENT_BIN or a built rust/target
+  // binary). In a dev checkout with no built binary the daemon cannot start, so
+  // skip rather than hanging until the timeout. Build it with `cargo build` in
+  // rust/ (or set CLIMON_CLIENT_BIN) to exercise this test.
+  const resolveIngestInvocation = (
+    serverModule as typeof serverModule & {
+      resolveIngestInvocation?: (
+        env: NodeJS.ProcessEnv,
+        execPath: string
+      ) => { file: string; args: string[] };
+    }
+  ).resolveIngestInvocation;
+  const ingestBinaryAvailable = (() => {
+    if (!resolveIngestInvocation) return false;
+    try {
+      const inv = resolveIngestInvocation(process.env, process.execPath);
+      // A bare `climon` resolves against PATH at spawn time; an absolute path
+      // must exist on disk to be spawnable.
+      return inv.file === "climon" || existsSync(inv.file);
+    } catch {
+      return false;
+    }
+  })();
+
+  test.skipIf(!ingestBinaryAvailable)("stops the ingest daemon on graceful shutdown even with a peer home configured", async () => {
     const testTmp = join(process.cwd(), ".copilot-tmp");
     mkdirSync(testTmp, { recursive: true });
     const home = mkdtempSync(join(testTmp, "climon-server-shutdown-"));
@@ -538,7 +573,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" }
     };
@@ -566,7 +601,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" },
       remote: { enabled: true, tunnelId: "uplink", ingestHost: "localhost" }
@@ -598,7 +633,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" }
     };
@@ -623,7 +658,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" },
       remote: {

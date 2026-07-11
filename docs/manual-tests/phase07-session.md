@@ -4,17 +4,19 @@ These cases prove that the ported session host (`rust/climon-session`) behaves
 like the TypeScript client's session host across the three first-class
 platforms, on the live wire/metadata boundary that browsers and the unmodified
 Bun `climon-server` actually exercise. They cover the attach/detach local
-relay, browser-viewer resize clamp + revert, screen-idle → needs-attention →
+relay, the shared-PTY control-handoff model (single controller, follow/displaced
+surfaces), screen-idle → needs-attention →
 input-clears attention, dashboard rename → title broadcast, headless
-(background) sessions, the completed/failed lifecycle, the host
-overgrown-warning, and a best-effort live-interop round-trip against a spawned
+(background) sessions, the completed/failed lifecycle, and a best-effort
+live-interop round-trip against a spawned
 unmodified Bun server.
 
 Background: Phase 7 ports `src/session-host.ts` and the richer superset
 `src/daemon/daemon.ts` (plus `src/daemon/idle-detector.ts`,
 `src/daemon/buffer.ts`, `src/session-socket.ts`, `src/terminal-replay.ts`) into
 one cohesive `SessionHost` (`rust/climon-session/src/host.rs`) with the
-mouse-private-mode replay suffix, the host overgrown-warning, and the
+mouse-private-mode replay suffix, the shared-PTY control-handoff controller model
+(`src/control.rs`), and the
 attached-only local relay gated behind a `headless` flag. The screen-idle
 fingerprint is rendered by a `vt100`-backed headless grid
 (`src/fingerprint.rs`); it is **internal** daemon state never sent over the
@@ -184,76 +186,15 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
-## MT-P7-11 — Attach: overgrown browser viewer pauses local output (no blank screen)
+## MT-P7-11 — (superseded) Overgrown browser viewer / Fill-mode gating
 
 - **ID:** MT-P7-11
-- **Feature / phase:** Phase 7 — Fill-mode overgrown gating for the in-process host
-- **Preconditions:** A `climon` client build and a running `climon server`
-  dashboard. Default config (`terminal.clampBrowserToHost = false`, i.e. Fill
-  mode). Launch from a real interactive console.
-- **Config-matrix cell:** SESS-win (primary), SESS-mac, SESS-linux
-- **Platforms:** Windows (x64), macOS, Linux
-
-**Steps:**
-1. Start an attached session from a **small** local console window (so it is
-   easy for a browser to be larger), e.g. `climon bash`.
-2. Open the same session in the dashboard in a **large** browser window /
-   maximized terminal pane, so the browser viewer grows the shared PTY beyond
-   the local console (Fill mode). On the local console you should now see the
-   `[climon] A browser viewer enlarged this session …` notice.
-3. Type/scroll in the dashboard. Confirm the **local console screen is NOT
-   blanked or corrupted** — local PTY rendering is paused and frozen at the
-   notice, while the dashboard renders normally.
-4. Restore: either click the **lock icon** on the active session in the
-   dashboard (clamp mode), shrink the browser to the local size, or close the
-   browser viewer. Confirm that after a brief moment (~250 ms) the local console
-   **repaints the current session content** (matching the dashboard) instead of
-   staying blank — including on Windows `cmd.exe`/ConPTY, where the resize
-   triggers an asynchronous clear-and-repaint.
-
-**Expected result:**
-- In Fill mode, when a browser viewer enlarges the shared PTY beyond the local
-  terminal, the in-process host **pauses** local stdout writes and prints the
-  overgrown notice instead of writing oversized output that would blank/corrupt
-  the local screen. Dashboard viewers, scrollback, and the headless grid still
-  receive every byte. The pause is **level-triggered on the real corruption
-  condition — the PTY currently exceeds the local console in either dimension
-  (`HostState::local_terminal_exceeded`) — independent of resize mode**, NOT
-  edge-triggered on the Fill-gated dashboard warning. (Edge-triggering drifted:
-  the local terminal could end up resumed while the PTY was still larger than the
-  console, so no notice showed and ConPTY corrupted it.) The notice therefore
-  reliably appears whenever the dashboard is bigger than the local terminal and
-  stays until the PTY fits again. On restore (clamp / shrink / close viewer) the
-  local terminal **stays paused for a short delay (`LOCAL_RESTORE_DELAY`, ~250 ms)**
-  so the PTY's resize-repaint burst drains first, then the local console is
-  **repainted from the parsed grid's current screen** (`HeadlessGrid::render_screen`,
-  a sequential `vt100` repaint using only `\r\n` between rows — no absolute cursor
-  positioning, trailing blank rows trimmed) — NOT a raw scrollback replay, which on
-  Windows ConPTY stacks lines on top of each other (absolute-cursor / missing
-  carriage-return corruption). The deferral is load-bearing on Windows ConPTY: an
-  immediate repaint would be clobbered by the asynchronous resize-repaint, leaving
-  the terminal blank. **When the watcher fires it re-checks `local_terminal_exceeded`
-  and only repaints + resumes if the PTY now fits the local console** — if a viewer
-  re-grew during the delay the local terminal stays suppressed, because resuming
-  while still larger than the console would expose ConPTY's tall-grid absolute-
-  positioned live output (e.g. `\e[34;1H` for a 57-row PTY) to the shorter real
-  console and stack the prompt over earlier lines. Regression guard for the ALT+TAB
-  "screen clears to a blank cursor" bug, the "clamp leaves the local terminal blank"
-  bug, the "restored output has missing carriage returns / stacked lines" corruption,
-  and the "no overgrown message shown while the browser is bigger" bug.
-- **Diagnostics:** if the Windows corruption recurs, set `CLIMON_DEBUG_RESTORE=1`
-  before launching the attached client and reproduce the grow-then-restore. The
-  host appends timestamped, escaped traces to `$CLIMON_HOME/logs/restore-debug.log`
-  recording host/applied/**real console** sizes and the exact bytes at
-  overgrow-suppress, restore-schedule, and restore-fire, plus every PTY chunk for
-  ~2 s after unsuppress (to isolate whether the corrupter is our grid repaint or
-  ConPTY's late live resize-repaint).
-
-**Result-tracking row:**
-
-| Date | Tester | Platform | Version | Pass/Fail | Notes |
-|---|---|---|---|---|---|
-|  |  |  |  |  |  |
+- **Status:** **Superseded** by the control-handoff model. Fill-mode overgrown
+  gating no longer exists — the shared PTY is always sized to the single
+  **controller**, and a surface too small to render the controller grid is
+  *displaced* (blanked behind a Take-control screen) rather than shown an
+  "overgrown" notice. See
+  [terminal-control-handoff.md](terminal-control-handoff.md) (TCH-2, TCH-5).
 
 - **ID:** MT-P7-03
 - **Feature / phase:** Phase 7 — headless flag
@@ -281,41 +222,15 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
-## MT-P7-04 — Browser viewer resize: clamp + revert on last-viewer-disconnect
+## MT-P7-04 — (superseded) Browser viewer resize: clamp + revert
 
 - **ID:** MT-P7-04
-- **Feature / phase:** Phase 7 — `applyResize` / `revertToHostSize` /
-  terminal-mode
-- **Preconditions:** A running session (attached or headless) plus a browser
-  dashboard served by an unmodified Bun `climon-server`, or a scripted viewer
-  client that sends Resize frames.
-- **Config-matrix cell:** all (browser is the cross-environment dimension)
-- **Platforms:** macOS, Linux, Windows; Chromium + Firefox + WebKit for the
-  browser cell
-
-**Steps:**
-1. With `terminal.clampBrowserToHost = false` (Fill default): open a browser
-   viewer and resize the browser terminal **larger** than the host. Confirm the
-   PTY grows to the viewer size and the host receives an **overgrown** warning
-   frame.
-2. Set `terminal.clampBrowserToHost = true` (Clamped) and reconnect: confirm a
-   larger viewer is **clamped** to the host dimensions (a `PtySize` echoing the
-   clamped size is broadcast).
-3. With the viewer still larger (Fill), close the last browser viewer. Confirm
-   the PTY **reverts** to the host terminal size and the terminal mode resets to
-   the configured initial mode.
-
-**Expected result:**
-- Fill mode lets viewers grow the PTY beyond the host and raises/clears the host
-  overgrown warning; Clamped mode pins viewers to the host size.
-- When the last viewer disconnects, the PTY reverts to the host size and a
-  `PtySize` frame is broadcast.
-
-**Result-tracking row:**
-
-| Date | Tester | Platform | Version | Pass/Fail | Notes |
-|---|---|---|---|---|---|
-|  |  |  |  |  |  |
+- **Status:** **Superseded** by the control-handoff model. There is no
+  clamp/Fill toggle and no last-viewer revert-to-host-size: the shared PTY tracks
+  the current **controller's** size, and on controller disconnect the daemon falls
+  back to the highest-priority remaining surface (`pwa` > `dashboard` >
+  `terminal`, ties by most-recently-connected). See
+  [terminal-control-handoff.md](terminal-control-handoff.md) (TCH-2, TCH-4).
 
 ---
 
@@ -395,39 +310,40 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
-## MT-P7-10 — Acknowledged survives a switch-away resize redraw (clamp off)
+## MT-P7-10 — Acknowledged survives a control-handoff resize redraw
 
 - **ID:** MT-P7-10
 - **Feature / phase:** Phase 7 — `ScreenIdleDetector` post-resize settle window
   (`absorb_resize` + `RESIZE_SETTLE_MS`)
-- **Preconditions:** `terminal.clampBrowserToHost = false` and a small
-  `attention.idleSeconds` (e.g. `2`) in `$CLIMON_HOME/config.jsonc`. The dashboard
-  open with at least two sessions. Use an interactive shell (e.g. `zsh` or `bash`)
-  as the session command so it **redraws its prompt on `SIGWINCH`**.
-- **Config-matrix cell:** `clampBrowserToHost = false`
+- **Preconditions:** A small `attention.idleSeconds` (e.g. `2`) in
+  `$CLIMON_HOME/config.jsonc`. The dashboard open with at least two sessions. Use
+  an interactive shell (e.g. `zsh` or `bash`) as the session command so it
+  **redraws its prompt on `SIGWINCH`**.
+- **Config-matrix cell:** default config
 - **Platforms:** macOS, Linux, Windows
 
-**Background:** This reproduces the real "Acknowledged → Running" report. With
-clamp **off**, viewing a session resizes the PTY larger; switching away
-disconnects the last viewer, so the host reverts the PTY to its terminal size.
-That revert delivers a `SIGWINCH` whose **redraw output lands asynchronously** on
-the PTY reader thread, *after* the synchronous re-baseline — previously it was
-misread as activity and reverted the acknowledged session to `running`.
+**Background:** This reproduces the real "Acknowledged → Running" report. When a
+larger browser surface takes control it grows the shared PTY; switching away
+disconnects it, so control falls back to the attached local terminal and the
+daemon resizes the PTY back down to it. That resize delivers a `SIGWINCH` whose
+**redraw output lands asynchronously** on the PTY reader thread, *after* the
+synchronous re-baseline — previously it was misread as activity and reverted the
+acknowledged session to `running`.
 
 **Steps:**
 1. Start an interactive-shell session and let it sit at a static prompt; wait
    `idleSeconds` so it flips to `status: needs-attention`.
-2. In the dashboard, view that session in a browser **wider than the host
-   terminal** (clamp off grows the PTY) and acknowledge it. Confirm
-   `status: acknowledged`.
-3. **Switch away** to another session (disconnecting the last viewer of the first
-   one). This reverts its PTY back to the host size and triggers the shell's
-   `SIGWINCH` prompt redraw.
+2. In the dashboard, view that session in a browser **wider than the local
+   terminal** and **take control** (maximize) so it grows the PTY; acknowledge it.
+   Confirm `status: acknowledged`.
+3. **Switch away** to another session (disconnecting the controller of the first
+   one). Control falls back to the local terminal, resizing its PTY back down and
+   triggering the shell's `SIGWINCH` prompt redraw.
 4. Watch the first session's status for several seconds.
 
 **Expected result:**
 - The acknowledged session **stays `acknowledged`**. The trailing async redraw
-  from the switch-away resize is absorbed by the post-resize settle window and
+  from the control-handoff resize is absorbed by the post-resize settle window and
   never flips it to `running`.
 - Only a genuine screen-content change (real program output, well after the
   resize settles) resumes normal detection (`running`, then re-flag after a fresh
@@ -518,7 +434,8 @@ misread as activity and reverted the acknowledged session to `running`.
    - the replay renders the scrollback (including mouse-mode re-assertion),
    - live output streams to the browser,
    - typing in the browser reaches the PTY,
-   - resizing the browser terminal resizes the PTY (subject to clamp/Fill),
+   - resizing the browser terminal resizes the PTY when it is the controller
+     (control-handoff),
    - renaming updates the title.
 4. Cross-check the bytes are identical to the Bun client by repeating with a
    Bun-hosted session and diffing the captured frames if any discrepancy is

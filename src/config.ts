@@ -166,9 +166,7 @@ async function loadConfigInternal(env: NodeJS.ProcessEnv): Promise<ClimonConfig>
   } as ClimonConfig;
 
   // Backfill sections added after a config file was first written.
-  if (typeof parsedConfigObject.terminal.clampBrowserToHost !== "boolean") {
-    parsedConfigObject.terminal = { ...parsedConfigObject.terminal, clampBrowserToHost: false };
-  }
+  parsedConfigObject.terminal = { ...parsedConfigObject.terminal };
   parsedConfigObject.terminal.detachPrefix = normalizeDetachPrefix(parsedConfigObject.terminal.detachPrefix);
   // Backfill the attention section for configs written before it existed.
   if (typeof parsedConfigObject.attention.idleSeconds !== "number") {
