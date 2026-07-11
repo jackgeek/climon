@@ -165,7 +165,12 @@ async fn run_command(cmd: &str, args: &[String], env: &HashMap<String, String>) 
     } else {
         env.clone()
     };
-    command.env_clear();
+    // Layer our additions onto the *inherited* environment; never `env_clear`.
+    // On Windows `std::env::vars()` omits the hidden `=`-prefixed system entries
+    // (e.g. drive-current-directory vars), so clearing and re-adding only the
+    // snapshot spawns devtunnel with an incomplete environment. devtunnel then
+    // stalls on its network call instead of returning, hanging the launcher.
+    // The proven uplink path (dev's `devtunnel_command`) also only overlays.
     command.envs(effective_env);
     apply_windows_flags(&mut command);
     match command.output().await {
@@ -191,7 +196,9 @@ fn default_spawner() -> ProcessSpawner {
         command.stdin(std::process::Stdio::null());
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
-        command.env_clear();
+        // Layer additions onto the inherited environment; never `env_clear` (see
+        // `run_command`): clearing drops Windows' hidden system env entries and
+        // hangs the long-running devtunnel host/connect process on Windows.
         command.envs(env);
         apply_windows_flags(&mut command);
         command.spawn()
@@ -648,6 +655,30 @@ mod tests {
             let result = result.clone();
             Box::pin(async move { result })
         })
+    }
+
+    /// Regression guard: the real runner must overlay its env onto the
+    /// *inherited* process environment, never `env_clear` it. Clearing dropped
+    /// Windows' hidden system env entries and hung devtunnel's network call at
+    /// launch. Here the always-present `PATH` (absent from the passed env map)
+    /// must still reach the child. Uses an absolute shell and reads (not
+    /// mutates) the environment so it is safe under parallel test execution.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_command_inherits_parent_environment() {
+        // Intentionally pass an empty env map: PATH must be inherited, not wiped.
+        let env: HashMap<String, String> = HashMap::new();
+        let result = run_command(
+            "/bin/sh",
+            &s(&["-c", "printf %s \"$PATH\""]),
+            &env,
+        )
+        .await;
+        assert_eq!(result.status, 0);
+        assert!(
+            !result.stdout.is_empty(),
+            "child should inherit PATH from the parent environment, got empty"
+        );
     }
 
     fn gateway_with_runner(runner: Runner) -> DevtunnelGateway {
