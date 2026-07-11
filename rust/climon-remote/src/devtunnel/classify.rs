@@ -78,7 +78,8 @@ pub fn classify_failure(input: &DevtunnelFailureInput, now: &str) -> DevtunnelFa
             false,
         )
     } else if has_standalone_number(&lower, "404")
-        || contains_any(&lower, &["not found", "no tunnel"])
+        || contains_space_pattern(&lower, &["not", "found"])
+        || contains_any(&lower, &["no tunnel"])
         || contains_space_pattern(&lower, &["does", "not", "exist"])
     {
         (
