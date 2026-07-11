@@ -95,16 +95,74 @@ impl StagedArtifact {
 
     /// Returns the path to a named regular file inside the staging root.
     ///
-    /// Returns `Err` if the entry does not exist or is not a regular file.
+    /// Defenses applied before any filesystem access:
+    /// - rejects absolute paths, backslash-rooted paths, Windows drive prefixes,
+    ///   and `..` parent-traversal components in `name`;
+    ///
+    /// Defenses applied via the filesystem:
+    /// - uses `symlink_metadata` (not `is_file`) so symlinks are never followed
+    ///   silently — any symlink entry is rejected unconditionally;
+    /// - canonicalizes both the staging root and the candidate path to resolve
+    ///   any residual indirection, then verifies the result is still contained
+    ///   within the staging root.
+    ///
+    /// Returns `Err` if the entry does not exist, is not a regular file, or fails
+    /// any of the above checks.
     pub fn entry(&self, name: &str) -> Result<PathBuf, ArtifactError> {
-        let p = self.dir.path().join(name);
-        if p.is_file() {
-            Ok(p)
-        } else {
-            Err(ArtifactError::io(format!(
-                "entry '{name}' not found or not a regular file"
-            )))
+        // ── Name-level validation (no filesystem I/O) ─────────────────────────
+        let io_err = |msg: &str| ArtifactError::io(format!("entry '{name}': {msg}"));
+
+        if name.is_empty() {
+            return Err(io_err("name must not be empty"));
         }
+        if name.starts_with('/') {
+            return Err(io_err("absolute path rejected"));
+        }
+        if name.starts_with('\\') {
+            return Err(io_err("backslash-rooted path rejected"));
+        }
+        {
+            let b = name.as_bytes();
+            if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+                return Err(io_err("Windows drive prefix rejected"));
+            }
+        }
+        for part in name.split('/').chain(name.split('\\')) {
+            if part == ".." {
+                return Err(io_err("parent traversal rejected"));
+            }
+        }
+
+        let candidate = self.dir.path().join(name);
+
+        // ── Filesystem checks ─────────────────────────────────────────────────
+        // Use symlink_metadata so we inspect the entry itself, not a symlink target.
+        let meta = std::fs::symlink_metadata(&candidate)
+            .map_err(|_| io_err("not found or not accessible"))?;
+
+        if meta.file_type().is_symlink() {
+            return Err(io_err("symlink rejected"));
+        }
+        if !meta.file_type().is_file() {
+            return Err(io_err("not a regular file"));
+        }
+
+        // Canonicalize both paths to resolve any remaining indirection (e.g.
+        // symlinks in the temp-dir prefix itself) and verify containment.
+        let canonical_root = self
+            .dir
+            .path()
+            .canonicalize()
+            .map_err(|e| ArtifactError::io(format!("cannot canonicalize staging root: {e}")))?;
+        let canonical_path = candidate
+            .canonicalize()
+            .map_err(|e| ArtifactError::io(format!("cannot canonicalize entry path: {e}")))?;
+
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(io_err("resolved path is outside the staging root"));
+        }
+
+        Ok(canonical_path)
     }
 
     /// Persist the staging directory and return its path.
@@ -584,6 +642,15 @@ mod tests {
 
     // ── entry() ───────────────────────────────────────────────────────────────
 
+    /// Builds a minimal [`StagedArtifact`] containing one regular file.
+    /// Avoids repeating the sign/stage boilerplate in every security test.
+    fn minimal_staged() -> StagedArtifact {
+        let (signing, pub_b64) = test_keypair();
+        let zip = make_zip(&[("payload.bin", b"payload", 0o644)]);
+        let sig = test_sign(&signing, &zip);
+        stage_downloaded_artifact(&zip, &sig, &pub_b64).unwrap()
+    }
+
     #[test]
     fn entry_succeeds_for_a_present_regular_file() {
         let (signing, pub_b64) = test_keypair();
@@ -605,6 +672,119 @@ mod tests {
 
         let err = staged.entry("does-not-exist").unwrap_err();
         assert_eq!(err.kind(), &ArtifactErrorKind::Io);
+    }
+
+    // ── entry() security ─────────────────────────────────────────────────────
+    //
+    // Each test below is RED with the current implementation (which only calls
+    // is_file on the joined path) and GREEN after the fix.
+
+    /// Absolute path: Path::join(abs) replaces the staging root entirely, so
+    /// the old is_file() check on the replaced path would succeed for any
+    /// existing file on the system.
+    #[test]
+    fn entry_rejects_absolute_path_to_external_file() {
+        let staged = minimal_staged();
+        // Create a real file outside staging to confirm old impl returned Ok.
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("victim.txt"), b"sensitive").unwrap();
+        let abs = outside
+            .path()
+            .join("victim.txt")
+            .to_string_lossy()
+            .into_owned();
+
+        let err = staged.entry(&abs).unwrap_err();
+        assert_eq!(err.kind(), &ArtifactErrorKind::Io);
+    }
+
+    /// Parent traversal: `../sibling/file` navigates outside staging; old
+    /// is_file() resolves the real path and returns Ok for an existing file.
+    #[test]
+    fn entry_rejects_parent_traversal_to_existing_sibling_file() {
+        let staged = minimal_staged();
+        let parent = staged
+            .root()
+            .parent()
+            .expect("staging root must have a parent");
+        let sibling = tempfile::tempdir_in(parent).unwrap();
+        std::fs::write(sibling.path().join("secret.txt"), b"outside").unwrap();
+        let sib_name = sibling
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        // e.g. "../.tmpYYY/secret.txt" — old is_file() follows the real path → Ok
+        let traversal = format!("../{sib_name}/secret.txt");
+
+        let err = staged.entry(&traversal).unwrap_err();
+        assert_eq!(err.kind(), &ArtifactErrorKind::Io);
+    }
+
+    /// Backslash-rooted name: on Unix `\` is a valid filename character, so a
+    /// file named `\evil` can exist inside staging; old is_file() would find it
+    /// and return Ok despite the leading backslash.
+    #[cfg(unix)]
+    #[test]
+    fn entry_rejects_backslash_rooted_name_even_if_file_exists_in_staging() {
+        let staged = minimal_staged();
+        // '\' is a valid filename character on Unix — create it to ensure
+        // old is_file() would succeed.
+        std::fs::write(staged.root().join("\\evil"), b"content").unwrap();
+
+        let err = staged.entry("\\evil").unwrap_err();
+        assert_eq!(err.kind(), &ArtifactErrorKind::Io);
+    }
+
+    /// Windows drive prefix: on Unix `C:foo` is a valid filename, so a file
+    /// named `C:foo` inside staging would be returned Ok by the old impl.
+    #[cfg(unix)]
+    #[test]
+    fn entry_rejects_windows_drive_prefix_even_if_file_exists_in_staging() {
+        let staged = minimal_staged();
+        // `C:payload.bin` is a legal Unix filename — create it.
+        std::fs::write(staged.root().join("C:payload.bin"), b"content").unwrap();
+
+        let err = staged.entry("C:payload.bin").unwrap_err();
+        assert_eq!(err.kind(), &ArtifactErrorKind::Io);
+    }
+
+    /// Symlink inside staging pointing to a file OUTSIDE staging: old is_file()
+    /// follows the symlink and returns Ok (the target file exists).
+    #[cfg(unix)]
+    #[test]
+    fn entry_rejects_symlink_pointing_outside_staging() {
+        let staged = minimal_staged();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), staged.root().join("outside-link")).unwrap();
+
+        // Old is_file() follows the symlink → target exists → Ok (vulnerability).
+        // New implementation uses symlink_metadata → detects symlink → Err.
+        let err = staged.entry("outside-link").unwrap_err();
+        assert_eq!(err.kind(), &ArtifactErrorKind::Io);
+        assert!(
+            err.to_string().contains("symlink"),
+            "error should mention symlink, got: {err}"
+        );
+    }
+
+    /// Symlink inside staging pointing to another file WITHIN staging: also
+    /// rejected for defense-in-depth (the extracted content never has symlinks,
+    /// but we guard against any that might be created post-extraction).
+    #[cfg(unix)]
+    #[test]
+    fn entry_rejects_any_symlink_within_staging() {
+        let staged = minimal_staged();
+        let target = staged.root().join("payload.bin");
+        std::os::unix::fs::symlink(&target, staged.root().join("inner-link")).unwrap();
+
+        // Old is_file() follows the symlink → target exists inside staging → Ok.
+        // New implementation rejects all symlinks.
+        let err = staged.entry("inner-link").unwrap_err();
+        assert_eq!(err.kind(), &ArtifactErrorKind::Io);
+        assert!(err.to_string().contains("symlink"), "got: {err}");
     }
 
     // ── RAII cleanup ──────────────────────────────────────────────────────────
