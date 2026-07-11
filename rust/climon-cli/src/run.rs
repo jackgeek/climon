@@ -193,6 +193,7 @@ fn dispatch(argv: &[String]) -> Result<i32, String> {
         ParsedCommand::Uplink => Ok(run_uplink_entry()),
         ParsedCommand::Ingest => Ok(run_ingest_entry()),
         ParsedCommand::Session { id } => {
+            climon_store::validate_session_id(&id).map_err(|e| e.to_string())?;
             let store_env = StoreEnv::from_env();
             let meta: Option<SessionMeta> =
                 read_session_meta(&store_env, &id).map_err(|e| e.to_string())?;

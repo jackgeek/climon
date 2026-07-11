@@ -47,7 +47,9 @@ use crate::spawn_auth::{
     sign_now, verify_signed_control, RejectReason, ReplayGuard, DEFAULT_FRESHNESS_WINDOW_MS,
 };
 use crate::target_set::UplinkTargetSpec;
-use climon_session::socket::{parse_session_socket_ref, ParsedRef};
+use climon_session::socket::{
+    connect_session_socket, parse_session_socket_ref, ParsedRef, SessionStream,
+};
 
 /// Default keepalive interval in seconds. Mirrors `DEFAULT_KEEPALIVE_SECONDS`.
 pub const DEFAULT_KEEPALIVE_SECONDS: f64 = 60.0;
@@ -263,6 +265,24 @@ struct Attached {
 
 type AttachedMap = Arc<AsyncMutex<HashMap<String, Attached>>>;
 
+struct SessionStreamReadWrite(Box<dyn SessionStream>);
+
+impl Read for SessionStreamReadWrite {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl Write for SessionStreamReadWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
 /// Connects to a local daemon session socket, returning two clones (one for the
 /// reader thread, one for the writer thread) with a short read timeout so the
 /// reader can poll the active flag and exit on detach.
@@ -289,6 +309,15 @@ fn connect_session_pair(
             std::io::ErrorKind::Unsupported,
             "unix socket unsupported on this platform",
         )),
+        ParsedRef::Pipe(_) => {
+            let stream = connect_session_socket(reference)?;
+            stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+            let clone = stream.try_clone_box()?;
+            Ok((
+                Box::new(SessionStreamReadWrite(stream)),
+                Box::new(SessionStreamReadWrite(clone)),
+            ))
+        }
     }
 }
 

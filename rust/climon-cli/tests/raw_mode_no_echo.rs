@@ -34,6 +34,11 @@ fn temp_home() -> std::path::PathBuf {
     let dir =
         std::env::temp_dir().join(format!("climon-cli-rawmode-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(dir.join("sessions")).unwrap();
+    std::fs::write(
+        dir.join("config.jsonc"),
+        "{ \"session\": { \"ipcTransport\": \"tcp\" } }\n",
+    )
+    .unwrap();
     dir
 }
 
