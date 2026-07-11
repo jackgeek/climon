@@ -75,22 +75,31 @@ pub fn remove(env: &Env, id: &str) -> StoreResult<()> {
 }
 
 /// Removes the credential sidecar and ownership lock for `id` (idempotent).
-/// Used to reap sessions whose daemon died without cleaning up.
-pub fn remove_ipc_artifacts(env: &Env, id: &str) -> StoreResult<()> {
+/// Returns `true` if either artifact actually existed and was removed. Used to
+/// reap sessions whose daemon died without cleaning up.
+pub fn remove_ipc_artifacts(env: &Env, id: &str) -> StoreResult<bool> {
     validate_session_id(id)?;
-    remove(env, id)?;
+    let mut removed = false;
+    match fs::remove_file(env.ipc_auth_path(id)) {
+        Ok(()) => removed = true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(StoreError::Io(e)),
+    }
     let lock = env.sessions_dir().join(format!("{id}.ipc-lock"));
     match fs::remove_dir_all(&lock) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(StoreError::Io(e)),
+        Ok(()) => removed = true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(StoreError::Io(e)),
     }
+    Ok(removed)
 }
 
 /// Reaps IPC artifacts for every session whose recorded `daemon_pid` is present
 /// but no longer alive (per `is_alive`). Sessions with no `daemon_pid` are left
-/// untouched (they may be mid-startup or remote). Returns the reaped ids.
-/// Per-session errors (e.g. an unexpected id) are skipped, not fatal.
+/// untouched (they may be mid-startup or remote). Returns the ids whose
+/// artifacts actually existed and were removed (so already-clean dead sessions
+/// are not re-reported). Per-session errors (e.g. an unexpected id) are skipped,
+/// not fatal.
 pub fn reap_dead_session_ipc_artifacts(
     env: &Env,
     is_alive: &dyn Fn(i64) -> bool,
@@ -99,7 +108,8 @@ pub fn reap_dead_session_ipc_artifacts(
     for meta in crate::meta::list_sessions(env)? {
         match meta.daemon_pid {
             Some(pid)
-                if !is_alive(i64::from(pid)) && remove_ipc_artifacts(env, &meta.id).is_ok() =>
+                if !is_alive(i64::from(pid))
+                    && remove_ipc_artifacts(env, &meta.id).unwrap_or(false) =>
             {
                 reaped.push(meta.id);
             }
@@ -232,6 +242,21 @@ mod tests {
             .sessions_dir()
             .join(format!("{dead_id}.ipc-lock"))
             .exists());
+        let _ = std::fs::remove_dir_all(env.climon_home());
+    }
+
+    #[test]
+    fn reaper_skips_dead_daemons_with_no_ipc_artifacts() {
+        // A dead session whose artifacts are already gone (e.g. removed on a
+        // graceful exit or a prior cleanup) must NOT be re-reported as reaped.
+        let env = env_for("reap-ipc-noartifacts");
+        let dead_id = "rare-geckos-jam";
+        write_session_meta(&env, &base_meta(dead_id, Some(4343))).unwrap();
+        // Deliberately write NO sidecar and NO lock dir.
+
+        let reaped = reap_dead_session_ipc_artifacts(&env, &|_| false).unwrap();
+
+        assert!(reaped.is_empty(), "reaped nothing but reported: {reaped:?}");
         let _ = std::fs::remove_dir_all(env.climon_home());
     }
 
