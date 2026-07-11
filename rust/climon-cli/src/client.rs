@@ -773,6 +773,28 @@ mod tests {
     }
 
     #[test]
+    fn missing_ipc_sidecar_fails_closed_with_restart_guidance() {
+        use climon_store::Env;
+
+        let home = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("climon-missing-ipc-sidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        let env = Env::with_home(&home);
+
+        let err = match open_authenticated_session(&env, "rare-geckos-jam", "tcp://127.0.0.1:1") {
+            Ok(_) => panic!("expected missing IPC sidecar to fail closed"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("restart"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn attach_authenticates_before_sending_resize() {
         use climon_session::auth::daemon_handshake;
         use climon_session::socket::listen_on_session_socket;

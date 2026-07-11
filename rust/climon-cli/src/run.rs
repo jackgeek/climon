@@ -263,7 +263,22 @@ fn run_cleanup() -> i32 {
         stdout: &mut |t: &str| write_stdout(t, true),
         stderr: &mut |t: &str| write_stderr(t, true),
     };
-    run_cleanup_command(&env, deps, &mut io)
+    let code = run_cleanup_command(&env, deps, &mut io);
+    let store_env = StoreEnv::from_env();
+    match climon_store::ipc_auth::reap_dead_session_ipc_artifacts(&store_env, &|pid| {
+        u32::try_from(pid).is_ok_and(is_process_alive)
+    }) {
+        Ok(reaped) => {
+            for id in reaped {
+                write_stdout(&format!("Removed IPC artifacts for {id}\n"), true);
+            }
+        }
+        Err(e) => write_stderr(
+            &format!("WARNING: could not reap IPC artifacts: {e}\n"),
+            true,
+        ),
+    }
+    code
 }
 
 /// `climon remotes [--watch] [--json]`: render both directions of the remote

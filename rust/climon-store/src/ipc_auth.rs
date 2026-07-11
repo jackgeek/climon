@@ -74,15 +74,91 @@ pub fn remove(env: &Env, id: &str) -> StoreResult<()> {
     }
 }
 
+/// Removes the credential sidecar and ownership lock for `id` (idempotent).
+/// Used to reap sessions whose daemon died without cleaning up.
+pub fn remove_ipc_artifacts(env: &Env, id: &str) -> StoreResult<()> {
+    validate_session_id(id)?;
+    remove(env, id)?;
+    let lock = env.sessions_dir().join(format!("{id}.ipc-lock"));
+    match fs::remove_dir_all(&lock) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(StoreError::Io(e)),
+    }
+}
+
+/// Reaps IPC artifacts for every session whose recorded `daemon_pid` is present
+/// but no longer alive (per `is_alive`). Sessions with no `daemon_pid` are left
+/// untouched (they may be mid-startup or remote). Returns the reaped ids.
+/// Per-session errors (e.g. an unexpected id) are skipped, not fatal.
+pub fn reap_dead_session_ipc_artifacts(
+    env: &Env,
+    is_alive: &dyn Fn(i64) -> bool,
+) -> StoreResult<Vec<String>> {
+    let mut reaped = Vec::new();
+    for meta in crate::meta::list_sessions(env)? {
+        match meta.daemon_pid {
+            Some(pid)
+                if !is_alive(i64::from(pid)) && remove_ipc_artifacts(env, &meta.id).is_ok() =>
+            {
+                reaped.push(meta.id);
+            }
+            _ => {}
+        }
+    }
+    Ok(reaped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meta::write_session_meta;
+    use crate::paths::now_iso;
+    use climon_proto::meta::{PriorityReason, SessionMeta, SessionStatus};
     use std::fs;
 
     fn env_for(tag: &str) -> Env {
         let home = crate::test_support::scratch_dir(tag);
         fs::create_dir_all(home.join("sessions")).unwrap();
         Env::with_home(home)
+    }
+
+    fn base_meta(id: &str, daemon_pid: Option<u32>) -> SessionMeta {
+        let now = now_iso();
+        SessionMeta {
+            id: id.to_string(),
+            command: vec!["sleep".into(), "100".into()],
+            display_command: "sleep 100".into(),
+            cwd: "/tmp".into(),
+            status: SessionStatus::Running,
+            priority_reason: PriorityReason::Running,
+            daemon_pid,
+            cols: 80,
+            rows: 24,
+            headless: None,
+            socket_path: "tcp://127.0.0.1:0".into(),
+            client_version: None,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            last_activity_at: now,
+            attention_matched_at: None,
+            attention_reason: None,
+            completed_at: None,
+            exit_code: None,
+            error: None,
+            origin: None,
+            client_label: None,
+            name: None,
+            priority: None,
+            color: None,
+            user_paused: None,
+            theme: None,
+            terminal_title: None,
+            attention_snippet: None,
+            progress: None,
+            ipc_protocol_version: None,
+            ipc_generation: None,
+        }
     }
 
     #[test]
@@ -112,6 +188,51 @@ mod tests {
         assert!(read(&env, "rare-geckos-jam").unwrap().is_none());
         remove(&env, "rare-geckos-jam").unwrap();
         let _ = fs::remove_dir_all(env.climon_home());
+    }
+
+    #[test]
+    fn cleanup_removes_orphaned_ipc_sidecar_and_lock() {
+        let env = env_for("cleanup-ipc");
+        let rec = mint("tcp://127.0.0.1:5555");
+        write(&env, "rare-geckos-jam", &rec).unwrap();
+        std::fs::create_dir_all(env.sessions_dir().join("rare-geckos-jam.ipc-lock")).unwrap();
+        remove_ipc_artifacts(&env, "rare-geckos-jam").unwrap();
+        assert!(read(&env, "rare-geckos-jam").unwrap().is_none());
+        assert!(!env.sessions_dir().join("rare-geckos-jam.ipc-lock").exists());
+        let _ = std::fs::remove_dir_all(env.climon_home());
+    }
+
+    #[test]
+    fn reaper_removes_ipc_artifacts_only_for_dead_daemons() {
+        let env = env_for("reap-ipc");
+        let alive_id = "brave-otters-run";
+        let dead_id = "rare-geckos-jam";
+        let alive_pid = 4242_u32;
+        let dead_pid = 4343_u32;
+        let rec = mint("tcp://127.0.0.1:5555");
+
+        write_session_meta(&env, &base_meta(alive_id, Some(alive_pid))).unwrap();
+        write_session_meta(&env, &base_meta(dead_id, Some(dead_pid))).unwrap();
+        for id in [alive_id, dead_id] {
+            write(&env, id, &rec).unwrap();
+            std::fs::create_dir_all(env.sessions_dir().join(format!("{id}.ipc-lock"))).unwrap();
+        }
+
+        let reaped =
+            reap_dead_session_ipc_artifacts(&env, &|pid| pid == i64::from(alive_pid)).unwrap();
+
+        assert_eq!(reaped, vec![dead_id.to_string()]);
+        assert!(read(&env, alive_id).unwrap().is_some());
+        assert!(env
+            .sessions_dir()
+            .join(format!("{alive_id}.ipc-lock"))
+            .exists());
+        assert!(read(&env, dead_id).unwrap().is_none());
+        assert!(!env
+            .sessions_dir()
+            .join(format!("{dead_id}.ipc-lock"))
+            .exists());
+        let _ = std::fs::remove_dir_all(env.climon_home());
     }
 
     #[test]
