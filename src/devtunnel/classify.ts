@@ -3,7 +3,6 @@ import type {
   DevtunnelErrorCode,
   DevtunnelFailure,
   DevtunnelFailureInput,
-  DevtunnelOperation,
   DevtunnelRetryClass
 } from "./types.js";
 
@@ -109,7 +108,7 @@ export function classifyDevtunnelFailure(
   const retryAfter = output.match(/retry-after[:\s]+(\d+)/i)?.[1];
   return {
     code,
-    operation: input.operation as DevtunnelOperation,
+    operation: input.operation,
     summary: policy.summary,
     remediation: policy.remediation,
     technicalDetail: sanitizeDiagnostic(output || `exit status ${input.status}`),

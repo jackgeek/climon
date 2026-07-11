@@ -9,4 +9,17 @@ describe("classifyDevtunnelFailure", () => {
       expect(classifyDevtunnelFailure(fixture.input as DevtunnelFailureInput)).toMatchObject(fixture.expected);
     });
   }
+
+  test("scrubs identifiers from technicalDetail", () => {
+    const failure = classifyDevtunnelFailure({
+      operation: "create-tunnel",
+      status: 1,
+      stdout: "",
+      stderr: "auth failed for user jack@example.com at https://tunnel.example.com/host"
+    });
+    expect(failure.technicalDetail).not.toContain("jack@example.com");
+    expect(failure.technicalDetail).not.toContain("tunnel.example.com");
+    expect(failure.technicalDetail).toContain("<email>");
+    expect(failure.technicalDetail).toContain("<url>");
+  });
 });
