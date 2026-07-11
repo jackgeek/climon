@@ -518,6 +518,20 @@ pub fn run_installer(version: &str, client_stub: &[u8], server_stub: &[u8]) -> i
     0
 }
 
+#[cfg(any(windows, test))]
+fn run_recover_dispatch_with<F>(
+    args: &crate::update::RecoverBootstrapArgs,
+    version: &str,
+    client_stub: &[u8],
+    server_stub: &[u8],
+    recover: F,
+) -> i32
+where
+    F: FnOnce(&crate::update::RecoverBootstrapArgs, &str, &[u8], &[u8]) -> i32,
+{
+    recover(args, version, client_stub, server_stub)
+}
+
 /// Dispatches bootstrap recovery to the platform-specific implementation.
 fn run_recover_dispatch(
     args: &crate::update::RecoverBootstrapArgs,
@@ -537,9 +551,13 @@ fn run_recover_dispatch(
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = (args, version, _client_stub, _server_stub);
-        eprintln!("recover-bootstrap: operation is not available yet (exit 2)");
-        2
+        run_recover_dispatch_with(
+            args,
+            version,
+            _client_stub,
+            _server_stub,
+            crate::update::run_recover_bootstrap_windows,
+        )
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -752,6 +770,56 @@ mod tests {
             telemetry: None,
             auto_update: None,
         }
+    }
+
+    #[test]
+    fn windows_recover_dispatch_calls_production_recovery() {
+        let source = include_str!("installer.rs");
+        let dispatch = source
+            .split("/// Dispatches bootstrap recovery")
+            .nth(1)
+            .unwrap()
+            .split("/// Dispatches the apply-update operation")
+            .next()
+            .unwrap();
+
+        assert!(dispatch.contains("crate::update::run_recover_bootstrap_windows"));
+        assert!(!dispatch.contains(concat!("operation is not available ", "yet")));
+    }
+
+    #[test]
+    fn recover_dispatch_forwards_inputs_and_returns_runtime_code() {
+        let args = crate::update::RecoverBootstrapArgs {
+            apply: crate::update::ApplyUpdateArgs {
+                dir: PathBuf::from("C:/climon"),
+                source: PathBuf::from("C:/staging"),
+                version: "1.2.3".to_string(),
+            },
+            bootstrap_pid: Some(1234),
+            fallback: Some(PathBuf::from("C:/climon/climon.exe.old")),
+            original_args: vec![std::ffi::OsString::from("session")],
+        };
+        let client_stub = [1, 2, 3];
+        let server_stub = [4, 5, 6];
+        let mut called = false;
+
+        let code = run_recover_dispatch_with(
+            &args,
+            "1.2.3",
+            &client_stub,
+            &server_stub,
+            |actual_args, actual_version, actual_client_stub, actual_server_stub| {
+                called = true;
+                assert_eq!(actual_args, &args);
+                assert_eq!(actual_version, "1.2.3");
+                assert_eq!(actual_client_stub, client_stub);
+                assert_eq!(actual_server_stub, server_stub);
+                37
+            },
+        );
+
+        assert!(called);
+        assert_eq!(code, 37);
     }
 
     #[test]
