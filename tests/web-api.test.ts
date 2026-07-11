@@ -179,6 +179,7 @@ describe("buildSetupScript", () => {
 
   test("emits the two required remote settings", () => {
     const script = buildSetupScript(BASE);
+    expect(script).toContain("climon config feature.remotes enabled");
     expect(script).toContain("climon config remote.enabled true");
     expect(script).toContain("climon config remote.tunnelId abc123");
     expect(script).not.toContain("remote.port");

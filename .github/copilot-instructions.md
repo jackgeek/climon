@@ -11,6 +11,7 @@
 
 - Always start new work in a fresh git worktree under the `.worktrees/` folder, never directly on the main or dev checkout. Create one per task with `git worktree add .worktrees/<branch-name> -b <branch-name>` (or check out an existing branch) and do all edits, builds, and tests there. The `.worktrees/` folder is gitignored.
 - **Always open pull requests against the `dev` branch, never `main`.** Pushing to `main` triggers the [`Release`](.github/workflows/release.yml) workflow (it bumps the version, tags, and publishes), so feature/fix PRs must target `dev` to avoid cutting an accidental release. `dev` is only merged into `main` when we deliberately want to ship a release.
+- **Always squash merge into `dev` unless explicitly told otherwise.** When merging a PR into `dev` (e.g. `gh pr merge --squash`), use a squash merge so each feature/fix lands as a single commit and keeps `dev` history linear. Only use a different merge strategy when the user specifically requests it.
 
 ## Local Copilot CLI skills
 
