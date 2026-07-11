@@ -1369,8 +1369,22 @@ async fn apply_reconnect(
 }
 
 pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) -> i32 {
+    // Opt-in foreground diagnostics: the detached uplink is otherwise a black
+    // box (stderr routed to null, logger skipped for the `uplink` role), so
+    // `CLIMON_UPLINK_DEBUG=1 climon __uplink` in the foreground traces the
+    // startup/target decisions to stderr.
+    let dbg = std::env::var("CLIMON_UPLINK_DEBUG").is_ok();
     let peer_home = as_string(resolve_config_setting("remote.peerHome", &config_env, cwd));
-    if peer_home.is_none() && !remote_enabled(&config_env, cwd) {
+    let enabled_at_entry = remote_enabled(&config_env, cwd);
+    if dbg {
+        eprintln!(
+            "[uplink] entry: cwd={cwd:?} peer_home={peer_home:?} remote_enabled={enabled_at_entry}"
+        );
+    }
+    if peer_home.is_none() && !enabled_at_entry {
+        if dbg {
+            eprintln!("[uplink] exit: remote not enabled and no peer_home");
+        }
         return 0;
     }
 
@@ -1384,8 +1398,19 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
             guard: Some(guard),
             ..
         } => guard,
-        _ => return 0,
+        other => {
+            if dbg {
+                eprintln!(
+                    "[uplink] exit: singleton not acquired (acquired={}, holder={:?}, pid_file={:?})",
+                    other.acquired, other.holder, pid_file
+                );
+            }
+            return 0;
+        }
     };
+    if dbg {
+        eprintln!("[uplink] singleton acquired; entering supervisor loop");
+    }
 
     let client_id = ensure_client_id(&config_env, cwd);
     let mut supervisor = TargetSupervisor::default();
@@ -1399,6 +1424,12 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
             None
         };
         let config = resolve_uplink_config(&config_env, cwd);
+        if dbg {
+            eprintln!(
+                "[uplink] loop: enabled={} config.enabled={} host={:?} port={:?} tunnel_id={:?}",
+                enabled, config.enabled, config.host, config.port, config.tunnel_id
+            );
+        }
         if !enabled && peer_home.is_none() {
             reconcile_targets(&mut supervisor.active, &[], &mut |_| unreachable!());
             write_supervisor_status(
@@ -1420,6 +1451,11 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         let discover_enabled =
             resolve_config_setting("remote.discover", &config_env, cwd) != Some(Value::Bool(false));
         let own_install_id = as_string(resolve_config_setting("install.id", &config_env, cwd));
+        if dbg {
+            eprintln!(
+                "[uplink] discover_enabled={discover_enabled} own_install_id={own_install_id:?}; starting discovery"
+            );
+        }
         let discovered = if enabled && discover_enabled {
             match crate::discovery::list_climon_ingest_tunnels(&discovery_gateway).await {
                 Ok(hosts) => hosts,
@@ -1438,6 +1474,9 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         } else {
             Vec::new()
         };
+        if dbg {
+            eprintln!("[uplink] discovery returned {} ingest host(s)", discovered.len());
+        }
         let explicit_host = if config.enabled {
             config.host.clone().zip(config.port)
         } else {
@@ -1448,6 +1487,11 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
         } else {
             None
         };
+        if dbg {
+            eprintln!(
+                "[uplink] explicit_host={explicit_host:?} explicit_tunnel_id={explicit_tunnel_id:?}"
+            );
+        }
         let mut desired = Vec::new();
         if let Some((host, port)) = peer_target {
             desired.push(UplinkTargetSpec::Direct { host, port });
@@ -1461,6 +1505,9 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
                 discovered,
             },
         ));
+        if dbg {
+            eprintln!("[uplink] computed {} desired target(s): {desired:?}", desired.len());
+        }
 
         let ce = config_env.clone();
         let se = store_env.clone();
@@ -1479,6 +1526,12 @@ pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) 
             TargetHandle::new(cancel, task)
         };
         reconcile_targets(&mut supervisor.active, &desired, &mut spawn);
+        if dbg {
+            eprintln!(
+                "[uplink] reconciled; {} active bridge(s)",
+                supervisor.active.len()
+            );
+        }
         if supervisor.active.is_empty() {
             write_supervisor_status(
                 &config_env,
