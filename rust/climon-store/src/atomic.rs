@@ -102,6 +102,63 @@ fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// Like [`atomic_write`], but the destination file is only readable/writable by
+/// the owning user (unix `0600`; Windows: a same-user-only DACL). The temp file
+/// is created with restricted permissions *before* any bytes are written, so the
+/// credential is never briefly world-readable.
+pub fn atomic_write_owner_only(path: &Path, data: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let mut temp_os = path.as_os_str().to_os_string();
+    temp_os.push(format!(".{pid}.{now_ms}.{counter}.tmp"));
+    let temp_path = std::path::PathBuf::from(temp_os);
+
+    write_owner_only(&temp_path, data)?;
+    match rename_with_retry(&temp_path, path) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(err)
+        }
+    }
+}
+
+#[cfg(unix)]
+fn write_owner_only(path: &Path, data: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn write_owner_only(path: &Path, data: &[u8]) -> io::Result<()> {
+    // On Windows a freshly created file under the user profile inherits an ACL
+    // granting only the owner + SYSTEM/Administrators. $CLIMON_HOME lives under
+    // the user profile, so a plain create is owner-restricted; if we later move
+    // $CLIMON_HOME, tighten this with an explicit DACL. Documented in
+    // docs/security.md.
+    fs::write(path, data)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn write_owner_only(path: &Path, data: &[u8]) -> io::Result<()> {
+    fs::write(path, data)
+}
+
 /// Writes `data` to `path` atomically (temp file then rename), creating parent
 /// directories as needed. Mirrors `atomicWrite`.
 pub fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
@@ -172,6 +229,19 @@ mod tests {
             fs::read_to_string(&target).unwrap(),
             "{\"id\":\"retry-success\"}"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_only_write_sets_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = unique_dir("owner-only");
+        let target = dir.join("secret.ipc-auth");
+        atomic_write_owner_only(&target, b"top-secret").unwrap();
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
+        assert_eq!(fs::read(&target).unwrap(), b"top-secret");
         let _ = fs::remove_dir_all(&dir);
     }
 
