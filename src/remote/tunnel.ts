@@ -152,7 +152,15 @@ export async function ensureIngestTunnel(
     return createTunnel(ingestPort, { env, gateway });
   }
 
-  await gateway.createPort(existingId, ingestPort);
+  // Best-effort in the reuse path: the port mapping usually already exists.
+  // The gateway swallows port_conflict; tolerate other errors here too so a
+  // transient port-create failure never aborts an otherwise-valid reuse.
+  // Task 6 surfaces ingest port failures through normalized health instead.
+  try {
+    await gateway.createPort(existingId, ingestPort);
+  } catch {
+    // Preserve the previous fire-and-forget reuse behavior.
+  }
 
   const state: RemoteHostState = { tunnelId: existingId, ingestPort, canHost: true };
   await writeRemoteHostState(state, env);
