@@ -38,6 +38,7 @@ pub struct UpdateCommandOptions<'a> {
 const MSG_UP_TO_DATE: &str = "climon is already up to date";
 const MSG_VERIFY_FAILED: &str =
     "Update aborted: signature verification failed. No changes were made.";
+const MSG_NO_ARTIFACT: &str = "No update artifact is available for";
 
 /// Executes the verified installer entrypoint.
 pub trait InstallerRunner {
@@ -88,6 +89,7 @@ pub fn run_update_command(
 
     let key = artifact_key(opts.platform, opts.arch);
     if !opts.manifest.artifacts.contains_key(&key) {
+        print(&format!("{MSG_NO_ARTIFACT} {key} yet.\n"));
         return Ok(UpdateResult {
             status: UpdateStatus::NoArtifact,
             version: None,
@@ -331,6 +333,34 @@ mod tests {
 
         assert_eq!(res.status, UpdateStatus::VerifyFailed);
         assert!(runner.calls.is_empty());
+    }
+
+    #[test]
+    fn missing_host_artifact_reports_and_prints_guidance() {
+        let (_signing, pub_b64) = keypair();
+        let dir = tempfile::tempdir().unwrap();
+        // Manifest advertises a newer version but only for a different host key.
+        let m = manifest(0, "/artifact.zip");
+        let opts = UpdateCommandOptions {
+            install_dir: dir.path(),
+            current_version: "0.12.1",
+            manifest: &m,
+            public_key_b64: &pub_b64,
+            platform: "win32",
+            arch: node_arch(),
+        };
+        let mut runner = RecordingRunner::returning(exit_status(0));
+        let mut printed = String::new();
+
+        let res = run_update_command(&opts, &mut runner, &mut |s| printed.push_str(s)).unwrap();
+
+        assert_eq!(res.status, UpdateStatus::NoArtifact);
+        assert!(runner.calls.is_empty());
+        assert!(
+            printed.contains(MSG_NO_ARTIFACT)
+                && printed.contains(&format!("windows-{}", node_arch())),
+            "expected no-artifact guidance, got: {printed:?}"
+        );
     }
 
     #[test]

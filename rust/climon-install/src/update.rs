@@ -841,8 +841,8 @@ pub fn run_recover_bootstrap_unix(
 
 /// Atomically writes a pointer file `<dir>/<base>.version` containing
 /// `<version>\n`. Uses temp-file + rename so the file is never observed
-/// half-written. This is the installer-owned copy; `climon-update` has its
-/// own identical implementation which will be removed in Task 3.
+/// half-written. The installer owns pointer writes; `climon-update` only
+/// reads pointer files.
 pub fn write_pointer_atomic(
     dir: &std::path::Path,
     base: &str,
