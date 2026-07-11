@@ -9,6 +9,7 @@
 //! - [`priority`]   <- `src/priority.ts`
 //! - [`session_meta`] <- `src/session-meta.ts`
 
+pub mod auth;
 pub mod frame;
 pub mod meta;
 pub mod priority;

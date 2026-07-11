@@ -8,3 +8,7 @@ description = "climon wire protocol, session metadata, and priority types (Rust 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+getrandom = { workspace = true }
