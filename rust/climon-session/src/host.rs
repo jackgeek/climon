@@ -447,7 +447,17 @@ impl HostState {
             return;
         };
         self.controller_id = Some(vid.to_string());
+        let before = (self.applied_cols, self.applied_rows);
         self.set_pty_size(cols, rows);
+        // A genuine size change already delivered SIGWINCH / a ConPTY resize, so
+        // the app re-rendered live. Only when a *non-local* surface takes control
+        // at the exact current size (no SIGWINCH) does the app need a nudge to
+        // repaint. The local terminal is excluded: its repaint is driven by the
+        // restore watcher after unsuppressing, so jiggling here would fire while
+        // local output is still suppressed and be swallowed.
+        if vid != "local" && (self.applied_cols, self.applied_rows) == before {
+            self.request_jiggle();
+        }
         self.broadcast_control();
     }
 
