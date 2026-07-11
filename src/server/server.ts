@@ -1061,6 +1061,26 @@ function devtunnelErrorResponse(error: unknown): Response {
   return Response.json({ error: error.failure }, { status });
 }
 
+/**
+ * Structured failure for an unavailable devtunnel CLI. Reuses the health probe's
+ * classified failure when present (e.g. a spawn error), otherwise synthesizes a
+ * `cli_missing` failure so callers always receive actionable guidance instead of
+ * an opaque string (covers the env-disabled path, which carries no lastFailure).
+ */
+function unavailableDevtunnelFailure(health: DevtunnelHealth): DevtunnelFailure {
+  if (health.lastFailure) return health.lastFailure;
+  return {
+    code: "cli_missing",
+    operation: "detect",
+    summary: "Microsoft Dev Tunnels is not installed or is unavailable on this machine.",
+    remediation: "Install the devtunnel CLI, then retry.",
+    technicalDetail: "devtunnel CLI not available",
+    occurredAt: new Date().toISOString(),
+    retryClass: "actionable",
+    retryable: false
+  };
+}
+
 function startupLog(message: string): void {
   logMsg(getLogger(), "debug", "server.startup_log_detail", { detail: message });
 }
@@ -1738,7 +1758,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         try {
           if (body.mode === "auto") {
             if (!health.available) {
-              return new Response("devtunnel CLI not available on this machine.", { status: 400 });
+              return devtunnelErrorResponse(new DevtunnelError(unavailableDevtunnelFailure(health)));
             }
             await ensureIngestTunnel(ingestPort, { gateway: devtunnel });
             lastIngestFailure = undefined;

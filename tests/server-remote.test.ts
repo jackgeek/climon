@@ -1083,4 +1083,21 @@ describe("remote status and tunnel HTTP endpoints", () => {
       await started.stop();
     }
   }, 45_000);
+
+  test("POST /api/remote/tunnel returns a structured failure when devtunnel is unavailable", async () => {
+    const started = await startServer({ env: { CLIMON_DISABLE_DEVTUNNEL: "1" } });
+    try {
+      const res = await fetch(`${started.base}/api/remote/tunnel`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: started.base },
+        body: JSON.stringify({ mode: "auto" })
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error?: { code?: string; summary?: string } };
+      expect(body.error?.code).toBe("cli_missing");
+      expect(typeof body.error?.summary).toBe("string");
+    } finally {
+      await started.stop();
+    }
+  }, 45_000);
 });
