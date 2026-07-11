@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 climon-install = { path = "../climon-install", version = "0.1.0" }
+climon-update = { path = "../climon-update", version = "0.1.0" }

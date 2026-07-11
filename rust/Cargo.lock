@@ -195,6 +195,7 @@ name = "climon-setup"
 version = "0.1.0"
 dependencies = [
  "climon-install",
+ "climon-update",
 ]
 
 [[package]]
@@ -223,6 +224,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "climon-config",
+ "climon-install",
  "ed25519-dalek",
  "libc",
  "serde",

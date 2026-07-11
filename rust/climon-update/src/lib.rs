@@ -10,6 +10,7 @@
 //! - [`pubkey`]          <- `src/update/pubkey.ts`
 
 pub mod artifact;
+pub mod bootstrap;
 pub mod check;
 pub mod clock;
 pub mod download;
