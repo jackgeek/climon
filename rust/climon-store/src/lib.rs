@@ -13,6 +13,7 @@
 pub mod atomic;
 pub mod error;
 pub mod ipc_auth;
+pub mod ipc_lock;
 pub mod lock;
 pub mod meta;
 pub mod patch;
