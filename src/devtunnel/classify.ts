@@ -88,7 +88,7 @@ const POLICY: Record<DevtunnelErrorCode, {
 };
 
 export function classifyDevtunnelFailure(
-  input: DevtunnelFailureInput | (Omit<DevtunnelFailureInput, "operation"> & { operation: string }),
+  input: DevtunnelFailureInput,
   now: Date = new Date()
 ): DevtunnelFailure {
   const output = `${input.stdout}\n${input.stderr}`.trim();
