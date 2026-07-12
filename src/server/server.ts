@@ -2127,7 +2127,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         let session;
         try {
           session = await connectAuthenticatedSession(ws.data.sessionId);
-        } catch {
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          logMsg(getLogger(), "warn", "server.attach_failed", {
+            sessionId: ws.data.sessionId,
+            reason,
+          });
+          try {
+            ws.send(JSON.stringify({ type: "error", message: reason }));
+          } catch {
+            // Socket may already be gone.
+          }
           ws.close();
           return;
         }

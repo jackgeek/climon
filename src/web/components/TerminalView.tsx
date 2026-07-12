@@ -835,6 +835,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             cols?: number;
             rows?: number;
             controllerId?: string;
+            message?: string;
           };
           if (msg.type === "exit") {
             terminalExitReceived = true;
@@ -876,6 +877,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             }
           } else if (msg.type === "replay") {
             awaitingReplayRef.current = true;
+          } else if (msg.type === "error") {
+            const detail = typeof msg.message === "string" ? msg.message : "connection failed";
+            term.write(`\r\n\x1b[31mclimon: cannot attach — ${detail}\x1b[0m\r\n`);
           }
         } catch {
           // Ignore malformed control messages.

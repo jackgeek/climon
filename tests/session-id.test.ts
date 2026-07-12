@@ -16,6 +16,11 @@ describe("validateSessionId", () => {
     expect(() => validateSessionId("rare-geckos-jam~Laptop_01")).not.toThrow();
   });
 
+  it("accepts a hostname-style namespace that is not a local id", () => {
+    expect(() => validateSessionId("client-1~s1")).not.toThrow();
+    expect(() => validateSessionId("dev-box-1~rare-geckos-jam")).not.toThrow();
+  });
+
   it("accepts a 64-char remote but rejects 65", () => {
     expect(() => validateSessionId(`rare-geckos-jam~${"a".repeat(64)}`)).not.toThrow();
     expect(() => validateSessionId(`rare-geckos-jam~${"a".repeat(65)}`)).toThrow();
