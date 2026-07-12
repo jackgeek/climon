@@ -183,6 +183,13 @@ fn v_remote_keepalive(_p: &str, v: &Value) -> Result<(), String> {
     }
 }
 
+fn v_devtunnel_probe_timeout(_p: &str, v: &Value) -> Result<(), String> {
+    match v.as_f64() {
+        Some(n) if is_int(n) && n >= 1.0 => Ok(()),
+        _ => Err("remote.devtunnelProbeTimeout must be a positive integer (>= 1 seconds)".into()),
+    }
+}
+
 fn v_client_id(_p: &str, v: &Value) -> Result<(), String> {
     let ok = matches!(v.as_str(), Some(s)
         if (1..=64).contains(&s.chars().count())
@@ -466,6 +473,16 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .accept_input()
         .global_only()
         .with_validate(v_remote_keepalive),
+        ConfigSetting::new(
+            "remote.devtunnelProbeTimeout",
+            Number,
+            "Seconds the launcher waits for the Dev Tunnels readiness probe (devtunnel --version + user show) before giving up and spawning the uplink best-effort. A stalled devtunnel is terminated on timeout so it never hangs launch. Raise it on slow networks; minimum 1.",
+            vec![Client],
+        )
+        .default(Value::from(5))
+        .accept_input()
+        .global_only()
+        .with_validate(v_devtunnel_probe_timeout),
         ConfigSetting::new(
             "remote.peerHome",
             String,
@@ -858,6 +875,7 @@ mod tests {
                 "remote.clientId",
                 "remote.spawnSecret",
                 "remote.keepAlive",
+                "remote.devtunnelProbeTimeout",
                 "remote.peerHome",
                 "remote.peerHost",
                 "remote.autoLink",
@@ -884,7 +902,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 42);
+        assert_eq!(all_config_keys().len(), 43);
     }
 
     #[test]
@@ -911,7 +929,7 @@ mod tests {
                 "hotKeys": { "focusTopSession": "Alt+J" },
                 "dashboard": { "theme": "Default", "keyBarPinned": true, "stateIconNoMotion": false },
                 "attention": { "idleSeconds": 10 },
-                "remote": { "discover": true, "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
+                "remote": { "discover": true, "ingestPortRetryAttempts": 100, "keepAlive": 60, "devtunnelProbeTimeout": 5, "autoLink": true },
                 "session": { "color": "auto", "priority": 500, "ipcTransport": "local" },
                 "tunnelLink": { "keepAlive": 60 },
                 "logging": { "level": "trace" },
@@ -978,6 +996,7 @@ mod tests {
                 "remote.clientId",
                 "remote.spawnSecret",
                 "remote.keepAlive",
+                "remote.devtunnelProbeTimeout",
                 "remote.peerHome",
                 "remote.peerHost",
                 "remote.autoLink",

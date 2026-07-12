@@ -291,6 +291,20 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "remote.devtunnelProbeTimeout",
+    type: "number",
+    defaultValue: 5,
+    purpose: "Seconds the launcher waits for the Dev Tunnels readiness probe (devtunnel --version + user show) before giving up and spawning the uplink best-effort. A stalled devtunnel is terminated on timeout so it never hangs launch. Raise it on slow networks; minimum 1.",
+    scope: ["client"],
+    acceptInput: true,
+    globalOnly: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+        throw new Error("remote.devtunnelProbeTimeout must be a positive integer (>= 1 seconds)");
+      }
+    }
+  },
+  {
     path: "remote.peerHome",
     type: "string",
     purpose: "Path to the peer OS's CLIMON_HOME for same-machine WSL<->Windows discovery (e.g. /mnt/c/Users/<you>/.climon from WSL, or \\\\wsl.localhost\\<distro>\\home\\<you>\\.climon from Windows). When feature.wslBridge is enabled, climon reads the peer's beacons and wires sessions to it. Usually set automatically by `climon link`.",
