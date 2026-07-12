@@ -1282,84 +1282,91 @@ async fn add_session(
                 Ok(pair) => pair,
                 Err(_) => break,
             };
+            let accept_sockets = accept_sockets.clone();
+            let accept_send = accept_send.clone();
+            let accept_remote_id = accept_remote_id.clone();
+            let accept_local_id = accept_local_id.clone();
+            let next_id = next_id.clone();
             let cred = accept_credential.clone();
-            let std_stream = match stream.into_std() {
-                Ok(stream) => stream,
-                Err(_) => continue,
-            };
-            if std_stream.set_nonblocking(false).is_err() {
-                continue;
-            }
-            let _ = std_stream.set_read_timeout(Some(Duration::from_secs(10)));
-            let handshaken = tokio::task::spawn_blocking(move || {
-                let mut stream = std_stream;
-                climon_session::auth::daemon_handshake(&mut stream, &cred)
-                    .map(|purpose| (stream, purpose))
-            })
-            .await;
-            let stream = match handshaken {
-                Ok(Ok((stream, climon_proto::auth::Purpose::Session))) => {
-                    if stream.set_nonblocking(true).is_err() {
-                        continue;
-                    }
-                    match TcpStream::from_std(stream) {
-                        Ok(stream) => stream,
-                        Err(_) => continue,
-                    }
-                }
-                Ok(Ok((_stream, climon_proto::auth::Purpose::Probe))) => continue,
-                Ok(Err(e)) => {
-                    eprintln!(
-                        "climon: warning: ingest attach handshake failed for {accept_local_id}: {e}"
-                    );
-                    continue;
-                }
-                Err(_) => continue,
-            };
-            let socket_id = next_id.fetch_add(1, Ordering::SeqCst);
-            let (to_local_tx, mut to_local_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-            accept_sockets.lock().await.insert(socket_id, to_local_tx);
-            let _ = accept_send.send(encode_control(&ControlMessage::Attach {
-                id: accept_remote_id.clone(),
-            }));
-
-            let (mut rd, mut wr) = stream.into_split();
-            // Writer: inbound mux data -> local socket.
-            let writer = tokio::spawn(async move {
-                while let Some(bytes) = to_local_rx.recv().await {
-                    if wr.write_all(&bytes).await.is_err() {
-                        break;
-                    }
-                }
-            });
-            // Reader: local socket -> mux data frames.
-            let reader_sockets = accept_sockets.clone();
-            let reader_send = accept_send.clone();
-            let reader_remote_id = accept_remote_id.clone();
             tokio::spawn(async move {
-                let mut buf = vec![0u8; 64 * 1024];
-                loop {
-                    match rd.read(&mut buf).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            if let Ok(frame) = encode_data(&reader_remote_id, &buf[..n]) {
-                                let _ = reader_send.send(frame);
+                let std_stream = match stream.into_std() {
+                    Ok(stream) => stream,
+                    Err(_) => return,
+                };
+                if std_stream.set_nonblocking(false).is_err() {
+                    return;
+                }
+                let _ = std_stream.set_read_timeout(Some(Duration::from_secs(10)));
+                let handshaken = tokio::task::spawn_blocking(move || {
+                    let mut stream = std_stream;
+                    climon_session::auth::daemon_handshake(&mut stream, &cred)
+                        .map(|purpose| (stream, purpose))
+                })
+                .await;
+                let stream = match handshaken {
+                    Ok(Ok((stream, climon_proto::auth::Purpose::Session))) => {
+                        if stream.set_nonblocking(true).is_err() {
+                            return;
+                        }
+                        match TcpStream::from_std(stream) {
+                            Ok(stream) => stream,
+                            Err(_) => return,
+                        }
+                    }
+                    Ok(Ok((_stream, climon_proto::auth::Purpose::Probe))) => return,
+                    Ok(Err(e)) => {
+                        eprintln!(
+                            "climon: warning: ingest attach handshake failed for {accept_local_id}: {e}"
+                        );
+                        return;
+                    }
+                    Err(_) => return,
+                };
+                let socket_id = next_id.fetch_add(1, Ordering::SeqCst);
+                let (to_local_tx, mut to_local_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+                accept_sockets.lock().await.insert(socket_id, to_local_tx);
+                let _ = accept_send.send(encode_control(&ControlMessage::Attach {
+                    id: accept_remote_id.clone(),
+                }));
+
+                let (mut rd, mut wr) = stream.into_split();
+                // Writer: inbound mux data -> local socket.
+                let writer = tokio::spawn(async move {
+                    while let Some(bytes) = to_local_rx.recv().await {
+                        if wr.write_all(&bytes).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                // Reader: local socket -> mux data frames.
+                let reader_sockets = accept_sockets.clone();
+                let reader_send = accept_send.clone();
+                let reader_remote_id = accept_remote_id.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 64 * 1024];
+                    loop {
+                        match rd.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                if let Ok(frame) = encode_data(&reader_remote_id, &buf[..n]) {
+                                    let _ = reader_send.send(frame);
+                                }
                             }
                         }
                     }
-                }
-                // Cleanup: drop this socket; emit detach when none remain.
-                let empty = {
-                    let mut map = reader_sockets.lock().await;
-                    map.remove(&socket_id);
-                    map.is_empty()
-                };
-                writer.abort();
-                if empty {
-                    let _ = reader_send.send(encode_control(&ControlMessage::Detach {
-                        id: reader_remote_id.clone(),
-                    }));
-                }
+                    // Cleanup: drop this socket; emit detach when none remain.
+                    let empty = {
+                        let mut map = reader_sockets.lock().await;
+                        map.remove(&socket_id);
+                        map.is_empty()
+                    };
+                    writer.abort();
+                    if empty {
+                        let _ = reader_send.send(encode_control(&ControlMessage::Detach {
+                            id: reader_remote_id.clone(),
+                        }));
+                    }
+                });
             });
         }
     });
