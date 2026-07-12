@@ -22,10 +22,17 @@ handshake with the session daemon.
 
 - **Local** sessions get that sidecar from their Rust daemon
   (`rust/climon-store/src/ipc_auth.rs` → `host.rs`).
-- **Remote** sessions are materialized by the Bun ingest bridge
-  (`src/remote/ingest.ts` `addSession`), which writes metadata + a raw
-  byte-forwarding loopback proxy socket but **never** writes an `.ipc-auth`
-  record.
+- **Remote** sessions are materialized by the **production Rust ingest**
+  (`climon __ingest` → `climon_remote::ingest::run_ingest_daemon`,
+  `rust/climon-remote/src/ingest.rs` `add_session`), which writes metadata + a
+  raw byte-forwarding loopback proxy socket but **never** writes an `.ipc-auth`
+  record and runs **no** handshake on the proxy.
+
+  > **Codebase note:** the Bun `src/remote/ingest.ts` is frozen legacy —
+  > `runIngestConnection` has zero production callers. All client/remote work
+  > (per repo convention) lives in the Rust `climon-remote` crate, and that is
+  > where this fix goes. An earlier draft of this spec attributed the bug to the
+  > Bun ingest; that was incorrect.
 
 Result: for every remote session, `connectAuthenticatedSession` calls
 `readIpcAuthRecord` → returns `null` → **throws** → the `open` handler's
@@ -46,8 +53,10 @@ observable so a future regression cannot hide silently.
 ## Non-goals
 
 - No change to the dev-tunnel transport, mux framing, or metadata namespacing.
-- No change to the Rust client. The ingest bridge is Bun server code
-  (`src/remote/ingest.ts`) that the dashboard server imports directly.
+- No change to the Bun dashboard server's attach *auth* path — it already reads
+  the sidecar via `connectAuthenticatedSession` and runs the client handshake.
+  The ingest fix is in the Rust `climon-remote` crate; the only Bun changes are
+  the observable-failure path (server + web).
 - No new feature-catalogue entry (`docs/features.md`) — this restores intended
   behavior rather than adding a feature.
 
@@ -78,75 +87,61 @@ daemon → client : AuthOk { daemon_proof(32) }        (Purpose.Session)
               or  AuthError { code(1) }
 ```
 
-All primitives (`randomNonce`, `verifyClientProof`, `daemonProof`,
-`clientProof`, `verifyDaemonProof`, `Purpose`, `AuthErrorCode`,
-`IPC_PROTOCOL_VERSION`, `NONCE_LEN`, `PROOF_LEN`, `PRE_AUTH_MAX_PAYLOAD`) are
-already exported from `src/ipc/auth.js`. TypeScript currently has only the client
-half (`clientHandshake` in `src/ipc/handshake.ts`); this adds the server half.
+All primitives already exist in Rust and are reused as-is:
+`climon_session::auth::daemon_handshake` / `client_handshake`, the
+`Purpose`/`AuthErrorCode` types, and `climon_store::ipc_auth::{mint, write,
+remove}`. `std::net::TcpStream` implements `SessionStream`, so the blocking
+handshake runs directly on the accepted proxy socket. **No new handshake or
+credential code is written** — the ingest simply calls the same functions the
+local session daemon already uses.
 
 ## Components
 
-### 1. `src/ipc/handshake.ts` — add `serverHandshake`
+### 1. Reused Rust primitives (no new code)
 
-```ts
-export function serverHandshake(
-  socket: Socket,
-  credential: Uint8Array,
-  timeoutMs = 5000,
-): Promise<Buffer>
-```
+- `climon_store::ipc_auth::mint(endpoint)` / `write(env, id, record)` /
+  `remove(env, id)` — the same on-disk sidecar the local daemon publishes
+  (`rust/climon-store/src/ipc_auth.rs`).
+- `climon_session::auth::daemon_handshake(&mut dyn SessionStream, &[u8])` — the
+  **blocking** server half of the mutual-HMAC handshake. It reads exactly the
+  frames it needs (no read-ahead), so there is no leftover-buffer problem: any
+  bytes the client pipelined after `AuthResponse` stay in the kernel buffer and
+  are read by the async bridge after the handshake.
+- `std::net::TcpStream: SessionStream` (`rust/climon-session/src/socket.rs:290`).
 
-Mirrors the Rust `daemon_handshake`:
-1. Send `AuthChallenge` = `version(1) || reserved(1)=0 || challenge_nonce(32)`.
-2. Read `AuthResponse`; validate length `1 + NONCE_LEN + PROOF_LEN` and purpose.
-3. `verifyClientProof` (constant-time). On failure send `AuthError(BadProof)` and
-   reject; malformed frames send `AuthError(Malformed)`.
-4. Send `AuthOk` (Purpose.Session) or `AuthProbeOk` (Purpose.Probe) carrying the
-   `daemonProof`.
-5. Resolve with any bytes received **after** the consumed `AuthResponse` frame
-   (leftover the client pipelined), mirroring how `clientHandshake` returns
-   leftover. Use `FrameDecoder` with `setMaxPayload(PRE_AUTH_MAX_PAYLOAD)` and a
-   timeout, cleaning up `data`/`error`/`close` listeners on settle.
+### 2. Async ↔ blocking bridge (the one non-obvious bit)
 
-### 2. `src/ipc/ipc-auth-store.ts` — credential mint + write + remove
+The ingest accept loop is tokio-async; `daemon_handshake` is blocking. Per
+accepted proxy connection: `stream.into_std()` → `set_nonblocking(false)` →
+`set_read_timeout(Some(10s))` → run `daemon_handshake` inside
+`tokio::task::spawn_blocking` → on success `set_nonblocking(true)` +
+`TcpStream::from_std` and resume the existing async `into_split()` bridge; on
+failure log and drop the socket (never send `Attach`).
 
-```ts
-export function mintIpcCredential(endpoint: string): IpcAuthRecord // {version:1, generation:hex(16B), endpoint, credential:hex(32B)}
-export async function writeIpcAuthRecord(id: string, record: IpcAuthRecord): Promise<void> // atomic, mode 0o600
-export async function removeIpcAuthRecord(id: string): Promise<void> // idempotent (ENOENT ok)
-```
+### 3. `rust/climon-remote/src/ingest.rs` — publish credential + gate the proxy
 
-`mintIpcCredential` matches the Rust `mint` on-disk shape
-(`rust/climon-store/src/ipc_auth.rs`): `version = 1`, `generation` = 16 random
-bytes hex, `credential` = 32 random bytes hex. Use `randomBytes` from
-`node:crypto`. Writes validate the id via the existing `validateSessionId`. Use
-an owner-only atomic write (temp file + `rename`, `mode: 0o600`, with a `chmod`
-fallback for platforms that ignore the create mode — same pattern as
-`src/config.ts`).
+`RemoteSession` gains a `credential: Vec<u8>` field.
 
-### 3. `src/remote/ingest.ts` — publish credential + gate the proxy
+In `add_session`, after the loopback listener is bound, the ref is resolved, and
+the meta is written:
+- `let record = climon_store::ipc_auth::mint(&resolved);`
+- `climon_store::ipc_auth::write(store_env, &local_id, &record)?;` (on failure:
+  `eprintln!` a warning, remove the just-written meta, drop the listener, and
+  skip materializing the proxy — never leave an unauthenticated proxy open).
+- keep `record.credential_bytes()` on the `RemoteSession`.
 
-`RemoteSession` gains a `credential: Uint8Array` field.
+In the accept loop's connection handler, before adding the socket / sending
+`Attach`:
+- run `daemon_handshake` (via the async↔blocking bridge above);
+- **on success:** insert the socket, `send(Attach)`, and wire the existing
+  reader/writer bridge unchanged;
+- **on failure:** `eprintln!("climon: warning: ingest attach handshake failed
+  for {local_id}: {e}")` and drop the socket. Never send `Attach`.
 
-In `addSession`, after `listenOnSessionSocket` resolves `actualSocketPath`:
-- `const record = mintIpcCredential(actualSocketPath);`
-- `await writeIpcAuthRecord(localId, record);`
-- keep `record`'s decoded credential bytes on the session entry.
-- If the sidecar write throws, log `ingest.ipc_auth_write_failed` and tear down
-  the just-created proxy server (do not leave an unauthenticated proxy open).
-
-In the `createNetServer((socket) => …)` connection handler, replace the
-immediate add/attach with:
-- run `serverHandshake(socket, credential)`;
-- **on success:** add socket to `sockets`, forward the resolved leftover Buffer
-  to the devbox as `encodeData(meta.id, leftover)` if non-empty, `send(attach)`,
-  then wire `socket.on("data", …)` and close/error cleanup as today;
-- **on failure:** log `ingest.attach_handshake_failed` (with reason) and
-  `socket.destroy()`. Never send `attach`.
-
-In `removeSession` and the dismissal branch of `addSession`, call
-`await removeIpcAuthRecord(localId)` alongside the existing socket cleanup so no
-stale credential file survives the session.
+In `remove_session`, `remove_session_deleting`, and the dismissal branch of
+`add_session`, call `climon_store::ipc_auth::remove(store_env, &local_id)`
+alongside the existing socket cleanup so no stale credential file survives the
+session (mirroring the local daemon's teardown in `host.rs`).
 
 ### 4. `src/server/server.ts` + `src/web/components/TerminalView.tsx` — observable attach failure
 
@@ -175,7 +170,7 @@ browser ─ws─▶ server open handler
               └─ connectAuthenticatedSession(namespacedId)
                    └─ readIpcAuthRecord(namespacedId)  ← NEW sidecar
                    └─ connect tcp://127.0.0.1:<proxyPort>
-                   └─ clientHandshake  ⇄  serverHandshake (ingest proxy)  ← NEW gate
+                   └─ clientHandshake  ⇄  daemon_handshake (Rust ingest proxy)  ← NEW gate
               on success: proxy send(attach) ─mux─▶ devbox uplink
                           devbox PTY frames ─mux─▶ proxy ─socket─▶ server ─ws─▶ browser xterm
               on failure: log (component server) + ws.send {type:"error"} → xterm red line + ws.close()
@@ -185,34 +180,34 @@ browser ─ws─▶ server open handler
 
 | Failure | Behavior |
 |---|---|
-| Proxy handshake fails (bad/absent proof) | `AuthError` sent by server handshake; proxy destroys socket; no `attach`; existing `detach`-on-last-close still applies. |
-| Sidecar write fails in `addSession` | Log `ingest.ipc_auth_write_failed`; tear down the new proxy server; skip materializing that session's proxy. |
-| Server-side `connectAuthenticatedSession` throws | Log (component `server`) + `ws.send {type:"error"}` (rendered as a red xterm line) + `ws.close()`. |
+| Proxy handshake fails (bad/absent proof) | `daemon_handshake` returns `Err`; the ingest drops the proxy socket; no `Attach`; existing `detach`-on-last-close still applies. |
+| Sidecar write fails in `add_session` | `eprintln!` warning; remove the just-written meta and drop the loopback listener; skip materializing that session's proxy. |
+| Server-side `connectAuthenticatedSession` throws | Log (component `server`, key `server.attach_failed`) + `ws.send {type:"error"}` (rendered as a red xterm line) + `ws.close()`. |
 
 ## Testing (TDD)
 
-**Unit — `tests/ipc-handshake.test.ts`:**
-- `serverHandshake` happy path with a real `clientHandshake` peer over a socket
-  pair: both verify proofs; server resolves empty leftover.
-- Bad credential: client observes `HandshakeError` with `AuthErrorCode.BadProof`.
-- Leftover: client pipelines extra bytes after `AuthResponse`; server resolves
-  them in the returned Buffer.
-- Timeout: no `AuthResponse` → server rejects after `timeoutMs`.
+**Rust unit/integration — in-module `#[cfg(test)] mod tests` in
+`rust/climon-remote/src/ingest.rs`** (following the existing
+`add_session_respects_dismissal` template, which shows `make_test_store_env`,
+`read_meta`, and the `add_session(...)` signature):
+- `add_session` writes a `<local_id>.ipc-auth` sidecar whose `endpoint` equals
+  the materialized meta's `socket_path`; `version == 1`, credential is 64 hex.
+- A **raw** connect to the loopback proxy (no handshake) emits **no** `Attach`
+  control frame and is dropped.
+- An authenticated connect (`client_handshake` with the sidecar credential)
+  produces an `Attach` frame for the session id, then bridges bytes.
 
-**Unit — `tests/ipc-auth.test.ts`:**
-- `mintIpcCredential` yields 64-hex `credential`, distinct across calls, `version = 1`.
-- `writeIpcAuthRecord` → `readIpcAuthRecord` roundtrips the record.
-- Written file mode is `0o600` (skip the mode assert on Windows).
+No new server/handshake primitives are added, so the Rust `climon-session`
+handshake and `climon-store` ipc-auth already have their own coverage — this
+plan only tests the ingest wiring.
 
-**Integration — `tests/ingest.test.ts`:**
-- After a `session-added` control frame, read the materialized `<id>.ipc-auth`,
-  connect to the proxy, complete `clientHandshake` with that credential, and
-  assert (a) an `attach` control frame is emitted to the mock devbox channel and
-  (b) devbox→browser and browser→devbox bytes bridge.
-- A **raw** connect (no handshake) receives **no** `attach` frame and is dropped.
+**Bun — observability half:** no new Bun handshake/store tests (those primitives
+are unchanged). The web `{type:"error"}` render and server error frame are
+covered by the existing `tests/terminal-panel.test.ts` sanity run plus the
+manual checks below.
 
-All tests isolate state with `CLIMON_HOME` pointing at a temp dir (socket tests
-need a real filesystem temp dir).
+All Rust tests isolate state with a temp store env (`make_test_store_env`); the
+loopback proxy binds `127.0.0.1`, so no special filesystem is required.
 
 ## Docs
 
