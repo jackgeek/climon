@@ -81,6 +81,17 @@ mandatory mutual-HMAC handshake on every connection over every transport.
   the daemon handshake before bridging the browser WebSocket; the credential and
   all `Auth*` frames stay server-side and are never forwarded to the browser.
   Dashboard liveness probes use the authenticated `Probe` purpose.
+- **Remote (devbox) sessions use the same authenticated loopback IPC.** The Rust
+  ingest (`climon __ingest`, `rust/climon-remote/src/ingest.rs`) materializes each
+  remote session behind a loopback TCP proxy. It mints a per-session `.ipc-auth`
+  credential whose `endpoint` is the resolved loopback proxy ref, publishes it
+  after writing the session metadata (`bind → publish`), and runs the daemon side
+  of the mutual-HMAC handshake on every inbound browser proxy connection before
+  bridging any bytes to the devbox. An unauthenticated connection to the loopback
+  proxy is dropped and never triggers an `attach`, so the CWE-306 guarantee also
+  covers the remote proxy hop. The credential is decoded host-locally and never
+  crosses the dev tunnel, and the sidecar is removed on session disconnect,
+  source deletion, and dismissal.
 - **Fail closed for legacy sessions.** If `$CLIMON_HOME/sessions/<id>.ipc-auth`
   is absent, consumers refuse to attach instead of falling back to unauthenticated
   IPC and surface: `Session '<id>' has no IPC credential. It was started by an
