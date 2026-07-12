@@ -1,7 +1,5 @@
 //! `climon cleanup` command wrapper. Port of `src/cli/cleanup-cmd.ts`.
 
-use std::path::Path;
-
 use climon_config::config::Env as ConfigEnv;
 use climon_remote::teardown::{teardown_local_server_stack, TeardownDeps};
 
@@ -110,17 +108,15 @@ pub fn cleanup_deps<'a>(
     TeardownDeps {
         is_process_alive,
         kill_process,
-        remove_file: Box::new(|path: &Path| {
-            let _ = std::fs::remove_file(path);
-        }),
         wait_timeout_ms,
+        ..Default::default()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -157,18 +153,26 @@ mod tests {
         std::fs::write(home.join("uplink.pid"), "333\n").unwrap();
     }
 
+    /// Overrides the graceful-shutdown hook with a no-op so cleanup tests never
+    /// POST `/__internal/shutdown` to whatever is listening on the seeded port
+    /// (e.g. a developer's live dashboard server on the default port 3131).
+    fn stub_network(mut deps: TeardownDeps<'_>) -> TeardownDeps<'_> {
+        deps.request_shutdown = Box::new(|_| true);
+        deps
+    }
+
     fn kill_succeeds() -> TeardownDeps<'static> {
         let killed: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
         let alive = killed.clone();
         let kill = killed.clone();
-        cleanup_deps(
+        stub_network(cleanup_deps(
             Box::new(move |pid| !alive.lock().unwrap().contains(&pid)),
             Box::new(move |pid, _f| {
                 kill.lock().unwrap().push(pid);
                 true
             }),
             3000,
-        )
+        ))
     }
 
     #[test]
@@ -231,7 +235,7 @@ mod tests {
             };
             run_cleanup_command(
                 &env,
-                cleanup_deps(Box::new(|_| true), Box::new(|_, _| true), 200),
+                stub_network(cleanup_deps(Box::new(|_| true), Box::new(|_, _| true), 200)),
                 &mut io,
             )
         };
