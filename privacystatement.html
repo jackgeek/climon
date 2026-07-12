@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Statement — climon</title>
+  <meta name="description" content="Privacy Statement for climon, the cross-platform PTY session manager." />
+  <meta name="robots" content="index, follow" />
+  <link rel="icon" type="image/png" href="favicon.png" />
+  <style>
+    :root { color-scheme: dark light; }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      background-color: #0b0d10;
+      color: #e6e8eb;
+      font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .wrap {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 48px 24px 96px;
+    }
+    h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 4px; }
+    h2 { font-size: 1.3rem; margin: 40px 0 12px; padding-top: 8px; border-top: 1px solid #22262b; }
+    h3 { font-size: 1.05rem; margin: 24px 0 8px; }
+    p, ul { margin: 12px 0; }
+    ul { padding-left: 22px; }
+    li { margin: 6px 0; }
+    a { color: #4ac726; }
+    a:hover { color: #57d62f; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.9em;
+      background: #16191d;
+      border: 1px solid #22262b;
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+    .updated { color: #9aa0a6; font-size: 0.9rem; margin-top: 0; }
+    strong { color: #f2f4f6; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Privacy Statement</h1>
+    <p class="updated">climon &middot; Last updated: 2026-07-12</p>
+
+    <p>
+      This Privacy Statement explains what data the climon software ("climon", "the
+      software", "we", "us") collects, why, and the choices you have. climon is an
+      open-source, cross-platform terminal session manager. It runs entirely on your
+      own machines: your sessions, terminal output, commands, and files never leave
+      your computer as part of normal operation.
+    </p>
+    <p>
+      The only data climon can send off your machine is <strong>optional, opt-in usage
+      telemetry</strong>, described below. This statement is written to apply worldwide,
+      including for people in the European Economic Area (EEA), the United Kingdom,
+      Switzerland, the United States (including California), Canada, Brazil, and other
+      jurisdictions.
+    </p>
+
+    <h2>TL;DR</h2>
+    <ul>
+      <li>Telemetry is <strong>off by default</strong>. Nothing is sent unless you explicitly
+        enable it with <code>climon config telemetry.enabled true</code>.</li>
+      <li>climon is <strong>designed never to collect personal or personally identifiable
+        information (PII)</strong>. No usernames, hostnames, IP addresses, file paths,
+        command lines, terminal output, or file contents are collected.</li>
+      <li>When telemetry is enabled, data is keyed only by a <strong>random, anonymous
+        install identifier</strong> that you can reset or delete at any time.</li>
+      <li>You can disable telemetry at any time and it takes effect immediately for
+        future runs.</li>
+    </ul>
+
+    <h2>1. Data climon does NOT collect</h2>
+    <p>
+      climon is architected so that the following never leave your machine, whether or
+      not telemetry is enabled:
+    </p>
+    <ul>
+      <li>Session output, terminal scrollback, or screen contents.</li>
+      <li>Command lines, arguments, environment variables, or their contents.</li>
+      <li>File paths, working directories, file names, or file contents.</li>
+      <li>Hostnames, usernames, user IDs, email addresses, IP addresses, or MAC addresses.</li>
+      <li>Authentication tokens, tunnel credentials, connection strings, passwords, or
+        any other secret. These are additionally redacted from all local logs.</li>
+      <li>Any other information that identifies you, your organization, or your machines.</li>
+    </ul>
+    <p>
+      <strong>Exception: optional attention notifications.</strong> When
+      <code>feature.smartNotifications</code> is enabled (off by default), attention
+      notifications include a fuzzy-extracted snippet of terminal output (&le;160 chars)
+      as the notification body. This means that terminal content leaves your machine in
+      push notification payloads (for mobile PWA notifications) and in remote-session
+      metadata when a session on a remote devbox flags attention (the snippet is synced
+      to the dashboard host along with the session status). The snippet never appears in
+      telemetry; it is opt-in via the <code>feature.smartNotifications</code> flag and can
+      be turned off again by setting it to <code>disabled</code>.
+    </p>
+    <p>
+      There are <strong>no advertising, profiling, tracking, or data-broker
+      integrations</strong> of any kind, and climon does not sell or share data for such
+      purposes.
+    </p>
+
+    <h2>2. Optional telemetry (opt-in)</h2>
+
+    <h3>2.1 What it is</h3>
+    <p>
+      The climon dashboard <strong>server</strong> (<code>climon-server</code>) can forward
+      diagnostic and usage telemetry to Microsoft Azure Application Insights. This is
+      intended to help maintainers understand which features are used and to diagnose
+      errors in aggregate. The climon <strong>client</strong> has no telemetry transport
+      and never sends telemetry.
+    </p>
+
+    <h3>2.2 It is off by default</h3>
+    <p>Telemetry only runs when <strong>all</strong> of the following are true:</p>
+    <ul>
+      <li>You have explicitly opted in by setting <code>telemetry.enabled</code> to
+        <code>true</code> (via <code>climon config telemetry.enabled true</code> or during
+        <code>climon setup</code>). The default is <code>false</code>.</li>
+      <li>The build you are running has a telemetry endpoint configured (official release
+        binaries do; a build with no endpoint sends nothing even if you opt in).</li>
+    </ul>
+    <p>If either condition is not met, no telemetry endpoint is contacted.</p>
+
+    <h3>2.3 What is collected when enabled</h3>
+    <p>
+      When telemetry is enabled, climon forwards structured diagnostic log records. Each
+      record may include:
+    </p>
+    <ul>
+      <li>A <strong>random, anonymous install identifier</strong> (<code>install.id</code>) —
+        a UUID generated locally on first run and stored in your climon configuration. It
+        contains no personal information and exists only so records from one installation
+        can be distinguished from another in aggregate.</li>
+      <li>The application role (e.g. <code>server</code>), the process ID, and the climon
+        version.</li>
+      <li>A <strong>stable message identifier</strong> (an 8-character hexadecimal code)
+        instead of the human-readable log text, so variable, potentially sensitive
+        rendered text does not leave your machine.</li>
+      <li>Non-sensitive structured parameters. Any parameter classified as sensitive
+        (hostnames, paths, URLs, configuration values, tokens, or PII) is replaced with a
+        typed redaction marker such as <code>[REDACTED:path]</code> before transmission.</li>
+      <li>Diagnostic parameters (error, reason, and status messages) are
+        <strong>sanitized</strong> rather than sent verbatim: the diagnostic skeleton
+        (error codes, system-call names, HTTP statuses) is preserved, while any embedded
+        file path, hostname, IP address, URL, email, or long token is stripped and replaced
+        with a typed marker such as <code>&lt;path&gt;</code> or <code>&lt;host&gt;</code>.
+        This lets us diagnose errors in aggregate without receiving identifying values; the
+        sanitizer errs on the side of removing too much.</li>
+    </ul>
+    <p>
+      Telemetry is keyed only by the anonymous install identifier. It is not linked to your
+      identity, and we do not attempt to re-identify you from it.
+    </p>
+
+    <h3>2.4 No free-form text is transmitted</h3>
+    <p>
+      Telemetry emission is allowlist-based: only a fixed set of non-identifying fields (an
+      anonymous install id, the application role, process id, climon version, component, and
+      a stable message id) plus explicitly-classified, redacted-or-sanitized message
+      parameters are ever transmitted. Rendered log text, serialized errors, and any
+      unrecognized field are dropped before anything leaves your machine — including for
+      internal or not-yet-catalogued log records, which are reduced to a bare identifier.
+    </p>
+
+    <h2>3. Legal basis and your rights</h2>
+    <p>
+      Because climon's telemetry is opt-in and keyed only by a random identifier that is not
+      linked to your identity, it is designed to fall outside the scope of most personal-data
+      regimes. Where any applicable law nonetheless treats this data as personal data:
+    </p>
+    <ul>
+      <li><strong>Legal basis (GDPR/UK GDPR):</strong> our legal basis is your
+        <strong>consent</strong>, given by enabling telemetry. You may withdraw consent at any
+        time (see Section 4) without affecting the lawfulness of processing before withdrawal.</li>
+      <li><strong>Your rights:</strong> depending on where you live, you may have rights to
+        access, correct, delete, restrict, or object to processing of your personal data, to
+        data portability, and to lodge a complaint with a supervisory authority (for EEA/UK
+        residents) or your local regulator. Because telemetry is anonymous and not linked to
+        your identity, we generally cannot identify your individual records; you can exercise
+        the practical equivalent by disabling telemetry and resetting your install identifier
+        (Section 4).</li>
+      <li><strong>California (CCPA/CPRA) and similar US state laws:</strong> climon does not
+        sell or share personal information and does not use it for targeted advertising or
+        profiling.</li>
+      <li><strong>No sale, no automated decision-making, no profiling.</strong></li>
+    </ul>
+
+    <h2>4. Your choices and controls</h2>
+    <ul>
+      <li><strong>Disable telemetry:</strong> <code>climon config telemetry.enabled false</code>.
+        This takes effect for future runs immediately.</li>
+      <li><strong>Never enable it:</strong> the default is disabled, so no action is needed to
+        opt out.</li>
+      <li><strong>Reset your anonymous identifier:</strong> you can delete or replace the
+        <code>install.id</code> value in your climon configuration
+        (<code>$CLIMON_HOME/config.jsonc</code>, default <code>~/.climon</code>). A new random
+        identifier is generated on next run only if telemetry is enabled.</li>
+      <li><strong>Local logs:</strong> climon writes logs to <code>$CLIMON_HOME</code> on your
+        machine. These never leave your machine unless telemetry is enabled, and secrets are
+        redacted within them. You may delete them at any time.</li>
+    </ul>
+
+    <h2>5. Data recipients, storage, and retention</h2>
+    <ul>
+      <li><strong>Processor:</strong> when telemetry is enabled, records are transmitted to
+        Microsoft Azure Application Insights, which processes and stores them on our behalf.
+        Microsoft's handling of this data is governed by the
+        <a href="https://privacy.microsoft.com/privacystatement" rel="noopener noreferrer">Microsoft Privacy Statement</a>
+        and the applicable Microsoft data protection terms.</li>
+      <li><strong>International transfers:</strong> telemetry may be processed in data centers
+        outside your country, including in regions operated by Microsoft. Where required,
+        transfers rely on appropriate safeguards (such as Standard Contractual Clauses).</li>
+      <li><strong>Retention:</strong> telemetry is retained only as long as needed for aggregate
+        diagnostics and product improvement, subject to the Application Insights retention
+        configuration, after which it is deleted or aggregated.</li>
+    </ul>
+
+    <h2>6. Children</h2>
+    <p>
+      climon is a developer tool not directed at children and does not knowingly collect any
+      data from children.
+    </p>
+
+    <h2>7. Security</h2>
+    <p>
+      The telemetry endpoint credential is never stored in climon configuration or committed to
+      source; it is embedded into official release binaries at build time. Secrets are redacted
+      from all logs.
+    </p>
+
+    <h2>8. Changes to this statement</h2>
+    <p>
+      We may update this Privacy Statement as climon evolves. Material changes will be noted in
+      the project changelog and the "Last updated" date above. Because telemetry is opt-in, any
+      expansion of collected data will remain subject to your explicit opt-in.
+    </p>
+
+    <h2>9. Contact</h2>
+    <p>
+      climon is an open-source project maintained on GitHub. For privacy questions or requests,
+      open an issue at
+      <a href="https://github.com/jackgeek/climon/issues" rel="noopener noreferrer">https://github.com/jackgeek/climon/issues</a>.
+    </p>
+  </div>
+</body>
+</html>
