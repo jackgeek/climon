@@ -43,6 +43,29 @@ export function shouldSendResize(args: {
   return !args.last || args.last.cols !== args.next.cols || args.last.rows !== args.next.rows;
 }
 
+// Decide whether a surface that just became focused/visible should reclaim
+// control of the session it is showing. Per the control-priority design,
+// returning to a window (alt-tab, tab switch, unlocking a phone, resuming a PWA)
+// makes it the controller again. We skip reclaiming ONLY when we can prove we
+// already hold control: a live open connection whose latest control frame named
+// us. While disconnected the `controllerId` we last saw may be stale -- the
+// daemon reassigns control to the local terminal when this surface's socket
+// drops (e.g. a backgrounded tab), and we never received that frame -- so we
+// must reclaim rather than trust a stale "we are the controller" value.
+// Otherwise the reconnect delivers a control frame naming the local terminal and
+// the surface wrongly shows the "Take control" button despite having had control.
+export function shouldReclaimOnFocus(args: {
+  visible: boolean;
+  sessionLive: boolean;
+  connected: boolean;
+  controllerId: string | null;
+  ownViewerId: string;
+}): boolean {
+  if (!args.visible || !args.sessionLive) return false;
+  if (args.connected && args.controllerId === args.ownViewerId) return false;
+  return true;
+}
+
 // A per-tab identity for this dashboard/PWA surface, sent with every resize so
 // the daemon can name exactly one controller and every other surface stays
 // displaced. `crypto.randomUUID()` only exists in secure contexts (https or

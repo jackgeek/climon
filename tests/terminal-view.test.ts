@@ -661,12 +661,17 @@ describe("TerminalView control handoff", () => {
   test("reclaims control when the window regains focus or visibility", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
     // Edge-triggered focus/visibility listeners re-arm take-control for the
-    // currently attached session (bug: dashboards should take over on focus).
+    // currently selected session (bug: dashboards should take over on focus).
     expect(source).toContain('window.addEventListener("focus", reclaimOnFocus)');
     expect(source).toContain('document.addEventListener("visibilitychange", reclaimOnFocus)');
-    expect(source).toContain("armTakeControl(sessionId)");
-    // Skip reclaiming when we already hold control to avoid redundant churn.
-    expect(source).toContain("if (controllerIdRef.current === viewerIdRef.current) {");
+    expect(source).toContain("armTakeControl(session.id)");
+    // The reclaim decision is gated on shouldReclaimOnFocus, which ignores a
+    // stale "we are the controller" value while disconnected so a backgrounded
+    // tab whose control the daemon reassigned still reclaims on return.
+    expect(source).toContain("shouldReclaimOnFocus({");
+    // Reclaim keys off the selected session so it survives the disconnected
+    // window (attachedSessionIdRef is null then).
+    expect(source).toContain("const session = selectedSessionRef.current;");
   });
 
   test("controller does not refit on self-caused grid changes (no resize feedback loop)", () => {
