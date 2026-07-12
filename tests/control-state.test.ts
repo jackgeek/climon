@@ -4,7 +4,8 @@ import {
   generateViewerId,
   surfaceKind,
   shouldRefitOnControlFrame,
-  shouldSendResize
+  shouldSendResize,
+  shouldReclaimOnFocus
 } from "../src/web/control-state.js";
 
 test("controller is controlling", () => {
@@ -52,4 +53,34 @@ test("an identical resize is suppressed to avoid redundant PTY resize churn", ()
 test("an identical resize is still sent when a replay must accompany it", () => {
   // Take-control needs the resize+replay round-trip even at an unchanged size.
   expect(shouldSendResize({ last: { cols: 80, rows: 24 }, next: { cols: 80, rows: 24 }, requestReplay: true })).toBe(true);
+});
+
+test("returning to focus while the live connection still names us controller does not reclaim", () => {
+  expect(
+    shouldReclaimOnFocus({ visible: true, sessionLive: true, connected: true, controllerId: "me", ownViewerId: "me" })
+  ).toBe(false);
+});
+test("a hidden window never reclaims", () => {
+  expect(
+    shouldReclaimOnFocus({ visible: false, sessionLive: true, connected: true, controllerId: "other", ownViewerId: "me" })
+  ).toBe(false);
+});
+test("a non-live session never reclaims", () => {
+  expect(
+    shouldReclaimOnFocus({ visible: true, sessionLive: false, connected: true, controllerId: "other", ownViewerId: "me" })
+  ).toBe(false);
+});
+test("a visible controller reclaims when another surface holds control", () => {
+  expect(
+    shouldReclaimOnFocus({ visible: true, sessionLive: true, connected: true, controllerId: "other", ownViewerId: "me" })
+  ).toBe(true);
+});
+test("a stale controllerId is ignored while disconnected so reclaim is armed on return", () => {
+  // While backgrounded the socket dropped and the daemon reassigned control to
+  // the local terminal, but we never received that frame -- controllerId is
+  // stale-equal to our own id. Because we are not connected we must still arm a
+  // reclaim so the reconnect re-takes control instead of showing "Take control".
+  expect(
+    shouldReclaimOnFocus({ visible: true, sessionLive: true, connected: false, controllerId: "me", ownViewerId: "me" })
+  ).toBe(true);
 });

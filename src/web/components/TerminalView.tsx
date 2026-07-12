@@ -13,7 +13,7 @@ import {
   fetchScrollback,
   isLiveStatus
 } from "../api.js";
-import { deriveControlState, generateViewerId, surfaceKind, shouldRefitOnControlFrame, shouldSendResize, type ControlState } from "../control-state.js";
+import { deriveControlState, generateViewerId, surfaceKind, shouldRefitOnControlFrame, shouldReclaimOnFocus, shouldSendResize, type ControlState } from "../control-state.js";
 import { readIsStandalone } from "../pwa/pwaContext.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
@@ -933,19 +933,29 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   // user is away from this window.
   useEffect(() => {
     function reclaimOnFocus(): void {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+      const visible = typeof document === "undefined" || document.visibilityState === "visible";
+      // Use the selected session (not the attached one): while the socket is
+      // dropped -- exactly when the daemon may have reassigned control away from
+      // this backgrounded tab -- attachedSessionIdRef is null, but we still need
+      // to arm a reclaim so the reconnect re-takes control.
+      const session = selectedSessionRef.current;
+      if (!session || !isLiveStatus(session.status)) {
         return;
       }
-      const sessionId = attachedSessionIdRef.current;
-      if (!sessionId) {
+      const ws = wsRef.current;
+      const connected = ws?.readyState === WebSocket.OPEN;
+      if (
+        !shouldReclaimOnFocus({
+          visible,
+          sessionLive: true,
+          connected,
+          controllerId: controllerIdRef.current,
+          ownViewerId: viewerIdRef.current
+        })
+      ) {
         return;
       }
-      // Already the controller? Nothing to reclaim -- avoid a redundant
-      // take-control resize round-trip.
-      if (controllerIdRef.current === viewerIdRef.current) {
-        return;
-      }
-      armTakeControl(sessionId);
+      armTakeControl(session.id);
     }
     window.addEventListener("focus", reclaimOnFocus);
     document.addEventListener("visibilitychange", reclaimOnFocus);
