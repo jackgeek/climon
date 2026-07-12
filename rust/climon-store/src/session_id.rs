@@ -11,24 +11,25 @@ pub const MAX_ATTEMPTS: usize = 50;
 /// Validates a session id used to build filesystem paths / IPC endpoints.
 ///
 /// Accepts a local id (`^[a-z]+(-[a-z]+){2}$`) or a remote-namespaced id
-/// `<local>~<remote_id>` where `<remote_id>` matches `^[A-Za-z0-9._-]{1,64}$`.
+/// `<namespace>~<remote_id>` where both namespaced components match
+/// `^[A-Za-z0-9._-]{1,64}$`.
 /// Rejects everything else — including `.`/`..`, path separators, and NUL — so
 /// no caller can escape `$CLIMON_HOME/sessions`.
 pub fn validate_session_id(id: &str) -> StoreResult<()> {
-    let (local, remote) = match id.split_once('~') {
-        Some((l, r)) => (l, Some(r)),
-        None => (id, None),
-    };
-    if !is_valid_local_id(local) {
-        return Err(StoreError::Validation(format!(
-            "Invalid session id: {id:?}"
-        )));
-    }
-    if let Some(remote) = remote {
-        if !is_valid_remote_component(remote) {
-            return Err(StoreError::Validation(format!(
-                "Invalid session id: {id:?}"
-            )));
+    match id.split_once('~') {
+        Some((namespace, remote)) => {
+            if !is_valid_remote_component(namespace) || !is_valid_remote_component(remote) {
+                return Err(StoreError::Validation(format!(
+                    "Invalid session id: {id:?}"
+                )));
+            }
+        }
+        None => {
+            if !is_valid_local_id(id) {
+                return Err(StoreError::Validation(format!(
+                    "Invalid session id: {id:?}"
+                )));
+            }
         }
     }
     Ok(())
@@ -141,6 +142,7 @@ mod tests {
         assert!(validate_session_id("rare-geckos-jam").is_ok());
         assert!(validate_session_id("rare-geckos-jam~laptop.example-1").is_ok());
         assert!(validate_session_id("rare-geckos-jam~Laptop_01").is_ok());
+        assert!(validate_session_id("client-1~s1").is_ok());
         assert!(validate_session_id(&format!("rare-geckos-jam~{}", "a".repeat(64))).is_ok());
     }
 

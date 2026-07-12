@@ -845,6 +845,7 @@ type LocalSockets = Arc<tokio::sync::Mutex<HashMap<u64, mpsc::UnboundedSender<Ve
 
 struct RemoteSession {
     local_id: String,
+    credential: Vec<u8>,
     sockets: LocalSockets,
     accept_handle: tokio::task::JoinHandle<()>,
 }
@@ -1216,9 +1217,17 @@ async fn add_session(
         .unwrap_or(false);
     if dismissed {
         if let Some(existing) = sessions.remove(&remote_id) {
-            existing.accept_handle.abort();
-            existing.sockets.lock().await.clear();
+            let RemoteSession {
+                mut credential,
+                sockets,
+                accept_handle,
+                ..
+            } = existing;
+            credential.fill(0);
+            accept_handle.abort();
+            sockets.lock().await.clear();
         }
+        let _ = climon_store::ipc_auth::remove(store_env, &local_id);
         return;
     }
 
@@ -1250,17 +1259,62 @@ async fn add_session(
     if write_session_meta(store_env, &meta_local).is_err() {
         return;
     }
+    let record = climon_store::ipc_auth::mint(&resolved);
+    if climon_store::ipc_auth::write(store_env, &local_id, &record).is_err() {
+        eprintln!(
+            "climon: warning: ingest could not write IPC credential for {local_id}; skipping proxy"
+        );
+        let _ = remove_session_meta(store_env, &local_id);
+        return;
+    }
+    let credential = record.credential_bytes().unwrap_or_default();
 
     let sockets: LocalSockets = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let accept_sockets = sockets.clone();
     let accept_send = send_tx.clone();
     let accept_remote_id = remote_id.clone();
+    let accept_local_id = local_id.clone();
+    let accept_credential = credential.clone();
     let next_id = Arc::new(AtomicU64::new(0));
     let accept_handle = tokio::spawn(async move {
         loop {
             let (stream, _) = match listener.accept().await {
                 Ok(pair) => pair,
                 Err(_) => break,
+            };
+            let cred = accept_credential.clone();
+            let std_stream = match stream.into_std() {
+                Ok(stream) => stream,
+                Err(_) => continue,
+            };
+            if std_stream.set_nonblocking(false).is_err() {
+                continue;
+            }
+            let _ = std_stream.set_read_timeout(Some(Duration::from_secs(10)));
+            let handshaken = tokio::task::spawn_blocking(move || {
+                let mut stream = std_stream;
+                climon_session::auth::daemon_handshake(&mut stream, &cred)
+                    .map(|purpose| (stream, purpose))
+            })
+            .await;
+            let stream = match handshaken {
+                Ok(Ok((stream, climon_proto::auth::Purpose::Session))) => {
+                    if stream.set_nonblocking(true).is_err() {
+                        continue;
+                    }
+                    match TcpStream::from_std(stream) {
+                        Ok(stream) => stream,
+                        Err(_) => continue,
+                    }
+                }
+                Ok(Ok((_stream, climon_proto::auth::Purpose::Probe))) => continue,
+                Ok(Err(e)) => {
+                    eprintln!(
+                        "climon: warning: ingest attach handshake failed for {accept_local_id}: {e}"
+                    );
+                    continue;
+                }
+                Err(_) => continue,
             };
             let socket_id = next_id.fetch_add(1, Ordering::SeqCst);
             let (to_local_tx, mut to_local_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -1314,6 +1368,7 @@ async fn add_session(
         remote_id,
         RemoteSession {
             local_id,
+            credential,
             sockets,
             accept_handle,
         },
@@ -1326,14 +1381,22 @@ async fn remove_session(
     store_env: &Arc<StoreEnv>,
 ) {
     if let Some(session) = sessions.remove(remote_id) {
-        session.accept_handle.abort();
-        session.sockets.lock().await.clear();
+        let RemoteSession {
+            local_id,
+            mut credential,
+            sockets,
+            accept_handle,
+        } = session;
+        credential.fill(0);
+        accept_handle.abort();
+        sockets.lock().await.clear();
+        let _ = climon_store::ipc_auth::remove(store_env, &local_id);
         let patch = SessionMetaPatch {
             status: Some(SessionStatus::Disconnected),
             priority_reason: Some(PriorityReason::Disconnected),
             ..Default::default()
         };
-        let _ = patch_session_meta(store_env, &session.local_id, patch);
+        let _ = patch_session_meta(store_env, &local_id, patch);
     }
 }
 
@@ -1352,9 +1415,17 @@ async fn remove_session_deleting(
     store_env: &Arc<StoreEnv>,
 ) {
     if let Some(session) = sessions.remove(remote_id) {
-        session.accept_handle.abort();
-        session.sockets.lock().await.clear();
-        let _ = remove_session_meta(store_env, &session.local_id);
+        let RemoteSession {
+            local_id,
+            mut credential,
+            sockets,
+            accept_handle,
+        } = session;
+        credential.fill(0);
+        accept_handle.abort();
+        sockets.lock().await.clear();
+        let _ = climon_store::ipc_auth::remove(store_env, &local_id);
+        let _ = remove_session_meta(store_env, &local_id);
     }
 }
 
@@ -1381,10 +1452,12 @@ fn reconcile_against_snapshot(
             continue;
         };
         if dismissed.contains(&meta.id) {
+            let _ = climon_store::ipc_auth::remove(store_env, &meta.id);
             let _ = remove_session_meta(store_env, &meta.id);
             continue;
         }
         if !live.contains(remote_id) {
+            let _ = climon_store::ipc_auth::remove(store_env, &meta.id);
             let _ = remove_session_meta(store_env, &meta.id);
         }
     }
@@ -2393,6 +2466,181 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_session_writes_ipc_auth_sidecar_with_proxy_endpoint() {
+        let store_env = Arc::new(make_test_store_env());
+        let label = "client-1";
+        let remote_id = "s1";
+        let local_id = namespaced_id(label, remote_id);
+        let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
+        let (tx, _rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let meta = serde_json::json!({
+            "id": remote_id, "command": ["bash"], "displayCommand": "bash", "cwd": "/home/dev",
+            "status": "running", "priorityReason": "running",
+            "cols": 80, "rows": 24, "createdAt": "t", "updatedAt": "t", "lastActivityAt": "t"
+        });
+
+        add_session(
+            &meta,
+            &Some(label.to_string()),
+            &mut sessions,
+            &store_env,
+            16,
+            &tx,
+            &None,
+        )
+        .await;
+
+        let record = climon_store::ipc_auth::read(&store_env, &local_id)
+            .unwrap()
+            .expect("ipc-auth sidecar must exist");
+        assert_eq!(record.version, 1);
+        assert_eq!(record.credential.len(), 64);
+        assert!(record.credential.chars().all(|c| c.is_ascii_hexdigit()));
+        let stored = read_meta(&store_env, &local_id).expect("meta written");
+        assert_eq!(record.endpoint, stored.socket_path);
+
+        for (_, session) in sessions.drain() {
+            session.accept_handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_requires_handshake_before_attach() {
+        use climon_proto::auth::Purpose;
+        use climon_session::auth::client_handshake;
+        use climon_session::socket::{parse_session_socket_ref, ParsedRef};
+
+        let store_env = Arc::new(make_test_store_env());
+        let label = "client-1";
+        let remote_id = "s1";
+        let local_id = namespaced_id(label, remote_id);
+        let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let meta = serde_json::json!({
+            "id": remote_id, "command": ["bash"], "displayCommand": "bash", "cwd": "/home/dev",
+            "status": "running", "priorityReason": "running",
+            "cols": 80, "rows": 24, "createdAt": "t", "updatedAt": "t", "lastActivityAt": "t"
+        });
+
+        add_session(
+            &meta,
+            &Some(label.to_string()),
+            &mut sessions,
+            &store_env,
+            16,
+            &tx,
+            &None,
+        )
+        .await;
+
+        let record = climon_store::ipc_auth::read(&store_env, &local_id)
+            .unwrap()
+            .expect("ipc-auth sidecar must exist");
+        let (host, port) = match parse_session_socket_ref(&record.endpoint).unwrap() {
+            ParsedRef::Tcp { host, port } => (host, port),
+            other => panic!("expected tcp ref, got {other:?}"),
+        };
+        let credential = record.credential_bytes().unwrap();
+
+        let raw = TcpStream::connect((host.as_str(), port)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(rx.try_recv().is_err(), "raw connect must not emit Attach");
+        drop(raw);
+
+        let client = TcpStream::connect((host.as_str(), port)).await.unwrap();
+        let std_client = client.into_std().unwrap();
+        std_client.set_nonblocking(false).unwrap();
+        let handshaken = tokio::task::spawn_blocking(move || {
+            let mut stream = std_client;
+            client_handshake(&mut stream, &credential, Purpose::Session).map(|_| stream)
+        })
+        .await
+        .unwrap();
+        let std_client = handshaken.expect("client handshake succeeds");
+
+        let frame = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("Attach within 1s")
+            .expect("channel open");
+        let mut decoder = crate::mux::MuxDecoder::new();
+        let messages = decoder.push(&frame).unwrap();
+        assert!(
+            messages.iter().any(|message| matches!(
+                message,
+                crate::mux::MuxMessage::Control(crate::mux::ControlMessage::Attach { id })
+                    if id == remote_id
+            )),
+            "expected Attach for {remote_id}, got {messages:?}"
+        );
+
+        drop(std_client);
+        for (_, session) in sessions.drain() {
+            session.accept_handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_probe_handshake_does_not_attach() {
+        use climon_proto::auth::Purpose;
+        use climon_session::auth::client_handshake;
+        use climon_session::socket::{parse_session_socket_ref, ParsedRef};
+
+        let store_env = Arc::new(make_test_store_env());
+        let label = "client-1";
+        let remote_id = "s1";
+        let local_id = namespaced_id(label, remote_id);
+        let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let meta = serde_json::json!({
+            "id": remote_id, "command": ["bash"], "displayCommand": "bash", "cwd": "/home/dev",
+            "status": "running", "priorityReason": "running",
+            "cols": 80, "rows": 24, "createdAt": "t", "updatedAt": "t", "lastActivityAt": "t"
+        });
+
+        add_session(
+            &meta,
+            &Some(label.to_string()),
+            &mut sessions,
+            &store_env,
+            16,
+            &tx,
+            &None,
+        )
+        .await;
+
+        let record = climon_store::ipc_auth::read(&store_env, &local_id)
+            .unwrap()
+            .expect("ipc-auth sidecar must exist");
+        let (host, port) = match parse_session_socket_ref(&record.endpoint).unwrap() {
+            ParsedRef::Tcp { host, port } => (host, port),
+            other => panic!("expected tcp ref, got {other:?}"),
+        };
+        let credential = record.credential_bytes().unwrap();
+
+        let client = TcpStream::connect((host.as_str(), port)).await.unwrap();
+        let std_client = client.into_std().unwrap();
+        std_client.set_nonblocking(false).unwrap();
+        let handshaken = tokio::task::spawn_blocking(move || {
+            let mut stream = std_client;
+            client_handshake(&mut stream, &credential, Purpose::Probe).map(|_| stream)
+        })
+        .await
+        .unwrap();
+        let std_client = handshaken.expect("probe handshake succeeds");
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "probe handshake must not emit Attach"
+        );
+
+        drop(std_client);
+        for (_, session) in sessions.drain() {
+            session.accept_handle.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn pending_spawn_times_out() {
         use crate::mux::ControlMessage;
         let registry = IngestConnectionRegistry::new();
@@ -2656,14 +2904,17 @@ mod tests {
     }
 
     fn unique_home(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "climon-ingest-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "climon-ingest-{tag}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
         std::fs::create_dir_all(dir.join("sessions")).unwrap();
         dir
     }
@@ -2749,6 +3000,7 @@ mod tests {
             remote_id.to_string(),
             RemoteSession {
                 local_id: local_id.clone(),
+                credential: Vec::new(),
                 sockets: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
                 accept_handle: tokio::spawn(async {}),
             },
@@ -2934,7 +3186,9 @@ mod tests {
         let store_env = Arc::new(make_test_store_env());
         let label = "client-1";
         write_remote_meta(&store_env, label, "keep");
-        write_remote_meta(&store_env, label, "drop");
+        let drop_id = write_remote_meta(&store_env, label, "drop");
+        let record = climon_store::ipc_auth::mint("tcp://127.0.0.1:5000");
+        climon_store::ipc_auth::write(&store_env, &drop_id, &record).unwrap();
 
         let mut lbl = Some(label.to_string());
         let mut sessions: HashMap<String, RemoteSession> = HashMap::new();
@@ -2977,6 +3231,9 @@ mod tests {
 
         assert!(read_meta(&store_env, &namespaced_id(label, "keep")).is_some());
         assert!(read_meta(&store_env, &namespaced_id(label, "drop")).is_none());
+        assert!(climon_store::ipc_auth::read(&store_env, &drop_id)
+            .unwrap()
+            .is_none());
     }
 
     async fn wait_meta(
