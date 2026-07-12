@@ -589,8 +589,8 @@
         "category": "generic"
       },
       "reason": {
-        "redact": false,
-        "category": "generic"
+        "redact": true,
+        "category": "diagnostic"
       }
     }
   },

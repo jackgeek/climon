@@ -104,6 +104,16 @@ describe("TerminalView", () => {
     expect(source).toContain('} else if (msg.type === "replay") {\n            awaitingReplayRef.current = true;\n          }');
   });
 
+  test("renders dashboard attach error control frames as a red terminal line", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("message?: string;");
+    expect(source).toContain('} else if (msg.type === "error") {');
+    expect(source).toContain('const detail = typeof msg.message === "string" ? msg.message : "connection failed";');
+    expect(source).toContain("climon: cannot attach — ${detail}");
+    expect(source).toContain("\\x1b[31m");
+  });
+
   test("refreshes the renderer when a hidden terminal becomes visible", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
