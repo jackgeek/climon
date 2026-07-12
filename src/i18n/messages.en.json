@@ -579,6 +579,21 @@
       }
     }
   },
+  "server.attach_failed": {
+    "id": "3a391888",
+    "t": "attach failed for session {sessionId}: {reason}",
+    "hint": "Warning logged when the dashboard server could not open an authenticated IPC connection to a session's daemon or proxy for a browser attach; {sessionId} is the local session ID and {reason} is a short non-sensitive failure description shown to the user.",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "reason": {
+        "redact": false,
+        "category": "generic"
+      }
+    }
+  },
   "server.climon_server_listening": {
     "id": "a5071ad6",
     "t": "climon server v{version} listening on http://127.0.0.1:{port}/",
