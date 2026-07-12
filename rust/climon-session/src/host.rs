@@ -984,6 +984,27 @@ pub fn run_session_host(
         );
         let exit_frame = encode_json_frame(FrameType::Exit, &ExitPayload { exit_code });
         s.broadcast(&exit_frame);
+        // Give the local terminal control back and repaint its final screen
+        // before shutting down. If a dashboard/PWA was controlling the grid when
+        // the command exited, the local terminal is displaced and stranded on the
+        // take-control notice; the restore watcher has already stopped (it breaks
+        // on `s.exited`), so nothing else will repaint it. Rebuild the command's
+        // final screen from the scrollback snapshot so the user is left looking at
+        // the last output, not the notice.
+        if let Some(bytes) = local_exit_restore_bytes(
+            s.local_attached,
+            s.local_output_suppressed,
+            &snapshot,
+            s.host_cols.max(1),
+            s.host_rows.max(1),
+            &s.mouse_mode_state,
+        ) {
+            write_local_stdout(&bytes);
+            s.controller_id = Some("local".to_string());
+            s.local_output_suppressed = false;
+            s.local_notice_size = None;
+            s.local_restore_at = None;
+        }
         // Drop every client; each writer thread drains its queued frames
         // (including the Exit just broadcast) and then shuts its socket down,
         // which in turn unblocks the connection reader threads. Writer and
@@ -1338,6 +1359,40 @@ fn spawn_connection_reader(
         let mut s = state.lock().unwrap();
         s.handle_disconnect(client_id);
     })
+}
+
+/// The bytes to write to the in-process local terminal to restore its screen
+/// when the session exits, or `None` when no restore is needed.
+///
+/// A restore is needed exactly when an interactive local terminal is attached
+/// and currently suppressed — i.e. it is displaced, showing the take-control
+/// notice because a dashboard/PWA held control when the command exited. Without
+/// this the terminal is stranded on the "Press Space to take control." notice
+/// instead of the command's final screen/scrollback; there is no live output or
+/// restore-watcher tick left to repaint it, because the daemon is tearing down.
+/// Rebuilds a host-sized viewport from the final scrollback (mirroring the
+/// restore-watcher `Repaint` path) so the last screen lands cleanly over the
+/// cleared notice. Extracted as a pure function so the exit-time restore is
+/// unit-testable without a live PTY/`HostState`.
+fn local_exit_restore_bytes(
+    local_attached: bool,
+    local_output_suppressed: bool,
+    snapshot: &[u8],
+    host_cols: u16,
+    host_rows: u16,
+    mouse_mode_state: &HashMap<String, bool>,
+) -> Option<Vec<u8>> {
+    if !(local_attached && local_output_suppressed) {
+        return None;
+    }
+    let mut out =
+        build_mouse_private_mode_restore_suffix(mouse_mode_state, TRACKED_MOUSE_PRIVATE_MODES);
+    out.extend_from_slice(&render_screen_from_replay(
+        snapshot,
+        host_cols.max(1),
+        host_rows.max(1),
+    ));
+    Some(out)
 }
 
 /// Watches for a deferred local-terminal restore (a controlling surface shrank
@@ -2183,6 +2238,50 @@ mod local_displaced_tests {
         // even a dashboard whose grid is smaller than the local console.
         assert!(local_displaced_by_controller(Some("dashboard-abc")));
         assert!(local_displaced_by_controller(Some("terminal-1234")));
+    }
+}
+
+#[cfg(test)]
+mod local_exit_restore_tests {
+    use super::local_exit_restore_bytes;
+    use std::collections::HashMap;
+
+    #[test]
+    fn no_restore_when_local_not_attached() {
+        // A headless daemon has no local screen to restore.
+        assert_eq!(
+            local_exit_restore_bytes(false, true, b"hello", 80, 24, &HashMap::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn no_restore_when_not_suppressed() {
+        // The local terminal already holds control (not displaced): its live
+        // output already painted the final screen, so nothing to repaint.
+        assert_eq!(
+            local_exit_restore_bytes(true, false, b"hello", 80, 24, &HashMap::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn restores_final_screen_when_attached_and_displaced() {
+        // The reported bug: the session exited while a dashboard controlled the
+        // grid, so the local terminal is suppressed on the take-control notice.
+        // On exit we must repaint the command's final screen from scrollback.
+        let out =
+            local_exit_restore_bytes(true, true, b"final screen output", 80, 24, &HashMap::new())
+                .expect("a displaced local terminal must be repainted on exit");
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            text.contains("final screen output"),
+            "exit restore must repaint the command's final screen; got {text:?}"
+        );
+        assert!(
+            !text.contains("Press Space to take control."),
+            "exit restore must not leave the take-control notice on screen; got {text:?}"
+        );
     }
 }
 

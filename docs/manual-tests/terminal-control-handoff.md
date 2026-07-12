@@ -402,3 +402,35 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/fingerpri
 - **Platforms:** macOS, Linux, Windows (Windows Terminal authoritative; also
   spot-check conhost since ConPTY mediates mouse-mode escapes differently).
 - **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-13 — Exit while displaced restores the local terminal's final screen
+
+- **Feature:** when the monitored command exits while a dashboard/PWA controls
+  the grid, the in-process local terminal is displaced and stranded on the
+  *"Press Space to take control."* notice. The restore watcher has already
+  stopped (it breaks on `s.exited`), so the daemon's teardown now gives control
+  back to the local terminal and repaints the command's **final screen** from the
+  scrollback snapshot before broadcasting `Exit` and shutting down
+  (`local_exit_restore_bytes` in `rust/climon-session/src/host.rs`). The user is
+  left looking at the last output/scrollback, not the take-control notice.
+- **Preconditions:** climon rebuilt from this branch and a **new** session
+  started (the daemon runs the binary it was launched from); a running
+  `climon server` dashboard.
+- **Config-matrix cell:** default config; single-dashboard browser cell.
+- **Steps:**
+  1. Start an attached session (e.g. `climon bash`).
+  2. Run a command that leaves recognizable output on screen (e.g.
+     `ls -la` or `echo FINAL-SCREEN-MARKER`).
+  3. Open the session in a dashboard browser tab and take control from it, so
+     the local terminal becomes displaced and shows *"This session is being
+     viewed on a climon dashboard. Press Space to take control."*
+  4. While the dashboard still controls, terminate the session from the
+     dashboard-controlled surface or type `exit` (via the dashboard) so the
+     shell/command exits.
+- **Expected result:** As climon exits, the local terminal is repainted with the
+  command's final screen/scrollback (e.g. the `ls -la` output or the
+  `FINAL-SCREEN-MARKER` line) — **not** left showing the *"Press Space to take
+  control."* notice. No manual `reset`/refresh is needed to see the last screen.
+- **Platforms:** macOS, Linux (verify local-terminal sizing here per the Windows
+  caveat above); spot-check Windows Terminal.
+- **Result:** _(version / date / tester / pass|fail / notes)_
