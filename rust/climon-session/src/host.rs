@@ -118,6 +118,14 @@ struct HostState {
 
     clients: HashMap<u64, Client>,
 
+    /// Sender for the dedicated local-terminal output writer thread. Every local
+    /// console write (reader live output, displaced notice, restore repaint, exit
+    /// restore) enqueues here instead of writing directly, so a blocking/stalled
+    /// console write can never freeze a caller that holds this `state` lock. The
+    /// channel is unbounded, so `send` never blocks under the lock. See
+    /// `spawn_local_output_thread`.
+    local_out: Sender<Vec<u8>>,
+
     host_cols: u16,
     host_rows: u16,
     applied_cols: u16,
@@ -189,6 +197,14 @@ type Shared = Arc<Mutex<HostState>>;
 impl HostState {
     fn fingerprint(&self) -> String {
         self.grid.fingerprint()
+    }
+
+    /// Enqueues bytes for the local-terminal writer thread. Non-blocking (the
+    /// channel is unbounded), so this is safe to call while holding the `state`
+    /// lock — the actual, potentially-blocking console write happens off-lock on
+    /// the writer thread. See `spawn_local_output_thread`.
+    fn emit_local(&self, bytes: &[u8]) {
+        let _ = self.local_out.send(bytes.to_vec());
     }
 
     /// Builds the Replay payload: the scrollback snapshot plus the mouse
@@ -349,7 +365,7 @@ impl HostState {
             if needs_render {
                 // Render the notice at the *real console* size so it is centered
                 // on what the user sees, not the (possibly larger) controller grid.
-                write_local_stdout(render_local_displaced(notice_size.0, notice_size.1).as_bytes());
+                self.emit_local(render_local_displaced(notice_size.0, notice_size.1).as_bytes());
                 self.local_output_suppressed = true;
                 self.local_notice_size = Some(notice_size);
             }
@@ -779,11 +795,24 @@ pub fn run_session_host(
     let resizer = pty.resizer();
     let pty_writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(writer));
 
+    // Dedicated local-terminal output writer thread. All local console output
+    // (reader live output, displaced notice, restore repaint, exit restore, exit
+    // mouse-mode reset) is funneled through this single unbounded channel so the
+    // blocking console write happens off any lock. Writing under the shared
+    // `state` lock previously deadlocked the whole daemon when a console write
+    // stalled (e.g. a Windows QuickEdit selection or ConPTY mid-resize).
+    let (local_out_tx, local_out_rx) = channel::<Vec<u8>>();
+    let local_out_handle = spawn_local_output_thread(
+        local_out_rx,
+        Box::new(std::io::stdout()) as Box<dyn Write + Send>,
+    );
+
     let state: Shared = Arc::new(Mutex::new(HostState {
         env: env.clone(),
         id: id.to_string(),
         resizer,
         clients: HashMap::new(),
+        local_out: local_out_tx.clone(),
         host_cols: meta.cols,
         host_rows: meta.rows,
         applied_cols: meta.cols,
@@ -999,7 +1028,7 @@ pub fn run_session_host(
             s.host_rows.max(1),
             &s.mouse_mode_state,
         ) {
-            write_local_stdout(&bytes);
+            s.emit_local(&bytes);
             s.controller_id = Some("local".to_string());
             s.local_output_suppressed = false;
             s.local_notice_size = None;
@@ -1023,7 +1052,7 @@ pub fn run_session_host(
     let _ = title_handle.join();
     let _ = reader_handle.join();
     if local_attached {
-        write_local_stdout(&build_mouse_private_mode_restore_suffix(
+        let _ = local_out_tx.send(build_mouse_private_mode_restore_suffix(
             &HashMap::new(),
             TRACKED_MOUSE_PRIVATE_MODES,
         ));
@@ -1039,6 +1068,15 @@ pub fn run_session_host(
     for h in conn_threads.lock().unwrap().drain(..) {
         let _ = h.join();
     }
+
+    // Flush the local terminal: drop every `local_out` sender (the scope clone
+    // and the one inside `state`) so the writer thread's channel closes, then
+    // join it to guarantee the final restore/reset bytes reach the console
+    // before this daemon exits. `state` is the last surviving `Arc` here — every
+    // worker thread that cloned it has already been joined above.
+    drop(local_out_tx);
+    drop(state);
+    let _ = local_out_handle.join();
 
     cleanup_session_socket(&resolved_ref);
     let _ = climon_store::ipc_auth::remove(&env, id);
@@ -1070,16 +1108,6 @@ fn render_local_displaced(_cols: u16, _rows: u16) -> String {
     out
 }
 
-/// Writes directly to the local terminal's stdout (locked, flushed). Used for
-/// the in-process host's overgrown/restored notices, which originate off the
-/// PTY-reader thread.
-fn write_local_stdout(bytes: &[u8]) {
-    let stdout = std::io::stdout();
-    let mut lock = stdout.lock();
-    let _ = lock.write_all(bytes);
-    let _ = lock.flush();
-}
-
 fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
     state: Shared,
@@ -1094,7 +1122,7 @@ fn spawn_reader_thread(
             };
             let data = &buf[..n];
             let frame = encode_frame(FrameType::Output, data);
-            let suppress_local = {
+            {
                 let mut s = state.lock().unwrap();
                 let remainder = std::mem::take(&mut s.mouse_mode_remainder);
                 s.mouse_mode_remainder = track_mouse_private_modes_from_output(
@@ -1117,18 +1145,19 @@ fn spawn_reader_thread(
                 s.scrollback.append(data);
                 s.grid.write(data);
                 s.broadcast(&frame);
-                s.local_output_suppressed
+                // Enqueue local output while still holding the lock, so it is
+                // ordered (FIFO) against the displaced-notice / restore-repaint
+                // writes that other paths enqueue under this same lock. The
+                // enqueue is non-blocking (unbounded channel); the actual console
+                // write happens off-lock on the local-output writer thread. Skip
+                // it while a controlling surface has grown the shared PTY beyond
+                // this terminal (`local_output_suppressed`): the oversized output
+                // would corrupt/blank the local screen. Scrollback, grid, and
+                // dashboard viewers above still receive every byte.
+                if !headless && !s.local_output_suppressed {
+                    s.emit_local(data);
+                }
             };
-            // Skip the local write while a controlling surface has grown the
-            // shared PTY beyond this terminal: the oversized output would
-            // corrupt/blank the local screen. Scrollback, grid, and dashboard
-            // viewers above still receive every byte.
-            if !headless && !suppress_local {
-                let stdout = std::io::stdout();
-                let mut lock = stdout.lock();
-                let _ = lock.write_all(data);
-                let _ = lock.flush();
-            }
         }
     })
 }
@@ -1254,6 +1283,25 @@ fn spawn_writer_thread(
             }
         }
         let _ = stream.shutdown_both();
+    })
+}
+
+/// Drains queued local-terminal output, writing each chunk to the local console
+/// sink in FIFO order. Runs on its own thread so a blocking/stalled console
+/// write (Windows ConPTY mid-resize, a QuickEdit text selection pausing output,
+/// output not draining, etc.) never blocks a caller that holds the shared
+/// `state` lock. Every local-output site enqueues (non-blocking) instead of
+/// writing under the lock, which previously deadlocked the whole daemon when a
+/// console write stalled. Exits, flushing, when the channel closes.
+fn spawn_local_output_thread(
+    rx: Receiver<Vec<u8>>,
+    mut sink: Box<dyn Write + Send>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        while let Ok(chunk) = rx.recv() {
+            let _ = sink.write_all(&chunk);
+            let _ = sink.flush();
+        }
     })
 }
 
@@ -1583,7 +1631,7 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
                     s.host_cols.max(1),
                     s.host_rows.max(1),
                 ));
-                write_local_stdout(&out);
+                s.emit_local(&out);
                 s.local_output_suppressed = false;
                 s.local_restore_at = None;
                 s.local_notice_size = None;
@@ -2054,6 +2102,95 @@ mod writer_thread_tests {
         }
         drop(tx);
         handle.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod local_output_thread_tests {
+    use super::spawn_local_output_thread;
+    use std::io::{self, Write};
+    use std::sync::mpsc::channel;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// A `Write` sink that records every byte written and can be gated: while
+    /// `blocked` is true, the first (and any subsequent) `write` parks until the
+    /// gate is released, simulating a stalled/blocked local console.
+    struct GatedSink {
+        buf: Arc<Mutex<Vec<u8>>>,
+        gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl Write for GatedSink {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            let (lock, cvar) = &*self.gate;
+            let mut blocked = lock.lock().unwrap();
+            while *blocked {
+                blocked = cvar.wait(blocked).unwrap();
+            }
+            self.buf.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn drains_queued_chunks_in_order_then_exits_when_sender_drops() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let sink = GatedSink {
+            buf: buf.clone(),
+            gate,
+        };
+        let (tx, rx) = channel::<Vec<u8>>();
+        let handle = spawn_local_output_thread(rx, Box::new(sink));
+
+        tx.send(b"hello".to_vec()).unwrap();
+        tx.send(b"world".to_vec()).unwrap();
+        // Dropping the only sender closes the channel; the writer drains the
+        // queued chunks in FIFO order, then exits.
+        drop(tx);
+        handle.join().unwrap();
+
+        assert_eq!(&*buf.lock().unwrap(), b"helloworld");
+    }
+
+    #[test]
+    fn producer_never_blocks_while_the_local_sink_is_stalled() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let gate = Arc::new((Mutex::new(true), Condvar::new()));
+        let sink = GatedSink {
+            buf: buf.clone(),
+            gate: gate.clone(),
+        };
+        let (tx, rx) = channel::<Vec<u8>>();
+        let handle = spawn_local_output_thread(rx, Box::new(sink));
+
+        // The sink is stalled (gate held), so the writer thread parks inside the
+        // console write. The producer must still be able to enqueue without ever
+        // blocking on that stalled write — this is the whole point of decoupling
+        // local console I/O from the callers that hold the shared state lock.
+        let start = Instant::now();
+        for _ in 0..1000 {
+            tx.send(vec![b'x'; 64]).unwrap();
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "enqueuing local output must not block on a stalled console write"
+        );
+
+        // Release the gate; the writer drains everything and exits once the
+        // sender is dropped.
+        {
+            let (lock, cvar) = &*gate;
+            *lock.lock().unwrap() = false;
+            cvar.notify_all();
+        }
+        drop(tx);
+        handle.join().unwrap();
+        assert_eq!(buf.lock().unwrap().len(), 1000 * 64);
     }
 }
 
