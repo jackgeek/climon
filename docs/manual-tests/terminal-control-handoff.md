@@ -36,14 +36,24 @@ the displaced trigger.)
 choosing* a session: clicking a session in the desktop session list, or tapping
 **Open terminal** in the mobile/PWA view, automatically takes control (an
 `armTakeControl` that flushes once the surface is attached). The desktop
-**Open terminal** button remains for opening the maximized terminal view.
+**Open terminal** button remains for opening the maximized terminal view. The
+armed take-control **stays pending until it is actually sent** — if an in-flight
+reattach swaps the socket between attach and the deferred flush, the request is
+retried on a later frame instead of being silently dropped (which would leave the
+just-selected session wrongly stuck behind *"This session is being viewed
+elsewhere."*).
 
-**Focus reclaims control.** When a dashboard/PWA window regains focus or becomes
-visible again (alt-tab, tab switch, unlocking a phone, resuming the PWA), it
-automatically takes control of the session it is showing. This is edge-triggered
-by the browser `focus`/`visibilitychange` events — it fires only on the
-transition and is skipped when the surface already holds control, so it never
-fights another surface while the user is away from this window.
+**Focus — and every (re)attach — reclaims control.** When a dashboard/PWA window
+regains focus or becomes visible again (alt-tab, tab switch, unlocking a phone,
+resuming the PWA), it automatically takes control of the session it is showing.
+This is edge-triggered by the browser `focus`/`visibilitychange` events. Because
+a **same-tab session switch** and a **mid-session WS reconnect** fire no such
+event, the surface *also* re-takes control on every attach of the actively-viewed
+(selected, visible, live) session (`shouldTakeControlOnAttach`). The daemon
+reassigns control to the local terminal the moment a surface's socket drops, so
+this onopen reclaim is what makes a mouse switch and a reconnect land control
+back on the dashboard. It is skipped when the surface already holds control, so
+it never fights another surface while the user is away from this window.
 
 **No handoff flash.** The displaced *gating* (a surface stops reporting its size)
 updates immediately, but the displaced *overlay* is revealed only after a short
@@ -433,4 +443,45 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/fingerpri
   control."* notice. No manual `reset`/refresh is needed to see the last screen.
 - **Platforms:** macOS, Linux (verify local-terminal sizing here per the Windows
   caveat above); spot-check Windows Terminal.
+- **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-14 — Mouse-switching sessions (and mid-session reconnects) reliably re-take control
+
+- **Feature:** reliable take-control on every (re)attach. The dashboard server's
+  WS bridge buffers browser frames that arrive before its async daemon connect
+  completes (`BrowserFrameGate` in `src/server/browser-frame-gate.ts`), so an
+  immediate take-control-on-attach is no longer silently dropped in that race
+  window (the root cause of the intermittent *"being viewed elsewhere"* on a
+  switch). On the client, the actively-viewed session re-arms take-control on
+  every attach (`shouldTakeControlOnAttach`) and the request stays armed and
+  retries until it is actually sent (`flushPendingTakeControl`). A same-tab
+  session switch fires **no** `focus`/`visibilitychange`, so TCH-7's focus
+  reclaim never runs for it — this attach path is what makes a mouse switch (and
+  any WS reconnect) take control.
+- **Preconditions:** a running `climon server` dashboard and **two** live local
+  sessions (e.g. two `climon bash`/`climon shell` sessions), both launched
+  attached so each has a local terminal controller. A single desktop dashboard
+  tab, kept focused throughout.
+- **Config-matrix cell:** default config; single-dashboard browser cell.
+- **Steps:**
+  1. In one dashboard tab, click session A in the session list. Confirm A takes
+     control (overlay clears, terminal live). Leave both local terminals idle.
+  2. Click session B. Confirm B takes control.
+  3. Click back to session A. Without clicking anything else, confirm A is live
+     and controlling — **not** stuck on *"This session is being viewed
+     elsewhere."*
+  4. Repeat the A↔B mouse switch briskly ~15–20 times, always using the mouse and
+     never touching the keyboard. After each switch the just-selected session must
+     end up controlling.
+  5. Select A and let it control. From a shell inside A's daemon reach (or simply
+     wait for any transient dashboard-server reconnect), or restart the dashboard
+     server once while the tab stays open, to force the terminal WS to reconnect.
+     Confirm A re-takes control on reconnect rather than dropping to the local
+     terminal.
+- **Expected result:** Every mouse switch results in the selected session
+  controlling; the *"This session is being viewed elsewhere."* overlay never
+  sticks after a switch (step 3/4). After a WS reconnect (step 5) the actively
+  viewed session automatically reclaims control from the local terminal without a
+  manual click. No resize-storm or flicker on the sessions that stay selected.
+- **Platforms:** macOS, Linux, Windows.
 - **Result:** _(version / date / tester / pass|fail / notes)_

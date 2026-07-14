@@ -674,6 +674,31 @@ describe("TerminalView control handoff", () => {
     expect(source).toContain("const session = selectedSessionRef.current;");
   });
 
+  test("a take-control that could not be sent stays armed and retries instead of being dropped", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // takeControl reports whether it actually sent (false when the socket is not
+    // OPEN or the terminal is not mounted -- e.g. the socket was swapped by an
+    // in-flight reattach between onopen and the deferred flush).
+    expect(source).toContain("function takeControl(): boolean {");
+    expect(source).toContain("return false;");
+    expect(source).toContain("return true;");
+    // flushPendingTakeControl must NOT clear the pending request unless the send
+    // succeeded; a dropped take-control is exactly the intermittent "session is
+    // being viewed elsewhere" bug on a mouse switch. It retries on a later frame.
+    expect(source).toContain("if (takeControl()) {\n      pendingTakeControlSessionRef.current = null;");
+    expect(source).toContain("requestAnimationFrame(() => flushPendingTakeControl(sessionId, attempt + 1));");
+  });
+
+  test("attaching the actively-viewed session re-takes control on reconnect", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // A mouse switch fires no focus/visibilitychange, and a WS reconnect drops us
+    // back to the local controller, so onopen must re-arm take-control for the
+    // selected+visible session (gated by shouldTakeControlOnAttach) rather than
+    // relying on reclaimOnFocus, which never runs for an intra-tab switch.
+    expect(source).toContain("shouldTakeControlOnAttach({");
+    expect(source).toContain("pendingTakeControlSessionRef.current = liveSession.id;");
+  });
+
   test("controller does not refit on self-caused grid changes (no resize feedback loop)", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
     // The refit-on-control decision is gated on shouldRefitOnControlFrame, which

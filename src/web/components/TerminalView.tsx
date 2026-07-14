@@ -13,7 +13,7 @@ import {
   fetchScrollback,
   isLiveStatus
 } from "../api.js";
-import { deriveControlState, generateViewerId, surfaceKind, shouldRefitOnControlFrame, shouldReclaimOnFocus, shouldSendResize, type ControlState } from "../control-state.js";
+import { deriveControlState, generateViewerId, surfaceKind, shouldRefitOnControlFrame, shouldReclaimOnFocus, shouldTakeControlOnAttach, shouldSendResize, type ControlState } from "../control-state.js";
 import { readIsStandalone } from "../pwa/pwaContext.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
@@ -69,6 +69,11 @@ const RECONNECT_MAX_DELAY_MS = 5_000;
 // How long to wait before revealing the "displaced" overlay, so a fast
 // take-control handoff (open/focus/button) does not flash the dialog.
 const DISPLACED_OVERLAY_DELAY_MS = 350;
+// Bound the take-control retry so a terminal that never (re)mounts cannot spin a
+// rAF loop forever. A handful of frames comfortably covers the viewport settling
+// after onopen and a quick socket swap; a longer reconnect re-arms take-control
+// again from the next attachment's onopen (shouldTakeControlOnAttach).
+const MAX_TAKE_CONTROL_FLUSH_ATTEMPTS = 10;
 
 export const terminalOptions = {
   allowProposedApi: true,
@@ -577,11 +582,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }, DISPLACED_OVERLAY_DELAY_MS);
   }
 
-  function takeControl(): void {
+  function takeControl(): boolean {
     const ws = wsRef.current;
     const term = termRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !term) {
-      return;
+      return false;
     }
     // Report our natural size first so the daemon resizes the PTY to fit this
     // surface, then seize control. This bypasses the displaced guard on
@@ -592,6 +597,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     lastSentSizeRef.current = { cols, rows };
     ws.send(JSON.stringify({ type: "resize", cols, rows, kind: kindRef.current, viewerId: viewerIdRef.current }));
     ws.send(JSON.stringify({ type: "takeControl" }));
+    return true;
   }
 
   // Arm an automatic take-control for the given session so that selecting or
@@ -606,12 +612,26 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
   }
 
-  function flushPendingTakeControl(sessionId: string): void {
+  function flushPendingTakeControl(sessionId: string, attempt = 0): void {
     if (pendingTakeControlSessionRef.current !== sessionId) {
       return;
     }
-    pendingTakeControlSessionRef.current = null;
-    takeControl();
+    if (takeControl()) {
+      pendingTakeControlSessionRef.current = null;
+      return;
+    }
+    // takeControl() no-oped: the socket was not OPEN or the terminal was not
+    // mounted at this instant -- e.g. an in-flight reattach (a session switch or
+    // a server-token reconnect) swapped wsRef between onopen and this deferred
+    // flush. Keep the request armed and retry on a later frame instead of
+    // silently dropping it, otherwise the surface sticks behind "This session is
+    // being viewed elsewhere." with no focus event to trigger reclaimOnFocus.
+    // The guard above ends the retry once the request is served or the selection
+    // changes; the attempt cap bounds a terminal that never remounts.
+    if (attempt >= MAX_TAKE_CONTROL_FLUSH_ATTEMPTS) {
+      return;
+    }
+    requestAnimationFrame(() => flushPendingTakeControl(sessionId, attempt + 1));
   }
 
   function sendAttentionAck(sessionId: string, attentionMatchedAt: string): void {
@@ -813,6 +833,21 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         return;
       }
       flushAttentionAck();
+      // Re-take control on every (re)attach of the session the user is actively
+      // viewing. The daemon reassigns control to the local terminal the moment
+      // our socket drops, and an intra-tab mouse switch fires no focus event for
+      // reclaimOnFocus, so onopen is the only edge that reclaims a switch or a
+      // mid-session reconnect. Arming (not flushing) here preserves a request
+      // already queued by onSelect and defers measurement to the frame below.
+      if (
+        shouldTakeControlOnAttach({
+          attachIsSelected: selectedSessionRef.current?.id === liveSession.id,
+          visible: visibleRef.current,
+          sessionLive: isLiveStatus(liveSession.status)
+        })
+      ) {
+        pendingTakeControlSessionRef.current = liveSession.id;
+      }
       // If the user selected/opened this session, take control once attached.
       // Defer a frame so the terminal viewport has settled before we measure it.
       if (pendingTakeControlSessionRef.current === liveSession.id) {

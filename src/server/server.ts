@@ -1,4 +1,5 @@
 import { existsSync, rmSync, watch } from "node:fs";
+
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -41,6 +42,7 @@ import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
 import { ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
 import { connectAuthenticatedSession, probeAuthenticatedSession } from "../session-socket.js";
+import { BrowserFrameGate } from "./browser-frame-gate.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
@@ -605,6 +607,50 @@ export function browserAttentionPayload(message: {
     return null;
   }
   return { needsAttention: false, reason: "viewed", attentionMatchedAt: message.attentionMatchedAt };
+}
+
+/**
+ * Forwards a single decoded browser WebSocket frame to the session daemon. Shared
+ * by the live `message` handler and the pre-daemon drain in `open`, so frames the
+ * browser sent before the daemon socket was wired (e.g. an immediate
+ * take-control-on-attach) are replayed through the exact same path instead of
+ * being dropped.
+ */
+function forwardBrowserFrame(daemon: Socket, raw: string | Buffer): void {
+  if (typeof raw !== "string") {
+    return;
+  }
+  try {
+    const message = JSON.parse(raw) as {
+      type: string;
+      data?: string;
+      cols?: number;
+      rows?: number;
+      kind?: SurfaceKind;
+      viewerId?: string;
+      needsAttention?: boolean;
+      attentionMatchedAt?: string;
+    };
+    if (message.type === "input" && typeof message.data === "string") {
+      daemon.write(encodeFrame(FrameType.Input, Buffer.from(message.data, "utf8")));
+    } else if (message.type === "resize" && message.cols && message.rows) {
+      const payload = browserResizePayload(message);
+      if (payload) {
+        daemon.write(encodeJsonFrame(FrameType.Resize, payload));
+      }
+    } else if (message.type === "takeControl") {
+      daemon.write(encodeFrame(FrameType.TakeControl));
+    } else if (message.type === "attention") {
+      const payload = browserAttentionPayload(message);
+      if (payload) {
+        daemon.write(encodeJsonFrame(FrameType.Attention, payload));
+      }
+    } else if (message.type === "replay") {
+      daemon.write(encodeFrame(FrameType.Replay));
+    }
+  } catch {
+    // Ignore malformed messages.
+  }
 }
 
 export interface SpawnMetaOptions {
@@ -2124,6 +2170,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     },
     websocket: {
       async open(ws: ServerWebSocket<WsData>) {
+        // Create the frame gate synchronously, before the first `await` below, so
+        // any browser frames delivered during the async daemon connect are
+        // buffered rather than dropped (the browser's own onopen has already
+        // fired and it may send take-control immediately).
+        const gateData = ws.data as WsData & { gate?: BrowserFrameGate };
+        gateData.gate ??= new BrowserFrameGate();
         let session;
         try {
           session = await connectAuthenticatedSession(ws.data.sessionId);
@@ -2193,46 +2245,28 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         });
         daemon.on("error", () => ws.close());
         daemon.on("close", () => ws.close());
+
+        // Drain any frames the browser sent while the daemon socket was still
+        // connecting (e.g. the take-control-on-attach handshake), replaying them
+        // through the same forwarder the live `message` handler uses.
+        for (const raw of gateData.gate.flush()) {
+          forwardBrowserFrame(daemon, raw);
+        }
       },
       message(ws: ServerWebSocket<WsData>, raw) {
-        const daemon = (ws.data as WsData & { daemon?: Socket }).daemon;
+        const wsData = ws.data as WsData & { daemon?: Socket; gate?: BrowserFrameGate };
+        const daemon = wsData.daemon;
         if (!daemon) {
-          return;
-        }
-        if (typeof raw !== "string") {
-          return;
-        }
-        try {
-          const message = JSON.parse(raw) as {
-            type: string;
-            data?: string;
-            cols?: number;
-            rows?: number;
-            kind?: SurfaceKind;
-            viewerId?: string;
-            needsAttention?: boolean;
-            attentionMatchedAt?: string;
-          };
-          if (message.type === "input" && typeof message.data === "string") {
-            daemon.write(encodeFrame(FrameType.Input, Buffer.from(message.data, "utf8")));
-          } else if (message.type === "resize" && message.cols && message.rows) {
-            const payload = browserResizePayload(message);
-            if (payload) {
-              daemon.write(encodeJsonFrame(FrameType.Resize, payload));
-            }
-          } else if (message.type === "takeControl") {
-            daemon.write(encodeFrame(FrameType.TakeControl));
-          } else if (message.type === "attention") {
-            const payload = browserAttentionPayload(message);
-            if (payload) {
-              daemon.write(encodeJsonFrame(FrameType.Attention, payload));
-            }
-          } else if (message.type === "replay") {
-            daemon.write(encodeFrame(FrameType.Replay));
+          // The daemon socket is still being connected/authenticated in the async
+          // `open` handler. Buffer the frame (rather than dropping it) so an
+          // immediate take-control-on-attach is not lost to the race; `open`
+          // drains the gate once the socket is wired.
+          if (typeof raw === "string") {
+            (wsData.gate ??= new BrowserFrameGate()).buffer(raw);
           }
-        } catch {
-          // Ignore malformed messages.
+          return;
         }
+        forwardBrowserFrame(daemon, raw);
       },
       close(ws: ServerWebSocket<WsData>) {
         const wsData = ws.data as WsData & { daemon?: Socket; closed?: boolean };

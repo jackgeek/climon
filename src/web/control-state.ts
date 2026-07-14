@@ -66,6 +66,25 @@ export function shouldReclaimOnFocus(args: {
   return true;
 }
 
+// Decide whether a fresh attachment should immediately seize control. The daemon
+// reassigns control to the local terminal the moment this surface's socket drops
+// (a session switch, a server-token reattach, or any reconnect), so every attach
+// of the session the user is actively viewing -- the selected, visible, live
+// session -- must re-take control. Unlike shouldReclaimOnFocus this fires on the
+// reconnect/select edge rather than a window focus event, which is the ONLY path
+// that covers an intra-tab mouse switch (switching sessions in the same tab emits
+// no focus/visibilitychange). Without it a raced take-control is dropped and the
+// surface sticks behind "This session is being viewed elsewhere." Attaching only
+// ever targets the selected+visible session, so gating on attachIsSelected keeps
+// a background prefetch (should one ever exist) from stealing control.
+export function shouldTakeControlOnAttach(args: {
+  attachIsSelected: boolean;
+  visible: boolean;
+  sessionLive: boolean;
+}): boolean {
+  return args.attachIsSelected && args.visible && args.sessionLive;
+}
+
 // A per-tab identity for this dashboard/PWA surface, sent with every resize so
 // the daemon can name exactly one controller and every other surface stays
 // displaced. `crypto.randomUUID()` only exists in secure contexts (https or

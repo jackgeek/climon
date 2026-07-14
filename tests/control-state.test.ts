@@ -5,7 +5,8 @@ import {
   surfaceKind,
   shouldRefitOnControlFrame,
   shouldSendResize,
-  shouldReclaimOnFocus
+  shouldReclaimOnFocus,
+  shouldTakeControlOnAttach
 } from "../src/web/control-state.js";
 
 test("controller is controlling", () => {
@@ -83,4 +84,22 @@ test("a stale controllerId is ignored while disconnected so reclaim is armed on 
   expect(
     shouldReclaimOnFocus({ visible: true, sessionLive: true, connected: false, controllerId: "me", ownViewerId: "me" })
   ).toBe(true);
+});
+
+test("attaching the actively-viewed session takes control so a reconnect re-takes from local", () => {
+  // The daemon reassigns control to the local terminal the moment our socket
+  // drops, so every fresh attach of the session the user is actively viewing
+  // must re-take control -- otherwise a select or a mid-session reconnect leaves
+  // the surface wrongly displaced behind "This session is being viewed
+  // elsewhere." with no focus event to trigger reclaimOnFocus.
+  expect(shouldTakeControlOnAttach({ attachIsSelected: true, visible: true, sessionLive: true })).toBe(true);
+});
+test("attaching a session other than the selected one never takes control", () => {
+  expect(shouldTakeControlOnAttach({ attachIsSelected: false, visible: true, sessionLive: true })).toBe(false);
+});
+test("a hidden surface never takes control on attach", () => {
+  expect(shouldTakeControlOnAttach({ attachIsSelected: true, visible: false, sessionLive: true })).toBe(false);
+});
+test("attaching a non-live session never takes control", () => {
+  expect(shouldTakeControlOnAttach({ attachIsSelected: true, visible: true, sessionLive: false })).toBe(false);
 });
