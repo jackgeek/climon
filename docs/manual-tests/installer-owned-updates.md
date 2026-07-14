@@ -71,6 +71,20 @@ production-signed release (see the "Release gate" note at the end).
   server that serves the release directory at its root works, mirroring the
   harness's `serveDir`).
 
+> **Critical — sandbox the real install location before running any rig
+> `install[.exe]`/`update`:** the installer resolves its install directory from
+> the OS-standard location (`%LOCALAPPDATA%\Programs\climon` on Windows,
+> `$HOME`-relative on macOS/Linux) — **not** from `CLIMON_HOME`. Setting
+> `CLIMON_HOME` alone does **not** protect your real install: any manual step
+> below that runs `install[.exe]` or `climon update` directly (i.e. not through
+> `scripts/upgrade-test-harness.ts`, which already sandboxes this) will
+> overwrite your actual installed climon unless you also override
+> `LOCALAPPDATA` (Windows: `$env:LOCALAPPDATA = "$RIG\localappdata"`) or the
+> equivalent home/profile variable for your OS, pointed at a scratch directory,
+> for every command in the same shell/process. Environment variables set in one
+> terminal invocation do not carry over to a separate one, so re-export the
+> override in each new shell before touching a rig binary.
+
 ### A. Generate a throwaway Ed25519 keypair
 
 The raw public key is embedded in the test build; the PKCS8 private key signs the
@@ -184,7 +198,10 @@ download fails.
 
 > **Windows note:** use PowerShell env syntax (`$env:CLIMON_TEST_MANIFEST_URL =
 > "$BASE/manifest.json"`), `install.exe`/`climon.exe`, `Expand-Archive` instead
-> of `unzip`, and `python -m http.server` for the loopback server.
+> of `unzip`, and `python -m http.server` for the loopback server. Also set
+> `$env:LOCALAPPDATA` to a scratch directory in the same shell before running
+> `install.exe` or `climon.exe update` — see the sandboxing warning under
+> "Prerequisites" above.
 
 ---
 
