@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Button, Text, makeStyles, tokens } from "@fluentui/react-components";
+import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -69,6 +69,11 @@ const RECONNECT_MAX_DELAY_MS = 5_000;
 // How long to wait before revealing the "displaced" overlay, so a fast
 // take-control handoff (open/focus/button) does not flash the dialog.
 const DISPLACED_OVERLAY_DELAY_MS = 350;
+// How long to wait after an attach's replay completes before revealing the
+// content, so the post-replay refit AND the daemon's take-control jiggle
+// repaint (a PTY resize burst) both land while the content is still hidden.
+// Without this settle the fade starts mid-jiggle and the reflow is visible.
+const CONTENT_REVEAL_SETTLE_MS = 320;
 
 export const terminalOptions = {
   allowProposedApi: true,
@@ -378,12 +383,28 @@ const useStyles = makeStyles({
     minWidth: 0,
     minHeight: 0,
     padding: "8px",
+    // The xterm content fades in over the theme background once an attach's
+    // replay/reflow and the daemon jiggle have settled (see CONTENT_REVEAL_
+    // SETTLE_MS / scheduleContentReveal), masking the visible jiggle.
+    "& .xterm": {
+      opacity: 1,
+      transition: "opacity 220ms ease"
+    },
     "& .xterm-viewport": {
       scrollbarWidth: "none",
       msOverflowStyle: "none"
     },
     "& .xterm-viewport::-webkit-scrollbar": {
       display: "none"
+    }
+  },
+  // Applied while an attach's replay/reflow is in flight: instantly hides the
+  // xterm content (revealing the theme background beneath) with no fade-out, so
+  // only the fade-in animates when the class is removed.
+  hidden: {
+    "& .xterm": {
+      opacity: 0,
+      transition: "none"
     }
   },
   overlay: {
@@ -460,6 +481,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const xtermThemeRef = useRef(xtermTheme);
   const onFontSizeChangeRef = useRef(onFontSizeChange);
   const [displayState, setDisplayState] = useState<ControlState>("controlling");
+  // False while an attach's replay/reflow is in flight so the xterm content is
+  // hidden over the solid theme background; flipped true (fading the content in)
+  // once the replay/scrollback settles. Starts hidden so the very first attach
+  // never flashes an unsettled grid.
+  const [contentVisible, setContentVisible] = useState(false);
   const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
   const selectedSessionRef = useRef<SessionMeta | null>(session);
   const visibleRef = useRef(visible);
@@ -468,6 +494,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const attachmentGenerationRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const contentRevealTimerRef = useRef<number | null>(null);
   const awaitingReplayRef = useRef(false);
   const replayWriteInProgressRef = useRef(false);
   const replayAfterNextResizeRef = useRef(false);
@@ -556,6 +583,40 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       clearTimeout(displacedOverlayTimerRef.current);
       displacedOverlayTimerRef.current = null;
     }
+  }
+
+  function clearContentRevealTimer(): void {
+    if (contentRevealTimerRef.current !== null) {
+      clearTimeout(contentRevealTimerRef.current);
+      contentRevealTimerRef.current = null;
+    }
+  }
+
+  // Instantly hide the xterm content over the solid theme background at the
+  // start of an attach, cancelling any pending reveal so a superseded attach
+  // never un-hides the new one mid-flight.
+  function hideContent(): void {
+    clearContentRevealTimer();
+    setContentVisible(false);
+  }
+
+  // Reveal the content only after the post-replay refit and the daemon's
+  // take-control jiggle repaint have had time to settle, so the fade never
+  // starts mid-reflow. A frame after the settle we flip the flag, letting the
+  // CSS opacity transition animate the fade-in.
+  function scheduleContentReveal(): void {
+    clearContentRevealTimer();
+    contentRevealTimerRef.current = window.setTimeout(() => {
+      contentRevealTimerRef.current = null;
+      requestAnimationFrame(() => setContentVisible(true));
+    }, CONTENT_REVEAL_SETTLE_MS);
+  }
+
+  // Reveal immediately, e.g. on disconnect, so the content can never stick
+  // hidden while the reconnect overlay covers interaction.
+  function revealContentNow(): void {
+    clearContentRevealTimer();
+    setContentVisible(true);
   }
 
   // Defer showing the displaced overlay briefly. When a surface takes control
@@ -785,6 +846,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     wsRef.current = ws;
     attachedSessionIdRef.current = liveSession.id;
     initialReplayCompleteRef.current = false;
+    // Hide the content until this attach's replay AND the daemon jiggle settle,
+    // so their reflow is masked by the solid theme background (see contentVisible
+    // / scheduleContentReveal).
+    hideContent();
 
     let firstBinaryFrame = true;
     let disconnected = false;
@@ -803,6 +868,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         attachedSessionIdRef.current = null;
       }
       initialReplayCompleteRef.current = true;
+      // Never leave the content stuck hidden if we disconnect before the replay
+      // settles; the reconnect overlay covers any interaction meanwhile.
+      revealContentNow();
       if (!terminalExitReceived) {
         scheduleReconnect(liveSession.id, attachmentGeneration);
       }
@@ -906,6 +974,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
               () => {
                 initialReplayCompleteRef.current = true;
                 reconnectAttemptRef.current = 0;
+                scheduleContentReveal();
               },
               refreshActiveTerminal
             );
@@ -967,6 +1036,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
   // Clear any pending displaced-overlay timer on unmount.
   useEffect(() => cancelDisplacedOverlay, []);
+
+  // Clear any pending content-reveal timer on unmount.
+  useEffect(() => clearContentRevealTimer, []);
 
   // Create the terminal once and wire input + resize handling.
   useEffect(() => {
@@ -1104,17 +1176,20 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       }
       attachLiveSession(session, false);
     } else {
+      // Hide the content until the captured scrollback is written, matching the
+      // live-attach masking (see contentVisible).
+      hideContent();
       void fetchScrollback(session.id).then((buf) => {
         if (cancelled) {
           return;
         }
         if (buf) {
           term.write(buf, () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal);
           });
         } else {
           term.write("\x1b[90m[no output captured]\x1b[0m\r\n", () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal);
           });
         }
       });
@@ -1173,7 +1248,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     <div className={styles.wrapper}>
       <div
         ref={containerRef}
-        className={styles.root}
+        className={mergeClasses(styles.root, contentVisible ? undefined : styles.hidden)}
         style={{
           backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
           visibility: displayState === "displaced" ? "hidden" : "visible",
