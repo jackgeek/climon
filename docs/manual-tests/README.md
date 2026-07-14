@@ -89,6 +89,7 @@ result-tracking row.
 | — | Terminal viewport fit — terminal re-fits its pane instead of locking to the host grid (addon-fit/xterm version-mismatch regression) | [terminal-viewport-fit.md](terminal-viewport-fit.md) |
 | — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |
 | — | Jiggle-repaint on local restore (force wrapped app to redraw when the local terminal regains control) | [jiggle-repaint-on-restore.md](jiggle-repaint-on-restore.md) |
+| — | Terminal fade-in on (re)attach — xterm starts invisible over the theme background and fades in once the replay/reflow settles, masking the jiggle | [terminal-fade-in-on-attach.md](terminal-fade-in-on-attach.md) |
 
 ## Recording results
 

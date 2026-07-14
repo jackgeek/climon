@@ -55,6 +55,28 @@ describe("TerminalView", () => {
     expect(markup).not.toContain("border-top:");
   });
 
+  test("hides the xterm on attach and fades it in once the replay/jiggle settles", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    // Starts invisible so the first attach never flashes an unsettled grid.
+    expect(source).toContain("const [contentVisible, setContentVisible] = useState(false);");
+    // The solid mask is the theme's own background beneath the faded xterm.
+    expect(source).toContain('"& .xterm": {\n      opacity: 1,\n      transition: "opacity 220ms ease"\n    }');
+    expect(source).toContain('"& .xterm": {\n      opacity: 0,\n      transition: "none"\n    }');
+    expect(source).toContain("mergeClasses(styles.root, contentVisible ? undefined : styles.hidden)");
+    // Reveal is delayed past the post-replay refit and the daemon jiggle so the
+    // fade never starts mid-reflow.
+    expect(source).toContain("const CONTENT_REVEAL_SETTLE_MS = 320;");
+    expect(source).toContain("}, CONTENT_REVEAL_SETTLE_MS);");
+    // Hidden at every live attach start and terminated-scrollback load; revealed
+    // (settle-delayed) when the replay/scrollback write completes.
+    expect(source).toContain("hideContent();");
+    expect(source).toContain("reconnectAttemptRef.current = 0;\n                scheduleContentReveal();");
+    expect(source).toContain("completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal)");
+    // Disconnect reveals immediately so the content can never stick hidden.
+    expect(source).toContain("revealContentNow();");
+  });
+
   test("refits when the selected session changes even if terminal chrome is unchanged", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
