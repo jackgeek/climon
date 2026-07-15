@@ -1,14 +1,14 @@
 {
   "win32": [
-    { "source": "climon.dll", "dest": "climon.dll" },
+    { "source": "install.exe", "dest": "climon.exe" },
     { "source": "climon-server.exe", "dest": "climon-server.exe" }
   ],
   "linux": [
-    { "source": "climon", "dest": "climon" },
+    { "source": "install", "dest": "climon" },
     { "source": "climon-server", "dest": "climon-server" }
   ],
   "darwin": [
-    { "source": "climon", "dest": "climon" },
+    { "source": "install", "dest": "climon" },
     { "source": "climon-server", "dest": "climon-server" }
   ]
 }

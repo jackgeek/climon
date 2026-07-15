@@ -14,12 +14,6 @@ path = "src/main.rs"
 name = "climon_cli"
 path = "src/lib.rs"
 
-[features]
-# Dev/test only: forwards to climon-update's test-update-endpoint. Used solely by
-# scripts/upgrade-test-harness.ts to build a scratch client that can be pointed at a
-# local signed manifest. Never enabled by the release pipeline.
-test-update-endpoint = ["climon-update/test-update-endpoint"]
-
 [dependencies]
 climon-proto = { path = "../climon-proto", version = "0.1.0" }
 climon-config = { path = "../climon-config", version = "0.1.0" }

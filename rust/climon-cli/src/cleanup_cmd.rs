@@ -26,25 +26,6 @@ fn platform_kill_advice(pid: u32) -> String {
 pub fn run_cleanup_command(env: &ConfigEnv, deps: TeardownDeps, io: &mut CleanupCommandIo) -> i32 {
     let report = teardown_local_server_stack(env, &deps);
 
-    // After teardown, reap superseded versioned binaries (Windows only). Files
-    // still held by a running process are kept and reported, never force-killed.
-    #[cfg(windows)]
-    {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let reaped = climon_update::reaper::reap_superseded(dir);
-                for name in &reaped.removed {
-                    (io.stdout)(&format!("Removed {name}\n"));
-                }
-                for name in &reaped.skipped_locked {
-                    (io.stderr)(&format!(
-                        "Kept {name}: still in use by a running process.\n"
-                    ));
-                }
-            }
-        }
-    }
-
     let mut had_problems = false;
     let mut lines: Vec<String> = Vec::new();
 

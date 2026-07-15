@@ -23,13 +23,13 @@ pub mod client;
 pub mod config_cmd;
 pub mod detach_key;
 pub mod detect_shell;
+pub mod installer;
 pub mod launcher;
 pub mod link_cmd;
 pub mod pathenv;
 pub mod process_kill;
 
 pub mod remotes_cmd;
-pub mod run;
 pub mod self_spawn;
 pub mod server_exec;
 pub mod spawn;
@@ -37,8 +37,6 @@ pub mod spawn_command;
 pub mod terminal_launch;
 pub mod uplink_spawn;
 pub mod version;
-
-pub use run::run;
 
 /// The embedded MIT licence, printed first by `climon license`.
 pub const CLIMON_LICENSE: &str = include_str!("../../../LICENSE");
