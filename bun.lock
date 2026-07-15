@@ -6,7 +6,7 @@
       "name": "climon",
       "dependencies": {
         "@fluentui/react-components": "^9.74.3",
-        "@fluentui/react-icons": "^2.0.332",
+        "@fluentui/react-icons": "^2.0.333",
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/addon-unicode11": "^0.9.0",
         "@xterm/addon-web-links": "^0.12.0",
@@ -124,7 +124,7 @@
 
     "@fluentui/react-field": ["@fluentui/react-field@9.5.3", "", { "dependencies": { "@fluentui/react-context-selector": "^9.2.18", "@fluentui/react-icons": "^2.0.245", "@fluentui/react-jsx-runtime": "^9.4.4", "@fluentui/react-label": "^9.4.3", "@fluentui/react-shared-contexts": "^9.26.2", "@fluentui/react-theme": "^9.2.1", "@fluentui/react-utilities": "^9.26.5", "@griffel/react": "^1.5.32", "@swc/helpers": "^0.5.1" }, "peerDependencies": { "@types/react": ">=16.14.0 <20.0.0", "@types/react-dom": ">=16.9.0 <20.0.0", "react": ">=16.14.0 <20.0.0", "react-dom": ">=16.14.0 <20.0.0" } }, "sha512-5PJXFTGS9W4CBJW6Nh2Tqe5p8RxMMCPbsIyIcYUXIxCZTXDGrx1jZ+af8lWKJFlcfWOlFxyK+QE14UXl+lqzqw=="],
 
-    "@fluentui/react-icons": ["@fluentui/react-icons@2.0.332", "", { "dependencies": { "@griffel/react": "^1.6.1", "tslib": "^2.1.0" }, "peerDependencies": { "react": ">=16.8.0 <20.0.0" } }, "sha512-PxVua3X164DjoKqkgFUAs+MoCoL4sOGs+KnGKsoizV+jCe16yuZavPxhN8PCkDcAe7XrT4iCJCexOOqMcM4uBA=="],
+    "@fluentui/react-icons": ["@fluentui/react-icons@2.0.333", "", { "dependencies": { "@griffel/react": "^1.6.1", "tslib": "^2.1.0" }, "peerDependencies": { "react": ">=16.8.0 <20.0.0" } }, "sha512-HvS5kKw9tGweI3Poy6OGAiFqrt6HGElO46DFhNBeoIQRK/q35mZ2ep0u762MFuvOfLX3bVGSB8frORFTjh1E7A=="],
 
     "@fluentui/react-image": ["@fluentui/react-image@9.4.3", "", { "dependencies": { "@fluentui/react-jsx-runtime": "^9.4.4", "@fluentui/react-shared-contexts": "^9.26.2", "@fluentui/react-theme": "^9.2.1", "@fluentui/react-utilities": "^9.26.5", "@griffel/react": "^1.5.32", "@swc/helpers": "^0.5.1" }, "peerDependencies": { "@types/react": ">=16.14.0 <20.0.0", "@types/react-dom": ">=16.9.0 <20.0.0", "react": ">=16.14.0 <20.0.0", "react-dom": ">=16.14.0 <20.0.0" } }, "sha512-BQSsT3kVdpR3s02Zq9zpqj0NjaijWOVKPLBchp9XqWlygO15dkykNt2LRoHAkZRgpnlh2D8zBCw9qQ4ubzYNaA=="],
 
