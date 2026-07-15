@@ -17,6 +17,8 @@ Read `CHANGELOG.json` at the repo root. The first entry's `version` field is the
 
 Read `package.json` to get the current version. If it matches `LAST_VERSION`, the release hasn't been bumped yet — ask the user what bump level to use (patch/minor/major) and compute the next version. If it's already ahead of `LAST_VERSION`, use the `package.json` version as the new entry's version.
 
+**When you bump the version, bump it with `bun run release` (preferred) so `package.json` and the golden CLI fixtures move together. If you edit `package.json` by hand instead, you MUST also rewrite the `climon v<semver>` token on line 1 of both `fixtures/cli/version.txt` and `fixtures/cli/help.txt` — otherwise `rust/climon-cli/tests/cli_fixtures.rs` (and CI) fails on a version mismatch.**
+
 ## Step 3: Get commits since the last version
 
 Run:
@@ -75,6 +77,7 @@ Insert a new entry at the **top** of the JSON array:
 - Ensure the JSON is valid (no trailing commas, proper quoting)
 - Ensure the version is strictly `X.Y.Z` format
 - Ensure entries are ordered newest-first
+- If the version changed, confirm `fixtures/cli/version.txt` and `fixtures/cli/help.txt` line 1 report the new `climon v<semver>`, then run `cargo test -p climon-cli --test cli_fixtures` (from `rust/`) to confirm the CLI fixtures match the binary
 - Run `bun test tests/changelog.test.ts` to confirm nothing is broken
 
 ## Example
