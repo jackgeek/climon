@@ -12,26 +12,15 @@ pub struct InstallFile {
 /// (`win32`/`darwin`/`linux`). This is the single source of truth shared by the
 /// installer and the non-destructive updater swap.
 pub fn install_files_for_platform(platform: &str) -> Vec<InstallFile> {
-    if platform == "win32" {
-        return vec![
-            InstallFile {
-                source: "climon.dll".to_string(),
-                dest: "climon.dll".to_string(), // resolved to climon-<ver>.dll by the Windows apply path
-            },
-            InstallFile {
-                source: "climon-server.exe".to_string(),
-                dest: "climon-server.exe".to_string(), // resolved to climon-server-<ver>.exe
-            },
-        ];
-    }
+    let exe = if platform == "win32" { ".exe" } else { "" };
     vec![
         InstallFile {
-            source: "climon".to_string(),
-            dest: "climon".to_string(),
+            source: format!("install{exe}"),
+            dest: format!("climon{exe}"),
         },
         InstallFile {
-            source: "climon-server".to_string(),
-            dest: "climon-server".to_string(),
+            source: format!("climon-server{exe}"),
+            dest: format!("climon-server{exe}"),
         },
     ]
 }
@@ -44,9 +33,8 @@ mod tests {
     fn unix_files_have_no_exe_suffix() {
         let files = install_files_for_platform("linux");
         assert_eq!(files.len(), 2);
-        assert_eq!(files[0].source, "climon");
+        assert_eq!(files[0].source, "install");
         assert_eq!(files[0].dest, "climon");
-        assert_eq!(files[1].source, "climon-server");
         assert_eq!(files[1].dest, "climon-server");
     }
 
@@ -54,8 +42,8 @@ mod tests {
     fn windows_files_have_exe_suffix() {
         let files = install_files_for_platform("win32");
         assert_eq!(files.len(), 2);
-        assert_eq!(files[0].source, "climon.dll");
-        assert_eq!(files[0].dest, "climon.dll");
+        assert_eq!(files[0].source, "install.exe");
+        assert_eq!(files[0].dest, "climon.exe");
         assert_eq!(files[1].source, "climon-server.exe");
         assert_eq!(files[1].dest, "climon-server.exe");
     }

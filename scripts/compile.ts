@@ -2,28 +2,26 @@
 /**
  * Packages the shipped climon release artifacts.
  *
- * The shipped `climon` client is the **Rust** binary. On Unix it is the
- * executable built from `rust/climon-cli` (binary `climon`); on Windows it is
- * the cdylib built from `rust/climon-dll` (`climon.dll`), loaded in-process by a
- * tiny versioned stub so self-updates never block on a running `climon.exe`. The
- * dashboard **server** is still the Bun binary compiled from `src/server.ts`
- * (`climon-server`). Installation is performed by a dedicated installer built
- * from `rust/climon-setup` and shipped as `install[.exe]`; on Windows it embeds
- * the two tiny stubs (`climon.exe`/`climon-server.exe`) and places them itself,
- * so the stubs are NOT separate zip entries.
+ * The shipped `climon` client is the **Rust** binary built from
+ * `rust/climon-cli` (binary `climon` / `climon.exe`). It is packaged in each zip
+ * under the name `install`. The dashboard **server** is still the Bun binary
+ * compiled from `src/server.ts` (`climon-server`). The former JS installer
+ * bundle is replaced by a tiny `climon-alpha` **sentinel
+ * marker**: its mere presence next to the executable triggers the native Rust
+ * self-install (see `climon-cli`'s `try_run_installer`).
  *
- * Output: dist/climon-<platform>.zip, each containing `install[.exe]` (dedicated
- * installer), the client (`climon` on Unix / `climon.dll` on Windows), and
- * `climon-server[.exe]` (Bun). dist/ contains only zips.
+ * Output: dist/climon-<platform>.zip, each containing `install` (Rust client),
+ * `climon-server` (Bun), and `climon-alpha` (sentinel marker), with `.exe` on
+ * Windows binaries. dist/ contains only zips.
  *
  * Two modes:
- *   - **local / default**: build ONLY the host target's Rust client + installer
- *     with cargo and emit just dist/climon-<host>.zip (so a developer can build +
- *     run on one machine).
+ *   - **local / default**: build ONLY the host target's Rust client with cargo
+ *     and emit just dist/climon-<host>.zip (so a developer can build + run on
+ *     one machine).
  *   - **assemble** (CLIMON_ASSEMBLE=1): package all five zips from prebuilt Rust
- *     binaries staged under dist/.rust-clients/<platform>/ (the client and
- *     `install[.exe]`); used by the release CI matrix, which cross-compiles each
- *     target on its native runner.
+ *     client binaries staged under dist/.rust-clients/<platform>/install[.exe]
+ *     (used by the release CI matrix, which cross-compiles each client on its
+ *     native runner).
  */
 import { $ } from "bun";
 import {
@@ -45,17 +43,11 @@ const rustClientsStageDir = resolve(distDir, ".rust-clients");
 const serverEntrypoint = resolve(projectRoot, "src/server.ts");
 const embeddedAssetsPath = resolve(projectRoot, "src/server/embedded-assets.ts");
 
+/** Contents of the self-install sentinel marker shipped as `climon-alpha`. */
+const INSTALLER_SENTINEL =
+  "climon self-install sentinel — its presence next to the executable triggers the native installer.\n";
+
 const assembleMode = process.env.CLIMON_ASSEMBLE === "1";
-// Host-only, test-only: emit the pre-Feature-2 "bridge" layout (full standalone
-// climon[.exe] + climon-server[.exe], no installer, no DLL) for the upgrade-test
-// harness. Never set by the release pipeline. Ignored in assemble mode.
-const legacyLayoutMode = process.env.CLIMON_LEGACY_LAYOUT === "1" && !assembleMode;
-// Dev/test only: build the served clients with climon-update's test-update-endpoint
-// feature so `climon update` honors CLIMON_TEST_MANIFEST_URL. Set ONLY by the
-// upgrade-test harness (scripts/upgrade-test-harness.ts); never by the release
-// pipeline. Inert (no feature) unless CLIMON_TEST_UPDATE_ENDPOINT=1.
-const testUpdateEndpoint = process.env.CLIMON_TEST_UPDATE_ENDPOINT === "1";
-const clientFeatureArgs = testUpdateEndpoint ? ["--features", "test-update-endpoint"] : [];
 
 /**
  * `bun build` flags that activate the embedded-asset code path in
@@ -96,28 +88,10 @@ type ZipEntry = {
   data?: Uint8Array;
 };
 
-/**
- * The bare zip entry names for a platform.
- *
- * Default (stub model): `install[.exe]` + client (`climon.dll` on Windows / `climon`
- * on Unix) + `climon-server[.exe]`.
- *
- * `legacy: true` returns the pre-Feature-2 bridge layout used ONLY by the upgrade-test
- * harness: the full standalone client (`climon[.exe]`) + `climon-server[.exe]`, with no
- * installer and no DLL. The absence of `install.exe`+`climon.dll` is what marks a release
- * as non-stub-model to `should_migrate_legacy`.
- */
-export function zipEntryNamesForPlatform(
-  platform: string,
-  opts: { legacy?: boolean } = {}
-): string[] {
+export function zipEntryNamesForPlatform(platform: string): string[] {
   const isWindows = platform.startsWith("windows");
   const exe = isWindows ? ".exe" : "";
-  if (opts.legacy) {
-    return [`climon${exe}`, `climon-server${exe}`];
-  }
-  const client = isWindows ? "climon.dll" : "climon";
-  return [`install${exe}`, client, `climon-server${exe}`];
+  return [`install${exe}`, `climon-server${exe}`, "climon-alpha"];
 }
 
 const allTargets: BuildTarget[] = [
@@ -193,15 +167,14 @@ async function ensureCrossBinary(target: string): Promise<string | undefined> {
 }
 
 /**
- * Reads the prebuilt Rust client binary staged for a platform at
- * dist/.rust-clients/<platform>/ — `climon.dll` on Windows, `climon` on Unix.
- * Used in assemble mode; the bytes are read up front, before dist/ is cleaned,
- * so the clean does not delete them.
+ * Reads the prebuilt Rust client (`install`) binary staged for a platform at
+ * dist/.rust-clients/<platform>/install[.exe]. Used in assemble mode; the bytes
+ * are read up front, before dist/ is cleaned, so the clean does not delete them.
  */
 function readStagedRustClient(platform: string): Uint8Array {
   const isWindows = platform.startsWith("windows");
-  const clientName = isWindows ? "climon.dll" : "climon";
-  const staged = resolve(rustClientsStageDir, platform, clientName);
+  const exe = isWindows ? ".exe" : "";
+  const staged = resolve(rustClientsStageDir, platform, `install${exe}`);
   if (!existsSync(staged)) {
     throw new Error(
       `Assemble mode: missing prebuilt Rust client for ${platform} at ${staged}`
@@ -210,84 +183,13 @@ function readStagedRustClient(platform: string): Uint8Array {
   return new Uint8Array(readFileSync(staged));
 }
 
-/**
- * Reads the prebuilt dedicated installer (`install[.exe]`) staged for a platform
- * at dist/.rust-clients/<platform>/. On Windows the installer embeds the two
- * stubs, so they are not staged separately. Used in assemble mode.
- */
-function readStagedInstaller(platform: string): Uint8Array {
-  const isWindows = platform.startsWith("windows");
-  const exe = isWindows ? ".exe" : "";
-  const staged = resolve(rustClientsStageDir, platform, `install${exe}`);
-  if (!existsSync(staged)) {
-    throw new Error(
-      `Assemble mode: missing prebuilt installer for ${platform} at ${staged}`
-    );
-  }
-  return new Uint8Array(readFileSync(staged));
-}
-
 /** Builds the host Rust client with cargo and returns its bytes (local mode). */
 async function buildHostRustClient(platform: string): Promise<Uint8Array> {
   const isWindows = platform.startsWith("windows");
-  // Legacy/bridge layout ships the full standalone client on every platform,
-  // including Windows (it carries the migration-aware updater via climon_cli::run).
-  if (legacyLayoutMode) {
-    console.log(`→ Building standalone Rust client (cargo, ${platform}, legacy layout)...`);
-    await $`cargo build --release -p climon-cli ${clientFeatureArgs}`.cwd(rustDir);
-    const builtName = isWindows ? "climon.exe" : "climon";
-    const built = resolve(rustDir, "target", "release", builtName);
-    if (!existsSync(built)) {
-      throw new Error(`Expected cargo to produce ${built} but it was not found`);
-    }
-    return new Uint8Array(readFileSync(built));
-  }
-  console.log(`→ Building Rust client (cargo, ${platform})...`);
-  if (isWindows) {
-    await $`cargo build --release -p climon-dll ${clientFeatureArgs}`.cwd(rustDir);
-    const built = resolve(rustDir, "target", "release", "climon.dll");
-    if (!existsSync(built)) {
-      throw new Error(`Expected cargo to produce ${built} but it was not found`);
-    }
-    return new Uint8Array(readFileSync(built));
-  }
-  await $`cargo build --release -p climon-cli ${clientFeatureArgs}`.cwd(rustDir);
-  const built = resolve(rustDir, "target", "release", "climon");
-  if (!existsSync(built)) {
-    throw new Error(`Expected cargo to produce ${built} but it was not found`);
-  }
-  return new Uint8Array(readFileSync(built));
-}
-
-/**
- * Builds the host dedicated installer with cargo and returns its bytes (local
- * mode). On Windows the two stubs are built first and their paths passed via
- * CLIMON_CLIENT_STUB/CLIMON_SERVER_STUB so `climon-setup`'s build.rs embeds them.
- */
-async function buildHostInstaller(platform: string): Promise<Uint8Array> {
-  const isWindows = platform.startsWith("windows");
   const exe = isWindows ? ".exe" : "";
-  console.log(`→ Building Rust installer (cargo, ${platform})...`);
-  let stubEnv: Record<string, string> = {};
-  if (isWindows) {
-    await $`cargo build --release -p climon-stub`.cwd(rustDir);
-    stubEnv = {
-      // Signals climon-setup/build.rs that this is a real installer build, so a
-      // missing stub is a hard error instead of an empty placeholder.
-      CLIMON_BUILDING_INSTALLER: "1",
-      CLIMON_CLIENT_STUB: resolve(rustDir, "target", "release", "climon-stub.exe"),
-      CLIMON_SERVER_STUB: resolve(
-        rustDir,
-        "target",
-        "release",
-        "climon-server-stub.exe"
-      ),
-    };
-  }
-  await $`cargo build --release -p climon-setup`
-    .env({ ...process.env, ...stubEnv })
-    .cwd(rustDir);
-  const built = resolve(rustDir, "target", "release", `install${exe}`);
+  console.log(`→ Building Rust client (cargo, ${platform})...`);
+  await $`cargo build --release -p climon-cli`.cwd(rustDir);
+  const built = resolve(rustDir, "target", "release", `climon${exe}`);
   if (!existsSync(built)) {
     throw new Error(`Expected cargo to produce ${built} but it was not found`);
   }
@@ -306,19 +208,14 @@ async function main() {
   }
 
   const rustClients = new Map<string, Uint8Array>();
-  const rustInstallers = new Map<string, Uint8Array>();
   if (assembleMode) {
-    console.log("→ Assemble mode: loading prebuilt Rust clients + installers...");
+    console.log("→ Assemble mode: loading prebuilt Rust clients...");
     for (const { platform } of targets) {
       rustClients.set(platform, readStagedRustClient(platform));
-      rustInstallers.set(platform, readStagedInstaller(platform));
     }
   } else {
     const platform = targets[0].platform;
     rustClients.set(platform, await buildHostRustClient(platform));
-    if (!legacyLayoutMode) {
-      rustInstallers.set(platform, await buildHostInstaller(platform));
-    }
   }
 
   // Step 1: Embed assets so the server binary serves the dashboard bundle.
@@ -332,6 +229,11 @@ async function main() {
   try {
     mkdirSync(stageRoot, { recursive: true });
 
+    // The installer is now native (in the Rust client). Ship a tiny sentinel
+    // marker named climon-alpha — its presence triggers the self-install.
+    const installerSentinelData = new TextEncoder().encode(INSTALLER_SENTINEL);
+    console.log("→ Writing climon-alpha sentinel marker...");
+
     for (const { platform, target } of targets) {
       const isWindows = platform.startsWith("windows");
       const exe = isWindows ? ".exe" : "";
@@ -340,10 +242,6 @@ async function main() {
 
       const clientData = rustClients.get(platform);
       if (!clientData) throw new Error(`Missing Rust client for ${platform}`);
-      const installerData = rustInstallers.get(platform);
-      if (!legacyLayoutMode && !installerData) {
-        throw new Error(`Missing installer for ${platform}`);
-      }
 
       const serverOut = resolve(stageDir, `climon-server${exe}`);
       console.log(`→ Compiling climon-server (${target})...`);
@@ -359,16 +257,11 @@ async function main() {
         ? { level: 6 }
         : { level: 6, os: 3, attrs: 0o755 << 16 };
 
-      const zipFiles: ZipEntry[] = legacyLayoutMode
-        ? [
-            { name: `climon${exe}`, data: clientData },
-            { name: `climon-server${exe}`, path: serverOut },
-          ]
-        : [
-            { name: `install${exe}`, data: installerData },
-            { name: isWindows ? "climon.dll" : "climon", data: clientData },
-            { name: `climon-server${exe}`, path: serverOut },
-          ];
+      const zipFiles: ZipEntry[] = [
+        { name: `install${exe}`, data: clientData },
+        { name: `climon-server${exe}`, path: serverOut },
+        { name: "climon-alpha", data: installerSentinelData },
+      ];
 
       const zipEntries: Record<string, [Uint8Array, ZipOptions]> = {};
 
