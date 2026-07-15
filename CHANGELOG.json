@@ -1,5 +1,11 @@
 [
   {
+    "version": "3.2.1",
+    "changes": [
+      "Revert the 3.2.0 Windows self-update stub/installer rework that caused clients updating from 3.1.x to overwrite `climon` with the installer and break"
+    ]
+  },
+  {
     "version": "3.2.0",
     "changes": [
       "Add control handoff: see a \"being viewed elsewhere\" overlay when another viewer holds control, and take control from the dashboard's take-control button or the local terminal (press Space / Ctrl+T)",

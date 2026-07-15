@@ -66,7 +66,6 @@ result-tracking row.
 | — | Security — project-local config global-only settings | [security-config-global-only.md](security-config-global-only.md) |
 | — | Interactive install opt-ins default to Yes (telemetry + auto-update prompts) | [optin-default-yes.md](optin-default-yes.md) |
 | — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
-| — | Windows binary lifecycle — dedicated installer, stub/versioned layout, and bridge migration | [windows-binary-lifecycle.md](windows-binary-lifecycle.md) |
 | — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
 | — | Tunnel Link start reliability — patient relay-propagation health check + verified self-heal recreation | [tunnel-link-reliability.md](tunnel-link-reliability.md) |
 | — | MIT license transition — `climon license`, one-time upgrade notice, no notice on fresh installs | [mit-license-transition.md](mit-license-transition.md) |

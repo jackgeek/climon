@@ -5,12 +5,10 @@ name: Release
 # `post-merge` hook so the bump happens for every merge style (merge commit,
 # squash, or rebase), not just local `--no-ff` merges.
 #
-# The shipped client is the Rust `climon` binary (a cdylib `climon.dll` loaded by
-# a versioned stub on Windows; the `climon` executable on Unix). It is
-# cross-compiled for every target on a native runner in the `build-client`
-# matrix, alongside the dedicated installer (`install[.exe]`, which embeds the
-# Windows stubs). The `release` job then assembles the five zips (with the Bun
-# server), signs, verifies, and publishes them.
+# The shipped client is the Rust `climon` binary. It is cross-compiled for every
+# target on a native runner in the `build-client` matrix, then the `release` job
+# assembles the five zips (with the Bun server + climon-alpha sentinel), signs,
+# verifies, and publishes them.
 on:
   push:
     branches: [main]
@@ -137,10 +135,9 @@ jobs:
           CLIMON_UPDATE_PRIVATE_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY }}
         run: bun run verify-signing-key
 
-  # Cross-compile the Rust client + dedicated installer for every target on a
-  # native runner. Each leg uploads its client (`climon`/`climon.dll`) and
-  # `install[.exe]` binaries as artifacts for the assemble step. CLIMON_VERSION
-  # pins the bumped version into the binaries (build.rs).
+  # Cross-compile the Rust client for every target on a native runner. Each leg
+  # uploads its `install`/`install.exe` binary as an artifact for the assemble
+  # step. CLIMON_VERSION pins the bumped version into the binary (build.rs).
   build-client:
     needs: [version, verify-signing-key]
     strategy:
@@ -194,50 +191,32 @@ jobs:
         if: ${{ matrix.cross }}
         run: cargo install --locked cargo-zigbuild
 
-      - name: Build climon client + installer (Unix native)
-        if: ${{ !matrix.cross && matrix.platform != 'windows-x64' }}
+      - name: Build climon client (native)
+        if: ${{ !matrix.cross }}
         working-directory: rust
-        run: cargo build --release -p climon-cli -p climon-setup --target ${{ matrix.target }}
+        run: cargo build --release -p climon-cli --target ${{ matrix.target }}
 
-      - name: Build climon client + installer (cross via zigbuild)
+      - name: Build climon client (cross via zigbuild)
         if: ${{ matrix.cross }}
         working-directory: rust
-        run: cargo zigbuild --release -p climon-cli -p climon-setup --target ${{ matrix.target }}
+        run: cargo zigbuild --release -p climon-cli --target ${{ matrix.target }}
 
-      # Windows ships the client as a cdylib (climon.dll) loaded by a versioned
-      # stub. Build the two stubs first, then build the installer with their
-      # paths so climon-setup's build.rs embeds them into install.exe.
-      - name: Build climon client + installer (Windows)
-        if: ${{ matrix.platform == 'windows-x64' }}
-        working-directory: rust
-        shell: pwsh
-        run: |
-          cargo build --release -p climon-stub -p climon-dll --target ${{ matrix.target }}
-          $rel = "$(Get-Location)/target/${{ matrix.target }}/release"
-          $env:CLIMON_CLIENT_STUB = "$rel/climon-stub.exe"
-          $env:CLIMON_SERVER_STUB = "$rel/climon-server-stub.exe"
-          cargo build --release -p climon-setup --target ${{ matrix.target }}
-
-      # Stage the client (climon / climon.dll) and dedicated installer
-      # (install[.exe]) under the exact names the packager reads. The stubs are
-      # embedded inside install.exe, so they are never staged separately.
-      - name: Stage binaries (Unix)
+      # Stage the binary under the bare `install` name the packager expects.
+      - name: Stage install binary (Unix)
         if: ${{ matrix.platform != 'windows-x64' }}
         working-directory: rust
         run: |
           set -euo pipefail
           mkdir -p staged
-          cp "target/${{ matrix.target }}/release/climon" "staged/climon"
-          cp "target/${{ matrix.target }}/release/install" "staged/install"
+          cp "target/${{ matrix.target }}/release/climon" "staged/install"
 
-      - name: Stage binaries (Windows)
+      - name: Stage install binary (Windows)
         if: ${{ matrix.platform == 'windows-x64' }}
         working-directory: rust
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path staged | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/climon.dll" "staged/climon.dll"
-          Copy-Item "target/${{ matrix.target }}/release/install.exe" "staged/install.exe"
+          Copy-Item "target/${{ matrix.target }}/release/climon.exe" "staged/install.exe"
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
@@ -316,9 +295,8 @@ jobs:
           path: dist/.rust-clients-artifacts
 
       # download-artifact lays out artifacts as
-      # dist/.rust-clients-artifacts/rust-client-<platform>/{climon[.dll],install[.exe]};
-      # reshape into dist/.rust-clients/<platform>/ (both the client and the
-      # installer) for the packager. `cp "$dir"/*` copies both staged binaries.
+      # dist/.rust-clients-artifacts/rust-client-<platform>/install[.exe];
+      # reshape into dist/.rust-clients/<platform>/install[.exe] for the packager.
       - name: Stage Rust clients for packaging
         run: |
           set -euo pipefail

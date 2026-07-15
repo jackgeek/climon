@@ -3,12 +3,13 @@
 ## Install
 
 Download the release zip for your platform, unzip it, and run the bundled
-dedicated `install` binary (`install.exe` on Windows). It places the `climon`
-client and `climon-server`, updates your shell profile or user PATH, records the
-installed version, and prints the changelog. On Windows it also installs stable
-`climon.exe` and `climon-server.exe` stubs that select versioned payloads via
-pointer files. After that, `climon` and `climon server` are on your PATH.
-Commands below are identical regardless of how climon was installed.
+`install` binary (`install.exe` on Windows). It is the native Rust `climon`
+client; when run from the unzipped folder it finds the `climon-alpha` sentinel
+marker beside it and runs the **native self-installer** — it copies itself to
+`climon`, places `climon-server`, updates your shell profile
+or user PATH, writes the installed `.version`, and prints the changelog. After
+that, `climon` and `climon server` are on your PATH. Commands below are identical
+regardless of how climon was installed.
 
 ## Start the dashboard
 
@@ -126,11 +127,10 @@ climon update
 The artifact's Ed25519 detached signature is verified against the embedded
 public key before any file is replaced; unverifiable or tampered downloads are
 rejected and nothing changes. Updates are **non-destructive** — they never kill
-running sessions or a running dashboard server. Unix keeps the rename-over swap
-model. Windows writes new versioned `climon-<version>.dll` and
-`climon-server-<version>.exe` payloads, then flips pointer files so locked stubs
-are never overwritten. Running processes keep the old code; newly started
-sessions and a restarted server use the new version.
+running sessions or a running dashboard server. Binaries are swapped atomically
+(rename-over on Unix, displace-to-`.old` on Windows) and deferred when locked.
+Running processes keep the old code; newly started sessions and a restarted
+server use the new version.
 
 When `update.auto` is off (default), climon prints a one-line banner when a
 newer version is available instead of applying it automatically.
