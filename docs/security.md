@@ -56,9 +56,24 @@ connect:
   identity that has access to the tunnel. The uplink stops retrying once the
   host rejects the connection (auth failure is terminal, not retried as a
   transient network error).
+- Host-side dev-tunnel management is gated by `feature.remotes`. When enabled,
+  climon derives an opaque stable id from the non-secret `install.id`
+  (`climon-ingest-<hash>`), so the public tunnel URL never contains the
+  hostname. The `climon-ingest` label and description JSON contain only
+  display metadata (`app`, `role`, `clientId`, `hostname`, `version`) and never
+  include `remote.spawnSecret`, tokens, or credentials.
 - When climon auto-creates the tunnel, it also opens a keep-alive TCP port so
   the tunnel stays up and never presents an interactive confirmation page to a
   browser.
+- Devbox auto-discovery is scoped to the authenticated dev tunnel identity:
+  `devtunnel list --labels climon-ingest --json` returns only that user's own
+  tunnels, and climon treats a discovered host as live only when
+  `hostConnections >= 1`. Fan-out only opens outbound uplinks to those already
+  authorized tunnels plus any explicit target the user configured.
+- `remote.discover false` disables devbox discovery while preserving explicit
+  `remote.tunnelId` / `remote.host` setups. `CLIMON_DISABLE_DEVTUNNEL=1` (or
+  `true`) disables all devtunnel interaction on both host and devbox — probing,
+  tunnel creation, and list/connect/show/port calls.
 
 ## Direct same-machine bridge
 
@@ -172,7 +187,9 @@ sends an *imperative command* to a client, so it is gated and authenticated:
 
 - `~/.climon/remote-host.json` — the home machine's tunnel-host state. Written
   atomically (temp file + `rename`, so the ingest watcher never observes a torn
-  or empty file) with `0600` permissions inside a `0700` directory.
+  or empty file) with `0600` permissions inside a `0700` directory. For
+  auto-managed remotes this records the stable `climon-ingest-…` tunnel id and
+  current ingest port; it does not store devtunnel credentials.
 - `remote.spawnSecret` (in `config.jsonc`) — the pre-shared HMAC key for the
   remote spawn command channel. Generated only when `feature.remoteSpawn` is
   enabled, stored in the `0700` config directory, and redacted from logs and
@@ -360,6 +377,9 @@ loopback-only:
 
 - **Session metadata** (`toLocalMeta` / `sanitizeRemotePatch`): server-controlled
   fields overwritten, ids namespaced and validated, enum fields allowlisted.
+  Free-text fields (such as `attentionSnippet` and `terminalTitle`) are
+  allowlisted and bounded to 4096 chars to prevent oversize payloads; the
+  snippet is untrusted terminal output content from a remote devbox.
 - **Mux frames**: every frame is length-prefixed and capped
   (`MAX_MUX_PAYLOAD = 8 MiB`); an oversize or malformed frame tears the
   connection down rather than allocating unbounded memory.

@@ -9,44 +9,37 @@
  * changes in the Rust crates. (The Bun dashboard *server* under `src/server*`
  * and `src/web/` is NOT legacy and is still maintained.)
  */
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { rm, writeFile, chmod, rename } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { hostname } from "node:os";
 import { getRemoteHostPath } from "../config.js";
+import {
+  createDevtunnelGateway,
+  devtunnelEnv,
+  isDevtunnelDisabled,
+  type DevtunnelGateway,
+  type Runner,
+  type RunResult
+} from "../devtunnel/gateway.js";
+import { DevtunnelError, type DevtunnelFailure } from "../devtunnel/types.js";
+import { ensureInstallId } from "../setup/install-id.js";
+import { VERSION } from "../version.js";
 import type { RemoteHostState } from "./ingest.js";
+import {
+  INGEST_TUNNEL_LABEL,
+  deriveIngestTunnelId,
+  buildIngestDescription,
+  sanitizeHostForDescription
+} from "./ingest-tunnel-id.js";
+
+export { devtunnelEnv, isDevtunnelDisabled, type Runner, type RunResult };
 
 const TUNNEL_ID = /^[a-z0-9][a-z0-9-]{1,47}[a-z0-9]$/;
 
-export interface RunResult {
-  status: number;
-  stdout: string;
-  stderr: string;
+type TunnelOptions = { env?: NodeJS.ProcessEnv; runner?: Runner; gateway?: DevtunnelGateway };
+
+function gatewayFor(options: TunnelOptions = {}): DevtunnelGateway {
+  return options.gateway ?? createDevtunnelGateway({ runner: options.runner, env: options.env });
 }
-
-export type Runner = (cmd: string, args: string[]) => Promise<RunResult>;
-
-export function devtunnelEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  if (env.LD_LIBRARY_PATH) return env;
-  const icuLib = join(env.HOME ?? homedir(), ".local", "icu", "usr", "lib", "x86_64-linux-gnu");
-  return existsSync(icuLib) ? { ...env, LD_LIBRARY_PATH: icuLib } : env;
-}
-
-const defaultRunner: Runner = (cmd, args) =>
-  new Promise((resolve) => {
-    const child = spawn(cmd, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: cmd === "devtunnel" ? devtunnelEnv() : process.env,
-      windowsHide: true
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (b: Buffer) => (stdout += b.toString("utf8")));
-    child.stderr.on("data", (b: Buffer) => (stderr += b.toString("utf8")));
-    child.on("error", () => resolve({ status: 127, stdout, stderr: "spawn failed" }));
-    child.on("close", (code) => resolve({ status: code ?? 1, stdout, stderr }));
-  });
 
 /** Extracts a tunnel id from a bare id or a https://<id>-<port>.<region>.devtunnels.ms/ URL. */
 export function parseTunnelInput(input: string): string | undefined {
@@ -63,10 +56,10 @@ export interface DetectResult {
 }
 
 /** Confirms the `devtunnel` CLI is present and runnable. */
-export async function detectDevtunnel(runner: Runner = defaultRunner): Promise<DetectResult> {
-  const res = await runner("devtunnel", ["--version"]);
-  if (res.status !== 0) return { available: false };
-  return { available: true, version: res.stdout.trim() || undefined };
+export async function detectDevtunnel(input?: Runner | TunnelOptions): Promise<DetectResult> {
+  const options = typeof input === "function" ? { runner: input } : input ?? {};
+  const detected = await gatewayFor(options).detect();
+  return { available: detected.available, version: detected.version };
 }
 
 /** Atomically persists the desired tunnel-hosting state so fs.watch never sees a torn file. */
@@ -90,7 +83,7 @@ export interface ManualTunnelInput {
 /** Records a user-supplied tunnel as the desired hosting state. */
 export async function useManualTunnel(
   input: ManualTunnelInput,
-  options: { devtunnelAvailable: boolean; env?: NodeJS.ProcessEnv; runner?: Runner }
+  options: { devtunnelAvailable: boolean; env?: NodeJS.ProcessEnv; runner?: Runner; gateway?: DevtunnelGateway }
 ): Promise<RemoteHostState> {
   const state: RemoteHostState = {
     tunnelId: input.tunnelId,
@@ -110,41 +103,88 @@ export async function useManualTunnel(
  */
 export async function createTunnel(
   ingestPort: number,
-  options: { env?: NodeJS.ProcessEnv; runner?: Runner } = {}
+  options: TunnelOptions = {}
 ): Promise<RemoteHostState> {
-  const runner = options.runner ?? defaultRunner;
-  const create = await runner("devtunnel", ["create", "--json"]);
-  if (create.status !== 0) {
-    throw new Error(`devtunnel create failed: ${create.stderr.trim() || create.status}`);
-  }
-  const tunnelId = parseTunnelId(create.stdout);
-  if (!tunnelId) throw new Error("Could not parse tunnel id from `devtunnel create` output.");
+  const env = options.env ?? process.env;
+  const gateway = gatewayFor(options);
 
-  const portRes = await runner("devtunnel", ["port", "create", tunnelId, "-p", String(ingestPort)]);
-  if (portRes.status !== 0) {
-    throw new Error(`devtunnel port create failed: ${portRes.stderr.trim() || portRes.status}`);
-  }
+  const installId = ensureInstallId(env);
+  const desiredId = deriveIngestTunnelId(installId);
+  const host = sanitizeHostForDescription(hostname());
+  const description = buildIngestDescription({ clientId: host, hostname: host, version: VERSION });
+
+  const create = await gateway.createTunnel({
+    id: desiredId,
+    labels: [INGEST_TUNNEL_LABEL],
+    description
+  });
+  const tunnelId = parseTunnelId(create.stdout) ?? desiredId;
+
+  await gateway.createPort(tunnelId, ingestPort);
 
   const state: RemoteHostState = {
     tunnelId,
     ingestPort,
     canHost: true
   };
-  await writeRemoteHostState(state, options.env);
+  await writeRemoteHostState(state, env);
+  return state;
+}
+
+/**
+ * Idempotently ensures the host's stable-id ingest tunnel exists and is recorded
+ * as the desired hosting state. Reuses the tunnel when `devtunnel show` finds it;
+ * only a `tunnel_not_found` failure triggers creation. Any other gateway failure
+ * (not signed in, quota exhausted, network/transient) propagates as a
+ * {@link DevtunnelError} and NO success-shaped `remote-host.json` is written, so
+ * the previous desired state is left intact and the failure can be surfaced.
+ */
+export async function ensureIngestTunnel(
+  ingestPort: number,
+  options: TunnelOptions = {}
+): Promise<RemoteHostState> {
+  const env = options.env ?? process.env;
+  const gateway = gatewayFor(options);
+
+  const installId = ensureInstallId(env);
+  const desiredId = deriveIngestTunnelId(installId);
+
+  let existingId: string;
+  try {
+    existingId = tunnelIdFromParsed(await gateway.showTunnel(desiredId)) ?? desiredId;
+  } catch (error) {
+    if (error instanceof DevtunnelError && error.failure.code === "tunnel_not_found") {
+      return createTunnel(ingestPort, { env, gateway });
+    }
+    throw error;
+  }
+
+  // Reuse path: the port mapping usually already exists (the gateway swallows a
+  // pre-existing `port_conflict`). Any other port failure propagates so a broken
+  // ingest port surfaces as normalized health instead of a false success.
+  await gateway.createPort(existingId, ingestPort);
+
+  const state: RemoteHostState = { tunnelId: existingId, ingestPort, canHost: true };
+  await writeRemoteHostState(state, env);
   return state;
 }
 
 /** Tears down the recorded tunnel and removes the desired-state file. */
 export async function deleteTunnel(
-  options: { env?: NodeJS.ProcessEnv; runner?: Runner } = {}
+  options: TunnelOptions = {}
 ): Promise<void> {
-  const runner = options.runner ?? defaultRunner;
+  const gateway = gatewayFor(options);
+  const env = options.env ?? process.env;
   const { readRemoteHostState } = await import("./ingest.js");
-  const state = await readRemoteHostState(options.env ?? process.env);
+  const state = await readRemoteHostState(env);
   if (state?.canHost) {
-    await runner("devtunnel", ["delete", state.tunnelId]);
+    try {
+      await gateway.deleteTunnel(state.tunnelId);
+    } catch {
+      // Preserve previous cleanup behavior even if the CLI delete command fails.
+    }
   }
-  await rm(getRemoteHostPath(options.env ?? process.env), { force: true });
+  await rm(getRemoteHostPath(env), { force: true });
 }
 
 export interface ReconcileResult {
@@ -154,6 +194,11 @@ export interface ReconcileResult {
   port: number;
   /** If reconciliation failed and the tunnel was recreated from scratch. */
   recreated?: boolean;
+  /**
+   * The typed failure when the port could neither be remapped nor recreated.
+   * The last valid desired state is left intact (no success-shaped write).
+   */
+  failure?: DevtunnelFailure;
 }
 
 /**
@@ -161,52 +206,62 @@ export interface ReconcileResult {
  * If the port in remote-host.json differs from the live ingest port, updates
  * the devtunnel port mapping (delete old, create new). If the port update fails
  * (e.g. the tunnel was deleted externally), falls back to full tunnel recreation.
+ * If recreation also fails, records the typed failure and leaves the previously
+ * recorded desired state untouched rather than persisting a success-shaped file.
  * No-op if there is no configured tunnel or the ports already match.
  */
 export async function reconcileTunnelPort(
   actualPort: number,
-  options: { env?: NodeJS.ProcessEnv; runner?: Runner } = {}
+  options: TunnelOptions = {}
 ): Promise<ReconcileResult> {
   const env = options.env ?? process.env;
-  const runner = options.runner ?? defaultRunner;
+  const gateway = gatewayFor(options);
   const { readRemoteHostState } = await import("./ingest.js");
   const state = await readRemoteHostState(env);
 
   if (!state) return { changed: false, port: actualPort };
   if (state.ingestPort === actualPort) return { changed: false, port: actualPort };
 
-  // Port mismatch — update the tunnel's port mapping.
   if (state.canHost) {
-    // Try to delete the old port and create the new one.
-    const delRes = await runner("devtunnel", ["port", "delete", state.tunnelId, "-p", String(state.ingestPort)]);
-    const addRes = await runner("devtunnel", ["port", "create", state.tunnelId, "-p", String(actualPort)]);
-    if (addRes.status !== 0) {
-      // Tunnel might have been deleted externally — try full recreation.
+    try {
+      await gateway.deletePort(state.tunnelId, state.ingestPort);
+    } catch {
+      // The old port may already be gone; still try to add the desired mapping.
+    }
+    try {
+      await gateway.createPort(state.tunnelId, actualPort);
+    } catch (portError) {
       try {
-        const fresh = await createTunnel(actualPort, { env, runner });
+        const fresh = await createTunnel(actualPort, { env, gateway });
         return { changed: true, port: fresh.ingestPort, recreated: true };
-      } catch {
-        // If even recreation fails, just update the state file so the port
-        // is recorded correctly for `devtunnel host` next time.
+      } catch (recreateError) {
+        // Neither remap nor recreate worked: surface the typed failure and leave
+        // the last valid desired state (and its port) intact.
+        const failure = recreateError instanceof DevtunnelError
+          ? recreateError.failure
+          : portError instanceof DevtunnelError
+            ? portError.failure
+            : undefined;
+        return { changed: false, port: state.ingestPort, failure };
       }
-    } else if (delRes.status !== 0) {
-      // Old port didn't exist (maybe already deleted) but new port was added — fine.
     }
   }
 
-  // Update the persisted state to reflect the actual port.
   const updated: RemoteHostState = { ...state, ingestPort: actualPort };
   await writeRemoteHostState(updated, env);
   return { changed: true, port: actualPort };
 }
 
+function tunnelIdFromParsed(obj: unknown): string | undefined {
+  const o = obj as { tunnelId?: string; tunnel?: { tunnelId?: string } } | null;
+  return o?.tunnelId ?? o?.tunnel?.tunnelId;
+}
+
 function parseTunnelId(stdout: string): string | undefined {
   try {
-    const obj = JSON.parse(stdout) as { tunnelId?: string; tunnel?: { tunnelId?: string } };
-    return obj.tunnelId ?? obj.tunnel?.tunnelId;
+    return tunnelIdFromParsed(JSON.parse(stdout));
   } catch {
     const m = stdout.match(/\b([a-z0-9]{6,})\b/i);
     return m?.[1];
   }
 }
-

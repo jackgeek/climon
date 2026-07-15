@@ -551,13 +551,6 @@ pub fn load_config(env: &Env) -> Result<Value, String> {
         // Backfills.
         {
             let terminal = out.get_mut("terminal").unwrap().as_object_mut().unwrap();
-            if !terminal
-                .get("clampBrowserToHost")
-                .map(|v| v.is_boolean())
-                .unwrap_or(false)
-            {
-                terminal.insert("clampBrowserToHost".to_string(), Value::from(false));
-            }
             let normalized = normalize_detach_prefix(terminal.get("detachPrefix"));
             terminal.insert("detachPrefix".to_string(), normalized);
         }
@@ -846,7 +839,6 @@ mod tests {
         let cfg = default_config();
         assert_eq!(cfg["server"]["host"], json!("127.0.0.1"));
         assert_eq!(cfg["server"]["port"], json!(3131));
-        assert_eq!(cfg["terminal"]["clampBrowserToHost"], json!(false));
         assert_eq!(cfg["terminal"]["detachPrefix"], json!(0x1c));
         assert_eq!(cfg["hotKeys"]["focusTopSession"], json!("Alt+J"));
         assert_eq!(cfg["session"]["color"], json!("auto"));
@@ -1221,6 +1213,8 @@ mod tests {
         let ch = t.path().join("ch");
         fs::create_dir_all(&ch).unwrap();
         let env = Env::new(Some(ch.to_str().unwrap()), t.path());
+        // The obsolete `terminal.clampBrowserToHost` key may still exist in
+        // on-disk configs; it must load without error and simply be ignored.
         write_json(
             &ch,
             json!({ "version": 1, "server": { "host": "127.0.0.1", "port": 3131, "lan": false, "token": "tok" }, "terminal": { "clampBrowserToHost": true, "detachPrefix": 999 } }),

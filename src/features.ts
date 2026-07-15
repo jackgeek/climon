@@ -50,7 +50,7 @@ export const FEATURE_FLAGS = defineFeatureFlags([
   {
     name: "wslBridge",
     default: "disabled",
-    status: "experimental",
+    status: "untested",
     description:
       "Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard."
   },
@@ -60,6 +60,13 @@ export const FEATURE_FLAGS = defineFeatureFlags([
     status: "experimental",
     description:
       "Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge."
+  },
+  {
+    name: "smartNotifications",
+    default: "disabled",
+    status: "experimental",
+    description:
+      "Include a fuzzy-extracted snippet of the last relevant terminal output as the body of attention notifications, instead of a generic message."
   }
 ] as const satisfies readonly FeatureFlag[]);
 

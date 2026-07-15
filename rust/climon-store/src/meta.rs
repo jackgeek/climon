@@ -101,6 +101,12 @@ pub fn merge_patch(base: &SessionMeta, patch: &SessionMetaPatch) -> SessionMeta 
     if let Some(v) = patch.terminal_title.clone() {
         out.terminal_title = Some(v);
     }
+    if let Some(v) = patch.attention_snippet.clone() {
+        out.attention_snippet = v;
+    }
+    if let Some(v) = patch.progress {
+        out.progress = v;
+    }
     out
 }
 
@@ -226,6 +232,8 @@ mod tests {
             user_paused: None,
             theme: None,
             terminal_title: None,
+            attention_snippet: None,
+            progress: None,
         }
     }
 
@@ -415,6 +423,93 @@ mod tests {
         base.terminal_title = Some("keep".into());
         let unchanged = merge_patch(&base, &SessionMetaPatch::default());
         assert_eq!(unchanged.terminal_title.as_deref(), Some("keep"));
+    }
+
+    #[test]
+    fn merge_patch_sets_attention_snippet() {
+        let base = base_meta("snip");
+        let patched = merge_patch(
+            &base,
+            &SessionMetaPatch {
+                attention_snippet: Some(Some("build ok. Proceed?".into())),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            patched.attention_snippet.as_deref(),
+            Some("build ok. Proceed?")
+        );
+    }
+
+    #[test]
+    fn merge_clears_and_preserves_attention_snippet() {
+        // The attention_snippet field must support the three-state merge behavior:
+        // Some(Some(x)) sets a new snippet, Some(None) clears an existing snippet,
+        // and None (absent) leaves the existing snippet untouched.
+        let mut base = base_meta("snippet-three-state");
+        base.attention_snippet = Some("old snippet from earlier cycle".into());
+
+        // Absent patch field (None) preserves the existing snippet.
+        let noop = SessionMetaPatch {
+            daemon_pid: Some(8),
+            ..Default::default()
+        };
+        let preserved = merge_patch(&base, &noop);
+        assert_eq!(
+            preserved.attention_snippet.as_deref(),
+            Some("old snippet from earlier cycle")
+        );
+
+        // Explicit clear (Some(None)) removes the snippet.
+        let clear = SessionMetaPatch {
+            attention_snippet: Some(None),
+            ..Default::default()
+        };
+        let cleared = merge_patch(&base, &clear);
+        assert!(cleared.attention_snippet.is_none());
+        // Cleared field is omitted from the on-disk JSON.
+        let json = serde_json::to_string(&cleared).unwrap();
+        assert!(!json.contains("attentionSnippet"), "json: {json}");
+
+        // Set (Some(Some(v))) overwrites an existing snippet.
+        let set = SessionMetaPatch {
+            attention_snippet: Some(Some("new snippet".into())),
+            ..Default::default()
+        };
+        let reset = merge_patch(&base, &set);
+        assert_eq!(reset.attention_snippet.as_deref(), Some("new snippet"));
+    }
+
+    #[test]
+    fn merge_patch_sets_and_clears_progress() {
+        use climon_proto::meta::{ProgressState, TerminalProgress};
+        let base = base_meta("s1");
+        let set = merge_patch(
+            &base,
+            &SessionMetaPatch {
+                progress: Some(Some(TerminalProgress {
+                    state: ProgressState::Indeterminate,
+                    value: None,
+                })),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            set.progress.map(|p| p.state),
+            Some(ProgressState::Indeterminate)
+        );
+
+        let cleared = merge_patch(
+            &set,
+            &SessionMetaPatch {
+                progress: Some(None),
+                ..Default::default()
+            },
+        );
+        assert_eq!(cleared.progress, None);
+
+        let unchanged = merge_patch(&base, &SessionMetaPatch::default());
+        assert_eq!(unchanged.progress, None);
     }
 
     #[test]

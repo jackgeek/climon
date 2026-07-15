@@ -77,8 +77,10 @@ All cases isolate state with a temp `CLIMON_HOME` so they never touch a real
 3. `climon --help` → capture stdout.
 4. `diff` against `fixtures/cli/help.txt`.
 
-**Expected:** Both outputs are byte-identical to the fixtures (which are
-generated from the TS client). `climon license` appears in `--help`.
+**Expected:** Both outputs are byte-identical to the fixtures. `climon license`
+and `climon run [flags] <command>` (the primary documented form; the bare
+`climon <command>` is a shorthand and `climon command` an alias) both appear in
+`--help`.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
@@ -232,12 +234,10 @@ user-facing `license` command is documented in help.
 3. Confirm the terminal detaches and returns to your original shell while the
    session keeps running.
 4. `climon ls` → the session is still `running`.
-5. (Restore-clamped variant) Re-attach is out of Phase 8 scope; verify only the
-   detach key handling here.
 
 **Expected:** The `Ctrl-\ d` chord detaches without killing the session; the
-prefix byte is consumed and not forwarded to the PTY. `Ctrl-\ c` is the
-restore-clamped detach. The session continues under its daemon.
+prefix byte is consumed and not forwarded to the PTY. The session continues under
+its daemon.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|
@@ -287,6 +287,42 @@ restore-clamped detach. The session continues under its daemon.
 (`climon on its own no longer starts a session — showing help instead.` / ``Use
 `climon shell` …``) followed by the full help text on stdout; no session is
 started. Step 3 prints the same help text on stdout with **no** note on stderr.
+
+| Date | Tester | OS | Result | Notes |
+|---|---|---|---|---|
+| | | | | |
+
+---
+
+## MT-P8-11 — `climon command <cmd>` disambiguates reserved-word commands
+
+- **ID:** MT-P8-11
+- **Feature / phase:** Phase 8 — `climon-cli` `command` disambiguation prefix
+- **Preconditions:** `export CLIMON_HOME=$(mktemp -d)` (PowerShell: set
+  `$env:CLIMON_HOME`). Have a program on `PATH` whose name clashes with a climon
+  subcommand — e.g. create a `shell` script/executable, or use `ls` on unix.
+- **Config-matrix cell:** CLI-linux / CLI-macos / CLI-win
+- **Platforms:** all
+
+**Steps:**
+1. `climon --help` → confirm the help lists `climon command <command> [args...]`
+   with the "clashes with a climon subcommand" description.
+2. `climon command ls -la` (unix) or `climon command where.exe cmd` (Windows) →
+   confirm the named **program** runs in a monitored PTY session (not the climon
+   `ls` subcommand), attached to your terminal.
+3. In another terminal (same `CLIMON_HOME`) run `climon ls` and confirm the
+   session's display command is the program you ran (e.g. `ls`), not `climon`.
+4. `climon command --name disambig-test shell` (with a `shell` program on PATH)
+   → confirm a session named `disambig-test` runs the `shell` program, whereas
+   plain `climon shell` still starts a monitored parent-shell session.
+5. `climon command` with no following command → confirm the exact error
+   `Provide a command to run, e.g. \`climon command shell\`.` on stderr, exit 2.
+
+**Expected:** `climon command <cmd>` runs `<cmd>` as an ordinary program in a
+monitored session, bypassing subcommand interpretation; leading session flags
+(`--priority`/`--color`/`--name`/`--theme`) are still honored; a missing command
+produces the parse error and exit code 2. `climon shell`/`climon ls` (without the
+`command` prefix) keep their existing subcommand behavior.
 
 | Date | Tester | OS | Result | Notes |
 |---|---|---|---|---|

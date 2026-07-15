@@ -7,6 +7,10 @@
 //! `run_uplink` entry point (see `climon-cli`). The mux wire format and the
 //! hello/attach/detach/data protocol MUST match the Bun side byte-for-byte.
 
+// Task 8: this module returns the large typed `DevtunnelFailure` error surface
+// from the centralized gateway; allow the lint crate-consistent with gateway.rs.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{TcpStream as StdTcpStream, ToSocketAddrs};
@@ -27,16 +31,22 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::client_id::default_client_id;
+use crate::devtunnel::{
+    DevtunnelErrorCode, DevtunnelFailure, DevtunnelGateway, DevtunnelHealth, DevtunnelOperation,
+    DevtunnelRetryClass, DevtunnelState, RetryController,
+};
 use crate::discovery::{discover_dashboard, DashboardLocation, DiscoveryDeps};
 use crate::keepalive::mux_idle_timeout_ms;
 use crate::mux::{encode_control, encode_data, ControlMessage, MuxDecoder, MuxMessage};
 use crate::process::is_process_alive;
-use crate::singleton::acquire_singleton_detailed;
+use crate::singleton::{acquire_singleton_detailed, SingletonResult};
 use crate::spawn_auth::{
     sign_now, verify_signed_control, RejectReason, ReplayGuard, DEFAULT_FRESHNESS_WINDOW_MS,
 };
+use crate::target_set::UplinkTargetSpec;
 use climon_session::socket::{parse_session_socket_ref, ParsedRef};
 
 /// Default keepalive interval in seconds. Mirrors `DEFAULT_KEEPALIVE_SECONDS`.
@@ -365,6 +375,11 @@ async fn reconcile(bridge: &mut Bridge) {
         connected_at: bridge.connected_at,
         session_count: bridge.advertised.len() as u32,
         last_error: None,
+        devtunnel: Some(DevtunnelHealth::healthy(
+            DevtunnelState::Running,
+            None,
+            climon_store::paths::now_iso(),
+        )),
     };
     let _ = crate::uplink_status::write_uplink_status(&status, &bridge.config_env);
 }
@@ -505,6 +520,27 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
     }));
     reconcile(&mut bridge).await;
 
+    // Sessions-dir watcher: re-advertise local sessions whenever the metadata on
+    // disk changes so sessions created (or updated) AFTER the channel connects
+    // reach the remote dashboard without waiting for a reconnect. Mirrors the TS
+    // `watch(getSessionsDir(env), () => reconcile(bridge))`; this port uses the
+    // workspace's polling primitive (`shutdown_watch::spawn_poll`) as the fs.watch
+    // equivalent and only fires when the set of `*.json` files or their
+    // mtime/size changes, so a quiet channel does not re-send frames.
+    let reconcile_signal = Arc::new(tokio::sync::Notify::new());
+    let _sessions_watcher = {
+        let sessions_dir = bridge.store_env.sessions_dir();
+        let signal = reconcile_signal.clone();
+        let mut last = sessions_signature(&sessions_dir);
+        crate::shutdown_watch::spawn_poll(crate::shutdown_watch::DEFAULT_POLL_MS, move || {
+            let current = sessions_signature(&sessions_dir);
+            if current != last {
+                last = current;
+                signal.notify_one();
+            }
+        })
+    };
+
     let last_activity = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
 
     // Keepalive ping timer.
@@ -545,6 +581,11 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
                     connected_at,
                     session_count: live_session_count(&store_env),
                     last_error: None,
+                    devtunnel: Some(DevtunnelHealth::healthy(
+                        DevtunnelState::Running,
+                        None,
+                        climon_store::paths::now_iso(),
+                    )),
                 };
                 let _ = crate::uplink_status::write_uplink_status(&status, &cfg);
             }
@@ -577,6 +618,11 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
     loop {
         tokio::select! {
             _ = shutdown.notified() => break,
+            _ = reconcile_signal.notified() => {
+                // Sessions dir changed: re-advertise so new/updated local sessions
+                // (and any that disappeared) are pushed to the remote dashboard.
+                reconcile(&mut bridge).await;
+            }
             read = read_half.read(&mut buf) => {
                 let n = match read {
                     Ok(0) | Err(_) => break,
@@ -667,75 +713,135 @@ pub async fn run_uplink_bridge(channel: TcpStream, options: UplinkBridgeOptions)
 // by manual tests, mirroring the TS (which has no unit test for runUplink).
 // ---------------------------------------------------------------------------
 
-const AUTH_REJECT_PATTERNS: &[&str] = &[
-    "unauthor",
-    "forbidden",
-    "expired",
-    "invalid token",
-    "401",
-    "403",
-];
+const DISCOVERY_POLL_SECS: u64 = 30;
 
-fn auth_rejected_in(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    AUTH_REJECT_PATTERNS.iter().any(|p| lower.contains(p))
+/// The outcome of feeding a classified [`DevtunnelFailure`] to a tunnel target's
+/// [`RetryController`]: either wait `delay_ms` and reconnect (transient) or park
+/// until the target changes (actionable/permanent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReconnectAction {
+    Backoff {
+        delay_ms: u64,
+        health: DevtunnelHealth,
+    },
+    Pause {
+        reason: String,
+        health: DevtunnelHealth,
+    },
 }
 
-fn devtunnel_command(args: &[&str]) -> tokio::process::Command {
-    let env: HashMap<String, String> = std::env::vars().collect();
-    let mut cmd = tokio::process::Command::new("devtunnel");
-    cmd.args(args);
-    for (k, v) in crate::tunnel::devtunnel_env(&env) {
-        cmd.env(k, v);
+/// Records a failure against the controller and decides whether to reconnect
+/// with capped backoff or pause. Jitter is fixed at `0.5` (multiplier `1.0`) so
+/// the sequence is deterministic; the controller pauses non-transient failures.
+/// The classified failure + retry state are captured once into a
+/// [`DevtunnelHealth`] snapshot so the beacon never rebuilds failure strings.
+fn plan_reconnect(controller: &mut RetryController, failure: &DevtunnelFailure) -> ReconnectAction {
+    let now_ms = crate::time::now_ms();
+    let state = controller.fail(failure, now_ms, 0.5);
+    let probed_at = climon_store::paths::now_iso();
+    if state.paused {
+        let health = DevtunnelHealth::from_failure(
+            DevtunnelState::Paused,
+            failure.clone(),
+            Some(state),
+            probed_at,
+        );
+        ReconnectAction::Pause {
+            reason: failure.summary.clone(),
+            health,
+        }
+    } else {
+        let delay_ms = controller.backoff_delay_ms(state.attempt, failure.retry_after_ms, 0.5);
+        let health = DevtunnelHealth::from_failure(
+            DevtunnelState::Retrying,
+            failure.clone(),
+            Some(state),
+            probed_at,
+        );
+        ReconnectAction::Backoff { delay_ms, health }
     }
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    #[cfg(windows)]
-    {
-        // devtunnel.exe is a console app; without CREATE_NO_WINDOW every
-        // invocation (and the supervisor's reconnect loop spawns these
-        // repeatedly) flashes a console window on Windows.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd
 }
 
-/// A spawned `devtunnel connect` child plus its observed auth-rejection flag.
-struct ConnectChild {
+/// A synthetic transient failure for direct-host (non-tunnel) reconnects, which
+/// never involve Dev Tunnels: the capped-exponential backoff still applies, but
+/// no classification of `devtunnel` output is performed.
+fn direct_reconnect_failure() -> DevtunnelFailure {
+    DevtunnelFailure {
+        code: DevtunnelErrorCode::NetworkUnavailable,
+        operation: DevtunnelOperation::ConnectTunnel,
+        summary: "The remote ingest is not reachable yet.".to_string(),
+        remediation: "Climon will retry automatically.".to_string(),
+        technical_detail: "direct-host reconnect".to_string(),
+        occurred_at: climon_store::paths::now_iso(),
+        retry_class: DevtunnelRetryClass::Transient,
+        retryable: true,
+        retry_after_ms: None,
+        status: None,
+    }
+}
+
+/// A long-running `devtunnel connect <id>` child spawned through the shared
+/// [`DevtunnelGateway`]. stdout/stderr are streamed into a shared buffer so the
+/// eventual exit can be classified into a typed [`DevtunnelFailure`].
+struct ConnectProcess {
     child: tokio::process::Child,
-    auth_rejected: Arc<std::sync::atomic::AtomicBool>,
+    operation: DevtunnelOperation,
+    output: Arc<std::sync::Mutex<(String, String)>>,
 }
 
-impl ConnectChild {
-    fn auth_rejected(&self) -> bool {
-        self.auth_rejected
-            .load(std::sync::atomic::Ordering::Relaxed)
+impl ConnectProcess {
+    fn spawn(gateway: &DevtunnelGateway, tunnel_id: &str) -> Result<Self, DevtunnelFailure> {
+        let spawned = gateway.spawn_connect(tunnel_id)?;
+        let output = Arc::new(std::sync::Mutex::new((String::new(), String::new())));
+        spawn_output_reader(spawned.stdout, output.clone(), true);
+        spawn_output_reader(spawned.stderr, output.clone(), false);
+        Ok(Self {
+            child: spawned.child,
+            operation: spawned.operation,
+            output,
+        })
     }
+
+    /// Awaits the connect process exit and classifies it. A clean exit is still
+    /// treated as an unexpected (transient) process exit so the supervisor
+    /// reconnects.
+    async fn wait_exit(&mut self) -> DevtunnelFailure {
+        let status = self.child.wait().await;
+        self.classify_exit(status.ok().and_then(|s| s.code()))
+    }
+
+    /// Non-blocking exit classification. Returns `None` while still running.
+    fn try_exit(&mut self) -> Option<DevtunnelFailure> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(self.classify_exit(status.code())),
+            _ => None,
+        }
+    }
+
+    fn classify_exit(&self, code: Option<i32>) -> DevtunnelFailure {
+        let code = code.unwrap_or(1);
+        let (stdout, stderr) = self.output.lock().unwrap().clone();
+        crate::devtunnel::classify_devtunnel_exit(
+            self.operation.clone(),
+            if code == 0 { 1 } else { code },
+            &stdout,
+            &stderr,
+            None,
+            &climon_store::paths::now_iso(),
+        )
+        .unwrap_or_else(direct_reconnect_failure)
+    }
+
     async fn kill(&mut self) {
         let _ = self.child.kill().await;
     }
 }
 
-fn spawn_connect(tunnel_id: &str) -> std::io::Result<ConnectChild> {
-    let mut cmd = devtunnel_command(&["connect", tunnel_id]);
-    let mut child = cmd.spawn()?;
-    let auth_rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    if let Some(stdout) = child.stdout.take() {
-        spawn_auth_scan(stdout, auth_rejected.clone());
-    }
-    if let Some(stderr) = child.stderr.take() {
-        spawn_auth_scan(stderr, auth_rejected.clone());
-    }
-    Ok(ConnectChild {
-        child,
-        auth_rejected,
-    })
-}
-
-fn spawn_auth_scan<R>(reader: R, flag: Arc<std::sync::atomic::AtomicBool>)
-where
+fn spawn_output_reader<R>(
+    reader: R,
+    output: Arc<std::sync::Mutex<(String, String)>>,
+    is_stdout: bool,
+) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
@@ -746,8 +852,11 @@ where
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let text = String::from_utf8_lossy(&buf[..n]);
-                    if auth_rejected_in(&text) {
-                        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let mut guard = output.lock().unwrap();
+                    if is_stdout {
+                        guard.0.push_str(&text);
+                    } else {
+                        guard.1.push_str(&text);
                     }
                 }
             }
@@ -755,16 +864,22 @@ where
     });
 }
 
-/// Discovers the forwarded port for a tunnel via `devtunnel port list`.
-/// Mirrors `discoverTunnelPort`.
-async fn discover_tunnel_port(tunnel_id: &str) -> Option<u16> {
-    let mut cmd = devtunnel_command(&["port", "list", tunnel_id, "--json"]);
-    let output = cmd.output().await.ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if let Ok(parsed) = serde_json::from_str::<Value>(&stdout) {
+/// Discovers the forwarded port for a tunnel via the gateway `port list`.
+/// Mirrors `discoverTunnelPort`. Returns `Err` with the classified failure when
+/// the gateway op fails so callers can pause on actionable failures.
+async fn discover_tunnel_port(
+    gateway: &DevtunnelGateway,
+    tunnel_id: &str,
+) -> Result<Option<u16>, DevtunnelFailure> {
+    let result = gateway.list_ports(tunnel_id).await?;
+    Ok(parse_tunnel_port(&result.stdout))
+}
+
+/// Extracts the first usable forwarded port from `devtunnel port list --json`
+/// output, tolerating both array and object shapes and falling back to the first
+/// 2-5 digit run. Pure so it is unit-testable without shelling out.
+fn parse_tunnel_port(stdout: &str) -> Option<u16> {
+    if let Ok(parsed) = serde_json::from_str::<Value>(stdout) {
         let ports = if parsed.is_array() {
             parsed.as_array().cloned().unwrap_or_default()
         } else {
@@ -856,6 +971,41 @@ fn build_uplink_target(
     }
 }
 
+/// Computes a cheap change signature for the sessions directory from the set of
+/// `*.json` metadata files and their (size, mtime). Used by the sessions-dir
+/// watcher to trigger a re-advertise only when session metadata actually changes.
+fn sessions_signature(sessions_dir: &Path) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut entries: Vec<(String, u64, u128)> = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(sessions_dir) {
+        for entry in read_dir.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".json") {
+                continue;
+            }
+            let (len, mtime) = entry
+                .metadata()
+                .map(|m| {
+                    let mtime = m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0);
+                    (m.len(), mtime)
+                })
+                .unwrap_or((0, 0));
+            entries.push((name, len, mtime));
+        }
+    }
+    entries.sort();
+    let mut hasher = DefaultHasher::new();
+    entries.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Counts local (non-remote) sessions advertised by this uplink.
 fn live_session_count(store_env: &StoreEnv) -> u32 {
     list_sessions(store_env)
@@ -867,181 +1017,543 @@ fn live_session_count(store_env: &StoreEnv) -> u32 {
         .unwrap_or(0)
 }
 
+fn write_supervisor_status(
+    config_env: &ConfigEnv,
+    state: &str,
+    target: Option<crate::uplink_status::UplinkTarget>,
+    connected_at: Option<u64>,
+    session_count: u32,
+    last_error: Option<String>,
+    devtunnel: Option<DevtunnelHealth>,
+) {
+    // Keep `last_error` populated for pre-devtunnel readers: fall back to the
+    // health snapshot's failure summary when the caller did not pass one.
+    let last_error = last_error.or_else(|| {
+        devtunnel
+            .as_ref()
+            .and_then(|h| h.last_failure.as_ref().map(|f| f.summary.clone()))
+    });
+    let status = crate::uplink_status::UplinkStatus {
+        pid: std::process::id(),
+        updated_at: crate::time::now_ms(),
+        target,
+        state: state.to_string(),
+        connected_at,
+        session_count,
+        last_error,
+        devtunnel,
+    };
+    let _ = crate::uplink_status::write_uplink_status(&status, config_env);
+}
+
+pub fn target_key(spec: &UplinkTargetSpec) -> String {
+    match spec {
+        UplinkTargetSpec::Tunnel { tunnel_id } => format!("tunnel:{tunnel_id}"),
+        UplinkTargetSpec::Direct { host, port } => format!("direct:{host}:{port}"),
+    }
+}
+
+pub struct TargetHandle {
+    cancel: CancellationToken,
+    task: Option<tokio::task::JoinHandle<()>>,
+    #[cfg(test)]
+    fake: Option<(String, std::rc::Rc<std::cell::RefCell<Vec<String>>>)>,
+}
+
+#[derive(Default)]
+pub struct TargetSupervisor {
+    pub active: std::collections::HashMap<String, TargetHandle>,
+}
+
+impl TargetHandle {
+    pub fn new(cancel: CancellationToken, task: tokio::task::JoinHandle<()>) -> Self {
+        Self {
+            cancel,
+            task: Some(task),
+            #[cfg(test)]
+            fake: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn fake(key: String, cancelled: std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> Self {
+        Self {
+            cancel: CancellationToken::new(),
+            task: None,
+            fake: Some((key, cancelled)),
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancel.cancel();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
+        #[cfg(test)]
+        if let Some((key, log)) = &self.fake {
+            log.borrow_mut().push(key.clone());
+        }
+    }
+}
+
+/// Spawns bridge tasks for newly-desired targets and cancels tasks for targets no
+/// longer desired. Pure w.r.t. the injected `spawn`; no async here.
+pub fn reconcile_targets(
+    active: &mut std::collections::HashMap<String, TargetHandle>,
+    desired: &[UplinkTargetSpec],
+    spawn: &mut dyn FnMut(&UplinkTargetSpec) -> TargetHandle,
+) {
+    let desired_keys: std::collections::HashSet<String> = desired.iter().map(target_key).collect();
+    let stale: Vec<String> = active
+        .keys()
+        .filter(|k| !desired_keys.contains(*k))
+        .cloned()
+        .collect();
+    for key in stale {
+        if let Some(handle) = active.remove(&key) {
+            handle.cancel();
+        }
+    }
+    for spec in desired {
+        let key = target_key(spec);
+        if let std::collections::hash_map::Entry::Vacant(entry) = active.entry(key) {
+            entry.insert(spawn(spec));
+        }
+    }
+}
+
+fn remote_enabled(config_env: &ConfigEnv, cwd: &Path) -> bool {
+    resolve_config_setting("remote.enabled", config_env, cwd) == Some(Value::Bool(true))
+}
+
+async fn sleep_backoff_or_cancel(cancel: &CancellationToken, backoff_ms: u64) -> bool {
+    tokio::select! {
+        _ = cancel.cancelled() => true,
+        _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => false,
+    }
+}
+
+async fn run_target_bridge(
+    spec: UplinkTargetSpec,
+    config_env: ConfigEnv,
+    store_env: StoreEnv,
+    client_id: String,
+    cwd: std::path::PathBuf,
+    cancel: CancellationToken,
+) {
+    // A tunnel target's classified failures drive a shared retry controller so
+    // transient errors back off with capped exponential jitter and actionable
+    // errors (auth/quota) pause instead of hammering. Direct-host targets never
+    // touch Dev Tunnels but reuse the same backoff for reachability retries.
+    let gateway = DevtunnelGateway::new();
+    let mut retry = RetryController::new();
+    loop {
+        if cancel.is_cancelled() {
+            return;
+        }
+        let started_at = std::time::Instant::now();
+        let mut conn: Option<ConnectProcess> = None;
+
+        let (host, port, tunnel_id, is_peer_connection) = match &spec {
+            UplinkTargetSpec::Direct { host, port } => {
+                let is_peer = resolve_peer_uplink_target(&config_env, &cwd)
+                    .map(|(peer_host, peer_port)| peer_host == *host && peer_port == *port)
+                    .unwrap_or(false);
+                (host.clone(), *port, None, is_peer)
+            }
+            UplinkTargetSpec::Tunnel { tunnel_id } => {
+                let config = resolve_uplink_config(&config_env, &cwd);
+                let configured_port = if config.tunnel_id.as_deref() == Some(tunnel_id.as_str()) {
+                    config.port
+                } else {
+                    None
+                };
+                let tunnel_port = match configured_port {
+                    Some(p) => Some(p),
+                    None => {
+                        let discovered = tokio::select! {
+                            _ = cancel.cancelled() => return,
+                            d = discover_tunnel_port(&gateway, tunnel_id) => d,
+                        };
+                        match discovered {
+                            Ok(p) => p,
+                            Err(failure) => {
+                                let action = plan_reconnect(&mut retry, &failure);
+                                if apply_reconnect(action, &cancel, &config_env, None).await {
+                                    return;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                };
+                let Some(tunnel_port) = tunnel_port else {
+                    // The list succeeded but exposed no usable port yet; retry.
+                    let action = plan_reconnect(&mut retry, &direct_reconnect_failure());
+                    if apply_reconnect(action, &cancel, &config_env, None).await {
+                        return;
+                    }
+                    continue;
+                };
+                match ConnectProcess::spawn(&gateway, tunnel_id) {
+                    Ok(c) => {
+                        conn = Some(c);
+                        (
+                            "127.0.0.1".to_string(),
+                            tunnel_port,
+                            Some(tunnel_id.clone()),
+                            false,
+                        )
+                    }
+                    Err(failure) => {
+                        let action = plan_reconnect(&mut retry, &failure);
+                        if apply_reconnect(action, &cancel, &config_env, None).await {
+                            return;
+                        }
+                        continue;
+                    }
+                }
+            }
+        };
+
+        let target = build_uplink_target(is_peer_connection, &host, port, tunnel_id.as_deref());
+        write_supervisor_status(
+            &config_env,
+            "connecting",
+            Some(target.clone()),
+            None,
+            0,
+            None,
+            Some(DevtunnelHealth::healthy(
+                DevtunnelState::Starting,
+                None,
+                climon_store::paths::now_iso(),
+            )),
+        );
+
+        // Wait for the forwarded port to become reachable while also watching for
+        // an early connect-process exit (e.g. an auth rejection surfaces as the
+        // `devtunnel connect` child exiting with an actionable failure).
+        let reachable = if let Some(c) = conn.as_mut() {
+            tokio::select! {
+                _ = cancel.cancelled() => { conn_kill(&mut conn).await; return; }
+                failure = c.wait_exit() => {
+                    conn_kill(&mut conn).await;
+                    let action = plan_reconnect(&mut retry, &failure);
+                    if apply_reconnect(action, &cancel, &config_env, Some(target.clone())).await {
+                        return;
+                    }
+                    continue;
+                }
+                reachable = wait_for_port(port, &host, 15_000) => reachable,
+            }
+        } else {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                reachable = wait_for_port(port, &host, 15_000) => reachable,
+            }
+        };
+
+        if !reachable {
+            // The connect child may have exited with a classified cause; prefer
+            // it over the synthetic transient reachability failure.
+            let failure = conn
+                .as_mut()
+                .and_then(|c| c.try_exit())
+                .unwrap_or_else(direct_reconnect_failure);
+            conn_kill(&mut conn).await;
+            let action = plan_reconnect(&mut retry, &failure);
+            if apply_reconnect(action, &cancel, &config_env, Some(target.clone())).await {
+                return;
+            }
+            continue;
+        }
+
+        let mut connected = false;
+        if let Ok(channel) = TcpStream::connect((host.as_str(), port)).await {
+            connected = true;
+            let connected_at = crate::time::now_ms();
+            write_supervisor_status(
+                &config_env,
+                "connected",
+                Some(target.clone()),
+                Some(connected_at),
+                live_session_count(&store_env),
+                None,
+                Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Running,
+                    Some(climon_store::paths::now_iso()),
+                    climon_store::paths::now_iso(),
+                )),
+            );
+            let bridge = run_uplink_bridge(
+                channel,
+                UplinkBridgeOptions {
+                    store_env: store_env.clone(),
+                    client_id: client_id.clone(),
+                    keep_alive_seconds: Some(resolve_keep_alive(&config_env, &cwd)),
+                    peer: is_peer_connection,
+                    target: Some(target.clone()),
+                    connected_at: Some(connected_at),
+                    config_env: config_env.clone(),
+                },
+            );
+            tokio::select! {
+                _ = cancel.cancelled() => { conn_kill(&mut conn).await; return; }
+                _ = bridge => {}
+            }
+        }
+
+        // Unified reconnect decision: classify the connect exit if it stopped;
+        // otherwise treat the drop as transient. Reset the controller after a
+        // stable session so a long-lived connection restarts from base backoff.
+        let stable = connected && started_at.elapsed() > Duration::from_secs(30);
+        let failure = conn
+            .as_mut()
+            .and_then(|c| c.try_exit())
+            .unwrap_or_else(direct_reconnect_failure);
+        conn_kill(&mut conn).await;
+        if stable {
+            retry.success();
+        }
+        let action = plan_reconnect(&mut retry, &failure);
+        if apply_reconnect(action, &cancel, &config_env, Some(target.clone())).await {
+            return;
+        }
+    }
+}
+
+/// Kills and drops the connect child, if any.
+async fn conn_kill(conn: &mut Option<ConnectProcess>) {
+    if let Some(mut c) = conn.take() {
+        c.kill().await;
+    }
+}
+
+/// Applies a [`ReconnectAction`]: a pause writes a `paused` status and parks
+/// until the target is cancelled; a backoff writes `reconnecting` and sleeps.
+/// Returns `true` when the bridge task should stop looping (cancelled or paused).
+async fn apply_reconnect(
+    action: ReconnectAction,
+    cancel: &CancellationToken,
+    config_env: &ConfigEnv,
+    target: Option<crate::uplink_status::UplinkTarget>,
+) -> bool {
+    match action {
+        ReconnectAction::Pause { reason, health } => {
+            write_supervisor_status(
+                config_env,
+                "paused",
+                target,
+                None,
+                0,
+                Some(reason),
+                Some(health),
+            );
+            cancel.cancelled().await;
+            true
+        }
+        ReconnectAction::Backoff { delay_ms, health } => {
+            write_supervisor_status(
+                config_env,
+                "reconnecting",
+                target,
+                None,
+                0,
+                None,
+                Some(health),
+            );
+            sleep_backoff_or_cancel(cancel, delay_ms).await
+        }
+    }
+}
+
 pub async fn run_uplink(config_env: ConfigEnv, store_env: StoreEnv, cwd: &Path) -> i32 {
+    // Opt-in foreground diagnostics: the detached uplink is otherwise a black
+    // box (stderr routed to null, logger skipped for the `uplink` role), so
+    // `CLIMON_UPLINK_DEBUG=1 climon __uplink` in the foreground traces the
+    // startup/target decisions to stderr.
+    let dbg = std::env::var("CLIMON_UPLINK_DEBUG").is_ok();
     let peer_home = as_string(resolve_config_setting("remote.peerHome", &config_env, cwd));
-    let initial_legacy = resolve_uplink_config(&config_env, cwd);
-    if peer_home.is_none() && !initial_legacy.enabled {
+    let enabled_at_entry = remote_enabled(&config_env, cwd);
+    if dbg {
+        eprintln!(
+            "[uplink] entry: cwd={cwd:?} peer_home={peer_home:?} remote_enabled={enabled_at_entry}"
+        );
+    }
+    if peer_home.is_none() && !enabled_at_entry {
+        if dbg {
+            eprintln!("[uplink] exit: remote not enabled and no peer_home");
+        }
         return 0;
     }
 
     let pid_file = get_climon_home(&config_env).join("uplink.pid");
-    let singleton = acquire_singleton_detailed(&pid_file);
-    if !singleton.acquired {
-        return 0;
+    // Hold the singleton guard for the whole supervisor loop: the OS lock is
+    // released only when this process exits, so a crashed uplink (or a recycled
+    // PID) can never block a fresh one from taking over.
+    let _singleton_guard = match acquire_singleton_detailed(&pid_file) {
+        SingletonResult {
+            acquired: true,
+            guard: Some(guard),
+            ..
+        } => guard,
+        other => {
+            if dbg {
+                eprintln!(
+                    "[uplink] exit: singleton not acquired (acquired={}, holder={:?}, pid_file={:?})",
+                    other.acquired, other.holder, pid_file
+                );
+            }
+            return 0;
+        }
+    };
+    if dbg {
+        eprintln!("[uplink] singleton acquired; entering supervisor loop");
     }
 
     let client_id = ensure_client_id(&config_env, cwd);
-    let mut backoff_ms: u64 = 1000;
-
-    let write_uplink = |state: &str,
-                        target: Option<crate::uplink_status::UplinkTarget>,
-                        connected_at: Option<u64>,
-                        session_count: u32,
-                        last_error: Option<String>| {
-        let status = crate::uplink_status::UplinkStatus {
-            pid: std::process::id(),
-            updated_at: crate::time::now_ms(),
-            target,
-            state: state.to_string(),
-            connected_at,
-            session_count,
-            last_error,
-        };
-        let _ = crate::uplink_status::write_uplink_status(&status, &config_env);
-    };
+    let mut supervisor = TargetSupervisor::default();
+    let discovery_gateway = DevtunnelGateway::new();
 
     loop {
-        let started_at = std::time::Instant::now();
-
+        let enabled = remote_enabled(&config_env, cwd);
         let peer_target = if peer_home.is_some() {
             resolve_peer_uplink_target(&config_env, cwd)
         } else {
             None
         };
-        let is_peer_connection = peer_target.is_some();
         let config = resolve_uplink_config(&config_env, cwd);
-
-        let mut host: Option<String> = None;
-        let mut port: Option<u16> = None;
-        let mut conn: Option<ConnectChild> = None;
-
-        if let Some((peer_host, peer_port)) = peer_target {
-            host = Some(peer_host);
-            port = Some(peer_port);
-        } else if config.enabled {
-            if let (Some(h), Some(p)) = (config.host.clone(), config.port) {
-                host = Some(h);
-                port = Some(p);
-            } else if let Some(tunnel_id) = config.tunnel_id.clone() {
-                let tunnel_port = match config.port {
-                    Some(p) => Some(p),
-                    None => discover_tunnel_port(&tunnel_id).await,
-                };
-                if let Some(tp) = tunnel_port {
-                    if let Ok(c) = spawn_connect(&tunnel_id) {
-                        conn = Some(c);
-                        host = Some("127.0.0.1".to_string());
-                        port = Some(tp);
-                    }
-                }
-            }
-        }
-
-        let (host, port) = match (host, port) {
-            (Some(h), Some(p)) => (h, p),
-            _ => {
-                if let Some(mut c) = conn {
-                    c.kill().await;
-                }
-                if peer_home.is_none() {
-                    write_uplink("disconnected", None, None, 0, None);
-                    return 0;
-                }
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                backoff_ms = (backoff_ms * 2).min(30_000);
-                continue;
-            }
-        };
-
-        let target =
-            build_uplink_target(is_peer_connection, &host, port, config.tunnel_id.as_deref());
-        write_uplink("connecting", Some(target.clone()), None, 0, None);
-
-        let reachable = wait_for_port(port, &host, 15_000).await;
-        if !reachable {
-            if let Some(c) = &conn {
-                if c.auth_rejected() {
-                    eprintln!(
-                        "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
-                    );
-                    if let Some(mut c) = conn {
-                        c.kill().await;
-                    }
-                    write_uplink(
-                        "disconnected",
-                        None,
-                        None,
-                        0,
-                        Some("dev tunnel auth rejected".to_string()),
-                    );
-                    return 1;
-                }
-            }
-            if let Some(mut c) = conn {
-                c.kill().await;
-            }
-            // transient: fall through to backoff
-            write_uplink("reconnecting", Some(target.clone()), None, 0, None);
-            if started_at.elapsed() > Duration::from_secs(30) {
-                backoff_ms = 1000;
-            }
-            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-            backoff_ms = (backoff_ms * 2).min(30_000);
-            continue;
-        }
-
-        match TcpStream::connect((host.as_str(), port)).await {
-            Ok(channel) => {
-                let connected_at = crate::time::now_ms();
-                write_uplink(
-                    "connected",
-                    Some(target.clone()),
-                    Some(connected_at),
-                    live_session_count(&store_env),
-                    None,
-                );
-                run_uplink_bridge(
-                    channel,
-                    UplinkBridgeOptions {
-                        store_env: store_env.clone(),
-                        client_id: client_id.clone(),
-                        keep_alive_seconds: Some(resolve_keep_alive(&config_env, cwd)),
-                        peer: is_peer_connection,
-                        target: Some(target.clone()),
-                        connected_at: Some(connected_at),
-                        config_env: config_env.clone(),
-                    },
-                )
-                .await;
-            }
-            Err(_) => {
-                // transient connect error: fall through to backoff
-            }
-        }
-
-        write_uplink("reconnecting", Some(target.clone()), None, 0, None);
-        let auth_rejected_after = conn.as_ref().map(|c| c.auth_rejected()).unwrap_or(false);
-        if let Some(mut c) = conn {
-            c.kill().await;
-        }
-        if auth_rejected_after {
+        if dbg {
             eprintln!(
-                "climon uplink: dev tunnel auth rejected (not authorized for this tunnel). Stopping."
+                "[uplink] loop: enabled={} config.enabled={} host={:?} port={:?} tunnel_id={:?}",
+                enabled, config.enabled, config.host, config.port, config.tunnel_id
             );
-            write_uplink(
+        }
+        if !enabled && peer_home.is_none() {
+            reconcile_targets(&mut supervisor.active, &[], &mut |_| unreachable!());
+            write_supervisor_status(
+                &config_env,
                 "disconnected",
                 None,
                 None,
                 0,
-                Some("dev tunnel auth rejected".to_string()),
+                None,
+                Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Stopped,
+                    None,
+                    climon_store::paths::now_iso(),
+                )),
             );
-            return 1;
+            return 0;
         }
-        if started_at.elapsed() > Duration::from_secs(30) {
-            backoff_ms = 1000;
+
+        let discover_enabled =
+            resolve_config_setting("remote.discover", &config_env, cwd) != Some(Value::Bool(false));
+        let own_install_id = as_string(resolve_config_setting("install.id", &config_env, cwd));
+        if dbg {
+            eprintln!(
+                "[uplink] discover_enabled={discover_enabled} own_install_id={own_install_id:?}; starting discovery"
+            );
         }
-        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-        backoff_ms = (backoff_ms * 2).min(30_000);
+        let discovered = if enabled && discover_enabled {
+            match crate::discovery::list_climon_ingest_tunnels(&discovery_gateway).await {
+                Ok(hosts) => hosts,
+                Err(failure) => {
+                    // Record the discovery failure separately instead of treating
+                    // it as "no hosts": explicit host/tunnel targets below are
+                    // still retained so a misconfigured or logged-out discovery
+                    // never silently drops a configured uplink.
+                    eprintln!(
+                        "climon uplink: dev tunnel discovery failed: {} ({})",
+                        failure.summary, failure.technical_detail
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        if dbg {
+            eprintln!(
+                "[uplink] discovery returned {} ingest host(s)",
+                discovered.len()
+            );
+        }
+        let explicit_host = if config.enabled {
+            config.host.clone().zip(config.port)
+        } else {
+            None
+        };
+        let explicit_tunnel_id = if config.enabled {
+            config.tunnel_id.clone()
+        } else {
+            None
+        };
+        if dbg {
+            eprintln!(
+                "[uplink] explicit_host={explicit_host:?} explicit_tunnel_id={explicit_tunnel_id:?}"
+            );
+        }
+        let mut desired = Vec::new();
+        if let Some((host, port)) = peer_target {
+            desired.push(UplinkTargetSpec::Direct { host, port });
+        }
+        desired.extend(crate::target_set::compute_targets(
+            crate::target_set::ComputeTargetsInput {
+                discover_enabled,
+                own_install_id,
+                explicit_host,
+                explicit_tunnel_id,
+                discovered,
+            },
+        ));
+        if dbg {
+            eprintln!(
+                "[uplink] computed {} desired target(s): {desired:?}",
+                desired.len()
+            );
+        }
+
+        let ce = config_env.clone();
+        let se = store_env.clone();
+        let cid = client_id.clone();
+        let cwd_buf = cwd.to_path_buf();
+        let mut spawn = |spec: &UplinkTargetSpec| {
+            let cancel = CancellationToken::new();
+            let task = tokio::spawn(run_target_bridge(
+                spec.clone(),
+                ce.clone(),
+                se.clone(),
+                cid.clone(),
+                cwd_buf.clone(),
+                cancel.clone(),
+            ));
+            TargetHandle::new(cancel, task)
+        };
+        reconcile_targets(&mut supervisor.active, &desired, &mut spawn);
+        if dbg {
+            eprintln!(
+                "[uplink] reconciled; {} active bridge(s)",
+                supervisor.active.len()
+            );
+        }
+        if supervisor.active.is_empty() {
+            write_supervisor_status(
+                &config_env,
+                "disconnected",
+                None,
+                None,
+                0,
+                None,
+                Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Stopped,
+                    None,
+                    climon_store::paths::now_iso(),
+                )),
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(DISCOVERY_POLL_SECS)).await;
     }
 }
 
@@ -1056,7 +1568,6 @@ mod tests {
     use super::*;
     use climon_proto::meta::SessionMeta;
     use climon_store::meta::write_session_meta;
-    use std::collections::HashMap as Map;
     use tokio::net::TcpListener;
 
     #[test]
@@ -1153,6 +1664,8 @@ mod tests {
             theme: None,
             user_paused: None,
             terminal_title: None,
+            attention_snippet: None,
+            progress: None,
         }
     }
 
@@ -1277,6 +1790,78 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
+    #[test]
+    fn sessions_signature_changes_when_a_session_appears() {
+        let home = temp_home();
+        let sessions_dir = home.join("sessions");
+        let empty = sessions_signature(&sessions_dir);
+        // Stable for an unchanged directory.
+        assert_eq!(empty, sessions_signature(&sessions_dir));
+        // Non-`.json` files (locks, scrollback, tmp) do not affect the signature.
+        std::fs::write(sessions_dir.join("s1.json.lock"), "").unwrap();
+        std::fs::write(sessions_dir.join("s1.scrollback"), "x").unwrap();
+        assert_eq!(empty, sessions_signature(&sessions_dir));
+        // A new metadata file changes the signature.
+        std::fs::write(sessions_dir.join("s1.json"), "{}").unwrap();
+        assert_ne!(empty, sessions_signature(&sessions_dir));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[tokio::test]
+    async fn bridge_advertises_sessions_created_after_connect() {
+        let home = temp_home();
+        let store_env = store_env_for(&home);
+        // No sessions exist at connect time.
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let server = tokio::spawn(collect_control_kinds(listener, received.clone()));
+
+        let client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let bridge = tokio::spawn(run_uplink_bridge(
+            client,
+            UplinkBridgeOptions {
+                store_env: store_env_for(&home),
+                client_id: "dev1".into(),
+                keep_alive_seconds: Some(0.0),
+                peer: false,
+                target: None,
+                connected_at: None,
+                config_env: config_env_for(&home),
+            },
+        ));
+
+        // Initial reconcile has no sessions to advertise.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !received
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|k| k == "session-added"),
+            "no session should be advertised before one is created"
+        );
+
+        // Create a session after the channel connected; the sessions-dir watcher
+        // must re-advertise it without waiting for a reconnect.
+        write_session_meta(&store_env, &sample_meta(&home, "late", None)).unwrap();
+        tokio::time::sleep(Duration::from_millis(1600)).await;
+        assert!(
+            received
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|k| k == "session-added"),
+            "session created after connect should be advertised by the watcher"
+        );
+
+        bridge.abort();
+        let _ = bridge.await;
+        let _ = server.await;
+        std::fs::remove_dir_all(&home).ok();
+    }
+
     #[tokio::test]
     async fn bridge_does_not_advertise_remote_origin_sessions() {
         let home = temp_home();
@@ -1359,11 +1944,68 @@ mod tests {
     }
 
     #[test]
-    fn discover_tunnel_port_line_fallback_and_auth_scan() {
-        assert!(auth_rejected_in("Error: 403 Forbidden"));
-        assert!(auth_rejected_in("token expired"));
-        assert!(!auth_rejected_in("all good"));
-        let _ = Map::<String, String>::new();
+    fn parse_tunnel_port_handles_json_and_line_fallback() {
+        assert_eq!(
+            parse_tunnel_port(r#"{"ports":[{"portNumber":3132}]}"#),
+            Some(3132)
+        );
+        assert_eq!(parse_tunnel_port(r#"[{"port":8080}]"#), Some(8080));
+        assert_eq!(parse_tunnel_port("forwarding 4200 ->"), Some(4200));
+        assert_eq!(parse_tunnel_port("no digits here"), None);
+    }
+
+    #[test]
+    fn plan_reconnect_pauses_actionable_and_backs_off_transient() {
+        use crate::devtunnel::classify_failure;
+        use crate::devtunnel::{DevtunnelFailureInput, DevtunnelOperation};
+
+        let mut controller = RetryController::new();
+        let not_auth = classify_failure(
+            &DevtunnelFailureInput {
+                operation: DevtunnelOperation::ConnectTunnel,
+                status: 1,
+                stdout: String::new(),
+                stderr: "not logged in".to_string(),
+                spawn_error: None,
+                parse_failed: None,
+            },
+            "2026-07-11T13:00:00.000Z",
+        );
+        assert_eq!(not_auth.code, DevtunnelErrorCode::NotAuthenticated);
+        match plan_reconnect(&mut controller, &not_auth) {
+            ReconnectAction::Pause { .. } => {}
+            other => panic!("expected pause for actionable failure, got {other:?}"),
+        }
+
+        let mut controller = RetryController::new();
+        let network = classify_failure(
+            &DevtunnelFailureInput {
+                operation: DevtunnelOperation::ConnectTunnel,
+                status: 1,
+                stdout: String::new(),
+                stderr: "connection refused".to_string(),
+                spawn_error: None,
+                parse_failed: None,
+            },
+            "2026-07-11T13:00:00.000Z",
+        );
+        assert_eq!(network.code, DevtunnelErrorCode::NetworkUnavailable);
+        match plan_reconnect(&mut controller, &network) {
+            ReconnectAction::Backoff { delay_ms, .. } => assert_eq!(delay_ms, 1000),
+            other => panic!("expected backoff for transient failure, got {other:?}"),
+        }
+        // Second transient failure escalates the capped-exponential delay.
+        match plan_reconnect(&mut controller, &network) {
+            ReconnectAction::Backoff { delay_ms, .. } => assert_eq!(delay_ms, 2000),
+            other => panic!("expected escalated backoff, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn direct_reconnect_failure_is_transient() {
+        let failure = direct_reconnect_failure();
+        assert_eq!(failure.retry_class, DevtunnelRetryClass::Transient);
+        assert!(failure.retryable);
     }
 }
 
@@ -1384,6 +2026,65 @@ mod spawn_dispatch_tests {
             priority: Some(700),
             color: Some("red".into()),
             headless: true,
+        }
+    }
+
+    #[cfg(test)]
+    mod fanout_tests {
+        use super::*;
+        use crate::target_set::UplinkTargetSpec;
+        use std::collections::HashMap;
+
+        #[test]
+        fn target_key_is_stable_and_distinct() {
+            assert_eq!(
+                target_key(&UplinkTargetSpec::Tunnel {
+                    tunnel_id: "t1".into()
+                }),
+                "tunnel:t1"
+            );
+            assert_eq!(
+                target_key(&UplinkTargetSpec::Direct {
+                    host: "h".into(),
+                    port: 9
+                }),
+                "direct:h:9"
+            );
+        }
+
+        #[test]
+        fn reconcile_adds_new_and_removes_stale() {
+            let spawned = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+            let cancelled = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+
+            let mut active: HashMap<String, TargetHandle> = HashMap::new();
+
+            let s2 = spawned.clone();
+            let c2 = cancelled.clone();
+            let mut spawn = move |spec: &UplinkTargetSpec| {
+                s2.borrow_mut().push(target_key(spec));
+                TargetHandle::fake(target_key(spec), c2.clone())
+            };
+
+            let a = UplinkTargetSpec::Tunnel {
+                tunnel_id: "A".into(),
+            };
+            let b = UplinkTargetSpec::Tunnel {
+                tunnel_id: "B".into(),
+            };
+            reconcile_targets(&mut active, &[a.clone(), b.clone()], &mut spawn);
+            assert_eq!(*spawned.borrow(), vec!["tunnel:A", "tunnel:B"]);
+            assert_eq!(active.len(), 2);
+
+            let c = UplinkTargetSpec::Tunnel {
+                tunnel_id: "C".into(),
+            };
+            reconcile_targets(&mut active, &[b.clone(), c.clone()], &mut spawn);
+            assert!(cancelled.borrow().contains(&"tunnel:A".to_string()));
+            assert!(spawned.borrow().contains(&"tunnel:C".to_string()));
+            assert!(active.contains_key("tunnel:B"));
+            assert!(active.contains_key("tunnel:C"));
+            assert!(!active.contains_key("tunnel:A"));
         }
     }
 

@@ -40,19 +40,20 @@ result-tracking row.
 | 5 | `climon-store` crate — atomic metadata IO, patch serialization, session ids, server state | [phase05-store.md](phase05-store.md) |
 | 6 | climon-pty crate — cross-platform PTY spawn/resize, raw-mode termios/ConPTY, scrollback, terminal size | [phase06-pty.md](phase06-pty.md) |
 | 7 | climon-session crate — session host: PTY ownership, per-session IPC socket, scrollback shadow, idle/attention, frame relay, terminal-title capture, local relay, lifecycle | [phase07-session.md](phase07-session.md) |
-| 8 | climon-cli core — daily-driver `climon` client: arg parser, launcher (run/shell/ls/kill), attach client + detach, config/server delegation, license notices, version-from-package.json | [phase08-cli.md](phase08-cli.md) |
+| 8 | climon-cli core — daily-driver `climon` client: arg parser, launcher (run/shell/command/ls/kill), attach client + detach, config/server delegation, license notices, version-from-package.json | [phase08-cli.md](phase08-cli.md) |
 | 9 | climon-remote crate — uplink/ingest mux bridge (byte-exact wire), devtunnel detection, WSL↔Windows link/discovery, keepalive, singleton recycle, demotion, cleanup; wired `__uplink`/`__ingest`/`link`/`cleanup` + launcher auto-uplink/auto-link | [phase09-remote.md](phase09-remote.md) |
-| 10 | climon-update — self-update: byte-for-byte Ed25519 verify + AES-256-GCM/scrypt envelope decrypt, release manifest, atomic no-kill binary swap, background check + launch banner, `climon update` | [phase10-update.md](phase10-update.md) |
+| 10 | climon-update — self-update: byte-for-byte Ed25519 signature verify, release manifest (tolerates a legacy `encryption` field — artifacts are signed plaintext, no decrypt step runs), atomic no-kill binary swap, background check + launch banner, `climon update` | [phase10-update.md](phase10-update.md) |
 | 11 | climon-install — client-side install/setup: install-manifest + on-disk layout parity, PATH setup (macOS/Linux/Windows), `climon setup` onboarding, telemetry/auto-update opt-in, stable install id, running-process detection | [phase11-install.md](phase11-install.md) |
 | 12 | Cutover & cleanup — ship the Rust `climon` client as the `install` binary, native Rust self-install (sentinel `climon-alpha` trigger, PATH + `.version` + changelog, locked-binary kill/retry), `scripts/compile.ts` host/assemble modes, `release.yml` cross-compile matrix, retire the Bun client bin | [phase12-cutover.md](phase12-cutover.md) |
 | — | Pin key bar (mobile) — mobile-only hamburger toggle + centralised mobile detection | [pin-key-bar.md](pin-key-bar.md) |
 | — | Mobile active-session layout order — Open terminal button between title and status/client meta | [mobile-open-terminal-order.md](mobile-open-terminal-order.md) |
-| — | Tunnel-link expiry countdown banner | [phase13-tunnel-expiry-banner.md](phase13-tunnel-expiry-banner.md) |
 | — | WSL bridge feature flag — config-driven remotes ingest + explicit bridge opt-in | [phase14-wsl-bridge-feature-flag.md](phase14-wsl-bridge-feature-flag.md) |
 | — | Ingest Rust cutover — production Rust ingest, control-plane parity, ghost GC, gate #3, hardening | [phase15-ingest-rust-cutover.md](phase15-ingest-rust-cutover.md) |
-| — | Remotes visibility — `ingest-status.json`/`uplink-status.json` beacons, `climon remotes` (`--watch`/`--json`), loopback `GET /api/remotes` + SSE, dashboard "Remote hosts" panel, hello identity sanitization | [phase16-remotes-visibility.md](phase16-remotes-visibility.md) |
+| — | Remotes visibility — `ingest-status.json`/`uplink-status.json` beacons, `climon remotes` (`--watch`/`--json`), hello identity sanitization | [phase16-remotes-visibility.md](phase16-remotes-visibility.md) |
 | — | Legacy Bun client removal — Rust client plus maintained Bun dashboard/server workflow | [phase17-legacy-client-removal.md](phase17-legacy-client-removal.md) |
+| — | Remote devbox auto-discovery + multi-target fan-out | [phase18-remote-discovery.md](phase18-remote-discovery.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
+| — | Dev-tunnel resilience — installation, authentication, quota, retry, and status | [devtunnel-resilience.md](devtunnel-resilience.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
 | — | Foreground attention toast (in-app toast instead of system notification) | [foreground-attention-toast.md](foreground-attention-toast.md) |
 | — | PWA zoom lock & no overscroll (pinch-zoom disabled, page pinned 1:1 on swipe) | [pwa-zoom-lock.md](pwa-zoom-lock.md) |
@@ -65,18 +66,30 @@ result-tracking row.
 | — | Security — project-local config global-only settings | [security-config-global-only.md](security-config-global-only.md) |
 | — | Interactive install opt-ins default to Yes (telemetry + auto-update prompts) | [optin-default-yes.md](optin-default-yes.md) |
 | — | Remove `climon-beta` from the distribution (zip/install/update orphan cleanup) | [remove-climon-beta.md](remove-climon-beta.md) |
+| — | Windows binary lifecycle — dedicated installer, stub/versioned layout, and bridge migration | [windows-binary-lifecycle.md](windows-binary-lifecycle.md) |
 | — | Ingest hosts the remotes dev tunnel (`devtunnel host`) — devbox connects + appears in flyout | [ingest-tunnel-host.md](ingest-tunnel-host.md) |
 | — | Tunnel Link start reliability — patient relay-propagation health check + verified self-heal recreation | [tunnel-link-reliability.md](tunnel-link-reliability.md) |
 | — | MIT license transition — `climon license`, one-time upgrade notice, no notice on fresh installs | [mit-license-transition.md](mit-license-transition.md) |
 | — | Release signing-key preflight — CI blocks release when the signing key is missing or doesn't match the embedded public key (forks skip) | [release-signing-key-preflight.md](release-signing-key-preflight.md) |
 | — | Text staging area — icon-only keybar chooser + full-viewport compose overlay (Insert / Cancel) | [text-staging-area.md](text-staging-area.md) |
+| — | Compose history — per-session in-memory recall with Back/Forward buttons in the composer | [compose-history.md](compose-history.md) |
 | — | Telemetry privacy — no PII / no user command / no rendered text in App Insights egress (sanitizer + field allowlist + `subcommand`-only) | [telemetry-privacy.md](telemetry-privacy.md) |
 | — | Touch keybar availability + responsive chooser labels — touch-primary keybar, inline docking on wide touch, width-responsive button labels | [keybar-touch-responsive.md](keybar-touch-responsive.md) |
 | — | App Insights connection string source — env var / embedded constant only, never climon config | [appinsights-connection-source.md](appinsights-connection-source.md) |
 | — | Terminal font-size repaint — viewport repaints cleanly on font-size change without waiting for focus | [terminal-font-size-repaint.md](terminal-font-size-repaint.md) |
 | — | Terminal title as session subtitle — capture PTY OSC 0/2 title, drop name→title | [terminal-title-subtitle.md](terminal-title-subtitle.md) |
+| — | Terminal control handoff — one shared PTY, single controller, follow/displaced surfaces, Space / maximize Take control, priority fallback | [terminal-control-handoff.md](terminal-control-handoff.md) |
+| — | Terminal progress indicator — capture PTY OSC 9;4 progress, per-session bar/spinner/error/warning on the list (+ `dashboard.stateIconNoMotion`) | [terminal-progress-indicator.md](terminal-progress-indicator.md) |
 | — | Terminal selection / copy (touch) — Select button captures full scrollback into a monospaced textarea for native copy, with a strip-decorations toggle | [terminal-select-mode.md](terminal-select-mode.md) |
 | — | `bun run build` builds the Rust client + on-demand rustup bootstrap when cargo is missing | [build-all-rust-toolchain.md](build-all-rust-toolchain.md) |
+| — | Smart Notifications — attention notification body from fuzzy-extracted terminal output snippet | [smart-notifications.md](smart-notifications.md) |
+| — | Remote uplink/ingest singleton — OS advisory lock immune to PID recycling (fixes silent uplink exit) | [singleton-lock-pid-recycle.md](singleton-lock-pid-recycle.md) |
+| — | Uplink advertises sessions created after it connects (sessions-dir watcher re-reconcile) | [uplink-advertise-new-sessions.md](uplink-advertise-new-sessions.md) |
+| — | Remote host self-managed ingest tunnel — stable `climon-ingest` dev tunnel id, label, non-secret description, restart reuse | [phase18-remote-host-tunnel.md](phase18-remote-host-tunnel.md) |
+| — | Terminal viewport fit — terminal re-fits its pane instead of locking to the host grid (addon-fit/xterm version-mismatch regression) | [terminal-viewport-fit.md](terminal-viewport-fit.md) |
+| — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |
+| — | Jiggle-repaint on local restore (force wrapped app to redraw when the local terminal regains control) | [jiggle-repaint-on-restore.md](jiggle-repaint-on-restore.md) |
+| — | Terminal fade-in on (re)attach — xterm starts invisible over the theme background and fades in once the replay/reflow settles, masking the jiggle | [terminal-fade-in-on-attach.md](terminal-fade-in-on-attach.md) |
 
 ## Recording results
 

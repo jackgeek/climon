@@ -45,9 +45,23 @@ describe("buildAttentionToast", () => {
   });
 
   test("includes the terminal title as the toast body", () => {
-    const toast = buildAttentionToast(session({ name: "API server", terminalTitle: "vim server.ts", attentionMatchedAt: "t1" }));
+    const toast = buildAttentionToast(
+      session({ name: "API server", terminalTitle: "vim server.ts", attentionMatchedAt: "t1" })
+    );
     expect(toast.message).toBe("API server needs attention");
     expect(toast.body).toBe("vim server.ts");
+  });
+
+  test("prefers the smart snippet for the body", () => {
+    const toast = buildAttentionToast(
+      session({
+        name: "API server",
+        terminalTitle: "vim server.ts",
+        attentionSnippet: "Saved. Run tests?",
+        attentionMatchedAt: "t1"
+      })
+    );
+    expect(toast.body).toBe("Saved. Run tests?");
   });
 
   test("omits the body when there is no terminal title", () => {

@@ -10,7 +10,6 @@
  * and `src/web/` is NOT legacy and is still maintained.)
  */
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
-import { spawn, type ChildProcess } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
@@ -19,7 +18,7 @@ import { patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
 import { ReplayGuard, verifySignedControl, signNow, DEFAULT_FRESHNESS_WINDOW_MS } from "./spawn-auth.js";
-import { devtunnelEnv } from "./tunnel.js";
+import { createDevtunnelGateway } from "../devtunnel/gateway.js";
 import { cleanupSessionSocket, formatSessionSocketRef, listenOnSessionSocket } from "../session-socket.js";
 import type { IngestState } from "./ingest-state.js";
 import { resolveIngestBindHost } from "./ingest-bind-host.js";
@@ -86,6 +85,7 @@ function sanitizeRemotePatch(patch: SessionMetaPatch): SessionMetaPatch {
   if (input.color === null || ANSI_COLORS.has(input.color as AnsiColor)) clean.color = input.color as AnsiColor | null;
   if (typeof input.theme === "string") clean.theme = boundedString(input.theme);
   if (typeof input.terminalTitle === "string") clean.terminalTitle = boundedString(input.terminalTitle);
+  if (typeof input.attentionSnippet === "string") clean.attentionSnippet = boundedString(input.attentionSnippet);
   return clean;
 }
 
@@ -128,6 +128,10 @@ export function toLocalMeta(
     terminalTitle:
       typeof input.terminalTitle === "string" && input.terminalTitle
         ? boundedString(input.terminalTitle as string)
+        : undefined,
+    attentionSnippet:
+      typeof input.attentionSnippet === "string" && input.attentionSnippet
+        ? boundedString(input.attentionSnippet as string)
         : undefined,
     origin: "remote",
     clientLabel: label
@@ -568,20 +572,10 @@ export async function readRemoteHostState(env: NodeJS.ProcessEnv = process.env):
 }
 
 function defaultSpawnHost(tunnelId: string): HostProcess {
-  const child: ChildProcess = spawn("devtunnel", ["host", tunnelId], {
-    stdio: ["ignore", "inherit", "inherit"],
-    env: devtunnelEnv(),
-    windowsHide: true
-  });
-  return {
-    stop: () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // Already gone.
-      }
-    }
-  };
+  // Route through the centralized gateway so `devtunnel` is only ever spawned
+  // from src/devtunnel/. The returned DevtunnelProcess structurally satisfies
+  // HostProcess (it also exposes isAlive()).
+  return createDevtunnelGateway().spawnHost(tunnelId);
 }
 
 /**

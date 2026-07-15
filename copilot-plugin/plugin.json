@@ -6,6 +6,6 @@
     "name": "jackgeek"
   },
   "license": "MIT",
-  "keywords": ["climon", "changelog", "release"],
+  "keywords": ["climon", "changelog", "release", "dependabot", "dependencies"],
   "skills": ["skills/"]
 }

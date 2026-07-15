@@ -17,12 +17,14 @@
 
 pub mod client_id;
 pub mod demotion;
+pub mod devtunnel;
 pub mod discovery;
 pub mod ingest;
 pub mod ingest_bind_host;
 pub mod ingest_port;
 pub mod ingest_state;
 pub mod ingest_status;
+pub mod ingest_tunnel_id;
 pub mod keepalive;
 pub mod link;
 pub mod mux;
@@ -33,6 +35,7 @@ pub mod shutdown_request;
 pub mod shutdown_watch;
 pub mod singleton;
 pub mod spawn_auth;
+pub mod target_set;
 pub mod teardown;
 pub mod time;
 pub mod tunnel;

@@ -3,13 +3,12 @@
 ## Install
 
 Download the release zip for your platform, unzip it, and run the bundled
-`install` binary (`install.exe` on Windows). It is the native Rust `climon`
-client; when run from the unzipped folder it finds the `climon-alpha` sentinel
-marker beside it and runs the **native self-installer** — it copies itself to
-`climon`, places `climon-server`, updates your shell profile
-or user PATH, writes the installed `.version`, and prints the changelog. After
-that, `climon` and `climon server` are on your PATH. Commands below are identical
-regardless of how climon was installed.
+dedicated `install` binary (`install.exe` on Windows). It places the `climon`
+client and `climon-server`, updates your shell profile or user PATH, records the
+installed version, and prints the changelog. On Windows it also installs stable
+`climon.exe` and `climon-server.exe` stubs that select versioned payloads via
+pointer files. After that, `climon` and `climon server` are on your PATH.
+Commands below are identical regardless of how climon was installed.
 
 ## Start the dashboard
 
@@ -42,6 +41,15 @@ This launches your detected parent shell (PowerShell on Windows) in a managed
 PTY. Running `climon` with no arguments prints the help text instead of starting
 a shell.
 
+If the command you want to run shares its name with a climon subcommand (for
+example a program called `shell`, `ls`, or `server`), prefix it with `climon
+command` to bypass the subcommand and run the program directly:
+
+```bash
+climon command shell    # runs a program named "shell", not `climon shell`
+climon command ls -la   # runs the `ls` program, not `climon ls`
+```
+
 This starts the command inside a managed PTY and attaches your terminal to it —
 it behaves exactly like running the command directly. Meanwhile it appears on the
 dashboard.
@@ -68,9 +76,18 @@ stderr so you're aware you're stacking sessions, but it does not block or exit.
 
 ### Terminal size while attached
 
-If the dashboard is in Fill window mode and the browser grows the shared PTY
-beyond your attached local terminal, press **Ctrl-\\** then **c** in the local
-climon client to restore Clamp to remote terminal size mode.
+climon shares one live terminal between every surface viewing a session — your
+attached local terminal, the browser dashboard, and the installed PWA. Exactly
+one surface is the **controller** at a time, and the shared terminal is sized to
+the controller's viewport. Your local terminal is the controller the moment you
+attach.
+
+If another surface takes control, your local terminal blanks and shows *"This
+session is being viewed on a climon dashboard."* (displacement is decided by
+which surface is the controller, not by relative size). Press **Space** to take
+control back — the shared terminal resizes to your terminal and it becomes
+interactive again. Space reclaims control *only while displaced*; once your
+terminal is the controller, Space is ordinary shell input.
 
 ## Manage sessions
 
@@ -109,10 +126,11 @@ climon update
 The artifact's Ed25519 detached signature is verified against the embedded
 public key before any file is replaced; unverifiable or tampered downloads are
 rejected and nothing changes. Updates are **non-destructive** — they never kill
-running sessions or a running dashboard server. Binaries are swapped atomically
-(rename-over on Unix, displace-to-`.old` on Windows) and deferred when locked.
-Running processes keep the old code; newly started sessions and a restarted
-server use the new version.
+running sessions or a running dashboard server. Unix keeps the rename-over swap
+model. Windows writes new versioned `climon-<version>.dll` and
+`climon-server-<version>.exe` payloads, then flips pointer files so locked stubs
+are never overwritten. Running processes keep the old code; newly started
+sessions and a restarted server use the new version.
 
 When `update.auto` is off (default), climon prints a one-line banner when a
 newer version is available instead of applying it automatically.
@@ -139,17 +157,22 @@ newer version is available instead of applying it automatically.
     drives the same scrolling as a mouse wheel — moving through scrollback for
     normal output, or scrolling within apps that track the mouse. The swipe does
     not trigger the browser's pull-to-refresh while you are over the terminal.
-- **View mode**: each session row shows a **lock icon** next to the pause button
-  on the active session. A closed lock means **clamped** — the browser and the
-  attached climon client stay on the same terminal grid. An open lock means
-  **fill** — the browser terminal resizes the PTY to the available browser space.
-  Click the lock to toggle. On a narrow (mobile) viewport the active session is
-  forced to clamped and the lock is disabled; the previous mode is restored when
-  you return to a wider viewport. While the browser terminal is focused,
+- **Sharing control between viewers**: several browsers, PWAs, and an attached
+  local terminal can view the same session at once, but only one — the
+  **controller** — sets the shared terminal size at any moment. A viewer that is
+  at least as large as the controller's grid follows along and stays fully
+  interactive. A viewer that is **too small** to show the controller's grid is
+  blanked behind a centered *"This session is being viewed at a larger size
+  elsewhere"* message with a **Take control** button, and is non-interactive
+  until you take control. To take control from the dashboard, click the
+  **maximize** button on the session — the shared terminal resizes to fit your
+  view. Whoever takes control keeps it until another viewer takes control or the
+  current controller disconnects; on disconnect control falls back to the
+  highest-priority remaining viewer (PWA, then dashboard, then local terminal,
+  ties broken by most recently connected). In a displaced *local* terminal, press
+  **Space** to take control instead. While the browser terminal is focused,
   **Ctrl-+** and **Ctrl--** change the terminal font size instead of zooming the
-  browser. If an unclamped browser size makes the PTY too large for an attached
-  climon client terminal, that local terminal shows a warning and the restore
-  shortcut.
+  browser.
   - On a maximized mobile session, swipe in from the right edge to open the
     terminal panel. Choose **Keyboard** for the special-key bar (Esc, Tab,
     arrows, F-keys, modifiers) or **Font size** to step the terminal font up or
@@ -226,8 +249,8 @@ a session has the same effect: after you send input, climon will not raise
 sits idle for the window. This keeps a command you started but that runs silently
 (for example `sleep 30`) from being flagged while it works.
 
-Browser notifications use the message title `climon needs attention` and name
-the specific session in the body. Sound and browser notifications depend on the
+Browser notifications use the session's label as the message title and the
+session's terminal title as the body. Sound and browser notifications depend on the
 browser allowing notification permission and audio playback; the tab title count
 still updates when those browser features are blocked.
 
@@ -247,20 +270,21 @@ You can monitor sessions that run on another machine (a "devbox") from your loca
 dashboard. Traffic rides a Microsoft dev tunnel to a loopback-only ingest port — see
 [security.md](./security.md) for the full threat model.
 
-1. On the home machine, enable the ingest/uplink bridge, then start or restart
-   the dashboard: `climon config feature.remotes enabled` followed by
+1. On each home/dashboard machine, enable the ingest/uplink bridge, then start or
+   restart the dashboard: `climon config feature.remotes enabled` followed by
    `climon server`.
-2. Open the dashboard, click the hamburger menu, and choose **Remotes…**.
-3. If the `devtunnel` CLI is installed on the server machine, let climon create
-   and host the tunnel for you. Otherwise create a dev tunnel manually and paste
-   its id or URL into the dialog.
-4. Optionally choose the default color and priority for that devbox's sessions,
-   then copy the generated config script.
-5. Run the script on the devbox. It records `remote.tunnelId`,
-   `remote.port`, and any chosen session defaults with
-   `climon config`.
-6. Run any command on the devbox with `climon <cmd>`. The session appears on your
-   dashboard under the devbox's stable client id.
+2. On the devbox, log in to the same dev tunnel account and enable remote mode:
+   `climon config remote.enabled true`.
+3. Run any command on the devbox with `climon <cmd>`. The uplink scans
+   `devtunnel list --labels climon-ingest --json`, keeps live hosts
+   (`hostConnections >= 1`), excludes its own stable ingest tunnel, and connects
+   to every discovered host. The session appears on each dashboard under the
+   devbox's stable client id.
+
+To opt out of discovery, run `climon config remote.discover false` on the
+devbox and configure an explicit `remote.tunnelId` (or direct `remote.host` +
+`remote.port`) instead. Explicit targets are still honored and are unioned with
+discovered hosts while discovery is enabled.
 
 Revoke a devbox by deleting the dev tunnel or removing its identity from the
 tunnel's access list.
@@ -283,8 +307,7 @@ hostname/OS, address, and session count). A leading `●` marks a healthy entry;
 `○` marks a **stale** one. Staleness is derived live by the reader — an entry is
 stale when the writing process is gone or there has been no recent
 ping/heartbeat — so a crashed uplink or ingest shows as stale rather than
-lingering as healthy. The same data drives the dashboard's **Remote hosts**
-menu, updated live over SSE.
+lingering as healthy.
 
 `--json` emits a stable shape (top-level `uplink`, `ingest`, and
 `remotesEnabled`) suitable for `jq`. When neither `feature.remotes` nor
@@ -375,22 +398,24 @@ enabled.
 
 ### Creating the dev tunnel manually
 
-Use this path if you do not want the Remotes dialog to create the tunnel for you.
-Run these commands on the **home** machine where the dashboard is listening:
+Use this path for cross-account setups, or when you do not want climon to manage
+the host tunnel. Run these commands on the **home** machine where the dashboard
+ingest is listening:
 
 ```bash
 devtunnel user login
 
 # Use any valid lowercase tunnel id, or omit the id argument and copy the generated id.
 devtunnel create climon-tunnel
-devtunnel port create climon-tunnel -p 8080
+devtunnel port create climon-tunnel -p 3132
+devtunnel host climon-tunnel
 ```
 
-Paste the tunnel id (or the printed `devtunnels.ms` URL) into **Remotes…**.
-climon will host the recorded tunnel if the `devtunnel` CLI is available on the
-home machine; otherwise keep `devtunnel host climon-tunnel` running yourself.
-Then copy the generated climon config script from the dialog and run it on the
-devbox. Ensure the devbox is also logged in (`devtunnel user login`).
+Then configure the devbox explicitly with `climon config remote.enabled true`
+and `climon config remote.tunnelId climon-tunnel`. Ensure the devbox is also
+logged in (`devtunnel user login`). Existing devboxes that already have
+`remote.tunnelId` configured keep working; the auto-managed host tunnel does not
+remove the manual devbox path.
 
 ### Feature flags
 
@@ -429,16 +454,17 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `version` | number | `1` | client, daemon, server | Schema version for the persisted config file format. Always 1 for the current release. (**internal**) |
 | `server.host` | string | `127.0.0.1` | server | IP address the dashboard server binds to. Defaults to loopback for local-only access. |
 | `server.port` | number | `3131` | server | TCP port the dashboard server listens on. Change if 3131 conflicts with another service. |
-| `terminal.clampBrowserToHost` | boolean | `false` | daemon | When false (default), a browser viewer may grow the shared PTY beyond the host terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent content mangling. |
 | `terminal.detachPrefix` | number | `28` | client | Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255]. |
 | `hotKeys.focusTopSession` | string | `Alt+J` | server, browser | Web dashboard shortcut that selects the top session in the list and focuses its terminal. Format is "Mod+...+Key" (e.g. "Alt+T", "Ctrl+Shift+J"). Set to an empty string to disable. |
 | `dashboard.theme` | string | `Default` | server, browser | Default web dashboard terminal colour theme (by display name, e.g. "Dracula"). Sessions without their own theme inherit this. Choose from the dashboard "Default theme" picker; defaults to "Default". |
 | `dashboard.keyBarPinned` | boolean | `true` | server, browser | Whether the web dashboard key bar is pinned open. |
+| `dashboard.stateIconNoMotion` | boolean | `false` | server, browser | When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated). |
 | `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |
 | `remote.enabled` | boolean | unset | client | Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection. |
 | `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
 | `remote.ingestHost` | string | unset | client | Host address where the dashboard-side ingest daemon should listen for incoming remote session connections. |
 | `remote.tunnelId` | string | unset | client | Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward local climon traffic to a remote dashboard. |
+| `remote.discover` | boolean | `true` | client | When true (default), an enabled devbox (remote.enabled) auto-discovers live climon dashboard hosts by scanning your dev tunnels for the climon-ingest label and uplinks to all of them, in addition to any explicit remote.tunnelId/remote.host. Set false to disable discovery and only use explicitly configured targets. |
 | `remote.dashboardTunnelId` | string | unset | server | Server-owned persisted dashboard tunnel id used to reuse tunnel identity for tunnel link sessions. (**internal**) |
 | `remote.dashboardTunnelCluster` | string | unset | server | Server-owned persisted dashboard tunnel cluster used to reuse tunnel identity for tunnel link sessions. (**internal**) |
 | `remote.dashboardTunnelEnabled` | boolean | unset | server | Server-owned flag recording whether the Tunnel Link is enabled, so the server re-establishes the dashboard tunnel automatically on startup. (**internal**) |
@@ -457,8 +483,9 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `logging.level` | string | `trace` | client, daemon, server | Minimum log level emitted by climon processes. One of: trace, debug, info, warn, error, fatal, silent. Defaults to trace (everything). Set to silent to disable logging. Overridden per-invocation by the CLIMON_LOG_LEVEL environment variable. |
 | `feature.sessionSpawning` | string | `disabled` | client, daemon, server, browser | Allow spawning new sessions from the dashboard. Set to "enabled" or "disabled". [status: experimental] |
 | `feature.remoteSpawn` | string | `disabled` | client, daemon, server, browser | Allow the dashboard to spawn sessions on remote devboxes over a signed, replay-protected mux command channel. Set to "enabled" or "disabled". [status: experimental] |
-| `feature.wslBridge` | string | `disabled` | client, daemon, server, browser | Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard. Set to "enabled" or "disabled". [status: experimental] |
+| `feature.wslBridge` | string | `disabled` | client, daemon, server, browser | Stream sessions between a same-machine WSL distro and Windows so they appear on one shared dashboard. Set to "enabled" or "disabled". [status: untested] |
 | `feature.remotes` | string | `disabled` | client, daemon, server, browser | Connect sessions from a remote devbox to this dashboard over the ingest/uplink bridge. Set to "enabled" or "disabled". [status: experimental] |
+| `feature.smartNotifications` | string | `disabled` | client, daemon, server, browser | Include a fuzzy-extracted snippet of the last relevant terminal output as the body of attention notifications, instead of a generic message. Set to "enabled" or "disabled". [status: experimental] |
 | `telemetry.enabled` | boolean | `false` | client, server | When true, climon sends anonymous, opt-in usage telemetry keyed only by a random install id (no PII, session output, commands, paths, or hostnames). Off by default. |
 | `update.auto` | boolean | `false` | client | When true, climon downloads and applies signed updates automatically in the background. When false (default), it only prints a one-line banner suggesting `climon --update`. |
 | `update.lastCheck` | string | unset | client | ISO-8601 timestamp of the last background update check. Used to throttle checks. (**internal**) |

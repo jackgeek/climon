@@ -64,12 +64,18 @@ pub struct TeardownReport {
 type IsAliveFn<'a> = Box<dyn Fn(u32) -> bool + 'a>;
 type KillFn<'a> = Box<dyn Fn(u32, bool) -> bool + 'a>;
 type RemoveFileFn<'a> = Box<dyn Fn(&Path) + 'a>;
+type RequestShutdownFn<'a> = Box<dyn Fn(u16) -> bool + 'a>;
 
 /// Injectable dependencies for teardown. Mirrors the TS `options`.
 pub struct TeardownDeps<'a> {
     pub is_process_alive: IsAliveFn<'a>,
     pub kill_process: KillFn<'a>,
     pub remove_file: RemoveFileFn<'a>,
+    /// Sends the graceful `POST /__internal/shutdown` to the dashboard server on
+    /// the given port. Injectable so tests never perform real network I/O: the
+    /// default hits the loopback dashboard port, which would otherwise shut down
+    /// a developer's live server if a test seeds a `server.json` on that port.
+    pub request_shutdown: RequestShutdownFn<'a>,
     pub wait_timeout_ms: u64,
 }
 
@@ -81,6 +87,7 @@ impl Default for TeardownDeps<'_> {
             remove_file: Box::new(|path: &Path| {
                 let _ = std::fs::remove_file(path);
             }),
+            request_shutdown: Box::new(http_shutdown),
             wait_timeout_ms: 3000,
         }
     }
@@ -220,7 +227,7 @@ pub fn teardown_local_server_stack(env: &ConfigEnv, deps: &TeardownDeps) -> Tear
         server_pid = Some(state.pid);
         if (deps.is_process_alive)(state.pid) {
             // Try graceful HTTP shutdown first.
-            http_shutdown(state.port);
+            (deps.request_shutdown)(state.port);
             server_dead =
                 wait_for_death(state.pid, &deps.is_process_alive, deps.wait_timeout_ms, 100);
             if server_dead {
@@ -378,10 +385,17 @@ mod tests {
         .unwrap();
     }
 
-    fn kill_succeeds() -> (Arc<Mutex<Vec<u32>>>, TeardownDeps<'static>) {
+    #[allow(clippy::type_complexity)]
+    fn kill_succeeds() -> (
+        Arc<Mutex<Vec<u32>>>,
+        Arc<Mutex<Vec<u16>>>,
+        TeardownDeps<'static>,
+    ) {
         let killed: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+        let shutdowns: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
         let killed_alive = killed.clone();
         let killed_kill = killed.clone();
+        let shutdown_ports = shutdowns.clone();
         let deps = TeardownDeps {
             is_process_alive: Box::new(move |pid| !killed_alive.lock().unwrap().contains(&pid)),
             kill_process: Box::new(move |pid, _force| {
@@ -391,9 +405,15 @@ mod tests {
             remove_file: Box::new(|path: &Path| {
                 let _ = std::fs::remove_file(path);
             }),
+            // Record the requested shutdown port instead of touching the network,
+            // so this test never POSTs to a developer's live dashboard server.
+            request_shutdown: Box::new(move |port| {
+                shutdown_ports.lock().unwrap().push(port);
+                true
+            }),
             wait_timeout_ms: 3000,
         };
-        (killed, deps)
+        (killed, shutdowns, deps)
     }
 
     #[test]
@@ -401,8 +421,11 @@ mod tests {
         let home = temp_home();
         seed_stack(&home);
         let env = config_env_for(&home);
-        let (killed, deps) = kill_succeeds();
+        let (killed, shutdowns, deps) = kill_succeeds();
         let report = teardown_local_server_stack(&env, &deps);
+        // The graceful shutdown must go through the injected hook (never the real
+        // network), targeting the port recorded in server.json.
+        assert_eq!(*shutdowns.lock().unwrap(), vec![3131]);
         let mut k = killed.lock().unwrap().clone();
         k.sort_unstable();
         assert_eq!(k, vec![111, 222, 333]);
@@ -429,6 +452,7 @@ mod tests {
             remove_file: Box::new(|path: &Path| {
                 let _ = std::fs::remove_file(path);
             }),
+            request_shutdown: Box::new(|_| true),
             wait_timeout_ms: 3000,
         };
         let report = teardown_local_server_stack(&env, &deps);
@@ -452,6 +476,7 @@ mod tests {
             remove_file: Box::new(|path: &Path| {
                 let _ = std::fs::remove_file(path);
             }),
+            request_shutdown: Box::new(|_| true),
             wait_timeout_ms: 200,
         };
         let report = teardown_local_server_stack(&env, &deps);
@@ -477,6 +502,7 @@ mod tests {
             remove_file: Box::new(|path: &Path| {
                 let _ = std::fs::remove_file(path);
             }),
+            request_shutdown: Box::new(|_| true),
             wait_timeout_ms: 200,
         };
         let report = teardown_local_server_stack(&env, &deps);

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import xterm from "@xterm/headless";
+import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -17,11 +19,13 @@ import {
   refreshTerminalRender,
   refreshTerminalForReplay,
   resetTerminalForSession,
-  shouldRequestReplayForAuthoritativeMode,
+  shouldForwardTerminalData,
   shouldReconnectLiveAttachment,
   shouldHandleWheelAsScrollback,
   TerminalView,
   loadTerminalAddons,
+  configureTerminalUnicode,
+  createEmojiUnicodeProvider,
   terminalOptions
 } from "../src/web/components/TerminalView.js";
 
@@ -37,10 +41,8 @@ describe("TerminalView", () => {
       createElement(TerminalView, {
         accentColor: "blue",
         maximized: false,
-        onViewModeChange: () => {},
         session: null,
         visible: false,
-        viewMode: "clamped",
         fontSize: 13,
         xtermTheme: { background: "#0d1117" },
         onFontSizeChange: () => {},
@@ -53,10 +55,32 @@ describe("TerminalView", () => {
     expect(markup).not.toContain("border-top:");
   });
 
+  test("hides the xterm on attach and fades it in once the replay/jiggle settles", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    // Starts invisible so the first attach never flashes an unsettled grid.
+    expect(source).toContain("const [contentVisible, setContentVisible] = useState(false);");
+    // The solid mask is the theme's own background beneath the faded xterm.
+    expect(source).toContain('"& .xterm": {\n      opacity: 1,\n      transition: "opacity 220ms ease"\n    }');
+    expect(source).toContain('"& .xterm": {\n      opacity: 0,\n      transition: "none"\n    }');
+    expect(source).toContain("mergeClasses(styles.root, contentVisible ? undefined : styles.hidden)");
+    // Reveal is delayed past the post-replay refit and the daemon jiggle so the
+    // fade never starts mid-reflow.
+    expect(source).toContain("const CONTENT_REVEAL_SETTLE_MS = 320;");
+    expect(source).toContain("}, CONTENT_REVEAL_SETTLE_MS);");
+    // Hidden at every live attach start and terminated-scrollback load; revealed
+    // (settle-delayed) when the replay/scrollback write completes.
+    expect(source).toContain("hideContent();");
+    expect(source).toContain("reconnectAttemptRef.current = 0;\n                scheduleContentReveal();");
+    expect(source).toContain("completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal)");
+    // Disconnect reveals immediately so the content can never stick hidden.
+    expect(source).toContain("revealContentNow();");
+  });
+
   test("refits when the selected session changes even if terminal chrome is unchanged", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
-    expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);");
+    expect(source).toContain("}, [attachKey(session, visible), accentColor, maximized, visible]);");
   });
 
   test("reattaches live sessions after the dashboard server reconnects", () => {
@@ -66,29 +90,17 @@ describe("TerminalView", () => {
     expect(source).toContain("}, [attachKey(session, visible), serverConnected, serverReconnectToken]);");
   });
 
-  test("fully resets and replays on server reconnect so mouse-tracking modes are restored", () => {
+  test("tracks the server reconnect token so a bumped token drives a fresh attach", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
-    expect(source).toContain(
-      "const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;"
-    );
     expect(source).toContain("lastServerReconnectTokenRef.current = serverReconnectToken;");
-    // A reconnect re-queues the user's clamp/fill mode so the full reset + replay
-    // path (the daemon's replay carries the authoritative mouse private-mode
-    // suffix) restores mouse tracking after the socket reopens.
-    expect(source).toContain(
-      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
-    );
   });
 
-  test("pauses reconnect retries while the server is unavailable and restores the selected mode afterward", () => {
+  test("pauses reconnect retries while the server is unavailable", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("serverConnected: boolean;");
     expect(source).toContain("if (!visible || !serverConnected) {\n        return;\n      }");
-    expect(source).toContain(
-      "if (isServerReconnect) {\n        queuedViewModeRef.current = viewModeRef.current;\n      }"
-    );
     expect(source).toContain("serverConnectedRef.current");
   });
 
@@ -106,20 +118,12 @@ describe("TerminalView", () => {
     );
   });
 
-  test("requests a replay after mode-change resize so scrollback is rebuilt for the new PTY size", () => {
+  test("requests a replay after a grid-change resize so scrollback is rebuilt for the new PTY size", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain("replayAfterNextResizeRef.current = true;");
-    expect(source).toContain("message.mode = viewModeRef.current;");
     expect(source).toContain('ws.send(JSON.stringify({ type: "replay" }));');
     expect(source).toContain('} else if (msg.type === "replay") {\n            awaitingReplayRef.current = true;\n          }');
-  });
-
-  test("requests a replay for daemon-reported mode changes after initial replay", () => {
-    expect(shouldRequestReplayForAuthoritativeMode("clamped", "fill", true)).toBe(true);
-    expect(shouldRequestReplayForAuthoritativeMode("fill", "clamped", true)).toBe(true);
-    expect(shouldRequestReplayForAuthoritativeMode("fill", "fill", true)).toBe(false);
-    expect(shouldRequestReplayForAuthoritativeMode("clamped", "fill", false)).toBe(false);
   });
 
   test("refreshes the renderer when a hidden terminal becomes visible", () => {
@@ -170,6 +174,153 @@ describe("TerminalView", () => {
     expect(loaded).toEqual(["fit", "web-links"]);
   });
 
+  async function cursorAdvance(grapheme: string): Promise<number> {
+    const term = new Terminal({ cols: 40, rows: 3, allowProposedApi: true });
+    configureTerminalUnicode(term, new Unicode11Addon());
+    await writeTerminal(term, grapheme);
+    const advance = term.buffer.active.cursorX;
+    term.dispose();
+    return advance;
+  }
+
+  test("installs the climon emoji-aware Unicode version", async () => {
+    const term = new Terminal({ cols: 40, rows: 3, allowProposedApi: true });
+
+    configureTerminalUnicode(term, new Unicode11Addon());
+
+    expect(term.unicode.activeVersion).toBe("climon-emoji");
+    term.dispose();
+  });
+
+  test("advances two cells for wide emoji so they do not eat a space", async () => {
+    // Plain wide emoji and CJK are already correct under Unicode 11 — regression guards.
+    expect(await cursorAdvance("😀")).toBe(2);
+    expect(await cursorAdvance("⭐️")).toBe(2);
+    expect(await cursorAdvance("世")).toBe(2);
+    // ASCII must stay one cell.
+    expect(await cursorAdvance("A")).toBe(1);
+  });
+
+  test("promotes emoji-presentation (VS16) sequences to two cells", async () => {
+    // A narrow base + U+FE0F renders as a two-cell emoji; Unicode 11 alone leaves
+    // these at width 1, desyncing the cursor and swallowing a space.
+    expect(await cursorAdvance("❤️")).toBe(2);
+    expect(await cursorAdvance("⚠️")).toBe(2);
+    expect(await cursorAdvance("▶️")).toBe(2);
+  });
+
+  test("keeps keycap sequences to two cells", async () => {
+    // Keycap = digit + U+FE0F + U+20E3; VS16 promotion plus the combining keycap join.
+    expect(await cursorAdvance("1️⃣")).toBe(2);
+  });
+
+  test("keeps skin-tone emoji to two cells instead of summing the modifier", async () => {
+    // Base emoji + skin-tone modifier (U+1F3FD) must stay a single two-cell cluster.
+    expect(await cursorAdvance("👍🏽")).toBe(2);
+  });
+
+  test("leaves ZWJ sequences unchanged (documented out-of-scope limitation)", async () => {
+    // ZWJ family clustering is intentionally not handled: font-dependent and risky.
+    expect(await cursorAdvance("👨‍👩‍👧‍👦")).toBe(8);
+  });
+
+  test("emoji provider promotes VS16 and joins skin-tone modifiers, else delegates", () => {
+    const createPropertyValue = (_state: number, width: number, shouldJoin: boolean): number =>
+      (width << 1) | (shouldJoin ? 1 : 0);
+    const extractWidth = (value: number): number => (value >> 1) & 0b11;
+    const base = {
+      wcwidth: (cp: number): 0 | 1 | 2 => (cp === 0x41 ? 1 : 2),
+      charProperties: (): number => createPropertyValue(0, 1, false)
+    };
+
+    const provider = createEmojiUnicodeProvider(base, createPropertyValue, extractWidth);
+    const narrowBase = createPropertyValue(0, 1, false);
+
+    // VS16 after a narrow base -> width 2 + join.
+    const vs16 = provider.charProperties(0xfe0f, narrowBase);
+    expect(extractWidth(vs16)).toBe(2);
+    expect(vs16 & 1).toBe(1);
+
+    // Skin-tone modifier -> width 2 + join.
+    const tone = provider.charProperties(0x1f3fd, createPropertyValue(0, 2, false));
+    expect(extractWidth(tone)).toBe(2);
+    expect(tone & 1).toBe(1);
+
+    // Anything else delegates to the base provider.
+    expect(provider.charProperties(0x41, 0)).toBe(createPropertyValue(0, 1, false));
+    expect(provider.wcwidth(0x41)).toBe(1);
+  });
+
+  test("falls back to Unicode 11 without throwing when xterm internals are unavailable", () => {
+    let version = "6";
+    const stub = {
+      loadAddon: () => {},
+      unicode: {
+        get activeVersion() {
+          return version;
+        },
+        set activeVersion(value: string) {
+          version = value;
+        }
+      }
+    } as unknown as Parameters<typeof configureTerminalUnicode>[0];
+    const addon = { activate: () => {}, dispose: () => {} } as unknown as Parameters<
+      typeof configureTerminalUnicode
+    >[1];
+
+    expect(() => configureTerminalUnicode(stub, addon)).not.toThrow();
+    expect(version).toBe("11");
+  });
+
+  test("wires emoji-aware Unicode width handling into the live terminal on creation", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("configureTerminalUnicode(term, new Unicode11Addon());");
+  });
+
+  test("installed FitAddon computes dimensions against the xterm 6 core without the removed viewport API", () => {
+    // Regression guard for the addon-fit/xterm version mismatch: xterm 6 removed
+    // `terminal._core.viewport`, which addon-fit@0.10 read as
+    // `_core.viewport.scrollBarWidth` inside proposeDimensions(). That throw was
+    // swallowed by fitNow()'s try/catch, so fit() became a silent no-op and the
+    // terminal never re-fit its pane. A compatible addon-fit must compute
+    // dimensions from the cell size and element geometry without touching the
+    // removed viewport internal.
+    const fit = new FitAddon();
+
+    const element = { parentElement: {} as object };
+    // Shaped like an xterm 6 terminal: `_core` has NO `viewport`.
+    const fakeTerminal = {
+      element,
+      options: { scrollback: 1000, overviewRuler: { width: 0 } },
+      _core: {
+        _renderService: { dimensions: { css: { cell: { width: 9, height: 18 } } } }
+      }
+    };
+
+    const computedStyle = (target: unknown) => ({
+      getPropertyValue: (prop: string) => {
+        if (target === element.parentElement) {
+          if (prop === "height") return "600";
+          if (prop === "width") return "800";
+        }
+        return "0";
+      }
+    });
+
+    const priorWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = { getComputedStyle: computedStyle };
+    try {
+      fit.activate(fakeTerminal as unknown as Parameters<FitAddon["activate"]>[0]);
+      const dims = fit.proposeDimensions();
+      expect(dims).toBeDefined();
+      expect(dims?.rows).toBeGreaterThan(1);
+      expect(dims?.cols).toBeGreaterThan(1);
+    } finally {
+      (globalThis as { window?: unknown }).window = priorWindow;
+    }
+  });
+
   test("focuses and refreshes xterm when the terminal pane is focused", () => {
     let focusCalls = 0;
     let refreshCalls = 0;
@@ -178,6 +329,37 @@ describe("TerminalView", () => {
 
     expect(focusCalls).toBe(1);
     expect(refreshCalls).toBe(1);
+  });
+
+  test("forwards live terminal data but suppresses xterm-generated replay responses", () => {
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: true,
+        replayWriteInProgress: false
+      })
+    ).toBe(true);
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: false,
+        replayWriteInProgress: false
+      })
+    ).toBe(false);
+    expect(
+      shouldForwardTerminalData({
+        displaced: false,
+        initialReplayComplete: true,
+        replayWriteInProgress: true
+      })
+    ).toBe(false);
+    expect(
+      shouldForwardTerminalData({
+        displaced: true,
+        initialReplayComplete: true,
+        replayWriteInProgress: false
+      })
+    ).toBe(false);
   });
 
   test("captures the full terminal buffer as text, dropping trailing blank rows", async () => {
@@ -472,5 +654,85 @@ describe("TerminalHandle refresh", () => {
     expect(source).toContain("refresh: () => void;");
     // Imperative handle wires it to the repaint-only function (no refit).
     expect(source).toContain("refresh: () => refreshTerminalRender(termRef.current)");
+  });
+});
+
+describe("TerminalView control handoff", () => {
+  test("defers the displaced overlay to avoid a take-control handoff flash", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // The displaced gating ref updates immediately, but the visual overlay is
+    // scheduled behind a short delay so a fast handoff never flashes the dialog.
+    expect(source).toContain("scheduleDisplacedOverlay()");
+    expect(source).toContain("DISPLACED_OVERLAY_DELAY_MS");
+    // Gaining control cancels any pending overlay and shows the terminal at once.
+    expect(source).toContain("cancelDisplacedOverlay();\n              applyDisplacedUi(state);");
+    // The overlay is only revealed if we are still displaced when the delay ends.
+    expect(source).toContain("if (displacedRef.current) {\n        setDisplayState(\"displaced\");");
+  });
+
+  test("reclaims control when the window regains focus or visibility", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Edge-triggered focus/visibility listeners re-arm take-control for the
+    // currently selected session (bug: dashboards should take over on focus).
+    expect(source).toContain('window.addEventListener("focus", reclaimOnFocus)');
+    expect(source).toContain('document.addEventListener("visibilitychange", reclaimOnFocus)');
+    expect(source).toContain("armTakeControl(session.id)");
+    // The reclaim decision is gated on shouldReclaimOnFocus, which ignores a
+    // stale "we are the controller" value while disconnected so a backgrounded
+    // tab whose control the daemon reassigned still reclaims on return.
+    expect(source).toContain("shouldReclaimOnFocus({");
+    // Reclaim keys off the selected session so it survives the disconnected
+    // window (attachedSessionIdRef is null then).
+    expect(source).toContain("const session = selectedSessionRef.current;");
+  });
+
+  test("controller does not refit on self-caused grid changes (no resize feedback loop)", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // The refit-on-control decision is gated on shouldRefitOnControlFrame, which
+    // only fires on the displaced->controlling transition -- never on the grid
+    // changes the controller itself causes. Regression guard for the mobile PWA
+    // resize storm where refitting on every control frame looped forever.
+    expect(source).toContain("if (shouldRefitOnControlFrame({ state, wasDisplaced })) {");
+    // The old size-diff trigger must be gone.
+    expect(source).not.toContain("const gridChanged =");
+    expect(source).not.toContain("(gridChanged || wasDisplaced)");
+  });
+
+  test("terminal flex items can shrink from a larger controller grid to a smaller viewport", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // xterm's current canvas width contributes an intrinsic min-content width.
+    // Without minWidth: 0 on both flex items, a terminal sized by a larger
+    // controller makes FitAddon measure that stale width instead of the smaller
+    // dashboard viewport, so the grid remains off the right edge.
+    expect(source).toMatch(/wrapper:\s*\{[\s\S]*?minWidth:\s*0[\s\S]*?\n\s*\},\n\s*root:/);
+    expect(source).toMatch(/root:\s*\{[\s\S]*?minWidth:\s*0[\s\S]*?\n\s*padding:/);
+  });
+
+  test("focusing the terminal repaints but never refits (no focus->resize spiral)", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Focus is not a geometry change: refitting on focus lets xterm's focus
+    // churn (helper-textarea re-focus on refresh/resize) re-fire focusin at the
+    // double-rAF cadence, driving an unbounded shrinking resize spiral when the
+    // dashboard takes control. The focus/onFocusCapture path must repaint only.
+    expect(source).toContain("function repaintActiveTerminal(): void {");
+    // onFocusCapture (fires on every focusin bubbling from xterm) must repaint,
+    // never refit.
+    expect(source).toContain("onFocusCapture={repaintActiveTerminal}");
+    expect(source).not.toContain("onFocusCapture={refreshActiveTerminal}");
+    // Clicking to focus repaints stale glyphs too, but must not refit either.
+    expect(source).toContain("focusTerminalPane(termRef.current, repaintActiveTerminal)");
+    expect(source).not.toContain("focusTerminalPane(termRef.current, refreshActiveTerminal)");
+    // The refresh+refit helper survives for the post-replay settle, where a
+    // genuine geometry fit is wanted after the captured grid renders.
+    expect(source).toContain("function refreshActiveTerminal(): void {");
+    expect(source).toContain("refreshActiveTerminal\n            );");
+  });
+
+  test("redundant resize reports are suppressed via shouldSendResize", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    // Viewport jitter must not spam identical PTY resizes; only real size
+    // changes (or a replay-carrying resize) are sent.
+    expect(source).toContain("if (!shouldSendResize({ last: lastSentSizeRef.current, next: { cols, rows }, requestReplay })) {");
+    expect(source).toContain("lastSentSizeRef.current = { cols, rows };");
   });
 });

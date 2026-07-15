@@ -1,5 +1,8 @@
 import type { AnsiColor, SessionColorMode, SessionMeta } from "../types.js";
 import type { FeatureFlagState } from "../features.js";
+import type { DevtunnelFailure, DevtunnelHealth, DevtunnelRetryState } from "../devtunnel/types.js";
+
+type DevtunnelHealthState = DevtunnelHealth["state"];
 
 const DEV_TUNNELS_HOST_SUFFIX = ".devtunnels.ms";
 export const TUNNEL_SKIP_ANTI_PHISHING_PARAM = "X-Tunnel-Skip-AntiPhishing-Page";
@@ -284,6 +287,48 @@ export interface DashboardTunnelStatus {
   tunnelId?: string;
   version?: string;
   expiresAt?: string;
+  /** Structured mirror of `devtunnelAvailable` from the gateway health model. */
+  available?: boolean;
+  state?: DevtunnelHealthState;
+  lastFailure?: DevtunnelFailure;
+  retry?: DevtunnelRetryState;
+}
+
+/** Raised by the Tunnel Link client when a request returns a structured failure. */
+export class DevtunnelApiError extends Error {
+  constructor(public readonly failure: DevtunnelFailure) {
+    super(failure.summary);
+    this.name = "DevtunnelApiError";
+  }
+}
+
+async function readDevtunnelResponse(res: Response): Promise<DashboardTunnelStatus> {
+  const text = await res.text();
+  let body: DashboardTunnelStatus | { error: DevtunnelFailure } | undefined;
+  try {
+    body = text ? (JSON.parse(text) as DashboardTunnelStatus | { error: DevtunnelFailure }) : undefined;
+  } catch {
+    body = undefined;
+  }
+  if (!res.ok) {
+    const failure = (body as { error?: DevtunnelFailure } | undefined)?.error;
+    throw new DevtunnelApiError(failure ?? unexpectedFailure(res, text));
+  }
+  return body as DashboardTunnelStatus;
+}
+
+/** Synthesizes a structured failure for a non-JSON error body (e.g. a guard 403). */
+function unexpectedFailure(res: Response, text: string): DevtunnelFailure {
+  return {
+    code: "unknown",
+    operation: "detect",
+    summary: text.trim() || `Tunnel Link request failed (${res.status}).`,
+    remediation: "Try again from the machine running the dashboard.",
+    technicalDetail: `HTTP ${res.status}`,
+    occurredAt: new Date().toISOString(),
+    retryClass: "unknown",
+    retryable: false
+  };
 }
 
 export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatus> {
@@ -295,15 +340,19 @@ export async function fetchDashboardTunnelStatus(): Promise<DashboardTunnelStatu
 }
 
 export async function ensureDashboardTunnel(): Promise<DashboardTunnelStatus> {
-  const res = await fetch(withQuery("/api/dashboard-tunnel"), {
+  return fetch(withQuery("/api/dashboard-tunnel"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}"
-  });
-  if (!res.ok) {
-    throw new Error((await res.text()) || `Failed to start Tunnel Link (${res.status})`);
-  }
-  return (await res.json()) as DashboardTunnelStatus;
+  }).then(readDevtunnelResponse);
+}
+
+export function retryDashboardTunnel(): Promise<DashboardTunnelStatus> {
+  return fetch(withQuery("/api/dashboard-tunnel/retry"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}"
+  }).then(readDevtunnelResponse);
 }
 
 export async function closeDashboardTunnel(): Promise<void> {
@@ -354,6 +403,8 @@ export interface RemoteTunnelInfo {
 export interface RemoteStatus {
   devtunnelAvailable: boolean;
   version?: string;
+  /** Latest normalized gateway health, including any last ingest failure. */
+  devtunnel: DevtunnelHealth;
   ingestPort: number;
   tunnel?: RemoteTunnelInfo;
   canHost: boolean;
@@ -369,68 +420,29 @@ export async function fetchRemoteStatus(): Promise<RemoteStatus> {
   return (await res.json()) as RemoteStatus;
 }
 
-export interface RemotesConnection {
-  clientId: string;
-  hostname: string;
-  os: string;
-  address?: string;
-  connectedAt: number;
-  sessionCount: number;
-  lastPingAt?: number;
-  stale: boolean;
-}
-
-export interface RemotesResponse {
-  connections: RemotesConnection[];
-  ingestRunning: boolean;
-  remotesActive: boolean;
-}
-
-export async function fetchRemotes(): Promise<RemotesResponse> {
-  const res = await fetch(withQuery("/api/remotes"));
-  if (!res.ok) {
-    return { connections: [], ingestRunning: false, remotesActive: false };
-  }
-  return (await res.json()) as RemotesResponse;
-}
-
-/** Auto-creates a dev tunnel on the home machine (requires the devtunnel CLI). */
-export async function createRemoteTunnel(): Promise<RemoteStatus> {
-  const res = await fetch(withQuery("/api/remote/tunnel"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode: "auto" })
-  });
-  if (!res.ok) {
-    throw new Error((await res.text()) || `Failed to create tunnel (${res.status})`);
-  }
-  return (await res.json()) as RemoteStatus;
-}
-
-/** Records a manually-created tunnel (id or devtunnels.ms URL). */
-export async function recordManualTunnel(
-  tunnelInput: string
-): Promise<RemoteStatus> {
-  const res = await fetch(withQuery("/api/remote/tunnel"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode: "manual", tunnelInput })
-  });
-  if (!res.ok) {
-    throw new Error((await res.text()) || `Failed to record tunnel (${res.status})`);
-  }
-  return (await res.json()) as RemoteStatus;
-}
-
-export async function deleteRemoteTunnel(): Promise<void> {
+/** Parses a remote-tunnel response, raising {@link DevtunnelApiError} on a structured failure. */
+async function readRemoteStatusResponse(res: Response): Promise<RemoteStatus> {
+  const text = await res.text();
+  let body: RemoteStatus | { error: DevtunnelFailure } | undefined;
   try {
-    await fetch(withQuery("/api/remote/tunnel"), {
-      method: "DELETE",
-      headers: { "content-type": "application/json" }
-    });
+    body = text ? (JSON.parse(text) as RemoteStatus | { error: DevtunnelFailure }) : undefined;
   } catch {
-    // Best effort.
+    body = undefined;
   }
+  if (!res.ok) {
+    const failure = (body as { error?: DevtunnelFailure } | undefined)?.error;
+    throw new DevtunnelApiError(failure ?? unexpectedFailure(res, text));
+  }
+  return body as RemoteStatus;
+}
+
+/** Re-runs ingest tunnel setup and returns the refreshed remote status. */
+export function retryRemoteTunnel(): Promise<RemoteStatus> {
+  return fetch(withQuery("/api/remote/tunnel/retry"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}"
+  }).then(readRemoteStatusResponse);
 }
 
 export interface SetupScriptParams {
@@ -465,9 +477,10 @@ function arg(value: string): string {
  */
 export function buildSetupScript(params: SetupScriptParams): string {
   if (!params.tunnelId) {
-    return "# Create or paste a dev tunnel above to generate the devbox config script.";
+    return "# Enable host remotes to generate the devbox config script.";
   }
   const lines = [
+    "climon config feature.remotes enabled",
     "climon config remote.enabled true",
     `climon config remote.tunnelId ${arg(params.tunnelId)}`
   ];

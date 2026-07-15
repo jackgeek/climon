@@ -179,6 +179,7 @@ describe("buildSetupScript", () => {
 
   test("emits the two required remote settings", () => {
     const script = buildSetupScript(BASE);
+    expect(script).toContain("climon config feature.remotes enabled");
     expect(script).toContain("climon config remote.enabled true");
     expect(script).toContain("climon config remote.tunnelId abc123");
     expect(script).not.toContain("remote.port");
@@ -208,7 +209,7 @@ describe("buildSetupScript", () => {
 
   test("returns guidance when the tunnel id is missing", () => {
     const script = buildSetupScript({ ...BASE, tunnelId: "" });
-    expect(script).toContain("# Create or paste a dev tunnel");
+    expect(script).toContain("# Enable host remotes to generate the devbox config script.");
     expect(script).not.toContain("remote.enabled true");
   });
 

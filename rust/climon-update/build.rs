@@ -12,14 +12,26 @@ fn main() {
     let pubkey_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/update/pubkey.ts");
     println!("cargo:rerun-if-changed={}", pubkey_path.display());
 
-    let contents = std::fs::read_to_string(&pubkey_path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", pubkey_path.display()));
-    let key = extract_pubkey(&contents).unwrap_or_else(|| {
-        panic!(
-            "no UPDATE_PUBLIC_KEY_B64 string literal found in {}",
-            pubkey_path.display()
-        )
-    });
+    // Dev/test override: the upgrade-test harness builds a scratch client that must
+    // trust its throwaway signing key. When CLIMON_UPDATE_PUBKEY_B64 is set and
+    // non-empty we embed it verbatim; otherwise we read the production key from
+    // pubkey.ts exactly as before. Release CI never sets this var, so shipped
+    // binaries always embed the real key. Mirrors the CLIMON_VERSION override in
+    // climon-cli/build.rs.
+    println!("cargo:rerun-if-env-changed=CLIMON_UPDATE_PUBKEY_B64");
+    let key = match std::env::var("CLIMON_UPDATE_PUBKEY_B64") {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => {
+            let contents = std::fs::read_to_string(&pubkey_path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", pubkey_path.display()));
+            extract_pubkey(&contents).unwrap_or_else(|| {
+                panic!(
+                    "no UPDATE_PUBLIC_KEY_B64 string literal found in {}",
+                    pubkey_path.display()
+                )
+            })
+        }
+    };
     println!("cargo:rustc-env=CLIMON_UPDATE_PUBKEY_B64={key}");
 
     // Embed the climon version (from the repo-root package.json) so the updater

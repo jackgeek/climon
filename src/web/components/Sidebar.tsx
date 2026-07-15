@@ -23,11 +23,8 @@ import {
 } from "@fluentui/react-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { SessionMeta } from "../../types.js";
-import type { TerminalResizeMode } from "../../ipc/frame.js";
 import type { DashboardTunnelStatus } from "../api.js";
 import { SessionItem } from "./SessionItem.js";
-import { remoteHostsMenuLabel } from "./RemoteHostsPanel.js";
-import { TunnelExpiryBanner } from "./TunnelExpiryBanner.js";
 import { useFeature } from "../hooks/useFeature.js";
 import { useAnimatedListReorder } from "../hooks/useAnimatedListReorder.js";
 import { DASHBOARD_HEADER_HEIGHT } from "../layout.js";
@@ -132,8 +129,8 @@ const useStyles = makeStyles({
 export const tunnelLinkMenuLabel = "Tunnel Link";
 export const closeTunnelLinkMenuLabel = "Close Tunnel Link";
 
-export function shouldShowTunnelLink(status: Pick<DashboardTunnelStatus, "devtunnelAvailable"> | null): boolean {
-  return status?.devtunnelAvailable === true;
+export function shouldShowTunnelLink(_status: Pick<DashboardTunnelStatus, "devtunnelAvailable"> | null): boolean {
+  return true;
 }
 
 export function shouldShowCloseTunnelLink(
@@ -156,7 +153,6 @@ interface Props {
   onEdit: (session: SessionMeta) => void;
   onPauseToggle: (session: SessionMeta) => void;
   onManageRemote: () => void;
-  onShowRemoteHosts: () => void;
   notificationsEnabled: boolean;
   onToggleNotifications: () => void;
   canInstallPwa: boolean;
@@ -166,13 +162,11 @@ interface Props {
   onCloseTunnelLink: () => void;
   showRemotesMenu?: boolean;
   onRemoveDisconnected: () => void;
-  viewMode: TerminalResizeMode;
-  viewModeLocked?: boolean;
-  onViewModeToggle?: () => void;
   onMaximize: (id: string) => void;
   isMobile: boolean;
   keyBarPinned: boolean;
   onToggleKeyBarPinned: () => void;
+  stateIconNoMotion?: boolean;
   currentTheme?: string;
   onSelectTheme?: (id: string) => void;
 }
@@ -191,7 +185,6 @@ export function Sidebar({
   onEdit,
   onPauseToggle,
   onManageRemote,
-  onShowRemoteHosts,
   notificationsEnabled,
   onToggleNotifications,
   canInstallPwa,
@@ -201,13 +194,11 @@ export function Sidebar({
   onCloseTunnelLink,
   showRemotesMenu = false,
   onRemoveDisconnected,
-  viewMode,
-  viewModeLocked = false,
-  onViewModeToggle,
   onMaximize,
   isMobile,
   keyBarPinned,
   onToggleKeyBarPinned,
+  stateIconNoMotion = false,
   currentTheme = DEFAULT_THEME_NAME,
   onSelectTheme,
 }: Props) {
@@ -258,7 +249,6 @@ export function Sidebar({
                   <MenuItem onClick={onCloseTunnelLink}>{closeTunnelLinkMenuLabel}</MenuItem>
                 )}
                 {showRemotesMenu && <MenuItem onClick={onManageRemote}>{remotesMenuLabel}</MenuItem>}
-                {showRemotesMenu && <MenuItem onClick={onShowRemoteHosts}>{remoteHostsMenuLabel}</MenuItem>}
                 {sessions.some((s) => s.status === "completed" || s.status === "failed" || s.status === "disconnected") && (
                   <MenuItem onClick={onRemoveDisconnected}>{removeDisconnectedMenuLabel}</MenuItem>
                 )}
@@ -340,7 +330,6 @@ export function Sidebar({
           />
         )}
       </div>
-      {isMobile && <TunnelExpiryBanner variant="inline" />}
       <div className={styles.list} dir="rtl">
         {sessions.length === 0 ? (
           <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)} dir="ltr">
@@ -371,9 +360,7 @@ export function Sidebar({
                   onEdit={onEdit}
                   onPauseToggle={onPauseToggle}
                   onMaximize={onMaximize}
-                  viewMode={viewMode}
-                  viewModeLocked={viewModeLocked}
-                  onViewModeToggle={onViewModeToggle}
+                  stateIconNoMotion={stateIconNoMotion}
                 />
               </div>
             );

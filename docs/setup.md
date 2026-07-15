@@ -33,9 +33,10 @@ This fetches `@xterm/xterm` and `@xterm/addon-fit` (vendored for the dashboard).
 
 The easiest path is the install one-liner from the
 [README](../README.md#install), which downloads the release for your platform and
-runs the bundled self-installer (it places `climon` and `climon-server` and sets
-up your `PATH`). To install by hand, unzip a release archive and run its `install`
-binary.
+runs the bundled dedicated installer (it places `climon` and `climon-server` and
+sets up your `PATH`). To install by hand, unzip a release archive and run its
+`install` binary (`install.exe` on Windows). User-facing install-script behavior
+is unchanged.
 
 For local development from a source checkout, run the Rust client straight from
 source via the `dev` script (from the repo root):
@@ -44,9 +45,18 @@ source via the `dev` script (from the repo root):
 bun dev -- <args>     # e.g. bun dev -- --help
 ```
 
-This wraps `cargo run -p climon-cli --bin climon -- <args>`; you can also invoke
-that directly from `rust/` if you prefer. To run the dashboard server from
-source, use `bun run server` (or `bun src/server.ts server`).
+This runs `cargo build -p climon-cli` (showing compile progress) and then
+executes a copy of the freshly built binary from `rust/target/dev-run/`. Running
+from a copy keeps `rust/target/debug/climon` free to relink even while a previous
+`bun dev` session (or its detached uplink) is still running, so a live session
+never blocks the next build with `Access is denied (os error 5)`. On Windows,
+`bun dev` also terminates any stale process still executing
+`rust/target/debug/climon.exe` before building — such processes only exist as
+leftovers from older builds and would otherwise lock the relink (installed climon
+and the staged copies run from different paths and are left alone). You can also
+invoke `cargo run -p climon-cli --bin climon -- <args>` directly from `rust/` if
+you prefer. To run the dashboard server from source, use `bun run server` (or
+`bun src/server.ts server`).
 
 ## Configuration
 
@@ -66,8 +76,6 @@ On first run, climon writes `~/.climon/config.jsonc`:
     "port": 3131
   },
   "terminal": {
-    // When true (default), a browser viewer cannot grow the shared PTY beyond the host terminal's dimensions to prevent content mangling.
-    "clampBrowserToHost": true,
     // Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd' to detach without stopping the command. Must be an integer in [0, 255].
     "detachPrefix": 28
   },

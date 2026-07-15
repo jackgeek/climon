@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseColorMode } from "./session-meta.js";
 import type { ClimonConfig } from "./types.js";
 import { parseJsoncConfig, renderJsoncConfig } from "./config-jsonc.js";
+import { applyConfigDelta, cloneConfigValue, diffConfig } from "./config-merge.js";
 import {
   acceptedConfigKeys,
   buildDefaultConfigFromSettings,
@@ -18,6 +19,7 @@ export const DEFAULT_DETACH_PREFIX = 0x1c; // Ctrl-\
 const CONFIG_BASENAME = "config.jsonc";
 const LEGACY_CONFIG_BASENAME = "config.json";
 const LEGACY_CONFIG_BACKUP_BASENAME = "config.json.bak";
+const configGoldenSnapshots = new WeakMap<ClimonConfig, Record<string, unknown>>();
 
 /** Returns `value` if it is an integer in [0, 255], otherwise the default. */
 function normalizeDetachPrefix(value: unknown): number {
@@ -124,88 +126,85 @@ async function readConfigRecordFromPath(path: string): Promise<Record<string, un
   return parseJsoncConfig(raw, path);
 }
 
-export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<ClimonConfig> {
+async function loadConfigInternal(env: NodeJS.ProcessEnv): Promise<ClimonConfig> {
   await ensureClimonHome(env);
   const home = getClimonHome(env);
-  const canonicalPath = getConfigPathForDir(home);
-  const legacyPath = getLegacyConfigPathForDir(home);
-  
-  let configPath: string | undefined;
-  if (existsSync(canonicalPath)) {
-    configPath = canonicalPath;
-  } else if (existsSync(legacyPath)) {
-    configPath = legacyPath;
+  const configPath = existingConfigPathForDir(home);
+  if (!configPath) {
+    return defaultConfig();
   }
-  
+
+  const parsed = await readConfigRecordFromPath(configPath);
+  if (parsed.version !== undefined && parsed.version !== CONFIG_VERSION) {
+    throw new Error(`Unsupported climon config format in ${configPath}`);
+  }
+
+  const defaults = defaultConfig();
+  const parsedServer = isObjectRecord(parsed.server) ? parsed.server : {};
+  const parsedTerminal = isObjectRecord(parsed.terminal) ? parsed.terminal : {};
+  const parsedAttention = isObjectRecord(parsed.attention) ? parsed.attention : {};
+  const parsedRemote = isObjectRecord(parsed.remote) ? parsed.remote : undefined;
+  const parsedSession = isObjectRecord(parsed.session) ? parsed.session : {};
+  const parsedFeature = isObjectRecord(parsed.feature) ? parsed.feature : {};
+  const parsedHotKeys = isObjectRecord(parsed.hotKeys) ? parsed.hotKeys : {};
+  const parsedConfigObject = {
+    ...parsed,
+    version: CONFIG_VERSION,
+    server: { ...defaults.server, ...parsedServer },
+    terminal: { ...defaults.terminal, ...parsedTerminal },
+    attention: { ...defaults.attention, ...parsedAttention },
+    remote: parsedRemote ? { ...parsedRemote } : undefined,
+    session: {
+      ...(defaults.session ?? {}),
+      ...parsedSession,
+      priority: typeof parsedSession.priority === "number"
+        ? parsedSession.priority
+        : defaults.session?.priority
+    },
+    feature: { ...(defaults.feature ?? {}), ...parsedFeature },
+    hotKeys: { ...(defaults.hotKeys ?? {}), ...parsedHotKeys }
+  } as ClimonConfig;
+
+  // Backfill sections added after a config file was first written.
+  parsedConfigObject.terminal = { ...parsedConfigObject.terminal };
+  parsedConfigObject.terminal.detachPrefix = normalizeDetachPrefix(parsedConfigObject.terminal.detachPrefix);
+  // Backfill the attention section for configs written before it existed.
+  if (typeof parsedConfigObject.attention.idleSeconds !== "number") {
+    parsedConfigObject.attention = { ...parsedConfigObject.attention, idleSeconds: 10 };
+  }
   try {
-    if (!configPath) {
-      throw { code: "ENOENT" };
-    }
-    const parsed = await readConfigRecordFromPath(configPath);
-    if (!isObjectRecord(parsed) || (parsed.version !== undefined && parsed.version !== CONFIG_VERSION)) {
-      throw new Error(`Unsupported climon config format in ${configPath}`);
-    }
-    const defaults = defaultConfig();
-    const parsedServer = isObjectRecord(parsed.server) ? parsed.server : {};
-    const parsedTerminal = isObjectRecord(parsed.terminal) ? parsed.terminal : {};
-    const parsedAttention = isObjectRecord(parsed.attention) ? parsed.attention : {};
-    const parsedSession = isObjectRecord(parsed.session) ? parsed.session : {};
-    const parsedFeature = isObjectRecord(parsed.feature) ? (parsed.feature as Record<string, string>) : {};
-    const parsedHotKeys = isObjectRecord(parsed.hotKeys) ? parsed.hotKeys : {};
-    const parsedPriority = typeof parsedSession.priority === "number" ? { priority: parsedSession.priority } : {};
-    const parsedColor = typeof parsedSession.color === "string" ? { color: parsedSession.color } : {};
-    const parsedConfig = {
-      version: CONFIG_VERSION,
-      server: { ...defaults.server, ...parsedServer },
-      terminal: { ...defaults.terminal, ...parsedTerminal },
-      attention: { ...defaults.attention, ...parsedAttention },
-      remote: isObjectRecord(parsed.remote) ? parsed.remote : undefined,
-      session: { ...defaults.session, ...parsedPriority, ...parsedColor },
-      feature: { ...(defaults.feature ?? {}), ...parsedFeature },
-      hotKeys: { ...(defaults.hotKeys ?? {}), ...parsedHotKeys }
-    };
-    const parsedConfigObject = parsedConfig as ClimonConfig;
-    // Backfill sections added after a config file was first written.
-    if (!parsedConfigObject.terminal || typeof parsedConfigObject.terminal.clampBrowserToHost !== "boolean") {
-      parsedConfigObject.terminal = { ...(parsedConfigObject.terminal ?? {}), clampBrowserToHost: false };
-    }
-    parsedConfigObject.terminal.detachPrefix = normalizeDetachPrefix(parsedConfigObject.terminal.detachPrefix);
-    // Backfill the attention section for configs written before it existed.
-    if (!parsedConfigObject.attention || typeof parsedConfigObject.attention.idleSeconds !== "number") {
-      parsedConfigObject.attention = { ...(parsedConfigObject.attention ?? {}), idleSeconds: 10 };
-    }
-    if (!parsedConfigObject.session || typeof parsedConfigObject.session !== "object") {
-      parsedConfigObject.session = { color: "auto" };
-    } else {
-      try {
-        parsedConfigObject.session.color = typeof parsedConfigObject.session.color === "string"
-          ? parseColorMode(parsedConfigObject.session.color)
-          : "auto";
-      } catch {
-        parsedConfigObject.session.color = "auto";
-      }
-    }
-    if (
-      !parsedConfigObject.hotKeys ||
-      typeof parsedConfigObject.hotKeys.focusTopSession !== "string"
-    ) {
-      parsedConfigObject.hotKeys = {
-        ...(parsedConfigObject.hotKeys ?? {}),
-        focusTopSession: "Alt+J"
-      };
-    }
-    return parsedConfigObject;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-    const config = defaultConfig();
-    await saveConfig(config, env);
-    return config;
+    parsedConfigObject.session!.color = typeof parsedConfigObject.session!.color === "string"
+      ? parseColorMode(parsedConfigObject.session!.color)
+      : "auto";
+  } catch {
+    parsedConfigObject.session!.color = "auto";
   }
+  if (typeof parsedConfigObject.hotKeys.focusTopSession !== "string") {
+    parsedConfigObject.hotKeys = {
+      ...parsedConfigObject.hotKeys,
+      focusTopSession: "Alt+J"
+    };
+  }
+  return parsedConfigObject;
 }
 
-export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<ClimonConfig> {
+  const configExisted = existingConfigPathForDir(getClimonHome(env)) !== undefined;
+  const config = await loadConfigInternal(env);
+  if (!configExisted) {
+    await saveConfig(config, env);
+  }
+  configGoldenSnapshots.set(
+    config,
+    cloneConfigValue(config as unknown as Record<string, unknown>)
+  );
+  return config;
+}
+
+async function writeCompleteConfig(
+  configRecord: Record<string, unknown>,
+  env: NodeJS.ProcessEnv
+): Promise<void> {
   await ensureClimonHome(env);
   const home = getClimonHome(env);
   const canonicalPath = getConfigPathForDir(home);
@@ -217,7 +216,7 @@ export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = 
   const hasCanonical = existsSync(canonicalPath);
   
   // Write the canonical config.jsonc
-  const rendered = renderJsoncConfig(config as unknown as Record<string, unknown>);
+  const rendered = renderJsoncConfig(configRecord);
   await writeFile(canonicalPath, rendered, { mode: 0o600 });
   try {
     await chmod(canonicalPath, 0o600);
@@ -236,6 +235,21 @@ export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = 
       );
     }
   }
+}
+
+export async function saveConfig(config: ClimonConfig, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const callerState = cloneConfigValue(config as unknown as Record<string, unknown>);
+  const golden = configGoldenSnapshots.get(config);
+  let toWrite = callerState;
+  if (golden) {
+    const delta = diffConfig(golden, callerState);
+    const latest = await loadConfigInternal(env);
+    toWrite = delta
+      ? applyConfigDelta(latest as unknown as Record<string, unknown>, delta)
+      : latest as unknown as Record<string, unknown>;
+  }
+  await writeCompleteConfig(toWrite, env);
+  if (golden) configGoldenSnapshots.set(config, callerState);
 }
 
 export async function assertConfigReadable(env: NodeJS.ProcessEnv = process.env): Promise<void> {

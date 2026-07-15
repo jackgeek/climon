@@ -19,5 +19,3 @@ DevTunnels/
 
 # Local diagnostic/session artifacts (never part of the repo)
 diagnostics/
-.superpowers/
-docs/superpowers/

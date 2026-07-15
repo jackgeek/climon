@@ -6,6 +6,13 @@ license.workspace = true
 description = "climon self-update: Ed25519 verify, manifest, atomic no-kill binary swap (Rust port of the TS client updater)"
 build = "build.rs"
 
+[features]
+# Dev/test only: allows `climon update` to read its manifest URL from the
+# CLIMON_TEST_MANIFEST_URL env var instead of the hardcoded production URL.
+# NEVER enabled by scripts/compile.ts or .github/workflows/release.yml — shipped
+# binaries physically lack the override code.
+test-update-endpoint = []
+
 [lib]
 name = "climon_update"
 path = "src/lib.rs"
@@ -14,10 +21,10 @@ path = "src/lib.rs"
 serde = { workspace = true }
 serde_json = { workspace = true }
 climon-config = { path = "../climon-config", version = "0.1.0" }
-ed25519-dalek = "2"
+ed25519-dalek = "3"
 base64 = "0.22"
 ureq = { version = "2", default-features = false, features = ["tls", "gzip"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]

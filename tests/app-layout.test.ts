@@ -14,6 +14,8 @@ import {
   RECONNECT_VISIBILITY_GRACE_MS,
 } from "../src/web/App.js";
 import { shouldDeleteSessionWithoutDialog } from "../src/web/App.js";
+import { toTunnelLinkFailure } from "../src/web/App.js";
+import { DevtunnelApiError } from "../src/web/api.js";
 
 function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -32,6 +34,37 @@ function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
     ...overrides
   };
 }
+
+describe("toTunnelLinkFailure", () => {
+  test("passes through the structured failure from a DevtunnelApiError", () => {
+    const failure = {
+      code: "not_authenticated" as const,
+      operation: "host-tunnel" as const,
+      summary: "Sign in to Microsoft Dev Tunnels.",
+      remediation: "Run devtunnel user login.",
+      technicalDetail: "login required",
+      occurredAt: "2026-07-11T12:00:00.000Z",
+      retryClass: "actionable" as const,
+      retryable: false
+    };
+    expect(toTunnelLinkFailure(new DevtunnelApiError(failure))).toBe(failure);
+  });
+
+  test("synthesizes a retryable failure for a network-level error", () => {
+    const result = toTunnelLinkFailure(new TypeError("Failed to fetch"));
+    expect(result.code).toBe("unknown");
+    expect(result.retryable).toBe(true);
+    expect(result.retryClass).toBe("transient");
+    expect(result.summary).toContain("Failed to fetch");
+  });
+
+  test("falls back to a generic message for a non-Error rejection", () => {
+    const result = toTunnelLinkFailure("boom");
+    expect(result.code).toBe("unknown");
+    expect(result.summary.length).toBeGreaterThan(0);
+    expect(result.retryable).toBe(true);
+  });
+});
 
 describe("scheduleTerminalRefit", () => {
   test("sizes the mobile app shell from visual viewport CSS variables", () => {
@@ -209,8 +242,16 @@ describe("scheduleTerminalRefit", () => {
     test("Insert sends raw text and clears the staging text", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
-      // Insert: raw text, then clear.
-      expect(source).toContain("onComposeInsert={(text) => {\n                  terminalRef.current?.sendInput(text);\n                  setComposeText(\"\");");
+      // Extract the onComposeInsert handler body so the assertion tolerates
+      // unrelated statements (e.g. compose-history recording) between sending
+      // the text and clearing the staging area.
+      const insertStart = source.indexOf("onComposeInsert={(text) => {");
+      expect(insertStart).toBeGreaterThan(-1);
+      const insertEnd = source.indexOf("}}", insertStart);
+      const insertBody = source.slice(insertStart, insertEnd);
+      // Insert must send the raw text and then clear the staging text.
+      expect(insertBody).toContain("terminalRef.current?.sendInput(text);");
+      expect(insertBody).toContain('setComposeText("");');
       expect(source).not.toContain("onComposeInsertRun");
     });
 
@@ -225,15 +266,21 @@ describe("scheduleTerminalRefit", () => {
       expect(cancelBody).not.toContain('setComposeText("")');
     });
 
-    test("hides the exit-fullscreen button only while the compose overlay is visible", () => {
+    test("hides the exit-fullscreen button while a fullscreen overlay (compose or selection) is visible", () => {
       const source = readFileSync("src/web/App.tsx", "utf8");
 
-      // Tied to the overlay's own render condition so the user is never trapped
-      // in fullscreen if the session stops being live mid-compose.
+      // Tied to the overlays' own render condition so the user is never trapped
+      // in fullscreen if the session stops being live mid-compose/selection.
       expect(source).toContain(
         "const composeOverlayVisible = keyBarAvailable && panelView === \"compose\";"
       );
-      expect(source).toContain("{maximized && !composeOverlayVisible && (");
+      expect(source).toContain(
+        "const selectionOverlayVisible = keyBarAvailable && panelView === \"selection\";"
+      );
+      expect(source).toContain(
+        "const fullscreenOverlayVisible = composeOverlayVisible || selectionOverlayVisible;"
+      );
+      expect(source).toContain("{maximized && !fullscreenOverlayVisible && (");
     });
   });
 
@@ -283,6 +330,21 @@ describe("scheduleTerminalRefit", () => {
 });
 
 describe("tab refocus terminal refresh", () => {
+  test("arms take-control on page return before the terminal WebSocket reattaches", () => {
+    const source = readFileSync("src/web/App.tsx", "utf8");
+
+    const onVisibilityStart = source.indexOf("const onVisibility = ");
+    const onVisibilityEnd = source.indexOf("document.addEventListener(\"visibilitychange\"", onVisibilityStart);
+    const onVisibilityBody = source.slice(onVisibilityStart, onVisibilityEnd);
+
+    // Hiding the page tears down the terminal WebSocket. On return the native
+    // visibility event runs before React reattaches, so App must arm the active
+    // viewed session now; TerminalView flushes the pending takeover on socket open.
+    expect(onVisibilityBody).toContain("if (activeId && (!isMobile || maximized)) {");
+    expect(onVisibilityBody).toContain("term.armTakeControl(activeId);");
+    expect(source).toContain("}, [activeId, armReconnectOverlay, isMobile, maximized]);");
+  });
+
   test("repaints on refocus and focuses only on desktop", () => {
     const source = readFileSync("src/web/App.tsx", "utf8");
 
@@ -308,8 +370,8 @@ describe("tab refocus terminal refresh", () => {
     expect(elseIdx).toBeGreaterThan(refreshIdx);
     expect(focusIdx).toBeGreaterThan(elseIdx);
 
-    // The handler reads isMobile, so it must be a dependency of the effect.
-    expect(source).toContain("}, [armReconnectOverlay, isMobile]);");
+    // Every value read by the handler must be a dependency of the effect.
+    expect(source).toContain("}, [activeId, armReconnectOverlay, isMobile, maximized]);");
   });
 });
 

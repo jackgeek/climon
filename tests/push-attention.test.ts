@@ -45,16 +45,32 @@ describe("attention tracker", () => {
 
   test("buildPushPayload titles with the label and uses the terminal title as body", () => {
     const payload = buildPushPayload(
-      session({ id: "s1", name: "deploy", status: "needs-attention", terminalTitle: "npm run deploy" }),
+      session({ id: "s1", name: "deploy", status: "needs-attention", terminalTitle: "npm run deploy" })
     );
-    expect(payload.title).toBe("deploy needs attention");
+    expect(payload.title).toBe("deploy");
     expect(payload.body).toBe("npm run deploy");
     expect(payload.sessionId).toBe("s1");
   });
 
-  test("buildPushPayload body is empty when there is no terminal title", () => {
-    const payload = buildPushPayload(session({ id: "s1", name: "deploy", status: "needs-attention" }));
-    expect(payload.title).toBe("deploy needs attention");
+  test("buildPushPayload prefers the smart snippet for the body", () => {
+    const payload = buildPushPayload(
+      session({
+        id: "s1",
+        name: "deploy",
+        status: "needs-attention",
+        terminalTitle: "npm run deploy",
+        attentionSnippet: "Build green. Ship it?"
+      } as Partial<SessionMeta>)
+    );
+    expect(payload.title).toBe("deploy");
+    expect(payload.body).toBe("Build green. Ship it?");
+  });
+
+  test("buildPushPayload promotes the terminal title into the title when unnamed", () => {
+    const payload = buildPushPayload(
+      session({ id: "s1", name: "", status: "needs-attention", terminalTitle: "npm run deploy" })
+    );
+    expect(payload.title).toBe("npm run deploy");
     expect(payload.body).toBe("");
   });
 });

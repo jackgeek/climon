@@ -5,7 +5,8 @@
 climon isn't on your `PATH`. Install it with the one-liner from the
 [README](../README.md#install) (which runs the bundled self-installer and sets up
 your `PATH`), then open a new shell. For local development from a source checkout,
-run the Rust client with `bun dev -- <args>` (which wraps `cargo run -p climon-cli`).
+run the Rust client with `bun dev -- <args>` (which builds `climon-cli` and runs
+the freshly built binary).
 
 ## The web terminal is blank / black
 
@@ -77,6 +78,39 @@ powershell -ExecutionPolicy Bypass -File .\scripts\diagnostics\Collect-ClimonDev
 ```
 
 Add `-Json` to either command if you want structured output to share or diff.
+
+## Dev Tunnels errors (Tunnel Link and remotes)
+
+**Tunnel Link is always present** in the dashboard's ☰ menu, even when Dev
+Tunnels isn't ready. If the tunnel can't start, the Tunnel Link dialog shows a
+classified failure — a short summary, an error **code**, remediation, and a
+**Retry** button — instead of hiding the entry. The same failures surface for
+remote ingest/uplink sessions.
+
+Common cases and what climon does (and does **not**) do for you:
+
+- **`devtunnel` CLI missing (`cli_missing`).** Install Microsoft's `devtunnel`
+  CLI following the [linked Dev Tunnels install
+  instructions](../README.md#optional-the-devtunnel-cli). climon **will not**
+  install it for you. After installing, click **Retry**.
+- **Not signed in (`not_authenticated`).** Sign in **manually** by running
+  `devtunnel user login`, then click **Retry**. climon never auto-logs-in and
+  never launches the sign-in for you.
+- **Tunnel limit reached (`tunnel_quota_exhausted`).** Remove unused tunnels
+  **manually** with `devtunnel list` and `devtunnel delete`. climon **will not**
+  delete any tunnels for you.
+- **Rate limits / service or network outages (transient).** climon retries
+  automatically with capped-exponential backoff (1s → 30s) and a **Retry now**
+  action; the local (loopback) dashboard stays available while it retries.
+
+To inspect status from the terminal, run `climon remotes`: it shows a friendly
+failure summary with its code, remediation, and retry state (`retry: paused`
+for failures that need you to act, or the next retry time for transient ones).
+Add `--json` for the full technical detail and normalized health.
+
+The local dashboard still binds to loopback only — the same security warning in
+[Can't connect from another machine](#cant-connect-from-another-machine)
+applies; only the authenticated dev tunnel exposes it, and only to your account.
 
 ## Cleaning up stale state
 

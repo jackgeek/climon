@@ -1,10 +1,10 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import { makeStyles } from "@fluentui/react-components";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import type { SessionMeta } from "../../types.js";
-import type { TerminalResizeMode } from "../../ipc/frame.js";
 import {
   attachKey,
   attachSocketUrl,
@@ -13,7 +13,8 @@ import {
   fetchScrollback,
   isLiveStatus
 } from "../api.js";
-import { flushQueuedViewMode, sendViewModeOrQueue, type QueuedViewMode } from "../view-mode.js";
+import { deriveControlState, generateViewerId, surfaceKind, shouldRefitOnControlFrame, shouldReclaimOnFocus, shouldSendResize, type ControlState } from "../control-state.js";
+import { readIsStandalone } from "../pwa/pwaContext.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { DEFAULT_FONT_SIZE } from "../fontSize.js";
@@ -65,6 +66,14 @@ const DOM_DELTA_LINE = 1;
 const DOM_DELTA_PAGE = 2;
 const RECONNECT_BASE_DELAY_MS = 250;
 const RECONNECT_MAX_DELAY_MS = 5_000;
+// How long to wait before revealing the "displaced" overlay, so a fast
+// take-control handoff (open/focus/button) does not flash the dialog.
+const DISPLACED_OVERLAY_DELAY_MS = 350;
+// How long to wait after an attach's replay completes before revealing the
+// content, so the post-replay refit AND the daemon's take-control jiggle
+// repaint (a PTY resize burst) both land while the content is still hidden.
+// Without this settle the fade starts mid-jiggle and the reflow is visible.
+const CONTENT_REVEAL_SETTLE_MS = 320;
 
 export const terminalOptions = {
   allowProposedApi: true,
@@ -187,21 +196,13 @@ export function resetTerminalForSession(term: ResettableTerminal, session: { col
   term.reset();
 }
 
-// A live refresh (e.g. after a clamp/fill toggle) rebuilds scrollback without a
-// full term.reset(), preserving xterm private modes such as mouse tracking. The
-// daemon's replay snapshot re-asserts the authoritative modes via its appended
-// suffix, so the screen ends up correct without clearing mouse state.
+// A live refresh (e.g. after a control handoff resize) rebuilds scrollback
+// without a full term.reset(), preserving xterm private modes such as mouse
+// tracking. The daemon's replay snapshot re-asserts the authoritative modes via
+// its appended suffix, so the screen ends up correct without clearing mouse state.
 export function refreshTerminalForReplay(term: ReplayRefreshableTerminal): void {
   term.clear();
   term.scrollToBottom();
-}
-
-export function shouldRequestReplayForAuthoritativeMode(
-  previousMode: TerminalResizeMode,
-  nextMode: TerminalResizeMode,
-  initialReplayComplete: boolean
-): boolean {
-  return initialReplayComplete && previousMode !== nextMode;
 }
 
 export function canRefitTerminalForSession(
@@ -216,6 +217,14 @@ export function canRefitTerminalForSession(
     return true;
   }
   return isLiveStatus(session.status) && initialReplayComplete;
+}
+
+export function shouldForwardTerminalData(state: {
+  displaced: boolean;
+  initialReplayComplete: boolean;
+  replayWriteInProgress: boolean;
+}): boolean {
+  return !state.displaced && state.initialReplayComplete && !state.replayWriteInProgress;
 }
 
 export function completeInitialReplay(
@@ -268,22 +277,119 @@ export function loadTerminalAddons(
   term.loadAddon(webLinks);
 }
 
+export function configureTerminalUnicode(
+  term: Pick<Terminal, "loadAddon" | "unicode">,
+  unicode11: ITerminalAddon
+): void {
+  term.loadAddon(unicode11);
+  if (installEmojiUnicodeProvider(term)) {
+    term.unicode.activeVersion = EMOJI_UNICODE_VERSION;
+  } else {
+    // Fall back to the plain Unicode 11 widths if xterm's internals are not
+    // shaped as expected — the worst case is the pre-existing partial fix.
+    term.unicode.activeVersion = "11";
+  }
+}
+
+const EMOJI_UNICODE_VERSION = "climon-emoji";
+const EMOJI_PRESENTATION_SELECTOR = 0xfe0f;
+const SKIN_TONE_MIN = 0x1f3fb;
+const SKIN_TONE_MAX = 0x1f3ff;
+
+interface UnicodeVersionProvider {
+  readonly version: string;
+  wcwidth(codepoint: number): 0 | 1 | 2;
+  charProperties(codepoint: number, preceding: number): number;
+}
+
+type PropertyPacker = (state: number, width: number, shouldJoin: boolean) => number;
+type WidthExtractor = (value: number) => number;
+
+/**
+ * Wraps xterm's Unicode 11 provider to width emoji grapheme clusters that the
+ * per-codepoint wcwidth table gets wrong: an emoji-presentation selector (VS16)
+ * promotes a narrow base to two cells (also covering keycaps via the trailing
+ * combining mark), and a skin-tone modifier joins the preceding emoji as a single
+ * two-cell cluster. Everything else delegates to the base provider.
+ */
+export function createEmojiUnicodeProvider(
+  base: Pick<UnicodeVersionProvider, "wcwidth" | "charProperties">,
+  createPropertyValue: PropertyPacker,
+  extractWidth: WidthExtractor
+): UnicodeVersionProvider {
+  return {
+    version: EMOJI_UNICODE_VERSION,
+    wcwidth: (codepoint) => base.wcwidth(codepoint),
+    charProperties(codepoint, preceding) {
+      if (
+        codepoint === EMOJI_PRESENTATION_SELECTOR &&
+        preceding !== 0 &&
+        extractWidth(preceding) < 2
+      ) {
+        return createPropertyValue(0, 2, true);
+      }
+      if (codepoint >= SKIN_TONE_MIN && codepoint <= SKIN_TONE_MAX && preceding !== 0) {
+        return createPropertyValue(0, 2, true);
+      }
+      return base.charProperties(codepoint, preceding);
+    }
+  };
+}
+
+interface UnicodeServiceInternals {
+  _providers?: Record<string, UnicodeVersionProvider | undefined>;
+  register(provider: UnicodeVersionProvider): void;
+  constructor: {
+    createPropertyValue?: PropertyPacker;
+    extractWidth?: WidthExtractor;
+  };
+}
+
+function installEmojiUnicodeProvider(term: Pick<Terminal, "unicode">): boolean {
+  const service = (term as { _core?: { unicodeService?: UnicodeServiceInternals } })._core
+    ?.unicodeService;
+  const base = service?._providers?.["11"];
+  const createPropertyValue = service?.constructor?.createPropertyValue;
+  const extractWidth = service?.constructor?.extractWidth;
+  if (!service || !base || typeof createPropertyValue !== "function" || typeof extractWidth !== "function") {
+    return false;
+  }
+  service.register(createEmojiUnicodeProvider(base, createPropertyValue, extractWidth));
+  return true;
+}
+
 export interface TerminalHandle {
   getDimensions: () => { cols: number; rows: number } | null;
   refit: () => void;
   refresh: () => void;
   sendInput: (data: string) => void;
-  setViewMode: (mode: TerminalResizeMode) => void;
+  takeControl: () => void;
+  armTakeControl: (sessionId: string) => void;
   acknowledgeAttention: (sessionId: string, attentionMatchedAt: string) => void;
   focus: () => void;
   captureText: () => string;
 }
 
 const useStyles = makeStyles({
+  wrapper: {
+    position: "relative",
+    display: "flex",
+    flex: "1 1 auto",
+    minWidth: 0,
+    minHeight: 0
+  },
   root: {
     flex: "1 1 auto",
+    minWidth: 0,
     minHeight: 0,
     padding: "8px",
+    // The xterm content fades in over the theme background once an attach's
+    // replay/reflow and the daemon jiggle have settled (see CONTENT_REVEAL_
+    // SETTLE_MS / scheduleContentReveal), masking the visible jiggle.
+    "& .xterm": {
+      opacity: 1,
+      transition: "opacity 220ms ease"
+    },
     "& .xterm-viewport": {
       scrollbarWidth: "none",
       msOverflowStyle: "none"
@@ -291,6 +397,36 @@ const useStyles = makeStyles({
     "& .xterm-viewport::-webkit-scrollbar": {
       display: "none"
     }
+  },
+  // Applied while an attach's replay/reflow is in flight: instantly hides the
+  // xterm content (revealing the theme background beneath) with no fade-out, so
+  // only the fade-in animates when the class is removed.
+  hidden: {
+    "& .xterm": {
+      opacity: 0,
+      transition: "none"
+    }
+  },
+  overlay: {
+    position: "absolute",
+    inset: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: tokens.colorBackgroundOverlay,
+    zIndex: 1
+  },
+  overlayCard: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "16px",
+    maxWidth: "360px",
+    padding: "24px",
+    textAlign: "center",
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow16
   }
 });
 
@@ -299,8 +435,7 @@ interface Props {
   accentColor?: SessionMeta["color"];
   maximized: boolean;
   visible: boolean;
-  viewMode: TerminalResizeMode;
-  onViewModeChange: (mode: TerminalResizeMode) => void;
+  onControlStateChange?: (info: { controllerId: string | null; ownViewerId: string; state: ControlState }) => void;
   fontSize: number;
   xtermTheme: ITheme;
   onFontSizeChange: (delta: number) => void;
@@ -315,8 +450,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     accentColor,
     maximized,
     visible,
-    viewMode,
-    onViewModeChange,
+    onControlStateChange,
     fontSize,
     xtermTheme,
     onFontSizeChange,
@@ -332,12 +466,26 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const attachedSessionIdRef = useRef<string | null>(null);
-  const viewModeRef = useRef<TerminalResizeMode>(viewMode);
-  const onViewModeChangeRef = useRef(onViewModeChange);
+  const viewerIdRef = useRef<string>(generateViewerId());
+  const kindRef = useRef(surfaceKind(readIsStandalone()));
+  const controllerIdRef = useRef<string | null>(null);
+  const displacedRef = useRef(false);
+  // The last grid size this surface reported to the daemon, used to suppress
+  // redundant resize reports (see shouldSendResize) so viewport jitter cannot
+  // spam PTY resizes.
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const pendingTakeControlSessionRef = useRef<string | null>(null);
+  const displacedOverlayTimerRef = useRef<number | null>(null);
+  const onControlStateChangeRef = useRef(onControlStateChange);
   const fontSizeRef = useRef(fontSize);
   const xtermThemeRef = useRef(xtermTheme);
   const onFontSizeChangeRef = useRef(onFontSizeChange);
-  const queuedViewModeRef = useRef<TerminalResizeMode | null>(null);
+  const [displayState, setDisplayState] = useState<ControlState>("controlling");
+  // False while an attach's replay/reflow is in flight so the xterm content is
+  // hidden over the solid theme background; flipped true (fading the content in)
+  // once the replay/scrollback settles. Starts hidden so the very first attach
+  // never flashes an unsettled grid.
+  const [contentVisible, setContentVisible] = useState(false);
   const queuedAttentionAckRef = useRef<{ sessionId: string; attentionMatchedAt: string } | null>(null);
   const selectedSessionRef = useRef<SessionMeta | null>(session);
   const visibleRef = useRef(visible);
@@ -346,14 +494,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const attachmentGenerationRef = useRef(0);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const contentRevealTimerRef = useRef<number | null>(null);
   const awaitingReplayRef = useRef(false);
+  const replayWriteInProgressRef = useRef(false);
   const replayAfterNextResizeRef = useRef(false);
   const lastServerReconnectTokenRef = useRef(serverReconnectToken);
   const onLiveInteractionRef = useRef(onLiveInteraction);
-
-  useEffect(() => {
-    viewModeRef.current = viewMode;
-  }, [viewMode]);
 
   useEffect(() => {
     selectedSessionRef.current = session;
@@ -363,8 +509,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }, [session, visible, serverConnected, onLiveInteraction]);
 
   useEffect(() => {
-    onViewModeChangeRef.current = onViewModeChange;
-  }, [onViewModeChange]);
+    onControlStateChangeRef.current = onControlStateChange;
+  }, [onControlStateChange]);
 
   useEffect(() => {
     onFontSizeChangeRef.current = onFontSizeChange;
@@ -393,28 +539,31 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
   }, [xtermTheme]);
 
-  // A queued view-mode request belongs to the session that was attached when it
-  // was queued. Drop it when the session changes so it can never flush to a
-  // different session's socket.
-  useEffect(() => {
-    queuedViewModeRef.current = null;
-  }, [session?.id]);
-
   function sendResize(): void {
+    // Only the controller drives the grid. A non-controller (displaced) surface
+    // must stay silent -- reporting its size would fight the controller and
+    // trigger a resize feedback loop across surfaces.
+    if (displacedRef.current) {
+      return;
+    }
     const term = termRef.current;
     const ws = wsRef.current;
     if (term && ws && ws.readyState === WebSocket.OPEN) {
+      // Report this tab's NATURAL fit dimensions (what its container can hold),
+      // not term.cols/rows -- proposeDimensions() measures the container without
+      // resizing xterm.
+      const proposed = fitRef.current?.proposeDimensions();
+      const cols = proposed?.cols ?? term.cols;
+      const rows = proposed?.rows ?? term.rows;
       const requestReplay = replayAfterNextResizeRef.current;
-      const message: {
-        type: "resize";
-        cols: number;
-        rows: number;
-        mode?: TerminalResizeMode;
-      } = { type: "resize", cols: term.cols, rows: term.rows };
-      if (requestReplay) {
-        message.mode = viewModeRef.current;
+      // Suppress redundant reports: viewport jitter (mobile URL bar/keyboard,
+      // scrollbar flips) can re-fit to the same grid many times. Only report a
+      // real size change -- unless a replay must ride along (take-control).
+      if (!shouldSendResize({ last: lastSentSizeRef.current, next: { cols, rows }, requestReplay })) {
+        return;
       }
-      ws.send(JSON.stringify(message));
+      lastSentSizeRef.current = { cols, rows };
+      ws.send(JSON.stringify({ type: "resize", cols, rows, kind: kindRef.current, viewerId: viewerIdRef.current }));
       if (requestReplay) {
         replayAfterNextResizeRef.current = false;
         ws.send(JSON.stringify({ type: "replay" }));
@@ -422,27 +571,108 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
   }
 
-  function sendMode(mode: TerminalResizeMode): void {
-    viewModeRef.current = mode;
-    replayAfterNextResizeRef.current = true;
-    sendViewModeOrQueue(wsRef.current, mode, queuedViewModeRef as QueuedViewMode);
+  // Blank the terminal behind a "take control" overlay when displaced; restore it
+  // otherwise. Driven by the authoritative controller state from Control frames.
+  function applyDisplacedUi(state: ControlState): void {
+    setDisplayState(state);
   }
 
-  // The daemon reported its authoritative clamp/fill mode. When it differs from
-  // what this viewer last rendered, request a fresh replay on the next resize so
-  // xterm's scrollback is rebuilt for the new PTY grid.
-  function handleAuthoritativeViewMode(mode: TerminalResizeMode): void {
-    const requestReplay = shouldRequestReplayForAuthoritativeMode(
-      viewModeRef.current,
-      mode,
-      initialReplayCompleteRef.current
-    );
-    viewModeRef.current = mode;
-    onViewModeChangeRef.current(mode);
-    if (requestReplay) {
-      replayAfterNextResizeRef.current = true;
-      refit();
+  // Cancel a pending (not-yet-shown) displaced overlay.
+  function cancelDisplacedOverlay(): void {
+    if (displacedOverlayTimerRef.current !== null) {
+      clearTimeout(displacedOverlayTimerRef.current);
+      displacedOverlayTimerRef.current = null;
     }
+  }
+
+  function clearContentRevealTimer(): void {
+    if (contentRevealTimerRef.current !== null) {
+      clearTimeout(contentRevealTimerRef.current);
+      contentRevealTimerRef.current = null;
+    }
+  }
+
+  // Instantly hide the xterm content over the solid theme background at the
+  // start of an attach, cancelling any pending reveal so a superseded attach
+  // never un-hides the new one mid-flight.
+  function hideContent(): void {
+    clearContentRevealTimer();
+    setContentVisible(false);
+  }
+
+  // Reveal the content only after the post-replay refit and the daemon's
+  // take-control jiggle repaint have had time to settle, so the fade never
+  // starts mid-reflow. A frame after the settle we flip the flag, letting the
+  // CSS opacity transition animate the fade-in.
+  function scheduleContentReveal(): void {
+    clearContentRevealTimer();
+    contentRevealTimerRef.current = window.setTimeout(() => {
+      contentRevealTimerRef.current = null;
+      requestAnimationFrame(() => setContentVisible(true));
+    }, CONTENT_REVEAL_SETTLE_MS);
+  }
+
+  // Reveal immediately, e.g. on disconnect, so the content can never stick
+  // hidden while the reconnect overlay covers interaction.
+  function revealContentNow(): void {
+    clearContentRevealTimer();
+    setContentVisible(true);
+  }
+
+  // Defer showing the displaced overlay briefly. When a surface takes control
+  // (on open, on focus, or via the button), the daemon may first re-broadcast
+  // the *current* controller before our take-control round-trips, which would
+  // flash the "being viewed on another dashboard" dialog for a frame or two.
+  // Showing the overlay only after a short delay -- and cancelling it the moment
+  // we (re)gain control -- keeps the handoff flicker-free. The displaced gating
+  // (displacedRef) still updates immediately so we never fight the controller.
+  function scheduleDisplacedOverlay(): void {
+    if (displacedOverlayTimerRef.current !== null) {
+      return;
+    }
+    displacedOverlayTimerRef.current = window.setTimeout(() => {
+      displacedOverlayTimerRef.current = null;
+      if (displacedRef.current) {
+        setDisplayState("displaced");
+      }
+    }, DISPLACED_OVERLAY_DELAY_MS);
+  }
+
+  function takeControl(): void {
+    const ws = wsRef.current;
+    const term = termRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !term) {
+      return;
+    }
+    // Report our natural size first so the daemon resizes the PTY to fit this
+    // surface, then seize control. This bypasses the displaced guard on
+    // sendResize() because control has not transferred to us yet.
+    const proposed = fitRef.current?.proposeDimensions();
+    const cols = proposed?.cols ?? term.cols;
+    const rows = proposed?.rows ?? term.rows;
+    lastSentSizeRef.current = { cols, rows };
+    ws.send(JSON.stringify({ type: "resize", cols, rows, kind: kindRef.current, viewerId: viewerIdRef.current }));
+    ws.send(JSON.stringify({ type: "takeControl" }));
+  }
+
+  // Arm an automatic take-control for the given session so that selecting or
+  // opening a session in this dashboard makes it the controller. If we are
+  // already attached to that session, take control immediately; otherwise the
+  // pending request is flushed when the next attachment opens.
+  function armTakeControl(sessionId: string): void {
+    pendingTakeControlSessionRef.current = sessionId;
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN && attachedSessionIdRef.current === sessionId) {
+      flushPendingTakeControl(sessionId);
+    }
+  }
+
+  function flushPendingTakeControl(sessionId: string): void {
+    if (pendingTakeControlSessionRef.current !== sessionId) {
+      return;
+    }
+    pendingTakeControlSessionRef.current = null;
+    takeControl();
   }
 
   function sendAttentionAck(sessionId: string, attentionMatchedAt: string): void {
@@ -469,6 +699,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }
 
   function fitNow(): void {
+    // A displaced (non-controller) surface must not fit or report its size --
+    // that is what drives the grid, and only the controller may do so.
+    if (displacedRef.current) {
+      return;
+    }
     if (
       !canRefitTerminalForSession(
         selectedSessionRef.current,
@@ -506,13 +741,24 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     });
   }
 
+  // Repaint the viewport without touching geometry. Focus is not a resize, so
+  // the focus path must never refit: refitting on focus lets xterm's own focus
+  // churn (it re-focuses its helper textarea when the grid is refreshed/resized)
+  // re-fire focusin, which would call refit() again on the next double-rAF --
+  // an unbounded shrinking resize spiral once a surface takes control.
+  function repaintActiveTerminal(): void {
+    refreshTerminalRender(termRef.current);
+  }
+
+  // Repaint AND refit. Reserved for events that actually change (or settle) the
+  // grid geometry -- e.g. the post-replay settle -- never for focus.
   function refreshActiveTerminal(): void {
     refreshTerminalRender(termRef.current);
     refit();
   }
 
   function focusActiveTerminal(): void {
-    focusTerminalPane(termRef.current, refreshActiveTerminal);
+    focusTerminalPane(termRef.current, repaintActiveTerminal);
   }
 
   function clearReconnectTimer(): void {
@@ -529,6 +775,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     attachmentGenerationRef.current++;
     initialReplayCompleteRef.current = true;
     awaitingReplayRef.current = false;
+    replayWriteInProgressRef.current = false;
     replayAfterNextResizeRef.current = false;
     if (wsRef.current) {
       try {
@@ -599,6 +846,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     wsRef.current = ws;
     attachedSessionIdRef.current = liveSession.id;
     initialReplayCompleteRef.current = false;
+    // Hide the content until this attach's replay AND the daemon jiggle settle,
+    // so their reflow is masked by the solid theme background (see contentVisible
+    // / scheduleContentReveal).
+    hideContent();
 
     let firstBinaryFrame = true;
     let disconnected = false;
@@ -617,6 +868,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         attachedSessionIdRef.current = null;
       }
       initialReplayCompleteRef.current = true;
+      // Never leave the content stuck hidden if we disconnect before the replay
+      // settles; the reconnect overlay covers any interaction meanwhile.
+      revealContentNow();
       if (!terminalExitReceived) {
         scheduleReconnect(liveSession.id, attachmentGeneration);
       }
@@ -626,13 +880,12 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
         return;
       }
-      if (flushQueuedViewMode(ws, queuedViewModeRef as QueuedViewMode)) {
-        // Restoring a queued mode (e.g. after a server reconnect) changes the PTY
-        // grid, so request a fresh replay on the following resize.
-        replayAfterNextResizeRef.current = true;
-        refit();
-      }
       flushAttentionAck();
+      // If the user selected/opened this session, take control once attached.
+      // Defer a frame so the terminal viewport has settled before we measure it.
+      if (pendingTakeControlSessionRef.current === liveSession.id) {
+        requestAnimationFrame(() => flushPendingTakeControl(liveSession.id));
+      }
     };
     ws.onmessage = (ev) => {
       if (!isCurrentAttachment(ws, liveSession.id, attachmentGeneration)) {
@@ -649,17 +902,46 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             exitCode?: number;
             cols?: number;
             rows?: number;
-            mode?: TerminalResizeMode;
+            controllerId?: string;
           };
           if (msg.type === "exit") {
             terminalExitReceived = true;
             term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
           } else if (msg.type === "size" && msg.cols && msg.rows) {
             // Authoritative PTY size from the daemon: match it so both the host
-            // terminal and this viewer render the same grid.
-            applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
-          } else if (msg.type === "mode" && (msg.mode === "clamped" || msg.mode === "fill")) {
-            handleAuthoritativeViewMode(msg.mode);
+            // terminal and this viewer render the same grid -- unless displaced,
+            // where the grid is too large for this tab so we keep it blank.
+            if (!displacedRef.current) {
+              applyAuthoritativeTerminalSize(term, msg.cols, msg.rows);
+            }
+          } else if (msg.type === "control") {
+            const controllerId = typeof msg.controllerId === "string" ? msg.controllerId : null;
+            controllerIdRef.current = controllerId;
+            const state = deriveControlState({ ownViewerId: viewerIdRef.current, controllerId });
+            const wasDisplaced = displacedRef.current;
+            displacedRef.current = state === "displaced";
+            if (state === "displaced") {
+              // Update the gating ref immediately (above) so we stop reporting
+              // our size, but defer the visual overlay to avoid a handoff flash.
+              scheduleDisplacedOverlay();
+            } else {
+              // We hold control: cancel any pending overlay and show the
+              // terminal right away.
+              cancelDisplacedOverlay();
+              applyDisplacedUi(state);
+            }
+            onControlStateChangeRef.current?.({ controllerId, ownViewerId: viewerIdRef.current, state });
+            if (shouldRefitOnControlFrame({ state, wasDisplaced })) {
+              // We JUST took control: render the grid at our size and rebuild
+              // scrollback on the next resize. We deliberately do NOT refit on
+              // grid changes while already the stable controller -- as the
+              // controller we caused them, and re-fitting would form a
+              // resize -> control -> refit -> resize feedback loop that never
+              // settles when the fit is unstable (mobile PWA), corrupting the
+              // screen with endless resizes and replays.
+              replayAfterNextResizeRef.current = true;
+              refit();
+            }
           } else if (msg.type === "replay") {
             awaitingReplayRef.current = true;
           }
@@ -683,13 +965,16 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
             // scrollback without a full reset so mouse-tracking modes survive.
             refreshTerminalForReplay(term);
           }
+          replayWriteInProgressRef.current = true;
           term.write(data, () => {
+            replayWriteInProgressRef.current = false;
             completeInitialReplay(
               attachmentGeneration,
               attachmentGenerationRef.current,
               () => {
                 initialReplayCompleteRef.current = true;
                 reconnectAttemptRef.current = 0;
+                scheduleContentReveal();
               },
               refreshActiveTerminal
             );
@@ -708,6 +993,53 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     ws.onclose = handleDisconnect;
   }
 
+  // Reclaim control when this dashboard/PWA window regains focus or becomes
+  // visible again. Per the control-priority design a surface takes over the
+  // session it is actively showing, so returning to this window (alt-tab, tab
+  // switch, unlocking a phone, resuming the PWA) makes it the controller again.
+  // Edge-triggered by the browser focus/visibility events -- it fires only on a
+  // transition, never continuously, so it cannot fight another surface while the
+  // user is away from this window.
+  useEffect(() => {
+    function reclaimOnFocus(): void {
+      const visible = typeof document === "undefined" || document.visibilityState === "visible";
+      // Use the selected session (not the attached one): while the socket is
+      // dropped -- exactly when the daemon may have reassigned control away from
+      // this backgrounded tab -- attachedSessionIdRef is null, but we still need
+      // to arm a reclaim so the reconnect re-takes control.
+      const session = selectedSessionRef.current;
+      if (!session || !isLiveStatus(session.status)) {
+        return;
+      }
+      const ws = wsRef.current;
+      const connected = ws?.readyState === WebSocket.OPEN;
+      if (
+        !shouldReclaimOnFocus({
+          visible,
+          sessionLive: true,
+          connected,
+          controllerId: controllerIdRef.current,
+          ownViewerId: viewerIdRef.current
+        })
+      ) {
+        return;
+      }
+      armTakeControl(session.id);
+    }
+    window.addEventListener("focus", reclaimOnFocus);
+    document.addEventListener("visibilitychange", reclaimOnFocus);
+    return () => {
+      window.removeEventListener("focus", reclaimOnFocus);
+      document.removeEventListener("visibilitychange", reclaimOnFocus);
+    };
+  }, []);
+
+  // Clear any pending displaced-overlay timer on unmount.
+  useEffect(() => cancelDisplacedOverlay, []);
+
+  // Clear any pending content-reveal timer on unmount.
+  useEffect(() => clearContentRevealTimer, []);
+
   // Create the terminal once and wire input + resize handling.
   useEffect(() => {
     const container = containerRef.current;
@@ -722,6 +1054,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     const fit = new FitAddon();
     const webLinks = new WebLinksAddon();
     loadTerminalAddons(term, fit, webLinks);
+    configureTerminalUnicode(term, new Unicode11Addon());
     term.open(container);
     termRef.current = term;
     fitRef.current = fit;
@@ -770,6 +1103,18 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     // Register input handling once and route to the current socket. Registering
     // this per-connection would duplicate every keystroke.
     const dataDisposable = term.onData((data) => {
+      // xterm emits onData not only for user input, but also for device-query
+      // responses generated while parsing output. Historical queries in a replay
+      // must not be answered back into the live PTY, where an unprepared shell
+      // would echo the OSC palette response as visible garbage.
+      const forwardAllowed = shouldForwardTerminalData({
+        displaced: displacedRef.current,
+        initialReplayComplete: initialReplayCompleteRef.current,
+        replayWriteInProgress: replayWriteInProgressRef.current
+      });
+      if (!forwardAllowed) {
+        return;
+      }
       const liveSession = selectedSessionRef.current;
       if (liveSession && isLiveStatus(liveSession.status)) {
         // Signal interaction even if the socket is closed: the user is actively
@@ -802,10 +1147,17 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     }
     closeWs();
     initialReplayCompleteRef.current = true;
+    // Reset control state so a previous session's displaced overlay never lingers
+    // over a freshly attached session; the daemon re-announces control on attach.
+    controllerIdRef.current = null;
+    lastSentSizeRef.current = null;
+    displacedRef.current = false;
+    cancelDisplacedOverlay();
+    setDisplayState("controlling");
     applyTerminalScrollbackForSession(term, session);
     resetTerminalForSession(term, session);
-    // A dashboard server reconnect re-runs this effect with a bumped token.
-    const isServerReconnect = serverReconnectToken !== lastServerReconnectTokenRef.current;
+    // A dashboard server reconnect re-runs this effect with a bumped token; track
+    // it so a bumped token drives a fresh attach.
     lastServerReconnectTokenRef.current = serverReconnectToken;
     const attachmentGeneration = attachmentGenerationRef.current;
 
@@ -822,25 +1174,22 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (!visible || !serverConnected) {
         return;
       }
-      // Preserve the user's clamp/fill choice across an outage: the daemon may
-      // revert to its default mode when the last viewer disconnects, so queue the
-      // pre-outage mode and flush it once the socket reopens.
-      if (isServerReconnect) {
-        queuedViewModeRef.current = viewModeRef.current;
-      }
       attachLiveSession(session, false);
     } else {
+      // Hide the content until the captured scrollback is written, matching the
+      // live-attach masking (see contentVisible).
+      hideContent();
       void fetchScrollback(session.id).then((buf) => {
         if (cancelled) {
           return;
         }
         if (buf) {
           term.write(buf, () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal);
           });
         } else {
           term.write("\x1b[90m[no output captured]\x1b[0m\r\n", () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, () => undefined, refreshActiveTerminal);
+            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal);
           });
         }
       });
@@ -866,7 +1215,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     if (canRefitTerminalForSession(session, initialReplayCompleteRef.current, visible)) {
       refit();
     }
-  }, [attachKey(session, visible), accentColor, maximized, visible, viewMode]);
+  }, [attachKey(session, visible), accentColor, maximized, visible]);
 
   useImperativeHandle(ref, () => ({
     getDimensions: () => {
@@ -876,6 +1225,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     refit,
     refresh: () => refreshTerminalRender(termRef.current),
     sendInput: (data: string) => {
+      if (displacedRef.current) {
+        return;
+      }
       const liveSession = selectedSessionRef.current;
       if (liveSession && isLiveStatus(liveSession.status)) {
         onLiveInteractionRef.current?.();
@@ -885,27 +1237,38 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         ws.send(JSON.stringify({ type: "input", data }));
       }
     },
-    setViewMode: (mode: TerminalResizeMode) => {
-      sendMode(mode);
-      refit();
-    },
+    takeControl,
+    armTakeControl,
     acknowledgeAttention: sendAttentionAck,
     focus: focusActiveTerminal,
     captureText: () => captureTerminalText(termRef.current)
   }));
 
   return (
-    <div
-      ref={containerRef}
-      className={styles.root}
-      style={{
-        backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
-        ...(accentColor
-          ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
-          : {})
-      }}
-      onClick={focusActiveTerminal}
-      onFocusCapture={refreshActiveTerminal}
-    />
+    <div className={styles.wrapper}>
+      <div
+        ref={containerRef}
+        className={mergeClasses(styles.root, contentVisible ? undefined : styles.hidden)}
+        style={{
+          backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,
+          visibility: displayState === "displaced" ? "hidden" : "visible",
+          ...(accentColor
+            ? { border: `${ACTIVE_SESSION_COLOR_ACCENT_WIDTH} solid ${ANSI_HIGHLIGHT_CSS[accentColor]}` }
+            : {})
+        }}
+        onClick={focusActiveTerminal}
+        onFocusCapture={repaintActiveTerminal}
+      />
+      {displayState === "displaced" && (
+        <div className={styles.overlay}>
+          <div className={styles.overlayCard}>
+            <Text>This session is being viewed elsewhere.</Text>
+            <Button appearance="primary" onClick={takeControl}>
+              Take control
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 });

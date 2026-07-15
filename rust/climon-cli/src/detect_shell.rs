@@ -18,6 +18,9 @@ const BLOCKED_PARENTS: &[&str] = &[
     "node",
     "bun",
     "deno",
+    "cargo",
+    "rustc",
+    "rustup",
     "sshd",
     "login",
     "init",
@@ -226,6 +229,8 @@ mod tests {
         assert!(is_blocked("/usr/bin/node"));
         assert!(is_blocked("C:\\Program Files\\nodejs\\node.exe"));
         assert!(is_blocked("bun"));
+        assert!(is_blocked("C:\\Users\\me\\.cargo\\bin\\cargo.exe"));
+        assert!(is_blocked("/home/me/.rustup/toolchains/stable/bin/cargo"));
         assert!(is_blocked("/sbin/init"));
         assert!(!is_blocked("/bin/bash"));
         assert!(!is_blocked("C:\\Windows\\System32\\cmd.exe"));

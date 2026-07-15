@@ -9,12 +9,83 @@ import {
   splitTunnelId,
   type DashboardTunnelRunner
 } from "../src/server/dashboard-tunnel.js";
+import { createDevtunnelGateway } from "../src/devtunnel/gateway.js";
+import type { DevtunnelProcessHandlers, RawDevtunnelProcessSpawner } from "../src/devtunnel/process.js";
+import { DevtunnelError, type DevtunnelErrorCode } from "../src/devtunnel/types.js";
 
 type ManagerOptions = Parameters<typeof createDashboardTunnelManager>[0];
 
-/** Builds a manager with tunnel verification stubbed to succeed unless overridden. */
-function createManager(options: ManagerOptions) {
-  return createDashboardTunnelManager({ verifyTunnel: async () => true, ...options });
+/** Legacy host-process handler shape used by the test spawners below. */
+interface TestHostHandlers {
+  onStdout: (text: string) => void;
+  onStderr: (text: string) => void;
+  onExit: (code: number | null) => void;
+}
+type TestHostSpawner = (
+  cmd: string,
+  args: string[],
+  handlers: TestHostHandlers
+) => { stop: () => void; isAlive: () => boolean };
+
+interface TestManagerOptions {
+  port: number;
+  runner?: DashboardTunnelRunner;
+  hostSpawner?: TestHostSpawner;
+  verifyTunnel?: (url: string) => Promise<boolean>;
+  watchdogMs?: number;
+  hostUrlTimeoutMs?: number;
+  keepAliveMs?: number;
+  pingTunnel?: (url: string) => Promise<void>;
+  persisted?: { tunnelId?: string; cluster?: string };
+  onPersistTunnel?: (value: { tunnelId: string; cluster?: string }) => void | Promise<void>;
+  onClearPersistedTunnel?: () => void | Promise<void>;
+}
+
+/** Adapts the legacy host-spawner shape to the gateway's raw process spawner. */
+function adaptRawSpawner(hostSpawner: TestHostSpawner): RawDevtunnelProcessSpawner {
+  return (cmd, args, handlers) =>
+    hostSpawner(cmd, args, {
+      onStdout: handlers.onStdout,
+      onStderr: handlers.onStderr,
+      onExit: (code) => handlers.onExit({ status: code })
+    });
+}
+
+/**
+ * Builds a manager backed by a fake {@link DevtunnelGateway} constructed from the
+ * test's runner + host spawner. Tunnel verification is stubbed to succeed unless
+ * overridden. The same runner also serves the raw verbose-expiry probe.
+ */
+function createManager(options: TestManagerOptions) {
+  const { runner, hostSpawner, ...rest } = options;
+  const managerOptions: ManagerOptions = { verifyTunnel: async () => true, ...rest };
+  if (runner || hostSpawner) {
+    managerOptions.gateway = (handlers: DevtunnelProcessHandlers) =>
+      createDevtunnelGateway({
+        runner: runner ?? (async () => ({ status: 0, stdout: "", stderr: "" })),
+        rawProcessSpawner: hostSpawner ? adaptRawSpawner(hostSpawner) : undefined,
+        processHandlers: handlers
+      });
+    if (runner) managerOptions.rawRunner = runner;
+  }
+  return createDashboardTunnelManager(managerOptions);
+}
+
+/** Awaits a rejected promise and asserts it rejects with a {@link DevtunnelError}. */
+async function expectDevtunnelError(
+  promise: Promise<unknown>,
+  code?: DevtunnelErrorCode
+): Promise<DevtunnelError> {
+  let caught: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(DevtunnelError);
+  const error = caught as DevtunnelError;
+  if (code) expect(error.failure.code).toBe(code);
+  return error;
 }
 
 describe("parseDashboardTunnelUrl", () => {
@@ -101,7 +172,7 @@ describe("createDashboardTunnelManager", () => {
     });
   });
 
-  test("asks the user to run devtunnel login user before hosting", async () => {
+  test("rejects with a structured not_authenticated failure before hosting", async () => {
     const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
@@ -111,7 +182,8 @@ describe("createDashboardTunnelManager", () => {
       }
     });
 
-    await expect(manager.ensure()).rejects.toThrow(dashboardTunnelAuthMessage);
+    const error = await expectDevtunnelError(manager.ensure(), "not_authenticated");
+    expect(error.failure.retryClass).toBe("actionable");
   });
 
   test("treats devtunnel user show Not logged in JSON as unauthenticated", async () => {
@@ -128,26 +200,44 @@ describe("createDashboardTunnelManager", () => {
       devtunnelAvailable: true,
       authenticated: false
     });
-    await expect(manager.ensure()).rejects.toThrow(dashboardTunnelAuthMessage);
+    await expectDevtunnelError(manager.ensure(), "not_authenticated");
   });
 
-  test("reports a controlled startup error if the host exits before a URL is available", async () => {
+  test("surfaces a structured quota-exhausted failure with remediation", async () => {
     const manager = createManager({
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
+        if (args[0] === "create") return { status: 1, stdout: "", stderr: "You already have too many tunnels" };
+        throw new Error(`unexpected command: ${args.join(" ")}`);
+      }
+    });
+
+    const error = await expectDevtunnelError(manager.ensure(), "tunnel_quota_exhausted");
+    expect(error.failure.summary).toContain("too many tunnels");
+    expect(error.failure.remediation).toContain("devtunnel list");
+  });
+
+  test("throws a structured host failure carrying technical detail on early exit", async () => {
+    const manager = createManager({
+      port: 3131,
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected command: ${args.join(" ")}`);
       },
       hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStderr("relay handshake failed unexpectedly");
         handlers.onExit(1);
         return { stop: () => undefined, isAlive: () => false };
       }
     });
 
-    await expect(manager.ensure()).rejects.toThrow("Could not determine dashboard tunnel URL");
+    const error = await expectDevtunnelError(manager.ensure());
+    expect(error.failure.technicalDetail).toContain("relay handshake failed");
   });
 
   test("creates a tunnel once and reuses it on subsequent ensure calls", async () => {
@@ -155,7 +245,7 @@ describe("createDashboardTunnelManager", () => {
     const runner: DashboardTunnelRunner = async (_cmd, args) => {
       commands.push(args.join(" "));
       if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-      if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+      if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
       if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
       if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
       throw new Error(`unexpected runner command: ${args.join(" ")}`);
@@ -192,7 +282,7 @@ describe("createDashboardTunnelManager", () => {
       runner: async (_cmd, args) => {
         commands.push(args.join(" "));
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected runner command: ${args.join(" ")}`);
       },
@@ -218,7 +308,7 @@ describe("createDashboardTunnelManager", () => {
       hostUrlTimeoutMs: 50,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "port") {
           portCommands.push(args.join(" "));
           return { status: 1, stdout: "", stderr: "Conflict with existing entity" };
@@ -246,7 +336,7 @@ describe("createDashboardTunnelManager", () => {
       runner: async (_cmd, args) => {
         commands.push(args.join(" "));
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") {
           createCount += 1;
           const id = createCount === 1 ? "broken-tunnel.eun1" : "working-tunnel.eun1";
@@ -269,7 +359,7 @@ describe("createDashboardTunnelManager", () => {
       tunnelId: "working-tunnel.eun1",
       running: true
     });
-    expect(commands).toContain("delete broken-tunnel.eun1 -f");
+    expect(commands).toContain("delete broken-tunnel.eun1 --force");
     expect(commands.filter((cmd) => cmd.startsWith("create"))).toHaveLength(2);
   });
 
@@ -280,7 +370,7 @@ describe("createDashboardTunnelManager", () => {
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") {
           createCount += 1;
           return { status: 0, stdout: JSON.stringify({ tunnel: { tunnelId: `tunnel-${createCount}.eun1` } }), stderr: "" };
@@ -323,7 +413,7 @@ describe("createDashboardTunnelManager", () => {
       },
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") {
           return {
             status: 0,
@@ -367,7 +457,7 @@ describe("createDashboardTunnelManager", () => {
       },
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") {
           return {
             status: 0,
@@ -406,7 +496,7 @@ describe("createDashboardTunnelManager", () => {
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") {
           return {
             status: 0,
@@ -436,7 +526,7 @@ describe("createDashboardTunnelManager", () => {
       runner: async (_cmd, args) => {
         runnerCommands.push(args.join(" "));
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected runner command: ${args.join(" ")}`);
@@ -460,7 +550,7 @@ describe("createDashboardTunnelManager", () => {
       keepAliveMs: 1,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -489,7 +579,7 @@ describe("createDashboardTunnelManager", () => {
       keepAliveMs: 1,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -511,6 +601,90 @@ describe("createDashboardTunnelManager", () => {
     expect(pingCount).toBe(afterClose);
   });
 
+  test("a recreated tunnel survives the discarded host's delayed intentional exit", async () => {
+    let verifyCount = 0;
+    // Captures the discarded host's exit so the test can fire it AFTER the
+    // replacement host is live, reproducing the async-exit clobber.
+    const deferredExits: Array<() => void> = [];
+    const manager = createManager({
+      port: 3131,
+      // The first host fails verification (forcing one recreation); the second passes.
+      verifyTunnel: async () => {
+        verifyCount += 1;
+        return verifyCount > 1;
+      },
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
+        if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        let alive = true;
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return {
+          // Defer the exit callback: a real SIGTERM'd host exits asynchronously,
+          // sometimes after the replacement host is already assigned.
+          stop: () => {
+            if (!alive) return;
+            alive = false;
+            deferredExits.push(() => handlers.onExit(1));
+          },
+          isAlive: () => alive
+        };
+      }
+    });
+
+    const started = await manager.ensure();
+    expect(started.running).toBe(true);
+    // Flush the discarded host's exit now that the replacement is live.
+    for (const fire of deferredExits.splice(0)) fire();
+    const after = await manager.status();
+
+    expect(after.running).toBe(true);
+    expect(after.state).toBe("running");
+    expect(after.lastFailure).toBeUndefined();
+
+    await manager.close();
+  });
+
+  test("close reports stopped even when killing the host triggers a nonzero exit", async () => {
+    const manager = createManager({
+      port: 3131,
+      runner: async (_cmd, args) => {
+        if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
+        if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
+        if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      hostSpawner: (_cmd, _args, handlers) => {
+        let alive = true;
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return {
+          // A killed `devtunnel host` exits nonzero; the exit fires after stop().
+          stop: () => {
+            if (!alive) return;
+            alive = false;
+            handlers.onExit(1);
+          },
+          isAlive: () => alive
+        };
+      }
+    });
+
+    await manager.ensure();
+    await manager.close();
+    // Let any queued exit callback run.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const status = await manager.status();
+
+    expect(status.running).toBe(false);
+    expect(status.state).toBe("stopped");
+    expect(status.lastFailure).toBeUndefined();
+    expect(status.retry?.paused ?? false).toBe(false);
+  });
+
   test("restarts the host process when the watchdog observes a break", async () => {
     const hostCommands: string[] = [];
     let firstStop: (() => void) | undefined;
@@ -518,7 +692,7 @@ describe("createDashboardTunnelManager", () => {
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -551,7 +725,7 @@ describe("createDashboardTunnelManager", () => {
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -579,7 +753,7 @@ describe("createDashboardTunnelManager", () => {
     await manager.ensure();
     breakFirstHost?.();
 
-    await expect(manager.ensure()).rejects.toThrow("Could not determine dashboard tunnel URL");
+    await expectDevtunnelError(manager.ensure());
     await expect(manager.ensure()).resolves.toMatchObject({
       url: "https://climon-test-3131.eun1.devtunnels.ms/",
       running: true
@@ -594,7 +768,7 @@ describe("createDashboardTunnelManager", () => {
       runner: async (_cmd, args) => {
         commands.push(args.join(" "));
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -632,7 +806,7 @@ describe("createDashboardTunnelManager", () => {
       },
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") {
           createCount += 1;
           if (createCount === 1) {
@@ -665,8 +839,11 @@ describe("createDashboardTunnelManager", () => {
           handlers.onStdout("Ready: https://reused-tunnel-3131.eun1.devtunnels.ms/");
         }
         return {
+          // A killed host exits nonzero after stop(), matching the real spawner.
           stop: () => {
+            if (!alive) return;
             alive = false;
+            handlers.onExit(1);
           },
           isAlive: () => alive
         };
@@ -693,7 +870,7 @@ describe("createDashboardTunnelManager", () => {
       port: 3131,
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected command: ${args.join(" ")}`);
@@ -725,7 +902,7 @@ describe("createDashboardTunnelManager", () => {
       persisted: { tunnelId: "climon-test", cluster: "eun1" },
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
         throw new Error(`unexpected runner command: ${args.join(" ")}`);
       },
@@ -753,7 +930,7 @@ describe("createDashboardTunnelManager", () => {
       persisted: { tunnelId: "climon-test", cluster: "eun1" },
       runner: async (_cmd, args) => {
         if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-        if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+        if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
         if (args[0] === "port") {
           portCommands.push(args.join(" "));
           if (args[1] === "list") {
@@ -780,6 +957,102 @@ describe("createDashboardTunnelManager", () => {
     expect(portCommands).toContain("port delete climon-test -p 39998");
     expect(portCommands).toContain("port delete climon-test -p 39999");
     expect(portCommands).not.toContain("port delete climon-test -p 39997");
+  });
+
+  const runningRunner: DashboardTunnelRunner = async (_cmd, args) => {
+    if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
+    if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
+    if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test" }), stderr: "" };
+    if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  };
+
+  test("enters the retrying state after a transient host exit", async () => {
+    let breakHost: (() => void) | undefined;
+    const manager = createManager({
+      port: 3131,
+      watchdogMs: 100000,
+      runner: runningRunner,
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        let alive = true;
+        breakHost = () => {
+          alive = false;
+          handlers.onExit(1);
+        };
+        return { stop: () => { alive = false; }, isAlive: () => alive };
+      }
+    });
+
+    await manager.ensure();
+    breakHost?.();
+    const status = await manager.status();
+
+    expect(status.running).toBe(false);
+    expect(status.state).toBe("retrying");
+    expect(status.retry?.paused).toBe(false);
+    expect(status.lastFailure?.code).toBe("process_exited");
+    await manager.close();
+  });
+
+  test("pauses after an actionable host failure", async () => {
+    let breakHost: (() => void) | undefined;
+    const manager = createManager({
+      port: 3131,
+      watchdogMs: 100000,
+      runner: runningRunner,
+      hostSpawner: (_cmd, _args, handlers) => {
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        let alive = true;
+        breakHost = () => {
+          alive = false;
+          handlers.onStderr("403 Forbidden: does not have access");
+          handlers.onExit(1);
+        };
+        return { stop: () => { alive = false; }, isAlive: () => alive };
+      }
+    });
+
+    await manager.ensure();
+    breakHost?.();
+    const status = await manager.status();
+
+    expect(status.state).toBe("paused");
+    expect(status.retry?.paused).toBe(true);
+    expect(status.lastFailure?.code).toBe("permission_denied");
+    await manager.close();
+  });
+
+  test("retry() resumes a paused link and re-attempts hosting", async () => {
+    let hostAttempt = 0;
+    const manager = createManager({
+      port: 3131,
+      watchdogMs: 100000,
+      runner: runningRunner,
+      hostSpawner: (_cmd, _args, handlers) => {
+        hostAttempt += 1;
+        if (hostAttempt === 1) {
+          handlers.onStderr("403 Forbidden: does not have access");
+          handlers.onExit(1);
+          return { stop: () => undefined, isAlive: () => false };
+        }
+        handlers.onStdout("Ready: https://climon-test-3131.eun1.devtunnels.ms/");
+        return { stop: () => undefined, isAlive: () => true };
+      }
+    });
+
+    await expectDevtunnelError(manager.ensure(), "permission_denied");
+    await expect(manager.status()).resolves.toMatchObject({ state: "paused" });
+
+    const resumed = await manager.retry();
+    expect(resumed.running).toBe(true);
+    expect(resumed.state).toBe("running");
+    expect(resumed.url).toBe("https://climon-test-3131.eun1.devtunnels.ms/");
+    await manager.close();
+  });
+
+  test("exports the legacy devtunnel auth message for back-compat", () => {
+    expect(dashboardTunnelAuthMessage).toContain("devtunnel user login");
   });
 });
 
@@ -840,7 +1113,7 @@ describe("dashboard tunnel status expiry", () => {
     return async (_cmd, args) => {
       commands.push(args.join(" "));
       if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-      if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+      if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
       if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "climon-test.eun1" }), stderr: "" };
       if (args[0] === "port") return { status: 0, stdout: "", stderr: "" };
       if (args[0] === "show") return { status: 0, stdout: '{ "expiration": "2026-07-21T19:50:20Z" }', stderr: "" };
@@ -884,7 +1157,7 @@ describe("dashboard tunnel expiry cache reset", () => {
     const expirations = ["2026-07-21T19:50:20Z", "2026-08-21T10:00:00Z"];
     const runner: DashboardTunnelRunner = async (_cmd, args) => {
       if (args[0] === "--version") return { status: 0, stdout: "1.0.0\n", stderr: "" };
-      if (args[0] === "user") return { status: 0, stdout: "{}\n", stderr: "" };
+      if (args[0] === "user") return { status: 0, stdout: JSON.stringify({ status: "Logged in as tester" }), stderr: "" };
       if (args[0] === "create") return { status: 0, stdout: JSON.stringify({ tunnelId: "saved-tunnel.eun1" }), stderr: "" };
       if (args[0] === "port" && args[1] === "create") {
         portCreateCalls += 1;

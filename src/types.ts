@@ -19,6 +19,25 @@ export type AnsiColor =
 
 export type SessionColorMode = AnsiColor | "none" | "auto";
 
+/**
+ * Terminal progress state reported by a program inside the PTY via the
+ * ConEmu/Windows-Terminal `OSC 9;4` sequence. Mirrors the Rust
+ * `climon_proto::meta::ProgressState` (serde camelCase). `normal` (state 1)
+ * carries a determinate `value` percentage; the others do not.
+ */
+export type ProgressState = "normal" | "error" | "indeterminate" | "warning";
+
+/**
+ * Latest `OSC 9;4` progress reported by a program in the PTY. Absent when the
+ * program has not reported progress or has cleared it (state 0). Mirrors the
+ * Rust `climon_proto::meta::TerminalProgress`.
+ */
+export interface TerminalProgress {
+  state: ProgressState;
+  /** Determinate percentage 0–100; only present for the `normal` state. */
+  value?: number;
+}
+
 export type PriorityReason =
   | "attention"
   | "completed"
@@ -33,13 +52,6 @@ export interface ServerConfig {
 }
 
 export interface TerminalConfig {
-  /**
-   * When true (default), a connected browser viewer cannot grow the shared PTY
-   * beyond the host terminal's dimensions. This keeps the local terminal (which
-   * renders raw PTY output and cannot reflow) and the browser showing the same
-   * content instead of the browser's larger viewport mangling the terminal.
-   */
-  clampBrowserToHost: boolean;
   /**
    * Byte value of the detach key prefix for the local attach client (default
    * 0x1c = Ctrl-\). Press this prefix then `d` to detach without stopping the
@@ -63,6 +75,8 @@ export interface DashboardConfig {
   theme?: string;
   /** Whether the dashboard key bar is pinned. */
   keyBarPinned?: boolean;
+  /** When true, freeze the animated terminal-progress indicator into a static icon. */
+  stateIconNoMotion?: boolean;
 }
 
 export interface RemoteConfig {
@@ -73,6 +87,8 @@ export interface RemoteConfig {
   ingestHost?: string;
   /** Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect`. */
   tunnelId?: string;
+  /** When true (default), auto-discover live dashboard hosts via dev tunnels. */
+  discover?: boolean;
   /** Server-owned persisted dashboard tunnel id reused for tunnel link sessions. */
   dashboardTunnelId?: string;
   /** Server-owned persisted dashboard tunnel cluster reused for tunnel link sessions. */
@@ -205,6 +221,10 @@ export interface SessionMeta {
   userPaused?: boolean;
   /** Latest terminal title emitted by a program inside the PTY (OSC 0/2), shown as a subtitle. */
   terminalTitle?: string;
+  /** Fuzzy-extracted last relevant terminal output at attention time; the smart-notification body. */
+  attentionSnippet?: string;
+  /** Latest terminal progress (OSC 9;4) reported by a program inside the PTY; absent/null = none. */
+  progress?: TerminalProgress | null;
 }
 
 export interface SessionMetaPatch {
@@ -226,6 +246,9 @@ export interface SessionMetaPatch {
   theme?: string;
   userPaused?: boolean;
   terminalTitle?: string;
+  attentionSnippet?: string;
+  /** Progress patch: a value sets it, `null` clears it (state 0), absent leaves it unchanged. */
+  progress?: TerminalProgress | null;
 }
 
 export interface SessionListResponse {

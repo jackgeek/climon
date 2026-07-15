@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use climon_config::config::{
     ensure_climon_home, load_config, resolve_config_setting, Env as ConfigEnv,
@@ -31,9 +32,9 @@ use crate::process_kill::{is_process_alive, kill_process};
 use crate::spawn::{resolve_client_id, spawn_headless_session, SessionMetaOptions};
 use crate::uplink_spawn::spawn_uplink_detached;
 use crate::version::VERSION;
+use climon_remote::devtunnel::DevtunnelGateway;
 use climon_remote::discovery::{discover_dashboard, DashboardLocation, DiscoveryDeps};
 use climon_remote::link::{maybe_auto_link as remote_maybe_auto_link, LinkDeps};
-use climon_remote::tunnel::DetectResult;
 
 /// Environment variable carrying the nesting depth. Mirrors `NEST_LEVEL_ENV_VAR`.
 const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
@@ -258,8 +259,19 @@ pub struct UplinkStartPlan {
     pub warning: Option<String>,
 }
 
+/// Launch-time Dev Tunnels probe result: whether the CLI is runnable and, if so,
+/// whether the user is signed in, plus whether the probe timed out before it
+/// could answer. Lets `plan_uplink_start` tell "CLI missing" apart from "CLI
+/// present but logged out" apart from "devtunnel stalled / didn't respond".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevtunnelProbe {
+    pub available: bool,
+    pub authenticated: bool,
+    pub timed_out: bool,
+}
+
 /// Decides whether to spawn the detached uplink. Mirrors `planUplinkStart`.
-pub fn plan_uplink_start(config: &UplinkStartConfig, detect: &DetectResult) -> UplinkStartPlan {
+pub fn plan_uplink_start(config: &UplinkStartConfig, probe: &DevtunnelProbe) -> UplinkStartPlan {
     if !config.enabled {
         return UplinkStartPlan {
             should_spawn: false,
@@ -278,11 +290,33 @@ pub fn plan_uplink_start(config: &UplinkStartConfig, detect: &DetectResult) -> U
             warning: None,
         };
     }
-    if !detect.available {
+    if probe.timed_out {
+        // Dev Tunnels stalled instead of answering. We can't tell healthy from
+        // broken, so spawn best-effort (the detached uplink retries discovery
+        // with capped backoff and reports state via `climon remotes`) and warn
+        // the user rather than hang or fail silently.
+        return UplinkStartPlan {
+            should_spawn: true,
+            warning: Some(
+                "climon: Dev Tunnels didn't respond within 5s; starting remote monitoring anyway. If sessions don't appear on the remote dashboard, check `climon remotes` or run `devtunnel user login`.\n"
+                    .to_string(),
+            ),
+        };
+    }
+    if !probe.available {
         return UplinkStartPlan {
             should_spawn: false,
             warning: Some(
                 "climon: remote monitoring is configured, but the devtunnel CLI is not installed or not runnable on this machine. Install devtunnel for sessions to appear on the remote dashboard.\n"
+                    .to_string(),
+            ),
+        };
+    }
+    if !probe.authenticated {
+        return UplinkStartPlan {
+            should_spawn: false,
+            warning: Some(
+                "climon: remote monitoring is configured, but Dev Tunnels is not signed in. Run `devtunnel user login`, then retry the session.\n"
                     .to_string(),
             ),
         };
@@ -310,29 +344,56 @@ fn config_u16(env: &ConfigEnv, cwd: &Path, key: &str) -> Option<u16> {
     }
 }
 
-/// Best-effort synchronous `devtunnel --version` probe. Mirrors `detectDevtunnel`.
-fn detect_devtunnel_sync() -> DetectResult {
-    match std::process::Command::new("devtunnel")
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .output()
+/// Total wall-clock budget for the launch-time Dev Tunnels probe
+/// (`detect()` + `show_user()`). Long enough for a healthy network round-trip,
+/// short enough that a stalled `devtunnel` never feels like a hang. On elapse
+/// the probe reports `timed_out` and the launcher spawns the uplink best-effort.
+const DEVTUNNEL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Best-effort synchronous Dev Tunnels probe over the shared gateway. Reports
+/// CLI availability and sign-in state so launch planning can distinguish
+/// missing-CLI from logged-out. Mirrors `detectDevtunnel` + `showUser`.
+fn probe_devtunnel_sync() -> DevtunnelProbe {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
     {
-        Ok(out) if out.status.success() => {
-            let trimmed = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            DetectResult {
-                available: true,
-                version: if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed)
-                },
+        Ok(rt) => rt,
+        Err(_) => {
+            return DevtunnelProbe {
+                available: false,
+                authenticated: false,
+                timed_out: false,
             }
         }
-        _ => DetectResult {
-            available: false,
-            version: None,
-        },
-    }
+    };
+    runtime.block_on(async {
+        let probe = async {
+            let gateway = DevtunnelGateway::new();
+            let detected = gateway.detect().await;
+            if !detected.available {
+                return DevtunnelProbe {
+                    available: false,
+                    authenticated: false,
+                    timed_out: false,
+                };
+            }
+            let user = gateway.show_user().await;
+            DevtunnelProbe {
+                available: true,
+                authenticated: user.authenticated,
+                timed_out: false,
+            }
+        };
+        match tokio::time::timeout(DEVTUNNEL_PROBE_TIMEOUT, probe).await {
+            Ok(result) => result,
+            Err(_) => DevtunnelProbe {
+                available: false,
+                authenticated: false,
+                timed_out: true,
+            },
+        }
+    })
 }
 
 /// Auto-links WSL<->Windows dashboard discovery when appropriate. Mirrors
@@ -389,12 +450,13 @@ fn ensure_uplink() {
 
     if !should_spawn {
         let needs_tunnel = enabled && host.is_none() && tunnel_id.is_some();
-        let detect = if needs_tunnel {
-            detect_devtunnel_sync()
+        let probe = if needs_tunnel {
+            probe_devtunnel_sync()
         } else {
-            DetectResult {
+            DevtunnelProbe {
                 available: false,
-                version: None,
+                authenticated: false,
+                timed_out: false,
             }
         };
         let plan = plan_uplink_start(
@@ -404,7 +466,7 @@ fn ensure_uplink() {
                 tunnel_id,
                 port,
             },
-            &detect,
+            &probe,
         );
         if let Some(warning) = &plan.warning {
             write_stderr(warning, true);
@@ -531,6 +593,8 @@ pub fn start_monitored_command(command: &[String], options: StartOptions) -> Res
         theme,
         user_paused: None,
         terminal_title: None,
+        attention_snippet: None,
+        progress: None,
     };
     write_session_meta(&store_env, &meta).map_err(|e| e.to_string())?;
 
@@ -774,9 +838,10 @@ mod tests {
                 tunnel_id: Some("spiffy-chair-c2lj709.eun1".to_string()),
                 port: None,
             },
-            &DetectResult {
+            &DevtunnelProbe {
                 available: false,
-                version: None,
+                authenticated: false,
+                timed_out: false,
             },
         );
         assert!(!plan.should_spawn);
@@ -784,6 +849,30 @@ mod tests {
             plan.warning.as_deref(),
             Some(
                 "climon: remote monitoring is configured, but the devtunnel CLI is not installed or not runnable on this machine. Install devtunnel for sessions to appear on the remote dashboard.\n"
+            )
+        );
+    }
+
+    #[test]
+    fn plan_uplink_warns_when_devtunnel_logged_out() {
+        let plan = plan_uplink_start(
+            &UplinkStartConfig {
+                enabled: true,
+                host: None,
+                tunnel_id: Some("spiffy-chair-c2lj709.eun1".to_string()),
+                port: None,
+            },
+            &DevtunnelProbe {
+                available: true,
+                authenticated: false,
+                timed_out: false,
+            },
+        );
+        assert!(!plan.should_spawn);
+        assert_eq!(
+            plan.warning.as_deref(),
+            Some(
+                "climon: remote monitoring is configured, but Dev Tunnels is not signed in. Run `devtunnel user login`, then retry the session.\n"
             )
         );
     }
@@ -797,9 +886,10 @@ mod tests {
                 tunnel_id: Some("spiffy-chair-c2lj709.eun1".to_string()),
                 port: None,
             },
-            &DetectResult {
+            &DevtunnelProbe {
                 available: true,
-                version: Some("Tunnel CLI version: 1.0.1886".to_string()),
+                authenticated: true,
+                timed_out: false,
             },
         );
         assert_eq!(
@@ -820,9 +910,10 @@ mod tests {
                 tunnel_id: None,
                 port: Some(3132),
             },
-            &DetectResult {
+            &DevtunnelProbe {
                 available: false,
-                version: None,
+                authenticated: false,
+                timed_out: false,
             },
         );
         assert_eq!(
@@ -843,9 +934,10 @@ mod tests {
                 tunnel_id: None,
                 port: None,
             },
-            &DetectResult {
+            &DevtunnelProbe {
                 available: false,
-                version: None,
+                authenticated: false,
+                timed_out: false,
             },
         );
         assert_eq!(
@@ -866,9 +958,10 @@ mod tests {
                 tunnel_id: None,
                 port: None,
             },
-            &DetectResult {
+            &DevtunnelProbe {
                 available: true,
-                version: None,
+                authenticated: true,
+                timed_out: false,
             },
         );
         assert_eq!(
@@ -880,7 +973,58 @@ mod tests {
         );
     }
 
-    // Serialize tests that mutate process-global state (cwd / CLIMON_HOME via
+    #[test]
+    fn plan_uplink_spawns_best_effort_on_probe_timeout() {
+        let plan = plan_uplink_start(
+            &UplinkStartConfig {
+                enabled: true,
+                host: None,
+                tunnel_id: Some("spiffy-chair-c2lj709.eun1".to_string()),
+                port: None,
+            },
+            &DevtunnelProbe {
+                available: false,
+                authenticated: false,
+                timed_out: true,
+            },
+        );
+        assert!(plan.should_spawn, "timeout should still spawn best-effort");
+        let warning = plan.warning.expect("timeout must warn the user");
+        assert!(
+            warning.contains("didn't respond within 5s"),
+            "warning should explain the timeout, got: {warning}"
+        );
+        assert!(
+            warning.contains("climon remotes"),
+            "warning should point at `climon remotes`, got: {warning}"
+        );
+    }
+
+    #[test]
+    fn plan_uplink_ignores_timeout_for_direct_host() {
+        // A direct host+port never needs devtunnel, so a timeout is irrelevant:
+        // spawn directly with no warning.
+        let plan = plan_uplink_start(
+            &UplinkStartConfig {
+                enabled: true,
+                host: Some("172.30.192.1".to_string()),
+                tunnel_id: None,
+                port: Some(3132),
+            },
+            &DevtunnelProbe {
+                available: false,
+                authenticated: false,
+                timed_out: true,
+            },
+        );
+        assert_eq!(
+            plan,
+            UplinkStartPlan {
+                should_spawn: true,
+                warning: None
+            }
+        );
+    }
     // StoreEnv::from_env is avoided by using explicit envs, but keep a lock for
     // any env-touching helpers).
     static LOCK: Mutex<()> = Mutex::new(());

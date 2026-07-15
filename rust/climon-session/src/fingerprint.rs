@@ -72,14 +72,25 @@ impl HeadlessGrid {
             rows.pop();
         }
         let mut out = Vec::new();
-        out.extend_from_slice(b"\x1b[H\x1b[2J\x1b[m");
+        // Home only. NEVER `\e[2J`: on Windows Terminal (and others) it clears
+        // scrollback. This repaint lands on top of the current primary buffer,
+        // overwriting only the visible viewport (where the displaced notice sat),
+        // so it must be non-destructive to history above the viewport.
+        out.extend_from_slice(b"\x1b[H");
         for (i, row) in rows.iter().enumerate() {
             if i > 0 {
                 out.extend_from_slice(b"\r\n");
             }
-            out.extend_from_slice(b"\x1b[2K");
+            // Reset SGR *before* the erase so the erased cells are painted with
+            // the default background (kills the vt100 last-cell attribute bleed);
+            // the row content then re-establishes whatever attributes it needs.
+            out.extend_from_slice(b"\x1b[m\x1b[2K");
             out.extend_from_slice(row);
         }
+        // Clear from the cursor to the end of the visible screen so stale rows
+        // below the current content are removed. `\e[J` (erase-below) does NOT
+        // touch scrollback, unlike `\e[2J`.
+        out.extend_from_slice(b"\x1b[m\x1b[J");
         out
     }
 
@@ -104,6 +115,51 @@ impl HeadlessGrid {
         }
         out
     }
+
+    /// Returns the current visible screen as one trailing-trimmed string per
+    /// row (top to bottom), with no dimension header. Used by the smart-
+    /// notification snippet extractor.
+    pub fn visible_lines(&self) -> Vec<String> {
+        let screen = self.parser.screen();
+        let mut out = Vec::with_capacity(self.rows as usize);
+        for row in 0..self.rows {
+            let mut line = String::new();
+            for col in 0..self.cols {
+                if let Some(cell) = screen.cell(row, col) {
+                    let contents = cell.contents();
+                    if contents.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(contents);
+                    }
+                }
+            }
+            out.push(line.trim_end().to_string());
+        }
+        out
+    }
+
+    /// Row index (0-based, top of the visible grid) the cursor currently sits on.
+    /// The smart-notification extractor uses this to ignore the input composer and
+    /// any help/status bar rendered at or below it, since the agent's response
+    /// sits above the cursor.
+    pub fn cursor_row(&self) -> u16 {
+        self.parser.screen().cursor_position().0
+    }
+}
+
+/// Rebuilds a screen at the requested size from the bounded raw PTY shadow,
+/// then emits the same viewport-only repaint as [`HeadlessGrid::render_screen`].
+///
+/// This is used for local-terminal restore because the controller-sized idle
+/// grid may have been narrowed by a dashboard, permanently discarding cells to
+/// the right of that dashboard's edge. Parsing the shadow into a fresh
+/// host-sized grid recovers those cells without replaying raw PTY/ConPTY diffs
+/// directly to the real console.
+pub(crate) fn render_screen_from_replay(replay: &[u8], cols: u16, rows: u16) -> Vec<u8> {
+    let mut grid = HeadlessGrid::new(cols, rows);
+    grid.write(replay);
+    grid.render_screen()
 }
 
 #[cfg(test)]
@@ -151,6 +207,49 @@ mod tests {
     }
 
     #[test]
+    fn content_survives_shrink_then_grow_resize() {
+        // Repro of the local take-control blank-screen bug: session starts large,
+        // a dashboard shrinks the PTY, then the local terminal reclaims and grows
+        // it back. render_screen() must still contain the prompt row -- if
+        // vt100::set_size drops content across the shrink/grow, the restore
+        // repaint is empty and the local terminal blanks.
+        let mut grid = HeadlessGrid::new(156, 47);
+        grid.write(b"PS C:\\> ");
+        assert!(grid.fingerprint().contains("PS C:\\>"));
+
+        grid.resize(154, 15); // dashboard takes control (smaller)
+        grid.resize(156, 47); // local reclaims (back to host size)
+
+        let repaint = String::from_utf8_lossy(&grid.render_screen()).to_string();
+        assert!(
+            repaint.contains("PS C:\\>"),
+            "prompt lost across shrink/grow resize; repaint={repaint:?}"
+        );
+    }
+
+    #[test]
+    fn right_hand_cells_survive_shrink_then_grow_resize() {
+        // Repro of the local restore clipping bug: a wide static line is visible
+        // in the local terminal, a narrower dashboard takes control, then the
+        // local terminal reclaims its original width. The controller-sized idle
+        // grid permanently discards cells to the right of the dashboard edge, so
+        // restore must rebuild a fresh host-sized grid from the raw PTY shadow.
+        let replay = b"left side                                              RIGHT_EDGE";
+        let mut grid = HeadlessGrid::new(80, 4);
+        grid.write(replay);
+
+        grid.resize(20, 4);
+        grid.resize(80, 4);
+
+        let repaint =
+            String::from_utf8_lossy(&render_screen_from_replay(replay, 80, 4)).to_string();
+        assert!(
+            repaint.contains("RIGHT_EDGE"),
+            "host-sized replay restore lost right-hand cells; repaint={repaint:?}"
+        );
+    }
+
+    #[test]
     fn render_screen_reproduces_current_screen_when_reparsed() {
         // Drive the grid with output that uses absolute cursor moves (the kind
         // of sequence that, when replayed raw to a real console, stacks lines on
@@ -194,5 +293,63 @@ mod tests {
                 "repaint must not use absolute row positioning, found: {seq:?}"
             );
         }
+    }
+
+    #[test]
+    fn render_screen_resets_sgr_before_every_erase_and_never_clears_scrollback() {
+        // Regression: render_screen must (a) never emit `\e[2J` (clears
+        // scrollback on Windows Terminal), and (b) reset SGR *before* every
+        // erase so a lingering background attribute cannot bleed into the
+        // cleared cells / prompt.
+        let mut grid = HeadlessGrid::new(20, 4);
+        // Blue background then text, leaving the blue attribute active on the
+        // last painted cell (the vt100 bleed source).
+        grid.write(b"\x1b[44mline one\r\nline two");
+
+        let out = String::from_utf8_lossy(&grid.render_screen()).to_string();
+
+        // (a) No full-screen clear anywhere in the repaint.
+        assert!(
+            !out.contains("\x1b[2J"),
+            "render_screen must never emit \\e[2J (nukes scrollback); got {out:?}"
+        );
+
+        // (b) Every erase (`\e[2K` erase-line or `\e[J` erase-below) must be
+        // immediately preceded by an SGR reset (`\e[m`) so cleared cells use
+        // the default background.
+        for erase in ["\x1b[2K", "\x1b[J"] {
+            let mut from = 0;
+            while let Some(rel) = out[from..].find(erase) {
+                let idx = from + rel;
+                assert!(
+                    out[..idx].ends_with("\x1b[m"),
+                    "erase {erase:?} at byte {idx} not preceded by \\e[m reset in {out:?}"
+                );
+                from = idx + erase.len();
+            }
+        }
+
+        // Content is still present.
+        assert!(out.contains("line one") && out.contains("line two"));
+    }
+
+    #[test]
+    fn visible_lines_returns_one_trimmed_string_per_row() {
+        let mut grid = HeadlessGrid::new(20, 3);
+        grid.write(b"hello world\r\nsecond line");
+        let rows = grid.visible_lines();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], "hello world");
+        assert_eq!(rows[1], "second line");
+        assert_eq!(rows[2], "");
+    }
+
+    #[test]
+    fn cursor_row_tracks_the_current_output_row() {
+        let mut grid = HeadlessGrid::new(20, 4);
+        assert_eq!(grid.cursor_row(), 0);
+        // Two newlines advance the cursor to the third row (index 2).
+        grid.write(b"line one\r\nline two\r\n> ");
+        assert_eq!(grid.cursor_row(), 2);
     }
 }

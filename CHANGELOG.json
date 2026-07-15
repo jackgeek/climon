@@ -1,5 +1,30 @@
 [
   {
+    "version": "3.2.0",
+    "changes": [
+      "Add control handoff: see a \"being viewed elsewhere\" overlay when another viewer holds control, and take control from the dashboard's take-control button or the local terminal (press Space / Ctrl+T)",
+      "Replace confusing clamp feature with 'Take control' handoff feature",
+      "Jiggle terminal dimensions on focus to clean up screen coruptions and resize artifacts",
+      "Fade the browser terminal in on (re)attach to mask the repaint jiggle",
+      "Make `climon run` the primary command for launching sessions, with `climon command` to disambiguate reserved words",
+      "Add smart notifications that include a relevant snippet of terminal output (feature.smartNotifications)",
+      "Show terminal progress (OSC 9;4) in the session list",
+      "Show the needs-attention toast on the mobile session list",
+      "Add Back/Forward navigation through per-session compose history in the dashboard composer",
+      "Make Microsoft Dev Tunnels usage more robust and failure-tolerant",
+      "Automatically manage the remote ingest tunnel and drop manual create/recreate from the Remotes dialog",
+      "Discover and fan out to multiple remote dev boxes automatically (remote.discover)",
+      "Add an empty default-color option to the Remotes dialog",
+      "Remove the dashboard \"Remote hosts\" menu and panel",
+      "Remove the dev tunnel expiry countdown banner",
+      "Add a dashboard.stateIconNoMotion preference to disable animated status icons",
+      "Preserve unknown settings and formatting when writing config files",
+      "Make Windows self-updates safe while climon is running by using stable stubs, versioned payloads, and a dedicated installer",
+      "Fix emoji width in the dashboard terminal renderer",
+      "Drop \"needs attention\" from the OS notification title"
+    ]
+  },
+  {
     "version": "3.1.2",
     "changes": [
       "Fix the installed iOS PWA (Chrome) failing to re-authenticate a dev tunnel after the sign-in expires; relaunching the PWA now completes the tunnel sign-in"

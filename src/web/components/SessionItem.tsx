@@ -6,14 +6,13 @@ import {
   Pause16Regular,
   Play16Regular,
   Settings16Regular,
-  LockClosed16Regular,
-  LockOpen16Regular
+  ErrorCircle16Filled,
+  Warning16Filled,
+  ArrowSync16Regular
 } from "@fluentui/react-icons";
 import { ANSI_CSS, ANSI_HIGHLIGHT_CSS } from "../colors.js";
-import type { SessionMeta } from "../../types.js";
-import type { TerminalResizeMode } from "../../ipc/frame.js";
+import type { SessionMeta, TerminalProgress } from "../../types.js";
 import { isLiveStatus } from "../api.js";
-import { clampSizeMenuLabel } from "../view-mode.js";
 import { StatusBadge, STATUS_LABELS } from "./StatusBadge.js";
 import { SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { bottomRowRightOffsets } from "./session-item-layout.js";
@@ -30,8 +29,7 @@ const useStyles = makeStyles({
     ":hover .climon-close": { display: "inline-flex" },
     ":hover .climon-new": { display: "inline-flex" },
     ":hover .climon-edit": { display: "inline-flex" },
-    ":hover .climon-pause": { display: "inline-flex" },
-    ":hover .climon-lock": { display: "inline-flex" }
+    ":hover .climon-pause": { display: "inline-flex" }
   },
   compactRoot: {
     minHeight: "54px",
@@ -126,11 +124,6 @@ const useStyles = makeStyles({
     bottom: "8px",
     display: "none"
   },
-  lockBtn: {
-    position: "absolute",
-    bottom: "8px",
-    display: "none"
-  },
   maximize: {
     display: "none",
     marginTop: "8px",
@@ -138,8 +131,65 @@ const useStyles = makeStyles({
     [MOBILE_MEDIA_QUERY_RULE]: {
       display: "inline-flex"
     }
+  },
+  progressTrack: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: "3px",
+    backgroundColor: tokens.colorNeutralBackground4,
+    overflow: "hidden",
+    pointerEvents: "none"
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: tokens.colorBrandBackground,
+    transition: "width 0.3s ease"
+  },
+  progressIcon: {
+    display: "inline-flex",
+    alignItems: "center",
+    flexShrink: 0
+  },
+  progressError: {
+    color: tokens.colorStatusDangerForeground1
+  },
+  progressWarning: {
+    color: tokens.colorStatusWarningForeground1
+  },
+  spinIcon: {
+    display: "inline-flex",
+    color: tokens.colorBrandForeground1,
+    animationName: {
+      "0%": { transform: "rotate(0deg)" },
+      "100%": { transform: "rotate(360deg)" }
+    },
+    animationDuration: "1.2s",
+    animationIterationCount: "infinite",
+    animationTimingFunction: "linear",
+    "@media (prefers-reduced-motion: reduce)": {
+      animationName: "none"
+    }
+  },
+  spinIconFrozen: {
+    animationName: "none"
   }
 });
+
+const PROGRESS_LABELS: Record<TerminalProgress["state"], string> = {
+  normal: "In progress",
+  error: "Error",
+  indeterminate: "In progress",
+  warning: "Warning"
+};
+
+function clampProgressValue(value: number | undefined): number {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
 
 interface Props {
   session: SessionMeta;
@@ -151,10 +201,73 @@ interface Props {
   onEdit: (session: SessionMeta) => void;
   onPauseToggle: (session: SessionMeta) => void;
   onMaximize: (id: string) => void;
-  viewMode?: TerminalResizeMode;
-  viewModeLocked?: boolean;
-  onViewModeToggle?: () => void;
+  stateIconNoMotion?: boolean;
 }
+
+function SessionProgressIcon({
+  progress,
+  noMotion,
+  styles
+}: {
+  progress: TerminalProgress;
+  noMotion: boolean;
+  styles: ReturnType<typeof useStyles>;
+}) {
+  const label = PROGRESS_LABELS[progress.state];
+  switch (progress.state) {
+    case "error":
+      return (
+        <span className={styles.progressIcon} role="img" aria-label={label} title={label}>
+          <ErrorCircle16Filled className={styles.progressError} />
+        </span>
+      );
+    case "warning":
+      return (
+        <span className={styles.progressIcon} role="img" aria-label={label} title={label}>
+          <Warning16Filled className={styles.progressWarning} />
+        </span>
+      );
+    case "indeterminate":
+      return (
+        <span
+          className={mergeClasses(styles.progressIcon, styles.spinIcon, noMotion && styles.spinIconFrozen)}
+          role="img"
+          aria-label={label}
+          title={label}
+        >
+          <ArrowSync16Regular />
+        </span>
+      );
+    default:
+      return null;
+  }
+}
+
+function SessionProgressBar({
+  progress,
+  styles
+}: {
+  progress: TerminalProgress;
+  styles: ReturnType<typeof useStyles>;
+}) {
+  if (progress.state !== "normal") {
+    return null;
+  }
+  const value = clampProgressValue(progress.value);
+  return (
+    <div
+      className={styles.progressTrack}
+      role="progressbar"
+      aria-valuenow={value}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label={PROGRESS_LABELS.normal}
+    >
+      <div className={styles.progressFill} style={{ width: `${value}%` }} />
+    </div>
+  );
+}
+
 
 export function sessionDisplayTitle(session: Pick<SessionMeta, "name" | "displayCommand">): string {
   return session.name || session.displayCommand;
@@ -180,9 +293,7 @@ export function SessionItem({
   onEdit,
   onPauseToggle,
   onMaximize,
-  viewMode,
-  viewModeLocked = false,
-  onViewModeToggle
+  stateIconNoMotion = false
 }: Props) {
   const styles = useStyles();
   const displayTitle = sessionDisplayTitle(session);
@@ -263,21 +374,6 @@ export function SessionItem({
       )}
       {showLiveControls && (
         <Button
-          className={mergeClasses("climon-lock", styles.lockBtn)}
-          style={{ right: `${rightOffsets.lock}px` }}
-          appearance="subtle"
-          size="small"
-          icon={viewMode === "fill" && !viewModeLocked ? <LockOpen16Regular /> : <LockClosed16Regular />}
-          title={clampSizeMenuLabel}
-          aria-label={clampSizeMenuLabel}
-          onClick={(e) => {
-            e.stopPropagation();
-            onViewModeToggle?.();
-          }}
-        />
-      )}
-      {showLiveControls && (
-        <Button
           className={mergeClasses("climon-pause", styles.pauseBtn)}
           style={{ right: `${rightOffsets.pause}px` }}
           appearance="subtle"
@@ -334,12 +430,16 @@ export function SessionItem({
       )}
       <div className={mergeClasses(styles.meta, compact && styles.compactMeta)}>
         <StatusBadge status={session.status} compact={compact} showTitle={!compact} />
+        {session.progress && (
+          <SessionProgressIcon progress={session.progress} noMotion={stateIconNoMotion} styles={styles} />
+        )}
         {!compact && session.clientLabel && (
           <span className={styles.origin} title={session.clientLabel}>
             {session.clientLabel}
           </span>
         )}
       </div>
+      {session.progress && <SessionProgressBar progress={session.progress} styles={styles} />}
     </div>
   );
 }

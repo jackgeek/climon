@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
 import { readServerStateFromDir, getServerStatePath, serializeServerState } from "../src/server-state.js";
-import { computeRemotesActive } from "../src/server/server.js";
+import { browserResizePayload, computeRemotesActive } from "../src/server/server.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
@@ -17,6 +17,16 @@ test("remotes are active when wslBridge or remotes flag is enabled", () => {
   expect(computeRemotesActive({ feature: { wslBridge: "enabled" } } as never)).toBe(true);
   expect(computeRemotesActive({ feature: { remotes: "enabled" } } as never)).toBe(true);
   expect(computeRemotesActive({ feature: { remoteSpawn: "enabled" } } as never)).toBe(false);
+});
+
+test("browserResizePayload carries kind and viewerId, not source/mode", () => {
+  expect(browserResizePayload({ cols: 100, rows: 40, kind: "dashboard", viewerId: "v1" })).toEqual({
+    cols: 100,
+    rows: 40,
+    kind: "dashboard",
+    viewerId: "v1"
+  });
+  expect(browserResizePayload({ cols: 0, rows: 40 })).toBeNull();
 });
 
 describe("buildInterimWslExposureWarning", () => {
@@ -121,7 +131,7 @@ describe("buildHealthPayload", () => {
   const baseConfig = {
     version: 1 as const,
     server: { host: "127.0.0.1", port: 3131 },
-    terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+    terminal: { detachPrefix: 28 },
     attention: { idleSeconds: 30 },
     hotKeys: { focusTopSession: "Alt+J" },
     feature: { remotes: "enabled" as const }
@@ -299,7 +309,32 @@ describe("shouldStopIngestForShutdown", () => {
 });
 
 describe("server shutdown ingest lifecycle", () => {
-  test("stops the ingest daemon on graceful shutdown even with a peer home configured", async () => {
+  // This test spawns a real detached ingest daemon, which requires the Rust
+  // `climon` client binary (via CLIMON_CLIENT_BIN or a built rust/target
+  // binary). In a dev checkout with no built binary the daemon cannot start, so
+  // skip rather than hanging until the timeout. Build it with `cargo build` in
+  // rust/ (or set CLIMON_CLIENT_BIN) to exercise this test.
+  const resolveIngestInvocation = (
+    serverModule as typeof serverModule & {
+      resolveIngestInvocation?: (
+        env: NodeJS.ProcessEnv,
+        execPath: string
+      ) => { file: string; args: string[] };
+    }
+  ).resolveIngestInvocation;
+  const ingestBinaryAvailable = (() => {
+    if (!resolveIngestInvocation) return false;
+    try {
+      const inv = resolveIngestInvocation(process.env, process.execPath);
+      // A bare `climon` resolves against PATH at spawn time; an absolute path
+      // must exist on disk to be spawnable.
+      return inv.file === "climon" || existsSync(inv.file);
+    } catch {
+      return false;
+    }
+  })();
+
+  test.skipIf(!ingestBinaryAvailable)("stops the ingest daemon on graceful shutdown even with a peer home configured", async () => {
     const testTmp = join(process.cwd(), ".copilot-tmp");
     mkdirSync(testTmp, { recursive: true });
     const home = mkdtempSync(join(testTmp, "climon-server-shutdown-"));
@@ -538,7 +573,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" }
     };
@@ -566,7 +601,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" },
       remote: { enabled: true, tunnelId: "uplink", ingestHost: "localhost" }
@@ -598,7 +633,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" }
     };
@@ -623,7 +658,7 @@ describe("applyDashboardTunnelPersistence", () => {
     const config: ClimonConfig = {
       version: 1 as const,
       server: { host: "127.0.0.1", port: 3131 },
-      terminal: { clampBrowserToHost: true, detachPrefix: 28 },
+      terminal: { detachPrefix: 28 },
       attention: { idleSeconds: 30 },
       hotKeys: { focusTopSession: "Alt+J" },
       remote: {
@@ -930,4 +965,139 @@ describe("applyDashboardTunnelEnabled", () => {
     expect(config.remote?.dashboardTunnelCluster).toBe("eun1");
     expect(config.remote?.dashboardTunnelEnabled).toBe(true);
   });
+});
+
+describe("remote status and tunnel HTTP endpoints", () => {
+  const testTmp = join(process.cwd(), ".copilot-tmp");
+
+  interface StartedServer {
+    server: Bun.Subprocess;
+    base: string;
+    home: string;
+    stop: () => Promise<void>;
+  }
+
+  async function startServer(overrides: {
+    env?: Record<string, string>;
+    fakeDevtunnel?: boolean;
+  } = {}): Promise<StartedServer> {
+    mkdirSync(testTmp, { recursive: true });
+    const home = mkdtempSync(join(testTmp, "climon-remote-http-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({}));
+    const dashboardPort = await freePort();
+    const env: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      CLIMON_HOME: home,
+      ...(overrides.env ?? {})
+    };
+    if (overrides.fakeDevtunnel) {
+      const binDir = join(home, "fakebin");
+      mkdirSync(binDir, { recursive: true });
+      const script = join(binDir, "devtunnel");
+      writeFileSync(
+        script,
+        [
+          "#!/bin/sh",
+          'case "$1" in',
+          '  --version) echo "1.0.0-fake"; exit 0 ;;',
+          '  user) echo \'{"status":"Logged in"}\'; exit 0 ;;',
+          '  show) echo "Error: tunnel not found" 1>&2; exit 1 ;;',
+          '  create) echo "Error: maximum number of tunnels reached" 1>&2; exit 1 ;;',
+          '  *) echo "unhandled: $*" 1>&2; exit 1 ;;',
+          "esac",
+          ""
+        ].join("\n")
+      );
+      chmodSync(script, 0o755);
+      env.PATH = `${binDir}:${env.PATH ?? ""}`;
+    }
+    const server = Bun.spawn(
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(dashboardPort)],
+      { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
+    );
+    let base = `http://127.0.0.1:${dashboardPort}`;
+    await waitFor(async () => {
+      const res = await fetch(`${base}/health`).catch(() => undefined);
+      if (res?.ok) return true;
+      const state = await readServerStateFromDir(home);
+      if (!state?.port) return undefined;
+      base = `http://127.0.0.1:${state.port}`;
+      const actual = await fetch(`${base}/health`).catch(() => undefined);
+      return actual?.ok ? true : undefined;
+    }, 30_000);
+    const stop = async () => {
+      const shutdown = await fetch(`${base}/__internal/shutdown`, { method: "POST" }).catch(() => undefined);
+      const exited = shutdown?.ok ? await waitForExit(server, 10_000) : false;
+      if (!exited) {
+        server.kill();
+        await waitForExit(server, 2000);
+      }
+      rmSync(home, { recursive: true, force: true });
+    };
+    return { server, base, home, stop };
+  }
+
+  test("GET /api/remote/status includes gateway devtunnel health", async () => {
+    const started = await startServer({ env: { CLIMON_DISABLE_DEVTUNNEL: "1" } });
+    try {
+      const res = await fetch(`${started.base}/api/remote/status`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        devtunnelAvailable: boolean;
+        devtunnel?: { available: boolean; probedAt?: string };
+      };
+      expect(body.devtunnel).toBeDefined();
+      expect(body.devtunnel?.available).toBe(false);
+      expect(typeof body.devtunnel?.probedAt).toBe("string");
+      expect(body.devtunnelAvailable).toBe(false);
+    } finally {
+      await started.stop();
+    }
+  }, 45_000);
+
+  test("POST /api/remote/tunnel returns a structured quota failure", async () => {
+    const started = await startServer({ fakeDevtunnel: true });
+    try {
+      const headers = {
+        "content-type": "application/json",
+        origin: started.base
+      };
+      const create = await fetch(`${started.base}/api/remote/tunnel`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ mode: "auto" })
+      });
+      expect(create.status).toBe(409);
+      const createBody = (await create.json()) as { error?: { code?: string } };
+      expect(createBody.error?.code).toBe("tunnel_quota_exhausted");
+
+      const retry = await fetch(`${started.base}/api/remote/tunnel/retry`, {
+        method: "POST",
+        headers,
+        body: "{}"
+      });
+      expect(retry.status).toBe(409);
+      const retryBody = (await retry.json()) as { error?: { code?: string } };
+      expect(retryBody.error?.code).toBe("tunnel_quota_exhausted");
+    } finally {
+      await started.stop();
+    }
+  }, 45_000);
+
+  test("POST /api/remote/tunnel returns a structured failure when devtunnel is unavailable", async () => {
+    const started = await startServer({ env: { CLIMON_DISABLE_DEVTUNNEL: "1" } });
+    try {
+      const res = await fetch(`${started.base}/api/remote/tunnel`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: started.base },
+        body: JSON.stringify({ mode: "auto" })
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error?: { code?: string; summary?: string } };
+      expect(body.error?.code).toBe("cli_missing");
+      expect(typeof body.error?.summary).toBe("string");
+    } finally {
+      await started.stop();
+    }
+  }, 45_000);
 });

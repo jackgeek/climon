@@ -9,6 +9,10 @@ loaded per session, only when you want it, while working in this repo.
 - **`update-changelog`** — examines commits since the last version in
   `CHANGELOG.json` and adds a new entry with user-friendly change descriptions
   for the upcoming release. See [`skills/update-changelog/SKILL.md`](skills/update-changelog/SKILL.md).
+- **`merge-dependabot-prs`** — triages open Dependabot PRs: retargets each onto
+  `dev`, runs the relevant test suite (`cargo test` for Rust deps, `bun test`
+  for JS deps), squash-merges the ones that pass, and reports why any PR could
+  not be merged. See [`skills/merge-dependabot-prs/SKILL.md`](skills/merge-dependabot-prs/SKILL.md).
 
 ## How to use
 
@@ -26,4 +30,5 @@ update the changelog
 
 Copilot will invoke the `update-changelog` skill. Skills are run by the agent
 in response to a natural-language request; Copilot CLI does not expose them as
-typed `/slash` commands.
+typed `/slash` commands. For example, "merge the dependabot PRs" runs the
+`merge-dependabot-prs` skill.

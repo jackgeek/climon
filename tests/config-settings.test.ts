@@ -18,16 +18,17 @@ describe("config settings registry", () => {
       "version",
       "server.host",
       "server.port",
-      "terminal.clampBrowserToHost",
       "terminal.detachPrefix",
       "hotKeys.focusTopSession",
       "dashboard.theme",
       "dashboard.keyBarPinned",
+      "dashboard.stateIconNoMotion",
       "attention.idleSeconds",
       "remote.enabled",
       "remote.host",
       "remote.ingestHost",
       "remote.tunnelId",
+      "remote.discover",
       "remote.dashboardTunnelId",
       "remote.dashboardTunnelCluster",
       "remote.dashboardTunnelEnabled",
@@ -48,6 +49,7 @@ describe("config settings registry", () => {
       "feature.remoteSpawn",
       "feature.wslBridge",
       "feature.remotes",
+      "feature.smartNotifications",
       "telemetry.enabled",
       "update.auto",
       "update.lastCheck",
@@ -92,17 +94,16 @@ describe("config settings registry", () => {
       version: 1,
       server: { host: "127.0.0.1", port: 3131 },
       terminal: {
-        clampBrowserToHost: false,
         detachPrefix: 0x1c
       },
       hotKeys: { focusTopSession: "Alt+J" },
-      dashboard: { theme: "Default", keyBarPinned: true },
+      dashboard: { theme: "Default", keyBarPinned: true, stateIconNoMotion: false },
       attention: { idleSeconds: 10 },
-      remote: { ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
+      remote: { discover: true, ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
       tunnelLink: { keepAlive: 60 },
       logging: { level: "trace" },
-      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled" },
+      feature: { sessionSpawning: "disabled", remoteSpawn: "disabled", wslBridge: "disabled", remotes: "disabled", smartNotifications: "disabled" },
       telemetry: { enabled: false },
       update: { auto: false }
     });
@@ -117,6 +118,12 @@ describe("config settings registry", () => {
 
     expect(clientId?.internal).not.toBe(true);
     expect(clientId?.acceptInput).toBe(true);
+  });
+
+  test("remote.discover is registered as a boolean client setting", () => {
+    const setting = CONFIG_SETTINGS.find((s) => s.path === "remote.discover");
+    expect(setting).toBeDefined();
+    expect(setting?.type).toBe("boolean");
   });
 
   test("config registry includes internal dashboard tunnel persistence fields", () => {
@@ -139,10 +146,12 @@ describe("config settings registry", () => {
       "hotKeys.focusTopSession",
       "dashboard.theme",
       "dashboard.keyBarPinned",
+      "dashboard.stateIconNoMotion",
       "remote.enabled",
       "remote.host",
       "remote.ingestHost",
       "remote.tunnelId",
+      "remote.discover",
       "remote.port",
       "remote.clientId",
       "remote.spawnSecret",
@@ -159,6 +168,7 @@ describe("config settings registry", () => {
       "feature.remoteSpawn",
       "feature.wslBridge",
       "feature.remotes",
+      "feature.smartNotifications",
       "telemetry.enabled",
       "update.auto"
     ]);
@@ -166,7 +176,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(39);
+    expect(allConfigKeys().length).toBe(41);
   });
 
   test("coerces values through registry validators", () => {

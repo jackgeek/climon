@@ -4,6 +4,29 @@
 //!
 //! These tests touch the real filesystem (CLIMON_HOME) and bind real sockets, so
 //! they serialize on a process-global lock and pin CLIMON_HOME under `target/`.
+//!
+//! # Unix-only
+//!
+//! Every case here drives the full daemon (`run_session_host`) against a real
+//! `sh -c` command and then joins the host thread, which blocks in the daemon's
+//! `Pty::wait()` until the child exits. Under a **headless ConPTY** — every
+//! GitHub-hosted `windows-latest` runner and other windowless sandboxes — a
+//! child attached to the pseudoconsole produces its output but never reaches its
+//! own `ExitProcess`; it only dies once the master is torn down (reporting a
+//! control-C exit, not its real code). So `wait()` never returns, the host
+//! thread never joins, and these tests hang until the CI timeout. No command
+//! self-terminates under that ConPTY, so the exit-code / `Completed` / `Failed`
+//! assertions cannot be satisfied there by any means.
+//!
+//! The behaviour under test — IPC framing, lifecycle metadata, the attention
+//! state machine — is platform-agnostic and fully exercised on the Linux and
+//! macOS runners. The Windows PTY mechanics (spawn, read, resize, exit-code
+//! derivation, master-drop teardown) are covered directly, with a graceful
+//! headless-ConPTY skip, by `climon-pty`'s `pty_integration` tests. A real
+//! interactive Windows desktop exits normally and would pass these too; only the
+//! headless CI environment cannot, so the file is gated to Unix rather than left
+//! to hang.
+#![cfg(unix)]
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -14,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use climon_proto::frame::{
     encode_json_frame, parse_json_payload, ExitPayload, FrameDecoder, FrameType, PtySizePayload,
-    ResizePayload, ResizeSource, TerminalResizeMode,
+    ResizePayload,
 };
 use climon_proto::meta::{PriorityReason, SessionMeta, SessionStatus};
 use climon_session::socket::{
@@ -87,6 +110,8 @@ fn base_meta(id: &str, home: &PathBuf, command: Vec<String>) -> SessionMeta {
         theme: None,
         user_paused: None,
         terminal_title: None,
+        attention_snippet: None,
+        progress: None,
     };
     // The launcher writes the initial meta file before the host starts.
     let env = Env::with_home(home);
@@ -159,7 +184,6 @@ fn streams_initial_frames_and_completes() {
 
     // Expect PtySize as the first initial frame.
     let mut saw_pty_size = false;
-    let mut saw_mode = false;
     let mut saw_replay = false;
     let mut saw_output_hello = false;
     let mut saw_exit = false;
@@ -184,7 +208,6 @@ fn streams_initial_frames_and_completes() {
                     assert_eq!((p.cols, p.rows), (80, 24));
                     saw_pty_size = true;
                 }
-                FrameType::TerminalMode => saw_mode = true,
                 FrameType::Replay => {
                     saw_replay = true;
                     if String::from_utf8_lossy(&frame.payload).contains("hello") {
@@ -209,7 +232,6 @@ fn streams_initial_frames_and_completes() {
     let code = host.join().unwrap();
     assert_eq!(code, 0, "session exit code");
     assert!(saw_pty_size, "received PtySize");
-    assert!(saw_mode, "received TerminalMode");
     assert!(saw_replay, "received Replay");
     assert!(saw_output_hello, "received hello via Replay or Output");
     assert!(saw_exit, "received Exit");
@@ -271,14 +293,14 @@ fn viewer_resize_broadcasts_pty_size() {
         .set_write_timeout(Some(Duration::from_secs(2)))
         .unwrap();
 
-    // Send a viewer (Fill-mode) resize larger than the host; Fill keeps it.
+    // Send a viewer resize larger than the host; the PTY grows to fit it.
     let resize = encode_json_frame(
         FrameType::Resize,
         &ResizePayload {
             cols: 120,
             rows: 40,
-            source: Some(ResizeSource::Viewer),
-            mode: Some(TerminalResizeMode::Fill),
+            kind: None,
+            viewer_id: None,
         },
     );
     stream.write_all(&resize).unwrap();
@@ -451,8 +473,8 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
         &ResizePayload {
             cols: 100,
             rows: 30,
-            source: Some(ResizeSource::Host),
-            mode: None,
+            kind: None,
+            viewer_id: None,
         },
     );
     stream.write_all(&resize).unwrap();

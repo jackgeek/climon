@@ -1,5 +1,4 @@
 import { existsSync, rmSync, watch } from "node:fs";
-import { join } from "node:path";
 import { type Socket } from "node:net";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -23,11 +22,11 @@ import {
   FrameType,
   parseJsonPayload,
   type AttentionPayload,
+  type ControlPayload,
   type ExitPayload,
   type PtySizePayload,
-  type TerminalModePayload,
   type ResizePayload,
-  type TerminalResizeMode
+  type SurfaceKind
 } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
 import { atomicWrite, listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
@@ -39,12 +38,14 @@ import { ensureSpawnSecret } from "../remote/spawn-secret.js";
 import { requestRemoteSpawn } from "./remote-spawn-client.js";
 import { isWsl, peerOsLabel } from "../remote/peer.js";
 import { stopUplinkDaemon } from "../remote/teardown.js";
-import { detectDevtunnel, createTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
+import { ensureIngestTunnel, deleteTunnel, parseTunnelInput, useManualTunnel, reconcileTunnelPort } from "../remote/tunnel.js";
 import { connectSessionSocket } from "../session-socket.js";
 import { sanitizeBrowserTerminalReplay } from "../terminal-replay.js";
 import { VERSION } from "../version.js";
 import { getStaticAsset, renderDashboard } from "./assets.js";
-import { createDashboardTunnelManager, dashboardTunnelAuthMessage } from "./dashboard-tunnel.js";
+import { createDashboardTunnelManager } from "./dashboard-tunnel.js";
+import { createDevtunnelGateway } from "../devtunnel/gateway.js";
+import { DevtunnelError, type DevtunnelFailure, type DevtunnelHealth } from "../devtunnel/types.js";
 import { runPromote } from "./promote.js";
 import { collectDashboardPreferences, persistDashboardPreference } from "./dashboard-preferences.js";
 import { buildPromoteDeps } from "./promote-probes.js";
@@ -578,14 +579,18 @@ export function splitCommand(command: string): string[] {
 export function browserResizePayload(message: {
   cols?: number;
   rows?: number;
-  mode?: TerminalResizeMode;
+  kind?: SurfaceKind;
+  viewerId?: string;
 }): ResizePayload | null {
   if (!message.cols || !message.rows) {
     return null;
   }
-  const payload: ResizePayload = { cols: message.cols, rows: message.rows, source: "viewer" };
-  if (message.mode === "clamped" || message.mode === "fill") {
-    payload.mode = message.mode;
+  const payload: ResizePayload = { cols: message.cols, rows: message.rows };
+  if (message.kind === "terminal" || message.kind === "dashboard" || message.kind === "pwa") {
+    payload.kind = message.kind;
+  }
+  if (typeof message.viewerId === "string") {
+    payload.viewerId = message.viewerId;
   }
   return payload;
 }
@@ -1038,6 +1043,44 @@ async function persistDashboardTunnelEnabled(enabled: boolean): Promise<void> {
   }
 }
 
+/**
+ * Maps a {@link DevtunnelError} to an HTTP response carrying the structured
+ * failure so the dashboard can render remediation and drive an explicit retry.
+ * Non-DevtunnelError values fall back to a generic 500.
+ */
+function devtunnelErrorResponse(error: unknown): Response {
+  if (!(error instanceof DevtunnelError)) {
+    return Response.json({ error: { code: "unknown", summary: "Tunnel Link error" } }, { status: 500 });
+  }
+  const status = error.failure.code === "not_authenticated" ? 401
+    : error.failure.code === "cli_missing" ? 503
+    : error.failure.code === "permission_denied" ? 403
+    : error.failure.code === "tunnel_quota_exhausted" ? 409
+    : error.failure.retryClass === "transient" ? 503
+    : 500;
+  return Response.json({ error: error.failure }, { status });
+}
+
+/**
+ * Structured failure for an unavailable devtunnel CLI. Reuses the health probe's
+ * classified failure when present (e.g. a spawn error), otherwise synthesizes a
+ * `cli_missing` failure so callers always receive actionable guidance instead of
+ * an opaque string (covers the env-disabled path, which carries no lastFailure).
+ */
+function unavailableDevtunnelFailure(health: DevtunnelHealth): DevtunnelFailure {
+  if (health.lastFailure) return health.lastFailure;
+  return {
+    code: "cli_missing",
+    operation: "detect",
+    summary: "Microsoft Dev Tunnels is not installed or is unavailable on this machine.",
+    remediation: "Install the devtunnel CLI, then retry.",
+    technicalDetail: "devtunnel CLI not available",
+    occurredAt: new Date().toISOString(),
+    retryClass: "actionable",
+    retryable: false
+  };
+}
+
 function startupLog(message: string): void {
   logMsg(getLogger(), "debug", "server.startup_log_detail", { detail: message });
 }
@@ -1211,6 +1254,22 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     await saveConfig(config);
   }
 
+  // One shared gateway drives ingest tunnel setup and remote status health so
+  // detect/create/port operations reuse a single devtunnel wiring. (The Dashboard
+  // Tunnel Link manager keeps building its own gateway: its `spawnHost` routes
+  // `devtunnel host` output through construction-time process handlers, which a
+  // pre-built shared instance cannot carry — see dashboard-tunnel.ts.)
+  const devtunnel = createDevtunnelGateway();
+  // The most recent ingest tunnel failure (startup or explicit retry), surfaced
+  // in /api/remote/status so the dashboard can render remediation + retry.
+  let lastIngestFailure: DevtunnelFailure | undefined;
+  async function currentDevtunnelHealth(): Promise<DevtunnelHealth> {
+    const detected = await devtunnel.detect();
+    return lastIngestFailure && !detected.lastFailure
+      ? { ...detected, lastFailure: lastIngestFailure }
+      : detected;
+  }
+
   // Created only after the port is finalized so the tunnel maps and hosts the
   // port this server actually bound. Creating it earlier (with the requested
   // port) means a restart that shifts to the next free port — common during a
@@ -1241,29 +1300,56 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   startupLog("cleaning up stale sessions");
   await cleanupStaleSessions();
   if (remotesActive) {
-    startupLog("ensuring ingest daemon is running");
-    await ensureIngestDaemon();
-    const exposureWarning = buildInterimWslExposureWarning({
-      remotesActive,
-      wslBridgeEnabled,
-      ingestBindHost: await resolveIngestBindAddress(process.env)
-    });
-    if (exposureWarning) {
-      process.stderr.write(`${exposureWarning}\n`);
-    }
-    startupLog("ingest daemon ready");
-    // Reconcile the tunnel port mapping with the ingest's actual bound port.
-    // Read ingest.json directly — we just verified the daemon is alive, so its
-    // beacon is authoritative regardless of what isProcessAlive() returns for
-    // cross-session signal checks on Windows.
-    const beacon = await readIngestState();
-    const livePort = beacon?.port ?? await resolveIngestPort();
-    startupLog(`resolved ingest port: ${livePort} (source: ${beacon ? "ingest.json" : "fallback"})`);
-    const reconcile = await reconcileTunnelPort(livePort);
-    if (reconcile.changed) {
-      startupLog(`reconciled tunnel port mapping → ${reconcile.port}${reconcile.recreated ? " (tunnel recreated)" : ""}`);
+    if ((await devtunnel.detect()).available) {
+      try {
+        const ingestPort = await resolveIngestPort();
+        const ensured = await ensureIngestTunnel(ingestPort, { gateway: devtunnel });
+        lastIngestFailure = undefined;
+        startupLog(`ensured ingest tunnel ${ensured.tunnelId} (port ${ensured.ingestPort})`);
+      } catch (error) {
+        if (error instanceof DevtunnelError) lastIngestFailure = error.failure;
+        startupLog(`ingest tunnel ensure failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     } else {
-      startupLog(`tunnel port mapping already correct (port ${reconcile.port})`);
+      startupLog("devtunnel unavailable; skipping ingest tunnel ensure");
+    }
+    // A failure to bootstrap the ingest daemon (e.g. a dev checkout with no
+    // built Rust client binary, or a stale singleton from another worktree)
+    // must never take down the dashboard: bring the HTTP server up regardless
+    // so local sessions and /health stay available, and just warn.
+    try {
+      startupLog("ensuring ingest daemon is running");
+      await ensureIngestDaemon();
+      const exposureWarning = buildInterimWslExposureWarning({
+        remotesActive,
+        wslBridgeEnabled,
+        ingestBindHost: await resolveIngestBindAddress(process.env)
+      });
+      if (exposureWarning) {
+        process.stderr.write(`${exposureWarning}\n`);
+      }
+      startupLog("ingest daemon ready");
+      // Reconcile the tunnel port mapping with the ingest's actual bound port.
+      // Read ingest.json directly — we just verified the daemon is alive, so its
+      // beacon is authoritative regardless of what isProcessAlive() returns for
+      // cross-session signal checks on Windows.
+      const beacon = await readIngestState();
+      const livePort = beacon?.port ?? await resolveIngestPort();
+      startupLog(`resolved ingest port: ${livePort} (source: ${beacon ? "ingest.json" : "fallback"})`);
+      const reconcile = await reconcileTunnelPort(livePort, { gateway: devtunnel });
+      if (reconcile.failure) {
+        lastIngestFailure = reconcile.failure;
+        startupLog(`tunnel port reconcile failed: ${reconcile.failure.code}`);
+      } else if (reconcile.changed) {
+        startupLog(`reconciled tunnel port mapping → ${reconcile.port}${reconcile.recreated ? " (tunnel recreated)" : ""}`);
+      } else {
+        startupLog(`tunnel port mapping already correct (port ${reconcile.port})`);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      startupLog(`ingest daemon bootstrap failed: ${detail}`);
+      logMsg(getLogger(), "warn", "server.ingest_daemon_bootstrap_failed", { error: detail });
+      process.stderr.write(`climon: warning: remote ingest could not start: ${detail}\n`);
     }
   } else {
     startupLog("remotes not enabled; skipping ingest daemon");
@@ -1339,44 +1425,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }
     debounce = setTimeout(() => {
       void publishSessions();
-    }, 150);
-  });
-
-  async function readRemotesResponse() {
-    const { buildRemotesResponse } = await import("./remotes.js");
-    const path = join(getClimonHome(process.env), "ingest-status.json");
-    let status: import("./remotes.js").IngestStatusFile | undefined;
-    try {
-      status = JSON.parse(await Bun.file(path).text());
-    } catch {
-      status = undefined;
-    }
-    return buildRemotesResponse(
-      status,
-      Date.now(),
-      computeRemotesActive(config),
-      (pid) => isProcessAlive(pid)
-    );
-  }
-
-  // Live-push a `remotes` SSE event whenever the ingest rewrites its status
-  // beacon (connect/disconnect/identity/heartbeat). Staleness is recomputed by
-  // the builder, never trusted from the file.
-  let remotesDebounce: ReturnType<typeof setTimeout> | undefined;
-  const remotesWatcher = watch(getClimonHome(process.env), (_event, filename) => {
-    if (filename !== "ingest-status.json") return;
-    if (remotesDebounce) clearTimeout(remotesDebounce);
-    remotesDebounce = setTimeout(() => {
-      void readRemotesResponse().then((payload) => {
-        const data = `event: remotes\ndata: ${JSON.stringify(payload)}\n\n`;
-        for (const controller of sseClients) {
-          try {
-            controller.enqueue(encoder.encode(data));
-          } catch {
-            sseClients.delete(controller);
-          }
-        }
-      });
     }, 150);
   });
 
@@ -1615,24 +1663,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
       if (url.pathname === "/api/remote/status" && request.method === "GET") {
         if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
-        const detect = await detectDevtunnel();
+        const health = await currentDevtunnelHealth();
         const state = await readRemoteHostState();
         const remoteSpawn = isFeatureEnabled(config, "remoteSpawn");
         const spawnSecret = remoteSpawn ? await ensureSpawnSecret(process.env) : undefined;
         return Response.json({
-          devtunnelAvailable: detect.available,
-          version: detect.version,
+          devtunnelAvailable: health.available,
+          version: health.version,
+          devtunnel: health,
           ingestPort: await resolveIngestPort(),
           tunnel: state ? { id: state.tunnelId } : undefined,
-          canHost: state?.canHost ?? detect.available,
+          canHost: state?.canHost ?? health.available,
           remoteSpawn,
           spawnSecret
         });
-      }
-
-      if (url.pathname === "/api/remotes" && request.method === "GET") {
-        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
-        return Response.json(await readRemotesResponse());
       }
 
       if (url.pathname === "/api/dashboard-tunnel/status" && request.method === "GET") {
@@ -1654,8 +1698,25 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
           await persistDashboardTunnelEnabled(true);
           return Response.json(info);
         } catch (error) {
-          const message = error instanceof Error ? error.message : "Tunnel Link error";
-          return new Response(message, { status: message === dashboardTunnelAuthMessage ? 401 : 500 });
+          return devtunnelErrorResponse(error);
+        }
+      }
+
+      if (url.pathname === "/api/dashboard-tunnel/retry" && request.method === "POST") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        try {
+          const info = await dashboardTunnel.retry();
+          await persistDashboardTunnelEnabled(true);
+          return Response.json(info);
+        } catch (error) {
+          return devtunnelErrorResponse(error);
         }
       }
 
@@ -1692,37 +1753,78 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         } catch {
           return new Response("Invalid JSON body", { status: 400 });
         }
-        const detect = await detectDevtunnel();
+        const health = await currentDevtunnelHealth();
         const ingestPort = await resolveIngestPort();
         try {
           if (body.mode === "auto") {
-            if (!detect.available) {
-              return new Response("devtunnel CLI not available on this machine.", { status: 400 });
+            if (!health.available) {
+              return devtunnelErrorResponse(new DevtunnelError(unavailableDevtunnelFailure(health)));
             }
-            await createTunnel(ingestPort);
+            await ensureIngestTunnel(ingestPort, { gateway: devtunnel });
+            lastIngestFailure = undefined;
           } else {
             const tunnelId = parseTunnelInput(typeof body.tunnelInput === "string" ? body.tunnelInput : "");
             if (!tunnelId) return new Response("Invalid tunnel id or URL.", { status: 400 });
             await useManualTunnel(
               { tunnelId, ingestPort },
-              { devtunnelAvailable: detect.available }
+              { devtunnelAvailable: health.available }
             );
+            lastIngestFailure = undefined;
           }
         } catch (error) {
-          return new Response(error instanceof Error ? error.message : "Tunnel error", { status: 500 });
+          if (error instanceof DevtunnelError) lastIngestFailure = error.failure;
+          return devtunnelErrorResponse(error);
         }
         await ensureIngestDaemon();
         // Reconcile port mapping in case the ingest bound to a different port.
         const beaconForReconcile = await readIngestState();
         const livePort = beaconForReconcile?.port ?? await resolveIngestPort();
-        await reconcileTunnelPort(livePort);
+        const reconciled = await reconcileTunnelPort(livePort, { gateway: devtunnel });
+        if (reconciled.failure) lastIngestFailure = reconciled.failure;
         const state = await readRemoteHostState();
+        const refreshed = await currentDevtunnelHealth();
         return Response.json({
-          devtunnelAvailable: detect.available,
-          version: detect.version,
+          devtunnelAvailable: refreshed.available,
+          version: refreshed.version,
+          devtunnel: refreshed,
           ingestPort: livePort,
           tunnel: state ? { id: state.tunnelId } : undefined,
-          canHost: state?.canHost ?? detect.available
+          canHost: state?.canHost ?? refreshed.available
+        });
+      }
+
+      if (url.pathname === "/api/remote/tunnel/retry" && request.method === "POST") {
+        if (!isLocal(request, srv)) return new Response("Forbidden", { status: 403 });
+        if (!isAllowedSpawnRequest(
+          request.headers.get("content-type"),
+          request.headers.get("origin"),
+          request.headers.get("host")
+        )) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        const ingestPort = await resolveIngestPort();
+        try {
+          await ensureIngestTunnel(ingestPort, { gateway: devtunnel });
+          lastIngestFailure = undefined;
+        } catch (error) {
+          if (error instanceof DevtunnelError) lastIngestFailure = error.failure;
+          return devtunnelErrorResponse(error);
+        }
+        // Only start/reconcile ingest once the tunnel setup has succeeded.
+        await ensureIngestDaemon();
+        const beacon = await readIngestState();
+        const livePort = beacon?.port ?? await resolveIngestPort();
+        const reconciled = await reconcileTunnelPort(livePort, { gateway: devtunnel });
+        if (reconciled.failure) lastIngestFailure = reconciled.failure;
+        const state = await readRemoteHostState();
+        const refreshed = await currentDevtunnelHealth();
+        return Response.json({
+          devtunnelAvailable: refreshed.available,
+          version: refreshed.version,
+          devtunnel: refreshed,
+          ingestPort: livePort,
+          tunnel: state ? { id: state.tunnelId } : undefined,
+          canHost: state?.canHost ?? refreshed.available
         });
       }
 
@@ -2048,7 +2150,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         const decoder = new FrameDecoder();
         (ws.data as WsData & { daemon?: Socket }).daemon = daemon;
 
-        daemon.on("data", (chunk) => {
+        daemon.on("data", (chunk: Buffer) => {
           for (const frame of decoder.push(chunk)) {
             if (frame.type === FrameType.Output) {
               ws.sendBinary(frame.payload);
@@ -2062,9 +2164,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             } else if (frame.type === FrameType.PtySize) {
               const size = parseJsonPayload<PtySizePayload>(frame.payload);
               ws.send(JSON.stringify({ type: "size", cols: size.cols, rows: size.rows }));
-            } else if (frame.type === FrameType.TerminalMode) {
-              const mode = parseJsonPayload<TerminalModePayload>(frame.payload);
-              ws.send(JSON.stringify({ type: "mode", mode: mode.mode }));
+            } else if (frame.type === FrameType.Control) {
+              const ctrl = parseJsonPayload<ControlPayload>(frame.payload);
+              ws.send(JSON.stringify({ type: "control", controllerId: ctrl.controllerId, cols: ctrl.cols, rows: ctrl.rows }));
             }
           }
         });
@@ -2085,7 +2187,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             data?: string;
             cols?: number;
             rows?: number;
-            mode?: TerminalResizeMode;
+            kind?: SurfaceKind;
+            viewerId?: string;
             needsAttention?: boolean;
             attentionMatchedAt?: string;
           };
@@ -2096,8 +2199,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             if (payload) {
               daemon.write(encodeJsonFrame(FrameType.Resize, payload));
             }
-          } else if (message.type === "mode" && (message.mode === "clamped" || message.mode === "fill")) {
-            daemon.write(encodeJsonFrame(FrameType.TerminalMode, { mode: message.mode }));
+          } else if (message.type === "takeControl") {
+            daemon.write(encodeFrame(FrameType.TakeControl));
           } else if (message.type === "attention") {
             const payload = browserAttentionPayload(message);
             if (payload) {
@@ -2162,14 +2265,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // Does NOT remove server.json (callers decide) and does NOT touch the ingest.
     const closeListenerAndStreams = async (): Promise<void> => {
       watcher.close();
-      remotesWatcher.close();
       if (debounce) {
         clearTimeout(debounce);
         debounce = undefined;
-      }
-      if (remotesDebounce) {
-        clearTimeout(remotesDebounce);
-        remotesDebounce = undefined;
       }
       for (const controller of sseClients) {
         try {

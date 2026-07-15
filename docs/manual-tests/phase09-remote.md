@@ -78,8 +78,9 @@ produces byte-identical control/data frames to the Bun `encodeControl`/
 5. Type in the devbox session; confirm output streams to the dashboard viewer.
 
 **Expected:** The session is advertised to the host (`hello` → `session-added`),
-data bridges both ways, and detaching the last browser viewer reverts viewer
-resizes. Killing the devbox session removes it from the dashboard.
+data bridges both ways, and detaching the last browser viewer hands PTY control
+back to the remaining surface by priority. Killing the devbox session removes it
+from the dashboard.
 
 ---
 
@@ -180,8 +181,10 @@ bridge automatically.
 1. **Keepalive:** set `remote.keepAlive` to a small value; confirm periodic
    `ping` frames flow and an unanswered idle channel is torn down + reconnected.
 2. **Singleton:** start two `climon __uplink` (or `__ingest`) processes; confirm
-   the second sees the pidfile, declines, and exits 0. Kill the holder and start
-   again; confirm the stale pidfile is recycled.
+   the second fails to take the OS lock on `<pidfile>.lock`, declines, and exits
+   0. Kill the holder and start again; confirm the released lock lets a fresh
+   instance acquire even if the old pidfile's PID has been recycled (see
+   [singleton-lock-pid-recycle.md](singleton-lock-pid-recycle.md)).
 3. **Demotion:** with a co-located dashboard + ingest, write a shutdown-request
    beacon (allowlisted requester); confirm the ingest demotes — drops its
    listener, spawns a detached `__uplink`, stops the local server, and removes

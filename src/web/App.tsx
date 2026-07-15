@@ -35,10 +35,10 @@ import {
   closeDashboardTunnel,
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
+  retryDashboardTunnel,
   probeTunnelAuth,
-  fetchRemotes,
   postPushPresence,
-  type RemotesResponse,
+  DevtunnelApiError,
   type DashboardTunnelStatus
 } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -47,15 +47,16 @@ import { NewSessionDialog } from "./components/NewSessionDialog.js";
 import { EditSessionDialog } from "./components/EditSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
-import { RemoteHostsPanel } from "./components/RemoteHostsPanel.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
+import type { DevtunnelFailure } from "../devtunnel/types.js";
 import { TerminalView, type TerminalHandle, stripTerminalDecorations } from "./components/TerminalView.js";
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
 import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed } from "./sidebarCollapse.js";
 import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
+import { addComposeEntry } from "./composeHistory.js";
 import { getTheme } from "./themes.js";
-import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED } from "../dashboard-preference-keys.js";
+import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED, PREF_STATE_ICON_NO_MOTION } from "../dashboard-preference-keys.js";
 import {
   readCachedPreference,
   setDashboardPreference,
@@ -75,10 +76,7 @@ import {
   writeBrowserNotificationsEnabled
 } from "./attentionAlerts.js";
 import { StatusBadge } from "./components/StatusBadge.js";
-import type { TerminalResizeMode } from "../ipc/frame.js";
-import { toggleViewMode } from "./view-mode.js";
 import { InstallPwaDialog } from "./components/InstallPwaDialog.js";
-import { TunnelExpiryBanner } from "./components/TunnelExpiryBanner.js";
 import { readIsStandalone, readIsTunnelOrigin, isPushSupported, canInstallPwa, reauthenticateTunnel } from "./pwa/pwaContext.js";
 import {
   registerServiceWorker,
@@ -528,6 +526,28 @@ export function TunnelReauthOverlay({ onReauth }: { onReauth: () => void }) {
   );
 }
 
+/**
+ * Normalizes any Tunnel Link error into a {@link DevtunnelFailure} so the failure
+ * UI (with an explicit Retry) surfaces even for network-level rejections that never
+ * reach the structured {@link DevtunnelApiError} path (offline, server down).
+ */
+export function toTunnelLinkFailure(error: unknown): DevtunnelFailure {
+  if (error instanceof DevtunnelApiError) {
+    return error.failure;
+  }
+  const message = error instanceof Error ? error.message : "Failed to reach the Tunnel Link service.";
+  return {
+    code: "unknown",
+    operation: "detect",
+    summary: message || "Failed to reach the Tunnel Link service.",
+    remediation: "Check that the dashboard server is running, then retry.",
+    technicalDetail: message,
+    occurredAt: new Date().toISOString(),
+    retryClass: "transient",
+    retryable: true
+  };
+}
+
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -543,10 +563,14 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => readSidebarCollapsed());
   const [panelView, setPanelView] = useState<PanelView>("closed");
   const [composeText, setComposeText] = useState("");
+  const [composeHistory, setComposeHistory] = useState<Record<string, string[]>>({});
   const [selectionCaptureText, setSelectionCaptureText] = useState("");
   const [stripDecorations, setStripDecorations] = useState(false);
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
+  );
+  const [stateIconNoMotion, setStateIconNoMotion] = useState<boolean>(
+    () => readCachedPreference(PREF_STATE_ICON_NO_MOTION) === true
   );
   const [themeId, setThemeId] = useState<string>(
     () => (readCachedPreference(PREF_THEME) as string) ?? DEFAULT_THEME_NAME
@@ -566,21 +590,12 @@ export function App() {
   const [features, setFeatures] = useState<FeatureFlagsMap>({});
   const [focusTopSessionShortcut, setFocusTopSessionShortcut] = useState<string>("Alt+J");
   const [remoteOpen, setRemoteOpen] = useState(false);
-  const [remoteHostsOpen, setRemoteHostsOpen] = useState(false);
-  const [remotes, setRemotes] = useState<RemotesResponse>({
-    connections: [],
-    ingestRunning: false,
-    remotesActive: false
-  });
   const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
   const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);
-  const [tunnelLinkError, setTunnelLinkError] = useState("");
+  const [tunnelLinkFailure, setTunnelLinkFailure] = useState<DevtunnelFailure | undefined>(undefined);
+  const [tunnelLinkRetrying, setTunnelLinkRetrying] = useState(false);
   const [tunnelLinkCopied, setTunnelLinkCopied] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
-  const [activeViewMode, setActiveViewMode] = useState<{ sessionId: string | null; mode: TerminalResizeMode }>({
-    sessionId: null,
-    mode: "fill"
-  });
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const [pwaInstallOpen, setPwaInstallOpen] = useState(false);
@@ -796,10 +811,11 @@ export function App() {
   const attentionToasterId = useId("attention-toaster");
   const { dispatchToast, dismissToast } = useToastController(attentionToasterId);
 
-  // In-app alerts (toast/sound/vibration) are shown while the dashboard is in
-  // the foreground, except on the mobile session list, where the attention
-  // badge is already visible.
-  const alertsVisible = pageVisible && (!isMobile || maximized);
+  // In-app alerts (toast/sound/vibration) fire whenever the dashboard is in the
+  // foreground — including the mobile session list — so an attention event is
+  // never missed. The actively viewed session is excluded separately via
+  // viewedSessionId, and alerts are still suppressed while the tab is hidden.
+  const alertsVisible = pageVisible;
 
   const dispatchAttentionToast = useCallback(
     (session: SessionMeta): void => {
@@ -925,13 +941,6 @@ export function App() {
         // Ignore malformed payloads; the next event will reconcile.
       }
     });
-    es.addEventListener("remotes", (ev) => {
-      try {
-        setRemotes(JSON.parse((ev as MessageEvent).data) as RemotesResponse);
-      } catch {
-        // Ignore malformed payloads; the next event will reconcile.
-      }
-    });
     void fetchSessions()
       .then((loadedSessions) => {
         applySessionsRefresh(loadedSessions);
@@ -962,6 +971,10 @@ export function App() {
         const serverPin = preferences[PREF_KEY_BAR_PINNED];
         if (typeof serverPin === "boolean") {
           setKeyBarPinned(serverPin);
+        }
+        const serverNoMotion = preferences[PREF_STATE_ICON_NO_MOTION];
+        if (typeof serverNoMotion === "boolean") {
+          setStateIconNoMotion(serverNoMotion);
         }
       }
     );
@@ -1105,6 +1118,13 @@ export function App() {
           if (!term) {
             return;
           }
+          // Hiding the page tears down the terminal WebSocket. The native
+          // visibility event runs before React's visible reattachment completes,
+          // so arm the viewed session now; TerminalView queues the request and
+          // flushes it when the new socket opens.
+          if (activeId && (!isMobile || maximized)) {
+            term.armTakeControl(activeId);
+          }
           if (isMobile) {
             term.refresh();
           } else {
@@ -1115,7 +1135,7 @@ export function App() {
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [armReconnectOverlay, isMobile]);
+  }, [activeId, armReconnectOverlay, isMobile, maximized]);
 
   // The terminal panel is a flex child that shrinks the terminal pane when
   // shown. xterm does not reflow to the smaller pane on its own, so refit it
@@ -1213,19 +1233,6 @@ export function App() {
       pendingSelectRef.current = id;
     }
   }
-
-  // The active session's mode, tagged with the session it belongs to. It is
-  // `null` right after switching sessions (before the new session's daemon
-  // reports its mode) so callers never act on a stale value.
-  const authoritativeViewMode = activeViewMode.sessionId === activeId ? activeViewMode.mode : null;
-
-  const requestViewMode = useCallback(
-    (mode: TerminalResizeMode): void => {
-      setActiveViewMode({ sessionId: activeId, mode });
-      terminalRef.current?.setViewMode(mode);
-    },
-    [activeId]
-  );
 
   // Selecting a session on desktop moves keyboard focus into the terminal so
   // the user can start typing immediately. On mobile the terminal is offscreen
@@ -1372,22 +1379,37 @@ export function App() {
 
   const handleTunnelLink = useCallback(async (): Promise<void> => {
     setTunnelLinkOpen(true);
-    setTunnelLinkError("");
+    setTunnelLinkFailure(undefined);
     setTunnelLinkCopied(false);
     try {
       setTunnelLinkStatus(await ensureDashboardTunnel());
     } catch (e) {
-      setTunnelLinkError(e instanceof Error ? e.message : "Failed to start Tunnel Link.");
+      setTunnelLinkFailure(toTunnelLinkFailure(e));
       await refreshTunnelLinkStatus();
     }
   }, [refreshTunnelLinkStatus]);
 
+  const handleRetryTunnelLink = useCallback(async (): Promise<void> => {
+    setTunnelLinkFailure(undefined);
+    setTunnelLinkRetrying(true);
+    try {
+      setTunnelLinkStatus(await retryDashboardTunnel());
+    } catch (e) {
+      setTunnelLinkFailure(toTunnelLinkFailure(e));
+      await refreshTunnelLinkStatus();
+    } finally {
+      setTunnelLinkRetrying(false);
+    }
+  }, [refreshTunnelLinkStatus]);
+
   const handleCloseTunnelLink = useCallback(async (): Promise<void> => {
-    setTunnelLinkError("");
+    setTunnelLinkFailure(undefined);
     try {
       await closeDashboardTunnel();
     } catch (e) {
-      setTunnelLinkError(e instanceof Error ? e.message : "Failed to close Tunnel Link.");
+      if (e instanceof DevtunnelApiError) {
+        setTunnelLinkFailure(e.failure);
+      }
     } finally {
       await refreshTunnelLinkStatus();
     }
@@ -1445,7 +1467,6 @@ export function App() {
         onOpenChange={setPwaInstallOpen}
         onInstall={handleInstallPwa}
       />
-      {!isMobile && <TunnelExpiryBanner />}
       {tunnelDownBannerVisible && (
         <div role="alert" className={styles.tunnelDownBanner}>
           This climon Tunnel Link is no longer available. Long-press the climon icon and choose Uninstall.
@@ -1465,7 +1486,14 @@ export function App() {
           collapsed={sidebarCompact}
           collapsible={!isMobile}
           onCollapsedChange={handleSidebarCollapsedChange}
-          onSelect={handleSelect}
+          onSelect={(id) => {
+            handleSelect(id);
+            // Actively choosing a session on desktop takes control of it, so the
+            // dashboard drives the grid without the user hunting for a button.
+            if (!isMobile) {
+              terminalRef.current?.armTakeControl(id);
+            }
+          }}
           onClose={(id) => requestClose(id)}
           onNew={() => {
             setDialogParent(null);
@@ -1483,10 +1511,6 @@ export function App() {
           onEdit={(session) => setEditTarget(session)}
           onPauseToggle={handlePauseToggle}
           onManageRemote={() => setRemoteOpen(true)}
-          onShowRemoteHosts={() => {
-            setRemoteHostsOpen(true);
-            void fetchRemotes().then(setRemotes);
-          }}
           notificationsEnabled={notificationsEnabled}
           onToggleNotifications={handleToggleNotifications}
           canInstallPwa={installAvailable}
@@ -1499,15 +1523,16 @@ export function App() {
           isMobile={isMobile}
           keyBarPinned={keyBarPinned}
           onToggleKeyBarPinned={handleToggleKeyBarPinned}
+          stateIconNoMotion={stateIconNoMotion}
           currentTheme={themeId}
           onSelectTheme={handleSelectTheme}
-          viewMode={authoritativeViewMode ?? "fill"}
-          viewModeLocked={false}
-          onViewModeToggle={() => requestViewMode(toggleViewMode(authoritativeViewMode ?? "fill"))}
           onMaximize={(id) => {
             const selected = sessions.find((s) => s.id === id);
             setActiveId(id);
             setMaximized(true);
+            // Opening a session's terminal (the PWA "open terminal" action) takes
+            // control so the on-screen session sizes to this device.
+            terminalRef.current?.armTakeControl(id);
             const attentionMatchedAt = selected?.attentionMatchedAt;
             if (selected?.status === "needs-attention" && attentionMatchedAt) {
               requestAnimationFrame(() => terminalRef.current?.acknowledgeAttention(id, attentionMatchedAt));
@@ -1529,12 +1554,6 @@ export function App() {
           accentColor={activeSession?.color}
           maximized={maximized}
           visible={terminalVisible}
-          viewMode={authoritativeViewMode ?? "fill"}
-          onViewModeChange={(mode) => {
-            if (activeId) {
-              setActiveViewMode({ sessionId: activeId, mode });
-            }
-          }}
           fontSize={fontSize}
           xtermTheme={activeTheme.xterm}
           onFontSizeChange={adjustFontSize}
@@ -1559,6 +1578,7 @@ export function App() {
                 view={panelView}
                 fontSize={fontSize}
                 composeText={composeText}
+                composeHistory={activeId ? composeHistory[activeId] ?? [] : []}
                 selectionText={stripDecorations ? stripTerminalDecorations(selectionCaptureText) : selectionCaptureText}
                 stripDecorations={stripDecorations}
                 showLabels={!isMobile}
@@ -1573,6 +1593,12 @@ export function App() {
                 onComposeTextChange={setComposeText}
                 onComposeInsert={(text) => {
                   terminalRef.current?.sendInput(text);
+                  if (activeId) {
+                    setComposeHistory((prev) => ({
+                      ...prev,
+                      [activeId]: addComposeEntry(prev[activeId] ?? [], text)
+                    }));
+                  }
                   setComposeText("");
                   setPanelView(keyBarPinned ? "chooser" : "closed");
                 }}
@@ -1622,16 +1648,12 @@ export function App() {
         onKill={() => void handleForceKill()}
       />
       <RemoteClientDialog open={remoteOpen} onOpenChange={setRemoteOpen} />
-      <RemoteHostsPanel
-        open={remoteHostsOpen}
-        onClose={() => setRemoteHostsOpen(false)}
-        connections={remotes.connections}
-        remotesActive={remotes.remotesActive}
-      />
       <TunnelLinkDialog
         open={tunnelLinkOpen}
         status={tunnelLinkStatus}
-        error={tunnelLinkError}
+        failure={tunnelLinkFailure}
+        retrying={tunnelLinkRetrying}
+        onRetry={() => void handleRetryTunnelLink()}
         copied={tunnelLinkCopied}
         onCopy={setTunnelLinkCopied}
         onClose={() => setTunnelLinkOpen(false)}

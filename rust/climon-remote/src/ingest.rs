@@ -6,6 +6,10 @@
 //! is parsed leniently from JSON, every server-controlled field is set locally,
 //! remote ids are validated against path traversal, and patches are allow-listed.
 
+// Task 8: this module returns the large typed `DevtunnelFailure` error surface
+// from the centralized gateway; allow the lint crate-consistent with gateway.rs.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,7 +17,8 @@ use std::time::Duration;
 
 use climon_config::config::{resolve_config_setting, Env as ConfigEnv};
 use climon_proto::meta::{
-    AnsiColor, Origin, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus,
+    AnsiColor, Origin, PriorityReason, ProgressState, SessionMeta, SessionMetaPatch, SessionStatus,
+    TerminalProgress,
 };
 use climon_session::socket::format_session_socket_ref;
 use climon_store::meta::{
@@ -26,6 +31,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Notify};
 
+use crate::devtunnel::{
+    classify_devtunnel_exit, DevtunnelErrorCode, DevtunnelFailure, DevtunnelGateway,
+    DevtunnelHealth, DevtunnelOperation, DevtunnelRetryClass, DevtunnelState, RetryController,
+};
 use crate::ingest_state::IngestState;
 use crate::keepalive::mux_idle_timeout_ms;
 use crate::mux::{encode_control, encode_data, ControlMessage, MuxDecoder, RawFrame};
@@ -231,6 +240,34 @@ fn parse_color(value: &Value) -> Option<AnsiColor> {
         .and_then(|s| AnsiColor::ALL.into_iter().find(|c| c.name() == s))
 }
 
+/// Parses an untrusted advertised `progress` object into a bounded
+/// [`TerminalProgress`], or `None` if the state is unknown. Percentages are
+/// clamped to 0..=100 and dropped for non-normal states.
+fn parse_progress(value: &Value) -> Option<TerminalProgress> {
+    let state = match value.get("state").and_then(|s| s.as_str())? {
+        "normal" => ProgressState::Normal,
+        "error" => ProgressState::Error,
+        "indeterminate" => ProgressState::Indeterminate,
+        "warning" => ProgressState::Warning,
+        _ => return None,
+    };
+    // A determinate (`normal`) update always carries an explicit percentage:
+    // missing/invalid/negative wire values normalize to 0 so untrusted input
+    // is bounded and matches the local OSC parser byte-for-byte.
+    let value = if matches!(state, ProgressState::Normal) {
+        Some(
+            value
+                .get("value")
+                .and_then(as_integer)
+                .map(|v| v.clamp(0, 100) as u8)
+                .unwrap_or(0),
+        )
+    } else {
+        None
+    };
+    Some(TerminalProgress { state, value })
+}
+
 fn as_integer(value: &Value) -> Option<i64> {
     let n = value.as_f64()?;
     if n.is_finite() && n.fract() == 0.0 {
@@ -320,6 +357,13 @@ pub fn sanitize_remote_patch(input: &Value) -> SessionMetaPatch {
     if let Some(v) = obj.get("terminalTitle").filter(|v| v.is_string()) {
         clean.terminal_title = Some(bounded_string(v, ""));
     }
+    if let Some(p) = obj.get("progress") {
+        if p.is_null() {
+            clean.progress = Some(None);
+        } else if let Some(parsed) = parse_progress(p) {
+            clean.progress = Some(Some(parsed));
+        }
+    }
     clean
 }
 
@@ -391,6 +435,14 @@ pub fn to_local_meta(
             None
         }
     };
+    let progress = {
+        let v = get("progress");
+        if v.is_null() {
+            None
+        } else {
+            parse_progress(&v)
+        }
+    };
 
     SessionMeta {
         id: local_id.to_string(),
@@ -424,6 +476,8 @@ pub fn to_local_meta(
         theme,
         user_paused: None,
         terminal_title,
+        attention_snippet: None,
+        progress,
     }
 }
 
@@ -1378,8 +1432,24 @@ async fn apply_session_list(
     reconcile_against_snapshot(store_env, label, &valid, &dismissed);
 }
 
+/// The observed state of a supervised `devtunnel host` process.
+pub enum HostExitState {
+    /// The process is still running.
+    Running,
+    /// The process has exited; `None` is a clean exit and `Some(failure)` is the
+    /// classified cause the supervisor uses to retry (transient) or pause
+    /// (actionable/permanent).
+    Exited(Option<DevtunnelFailure>),
+}
+
 pub trait HostProcess: Send {
     fn stop(&mut self);
+    /// Non-blocking check of whether the process has exited and why. The default
+    /// implementation never reports an exit; only the real `devtunnel host`
+    /// process and exit-driven test doubles override it.
+    fn poll_exit(&mut self) -> HostExitState {
+        HostExitState::Running
+    }
 }
 
 /// A simple closure-backed host process for tests.
@@ -1390,66 +1460,140 @@ impl<F: FnMut() + Send> HostProcess for ClosureHostProcess<F> {
     }
 }
 
-/// Builds the `devtunnel host <tunnelId>` command that binds the remotes dev
-/// tunnel to the local ingest port. Mirrors the legacy `defaultSpawnHost`
-/// (and the `devtunnel_command` helper in `uplink`): applies `devtunnel_env`,
-/// detaches stdin, inherits stdout/stderr into the ingest log, and suppresses
-/// the console window on Windows.
-fn devtunnel_host_command(tunnel_id: &str) -> std::process::Command {
-    let env: HashMap<String, String> = std::env::vars().collect();
-    let mut cmd = std::process::Command::new("devtunnel");
-    cmd.arg("host");
-    cmd.arg(tunnel_id);
-    for (k, v) in crate::tunnel::devtunnel_env(&env) {
-        cmd.env(k, v);
-    }
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::inherit());
-    cmd.stderr(std::process::Stdio::inherit());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // devtunnel.exe is a console app; without CREATE_NO_WINDOW the
-        // supervisor's host process flashes a console window on Windows.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd
-}
-
-/// A running `devtunnel host` child that is terminated and reaped on `stop()`.
+/// A running `devtunnel host` child spawned through the shared
+/// [`DevtunnelGateway`]. stdout/stderr are streamed into a shared buffer so the
+/// eventual exit can be classified into a typed [`DevtunnelFailure`]. `stop()`
+/// signals a kill and reaps the child on the current runtime.
 struct DevtunnelHostProcess {
-    child: Option<std::process::Child>,
+    child: Option<tokio::process::Child>,
+    operation: DevtunnelOperation,
+    output: Arc<Mutex<(String, String)>>,
+    exit: Option<Option<DevtunnelFailure>>,
 }
 
 impl HostProcess for DevtunnelHostProcess {
     fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = child.start_kill();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
+        }
+    }
+
+    fn poll_exit(&mut self) -> HostExitState {
+        if let Some(cached) = &self.exit {
+            return HostExitState::Exited(cached.clone());
+        }
+        let Some(child) = self.child.as_mut() else {
+            return HostExitState::Exited(None);
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let (out, err) = self.output.lock().unwrap().clone();
+                let cause = classify_devtunnel_exit(
+                    self.operation.clone(),
+                    status.code().unwrap_or(1),
+                    &out,
+                    &err,
+                    None,
+                    &now_iso(),
+                );
+                self.exit = Some(cause.clone());
+                HostExitState::Exited(cause)
+            }
+            _ => HostExitState::Running,
         }
     }
 }
 
-/// Spawns `devtunnel host <tunnelId>` to bind the remotes dev tunnel to the
-/// local ingest. This is the production `spawn_host` wired into the ingest
-/// daemon. If the spawn fails (e.g. the `devtunnel` CLI is missing) it returns
-/// a no-op host process so the ingest keeps running instead of crashing.
-pub fn spawn_devtunnel_host(tunnel_id: &str) -> Box<dyn HostProcess> {
-    match devtunnel_host_command(tunnel_id).spawn() {
-        Ok(child) => Box::new(DevtunnelHostProcess { child: Some(child) }),
-        Err(_) => Box::new(ClosureHostProcess(|| {})),
+fn spawn_host_output_reader<R>(reader: R, output: Arc<Mutex<(String, String)>>, is_stdout: bool)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut reader = reader;
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let text = String::from_utf8_lossy(&buf[..n]);
+                    let mut guard = output.lock().unwrap();
+                    if is_stdout {
+                        guard.0.push_str(&text);
+                    } else {
+                        guard.1.push_str(&text);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Spawns `devtunnel host <tunnelId>` through the gateway to bind the remotes
+/// dev tunnel to the local ingest. On spawn failure the classified
+/// [`DevtunnelFailure`] is returned (rather than a silent no-op process) so the
+/// supervisor can pause on actionable failures such as a missing CLI.
+pub fn spawn_devtunnel_host(
+    gateway: &DevtunnelGateway,
+    tunnel_id: &str,
+) -> Result<Box<dyn HostProcess>, DevtunnelFailure> {
+    let spawned = gateway.spawn_host(tunnel_id)?;
+    let output = Arc::new(Mutex::new((String::new(), String::new())));
+    spawn_host_output_reader(spawned.stdout, output.clone(), true);
+    spawn_host_output_reader(spawned.stderr, output.clone(), false);
+    Ok(Box::new(DevtunnelHostProcess {
+        child: Some(spawned.child),
+        operation: spawned.operation,
+        output,
+        exit: None,
+    }))
+}
+
+/// A transient failure representing an unexpected clean exit of the host process.
+fn host_clean_exit_failure() -> DevtunnelFailure {
+    DevtunnelFailure {
+        code: DevtunnelErrorCode::ProcessExited,
+        operation: DevtunnelOperation::HostTunnel,
+        summary: "The dev tunnel host process stopped unexpectedly.".to_string(),
+        remediation: "Climon will retry automatically.".to_string(),
+        technical_detail: "host process exited".to_string(),
+        occurred_at: now_iso(),
+        retry_class: DevtunnelRetryClass::Transient,
+        retryable: true,
+        retry_after_ms: None,
+        status: None,
     }
 }
 
-/// Factory closure that spawns a `devtunnel host` process for a tunnel id.
-pub type SpawnHostFn<'a> = Box<dyn FnMut(&str) -> Box<dyn HostProcess> + Send + 'a>;
+/// Factory closure that spawns a `devtunnel host` process for a tunnel id, or
+/// returns the classified failure when the spawn cannot be started.
+pub type SpawnHostFn<'a> =
+    Box<dyn FnMut(&str) -> Result<Box<dyn HostProcess>, DevtunnelFailure> + Send + 'a>;
+
+/// A supervised host and its retry/pause bookkeeping.
+struct HostSlot {
+    tunnel_id: String,
+    process: Option<Box<dyn HostProcess>>,
+    paused: bool,
+}
 
 /// Desired-state supervisor for `devtunnel host`. Mirrors `TunnelHostSupervisor`.
+/// The [`RetryController`] classifies each host exit or spawn failure: transient
+/// ones are retried on the next reconcile tick (bounded by the ingest supervisor
+/// poll cadence), while actionable/permanent ones pause hosting until the desired
+/// tunnel id changes.
 pub struct TunnelHostSupervisor<'a> {
     config_env: ConfigEnv,
     spawn_host: SpawnHostFn<'a>,
-    current: Option<(String, Box<dyn HostProcess>)>,
+    current: Option<HostSlot>,
+    retry: RetryController,
+    // Shared, normalized dev-tunnel host health published to the ingest status
+    // beacon. Updated on every host transition; read by the status writer.
+    health: Arc<Mutex<Option<DevtunnelHealth>>>,
 }
 
 impl<'a> TunnelHostSupervisor<'a> {
@@ -1458,32 +1602,167 @@ impl<'a> TunnelHostSupervisor<'a> {
             config_env,
             spawn_host,
             current: None,
+            retry: RetryController::new(),
+            health: Arc::new(Mutex::new(None)),
         }
     }
 
+    /// A clonable handle to the shared host-health cell so the ingest status
+    /// writer can read the latest snapshot without borrowing the supervisor.
+    pub fn health_handle(&self) -> Arc<Mutex<Option<DevtunnelHealth>>> {
+        self.health.clone()
+    }
+
+    fn set_health(&self, health: Option<DevtunnelHealth>) {
+        *self.health.lock().unwrap() = health;
+    }
+
     /// Compares persisted `remote-host.json` against the running host and
-    /// starts/stops/restarts to match. Mirrors `reconcile`.
+    /// starts/stops/restarts to match, and reacts to host process exits by
+    /// retrying transient failures or pausing on actionable ones. Mirrors
+    /// `reconcile`.
     pub fn reconcile(&mut self) {
-        let desired = crate::remote_host::read_remote_host_state(&self.config_env);
-        let desired_id = desired.map(|s| s.tunnel_id);
-        let current_id = self.current.as_ref().map(|(id, _)| id.clone());
-        if current_id == desired_id {
+        let desired_id =
+            crate::remote_host::read_remote_host_state(&self.config_env).map(|s| s.tunnel_id);
+        let current_id = self.current.as_ref().map(|s| s.tunnel_id.clone());
+
+        if current_id != desired_id {
+            // Desired target changed: stop the current host, reset retry state,
+            // and (re)start for the new id.
+            if let Some(mut slot) = self.current.take() {
+                if let Some(mut proc) = slot.process.take() {
+                    proc.stop();
+                }
+            }
+            self.retry = RetryController::new();
+            if let Some(id) = desired_id {
+                self.spawn_for(id);
+            } else {
+                // No desired host: report a stopped snapshot.
+                self.set_health(Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Stopped,
+                    None,
+                    now_iso(),
+                )));
+            }
             return;
         }
-        if let Some((_, mut proc)) = self.current.take() {
-            proc.stop();
+
+        // Same target: retry a prior transient spawn failure, or react to a
+        // host process exit.
+        let (paused, has_process) = match &self.current {
+            Some(slot) => (slot.paused, slot.process.is_some()),
+            None => return,
+        };
+        if paused {
+            return;
         }
-        if let Some(id) = desired_id {
-            let proc = (self.spawn_host)(&id);
-            self.current = Some((id, proc));
+        if !has_process {
+            // A previous spawn failed transiently (actionable spawn failures set
+            // `paused`, so we never reach here for those). Retry on this
+            // reconcile so a transient CLI/spawn error does not strand hosting
+            // until the desired tunnel id changes.
+            let id = self
+                .current
+                .as_ref()
+                .map(|slot| slot.tunnel_id.clone())
+                .unwrap_or_default();
+            self.current = None;
+            self.spawn_for(id);
+            return;
+        }
+        let exit = self
+            .current
+            .as_mut()
+            .and_then(|slot| slot.process.as_mut())
+            .map(|proc| proc.poll_exit());
+        let Some(HostExitState::Exited(cause)) = exit else {
+            return;
+        };
+
+        let id = self
+            .current
+            .as_ref()
+            .map(|slot| slot.tunnel_id.clone())
+            .unwrap_or_default();
+        if let Some(slot) = self.current.as_mut() {
+            if let Some(mut proc) = slot.process.take() {
+                proc.stop();
+            }
+        }
+        let failure = cause.unwrap_or_else(host_clean_exit_failure);
+        let state = self.retry.fail(&failure, crate::time::now_ms(), 0.5);
+        let paused = state.paused;
+        self.set_health(Some(DevtunnelHealth::from_failure(
+            if paused {
+                DevtunnelState::Paused
+            } else {
+                DevtunnelState::Retrying
+            },
+            failure,
+            Some(state),
+            now_iso(),
+        )));
+        if paused {
+            if let Some(slot) = self.current.as_mut() {
+                slot.paused = true;
+            }
+        } else {
+            self.current = None;
+            self.spawn_for(id);
+        }
+    }
+
+    /// Attempts to start hosting for `id`. A spawn failure is recorded against
+    /// the retry controller; actionable failures leave the slot paused.
+    fn spawn_for(&mut self, id: String) {
+        match (self.spawn_host)(&id) {
+            Ok(process) => {
+                self.set_health(Some(DevtunnelHealth::healthy(
+                    DevtunnelState::Running,
+                    Some(now_iso()),
+                    now_iso(),
+                )));
+                self.current = Some(HostSlot {
+                    tunnel_id: id,
+                    process: Some(process),
+                    paused: false,
+                });
+            }
+            Err(failure) => {
+                let state = self.retry.fail(&failure, crate::time::now_ms(), 0.5);
+                let paused = state.paused;
+                self.set_health(Some(DevtunnelHealth::from_failure(
+                    if paused {
+                        DevtunnelState::Paused
+                    } else {
+                        DevtunnelState::Retrying
+                    },
+                    failure,
+                    Some(state),
+                    now_iso(),
+                )));
+                self.current = Some(HostSlot {
+                    tunnel_id: id,
+                    process: None,
+                    paused,
+                });
+            }
         }
     }
 
     /// Stops the running host, if any. Mirrors `stop`.
     pub fn stop(&mut self) {
-        if let Some((_, mut proc)) = self.current.take() {
-            proc.stop();
+        if let Some(mut slot) = self.current.take() {
+            if let Some(mut proc) = slot.process.take() {
+                proc.stop();
+            }
         }
+        self.set_health(Some(DevtunnelHealth::healthy(
+            DevtunnelState::Stopped,
+            None,
+            now_iso(),
+        )));
     }
 }
 
@@ -1584,7 +1863,7 @@ impl Default for IngestDaemonDeps<'_> {
         Self {
             spawn_uplink: Box::new(|| {}),
             stop_local_server: Box::new(|| {}),
-            spawn_host: Box::new(|_| Box::new(ClosureHostProcess(|| {}))),
+            spawn_host: Box::new(|_| Ok(Box::new(ClosureHostProcess(|| {})))),
         }
     }
 }
@@ -1626,9 +1905,18 @@ pub async fn run_ingest_daemon(
     mut deps: IngestDaemonDeps<'_>,
 ) -> std::io::Result<IngestExit> {
     let pid_path = ingest_pid_path(&config_env);
-    if !crate::singleton::acquire_singleton(&pid_path) {
-        return Ok(IngestExit::AlreadyRunning);
-    }
+    // Hold the singleton guard for the daemon's whole lifetime. The OS advisory
+    // lock is released only when this process exits, so a stale pidfile or a
+    // recycled PID can never make a fresh daemon falsely believe another is
+    // already running.
+    let _singleton_guard = match crate::singleton::acquire_singleton_detailed(&pid_path) {
+        crate::singleton::SingletonResult {
+            acquired: true,
+            guard: Some(guard),
+            ..
+        } => guard,
+        _ => return Ok(IngestExit::AlreadyRunning),
+    };
     reconcile_stale_remote_sessions(&store_env);
 
     let state = crate::remote_host::read_remote_host_state(&config_env);
@@ -1748,11 +2036,13 @@ pub async fn run_ingest_daemon(
     // dead or stale ingest. `on_change` (below) is wired into every connection.
     let status_registry = registry.clone();
     let status_env = config_env.clone();
+    let status_health = supervisor.health_handle();
     let write_status: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         let status = crate::ingest_status::IngestStatus {
             pid: std::process::id(),
             updated_at: crate::time::now_ms(),
             connections: status_registry.connected_snapshot(crate::time::now_ms()),
+            devtunnel: status_health.lock().unwrap().clone(),
         };
         let _ = crate::ingest_status::write_ingest_status(&status, &status_env);
     });
@@ -1987,6 +2277,52 @@ mod tests {
         let snap: Vec<IngestConnectionStatus> = registry.connected_snapshot(1_000_000);
         assert_eq!(snap[0].hostname, "c2");
         assert_eq!(snap[0].os, "unknown");
+    }
+
+    #[test]
+    fn sanitizes_progress_from_wire() {
+        use climon_proto::meta::{ProgressState, TerminalProgress};
+        let v = serde_json::json!({ "state": "normal", "value": 250 });
+        assert_eq!(
+            parse_progress(&v),
+            Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(100)
+            })
+        );
+        let neg = serde_json::json!({ "state": "normal", "value": -5 });
+        assert_eq!(
+            parse_progress(&neg),
+            Some(TerminalProgress {
+                state: ProgressState::Normal,
+                value: Some(0)
+            })
+        );
+        let bad = serde_json::json!({ "state": "bogus" });
+        assert_eq!(parse_progress(&bad), None);
+        let err = serde_json::json!({ "state": "error", "value": 50 });
+        assert_eq!(
+            parse_progress(&err),
+            Some(TerminalProgress {
+                state: ProgressState::Error,
+                value: None
+            })
+        );
+        // A determinate update with no/non-numeric percentage normalizes to 0 so
+        // it matches the local OSC parser and never persists `normal` without a value.
+        for missing in [
+            serde_json::json!({ "state": "normal" }),
+            serde_json::json!({ "state": "normal", "value": "oops" }),
+            serde_json::json!({ "state": "normal", "value": 12.5 }),
+        ] {
+            assert_eq!(
+                parse_progress(&missing),
+                Some(TerminalProgress {
+                    state: ProgressState::Normal,
+                    value: Some(0)
+                })
+            );
+        }
     }
 
     #[tokio::test]
@@ -2850,20 +3186,6 @@ mod tests {
     }
 
     #[test]
-    fn devtunnel_host_command_targets_the_tunnel() {
-        let cmd = devtunnel_host_command("majestic-chair-4g4f6wz.eun1");
-        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("devtunnel"));
-        let args: Vec<&std::ffi::OsStr> = cmd.get_args().collect();
-        assert_eq!(
-            args,
-            vec![
-                std::ffi::OsStr::new("host"),
-                std::ffi::OsStr::new("majestic-chair-4g4f6wz.eun1"),
-            ]
-        );
-    }
-
-    #[test]
     fn supervisor_starts_and_stops_hosting() {
         let home = unique_home("sup");
         let config_env = ConfigEnv::new(Some(home.to_str().unwrap()), &home);
@@ -2879,9 +3201,9 @@ mod tests {
                 sp.lock().unwrap().push(id.to_string());
                 let kl2 = kl.clone();
                 let id2 = id.to_string();
-                Box::new(ClosureHostProcess(move || {
+                Ok(Box::new(ClosureHostProcess(move || {
                     kl2.lock().unwrap().push(id2.clone())
-                })) as Box<dyn HostProcess>
+                })) as Box<dyn HostProcess>)
             }),
         );
 
@@ -2913,6 +3235,180 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
+    /// A test host process that reports a preset exit state on `poll_exit`.
+    struct FakeHostProcess {
+        exit: HostExitState,
+        stopped: Arc<Mutex<u32>>,
+    }
+    impl HostProcess for FakeHostProcess {
+        fn stop(&mut self) {
+            *self.stopped.lock().unwrap() += 1;
+        }
+        fn poll_exit(&mut self) -> HostExitState {
+            match &self.exit {
+                HostExitState::Running => HostExitState::Running,
+                HostExitState::Exited(cause) => HostExitState::Exited(cause.clone()),
+            }
+        }
+    }
+
+    fn actionable_failure() -> DevtunnelFailure {
+        crate::devtunnel::classify_failure(
+            &crate::devtunnel::DevtunnelFailureInput {
+                operation: DevtunnelOperation::HostTunnel,
+                status: 1,
+                stdout: String::new(),
+                stderr: "not logged in".to_string(),
+                spawn_error: None,
+                parse_failed: None,
+            },
+            "2026-07-11T13:00:00.000Z",
+        )
+    }
+
+    fn transient_failure() -> DevtunnelFailure {
+        crate::devtunnel::classify_failure(
+            &crate::devtunnel::DevtunnelFailureInput {
+                operation: DevtunnelOperation::HostTunnel,
+                status: 1,
+                stdout: String::new(),
+                stderr: "connection refused".to_string(),
+                spawn_error: None,
+                parse_failed: None,
+            },
+            "2026-07-11T13:00:00.000Z",
+        )
+    }
+
+    #[test]
+    fn supervisor_records_spawn_failure_and_pauses() {
+        let home = unique_home("sup-err");
+        let config_env = ConfigEnv::new(Some(home.to_str().unwrap()), &home);
+        let remote_path = climon_config::config::get_remote_host_path(&config_env);
+        std::fs::write(&remote_path, r#"{"tunnelId":"tunA","ingestPort":3132}"#).unwrap();
+
+        let attempts = Arc::new(Mutex::new(0u32));
+        let at = attempts.clone();
+        let mut supervisor = TunnelHostSupervisor::new(
+            config_env.clone(),
+            Box::new(move |_id: &str| {
+                *at.lock().unwrap() += 1;
+                Err(crate::devtunnel::classify_failure(
+                    &crate::devtunnel::DevtunnelFailureInput {
+                        operation: DevtunnelOperation::HostTunnel,
+                        status: 127,
+                        stdout: String::new(),
+                        stderr: "not found".to_string(),
+                        spawn_error: Some("ENOENT".to_string()),
+                        parse_failed: None,
+                    },
+                    "2026-07-11T13:00:00.000Z",
+                ))
+            }),
+        );
+
+        // Spawn failure is recorded (CLI missing = actionable): the slot exists
+        // but is paused, and further reconciles do NOT retry the doomed spawn.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 1);
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 1);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn supervisor_retries_transient_spawn_failure() {
+        let home = unique_home("sup-transient-spawn");
+        let config_env = ConfigEnv::new(Some(home.to_str().unwrap()), &home);
+        let remote_path = climon_config::config::get_remote_host_path(&config_env);
+        std::fs::write(&remote_path, r#"{"tunnelId":"tunA","ingestPort":3132}"#).unwrap();
+
+        let attempts = Arc::new(Mutex::new(0u32));
+        let at = attempts.clone();
+        let mut supervisor = TunnelHostSupervisor::new(
+            config_env.clone(),
+            Box::new(move |_id: &str| {
+                let mut n = at.lock().unwrap();
+                *n += 1;
+                if *n == 1 {
+                    // First attempt fails transiently (not actionable): the slot
+                    // is left process-less but NOT paused.
+                    Err(transient_failure())
+                } else {
+                    Ok(Box::new(FakeHostProcess {
+                        exit: HostExitState::Running,
+                        stopped: Arc::new(Mutex::new(0u32)),
+                    }) as Box<dyn HostProcess>)
+                }
+            }),
+        );
+
+        // Attempt 1: transient spawn failure.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 1);
+        // A transient spawn failure MUST be retried on the next reconcile rather
+        // than stranding hosting until the desired id changes.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        // Now hosting is running: further reconciles do not respawn.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn supervisor_retries_transient_exit_and_pauses_actionable_exit() {
+        let home = unique_home("sup-exit");
+        let config_env = ConfigEnv::new(Some(home.to_str().unwrap()), &home);
+        let remote_path = climon_config::config::get_remote_host_path(&config_env);
+        std::fs::write(&remote_path, r#"{"tunnelId":"tunA","ingestPort":3132}"#).unwrap();
+
+        let attempts = Arc::new(Mutex::new(0u32));
+        let stopped = Arc::new(Mutex::new(0u32));
+        // Exit plan: first spawn exits transient (retry), second exits actionable
+        // (pause), third would be a no-op because the supervisor is paused.
+        let plan = Arc::new(Mutex::new(vec![
+            HostExitState::Exited(Some(transient_failure())),
+            HostExitState::Exited(Some(actionable_failure())),
+            HostExitState::Running,
+        ]));
+        let at = attempts.clone();
+        let st = stopped.clone();
+        let pl = plan.clone();
+        let mut supervisor = TunnelHostSupervisor::new(
+            config_env.clone(),
+            Box::new(move |_id: &str| {
+                let mut idx = at.lock().unwrap();
+                let exit = {
+                    let mut plan = pl.lock().unwrap();
+                    if plan.is_empty() {
+                        HostExitState::Running
+                    } else {
+                        plan.remove(0)
+                    }
+                };
+                *idx += 1;
+                Ok(Box::new(FakeHostProcess {
+                    exit,
+                    stopped: st.clone(),
+                }) as Box<dyn HostProcess>)
+            }),
+        );
+
+        // Start: attempt 1 (transient exit staged).
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 1);
+        // Transient exit -> respawn: attempt 2 (actionable exit staged).
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        // Actionable exit -> pause: no respawn.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        // Still paused: further reconciles never respawn.
+        supervisor.reconcile();
+        assert_eq!(*attempts.lock().unwrap(), 2);
+        std::fs::remove_dir_all(&home).ok();
+    }
     #[tokio::test]
     async fn daemon_demotes_on_shutdown_request_and_frees_port() {
         let home = unique_home("demote");
@@ -2938,7 +3434,7 @@ mod tests {
                 IngestDaemonDeps {
                     spawn_uplink: Box::new(move || su.store(true, Ordering::SeqCst)),
                     stop_local_server: Box::new(|| {}),
-                    spawn_host: Box::new(|_| Box::new(ClosureHostProcess(|| {}))),
+                    spawn_host: Box::new(|_| Ok(Box::new(ClosureHostProcess(|| {})))),
                 },
             )
             .await

@@ -13,12 +13,6 @@
     TCP port the dashboard server listens on. Change if 3131 conflicts with another
     service.
 
-  terminal.clampBrowserToHost
-    Type: boolean; Default: false; Scope: daemon
-    When false (default), a browser viewer may grow the shared PTY beyond the host
-    terminal's dimensions. Set true to clamp viewer size to the host terminal to prevent
-    content mangling.
-
   terminal.detachPrefix
     Type: number; Default: 28; Scope: client
     Byte value of the detach key prefix (default 0x1c = Ctrl-\). Press prefix then 'd'
@@ -39,6 +33,12 @@
   dashboard.keyBarPinned
     Type: boolean; Default: true; Scope: server, browser
     Whether the web dashboard key bar is pinned open.
+
+  dashboard.stateIconNoMotion
+    Type: boolean; Default: false; Scope: server, browser
+    When true, the web dashboard freezes the animated terminal-progress indicator (OSC
+    9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences.
+    Defaults to false (animated).
 
   attention.idleSeconds
     Type: number; Default: 10; Scope: daemon
@@ -65,6 +65,13 @@
     Type: string; Default: unset; Scope: client
     Dev tunnel id (e.g. "happy-tree-abc123") used by `devtunnel connect` to forward
     local climon traffic to a remote dashboard.
+
+  remote.discover
+    Type: boolean; Default: true; Scope: client
+    When true (default), an enabled devbox (remote.enabled) auto-discovers live climon
+    dashboard hosts by scanning your dev tunnels for the climon-ingest label and uplinks
+    to all of them, in addition to any explicit remote.tunnelId/remote.host. Set false
+    to disable discovery and only use explicitly configured targets.
 
   remote.dashboardTunnelId
     Type: string; Default: unset; Scope: server; internal
@@ -170,12 +177,18 @@
   feature.wslBridge
     Type: string; Default: disabled; Scope: client, daemon, server, browser
     Stream sessions between a same-machine WSL distro and Windows so they appear on one
-    shared dashboard. Set to "enabled" or "disabled". [status: experimental]
+    shared dashboard. Set to "enabled" or "disabled". [status: untested]
 
   feature.remotes
     Type: string; Default: disabled; Scope: client, daemon, server, browser
     Connect sessions from a remote devbox to this dashboard over the ingest/uplink
     bridge. Set to "enabled" or "disabled". [status: experimental]
+
+  feature.smartNotifications
+    Type: string; Default: disabled; Scope: client, daemon, server, browser
+    Include a fuzzy-extracted snippet of the last relevant terminal output as the body
+    of attention notifications, instead of a generic message. Set to "enabled" or
+    "disabled". [status: experimental]
 
   telemetry.enabled
     Type: boolean; Default: false; Scope: client, server

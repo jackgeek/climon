@@ -83,9 +83,10 @@ irm https://raw.githubusercontent.com/jackgeek/climon/main/install.ps1 | iex
 
 Prefer to install by hand? Download the archive for your platform from the
 [latest release](https://github.com/jackgeek/climon/releases/latest)
-(`climon-<platform>.zip`), unzip it, and run the bundled `install` (`install.exe`
-on Windows). See [Build from source](#build-from-source) to build the binaries
-yourself.
+(`climon-<platform>.zip`), unzip it, and run the bundled dedicated installer
+`install` (`install.exe` on Windows). The install scripts still behave the same;
+they just download and run that installer for you. See [Build from source](#build-from-source)
+to build the binaries yourself.
 
 > climon's release binaries aren't code-signed or notarized yet. The install
 > scripts clear the OS "downloaded from the internet" mark (macOS quarantine /
@@ -102,8 +103,11 @@ yourself.
 > this from happening. In the meantime, if your security software blocks climon,
 > you may need to add exceptions for these installed files:
 >
-> - `climon` (`climon.exe` on Windows) — the CLI client
-> - `climon-server` (`climon-server.exe` on Windows) — the dashboard server
+> - `climon` (`climon.exe` on Windows) — the CLI client / stable stub
+> - `climon-server` (`climon-server.exe` on Windows) — the dashboard server /
+>   stable stub
+> - On Windows, the versioned payloads in the same directory, such as
+>   `climon-<version>.dll` and `climon-server-<version>.exe`
 >
 > They are installed to:
 >
@@ -167,6 +171,20 @@ a dev server.
 climon bash                  # monitor an interactive shell
 climon copilot               # monitor a coding agent session
 climon npm run dev           # monitor a dev server
+```
+
+### `climon command <command> [args...]`
+
+Disambiguation prefix for running a command whose name clashes with a climon
+subcommand. For example, `climon shell` starts a monitored shell session rather
+than running a program called `shell`; use `climon command shell` to run the
+`shell` program instead. Anything after `command` is treated as the program and
+its arguments (leading session flags such as `--priority`/`--name` still apply).
+
+```sh
+climon command shell         # run a program named "shell", not `climon shell`
+climon command ls -la        # run the `ls` program, not `climon ls`
+climon command --name web server   # run a `server` program with a friendly name
 ```
 
 ### `climon shell`
@@ -296,7 +314,6 @@ Common settings:
 | `server.host`                 | `127.0.0.1` | Dashboard bind address. **Never change this** — see the security warning below. |
 | `server.port`                 | `3131`      | Dashboard port.                                         |
 | `attention.idleSeconds`       | `10`        | Idle seconds before a session is flagged for attention. |
-| `terminal.clampBrowserToHost` | `false`     | Clamp browser viewer resizes to the host terminal size. |
 | `dashboard.theme`             | `Default`   | Terminal colour theme (also settable from the ☰ menu). |
 | `session.color`               | `auto`      | Default accent colour for new sessions.                 |
 | `session.priority`            | `500`       | Default sort priority for new sessions.                 |
@@ -341,12 +358,14 @@ metadata); when there are no sessions, a global **[+]** appears in the sidebar.
 Your dashboard normally binds to loopback only. To reach it from your phone (or
 any other device) without exposing it to the network, use **Tunnel Link**:
 
-1. From the dashboard's ☰ menu, choose **Tunnel Link**. climon starts an
+1. From the dashboard's ☰ menu, choose **Tunnel Link** (it's **always
+   available**, even before Dev Tunnels is ready). climon starts an
    authenticated Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/)
    in front of your local dashboard and gives you an HTTPS `*.devtunnels.ms` URL.
    The tunnel is **private to your account** — it's tied to your dev tunnel
    identity and can't be shared with anyone else — and it stays up until you
-   choose **Close Tunnel Link**.
+   choose **Close Tunnel Link**. If it can't start, the dialog shows a friendly
+   error with remediation and a **Retry** button (see below).
 2. Open the link on your phone and tap **Install as PWA** to add climon to your
    home screen.
 3. Enable notifications from the menu to receive **Web Push alerts when a session
@@ -357,14 +376,30 @@ on and drive your sessions remotely. If the tunnel sign-in expires, relaunch the
 PWA — its launch reruns the tunnel sign-in — and it never stores tunnel
 credentials of its own in the browser.
 
+When several surfaces view the same session at once — your local terminal, the
+desktop dashboard, and your phone — they share one live terminal and only one is
+**in control** of its size at a time. A viewer that's too small to show the
+controller's grid is blanked behind a *"being viewed on a climon dashboard"*
+screen with a **Take control** button; tap the session's **maximize** button (or
+press **Space** in a displaced local terminal) to take control and resize the
+shared terminal to fit your view. See [docs/usage.md](docs/usage.md).
+
 > **PWA works best in Chrome or Edge on mobile.** On iOS, install and open the
 > PWA from **Chrome** (or Edge). iOS **Safari** currently can't complete the
 > Microsoft dev-tunnel sign-in (the auth redirect downloads an empty file), which
 > happens on Microsoft's relay before traffic reaches climon, so it also can't
 > install the PWA over an authenticated tunnel.
 
-> **Requires the `devtunnel` CLI** on the machine running the dashboard. When the
-> tunnel closes, the installed PWA shows a banner asking you to uninstall it.
+> **Requires the `devtunnel` CLI** on the machine running the dashboard (climon
+> won't install it for you — follow the [install
+> instructions](#optional-the-devtunnel-cli)). Sign in manually with `devtunnel
+> user login`, and if you hit your tunnel limit remove unused tunnels yourself
+> with `devtunnel list` / `devtunnel delete` — climon never logs in or deletes
+> tunnels on your behalf. climon retries transient failures automatically (capped
+> backoff) and surfaces a **Retry** action with a friendly error and remediation;
+> `climon remotes` reports the current failure/status (`--json` for technical
+> detail). When the tunnel closes, the installed PWA shows a banner asking you to
+> uninstall it.
 
 - Android (Chrome): **Install as PWA → Install**.
 - iPhone (Chrome, iOS 16.4+): **Share → Add to Home Screen**, then open climon
@@ -380,15 +415,23 @@ paths are opt-in.
 
 ### Remote devbox over a dev tunnel
 
-Enable `feature.remotes`, start a local server, then open **Remotes…** from the
-dashboard menu to create (or paste) a Microsoft
-[dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/) and copy a
-config script to run on the devbox. The transport exposes a loopback-only ingest
-port on the home machine — there is no SSH and no network-exposed dashboard.
+Enable `feature.remotes` and start a local server on each dashboard host — climon
+creates or reuses a stable, labeled Microsoft
+[dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/) for the
+ingest port automatically. On the devbox, run `climon config remote.enabled true`;
+climon auto-discovers live dashboard hosts by scanning your dev tunnels for the
+`climon-ingest` label and uplinks to all of them. Set `remote.discover false` to
+opt out and use an explicit `remote.tunnelId` or `remote.host` instead. The
+transport exposes a loopback-only ingest port on the home machine — there is no
+SSH and no
+network-exposed dashboard.
 
 > **Requires the `devtunnel` CLI** on both the home machine (to host the tunnel)
 > and the devbox (to connect through it), each logged in with the same identity
-> (`devtunnel user login`).
+> (`devtunnel user login`). climon won't install the CLI, log in, or delete
+> tunnels for you. Tunnel failures are classified with a code and remediation and
+> transient ones are retried automatically; run `climon remotes` (add `--json`
+> for technical detail) to see the current failure/status.
 
 See [docs/usage.md](docs/usage.md) and [docs/security.md](docs/security.md) for
 the full setup and threat model.
@@ -464,10 +507,12 @@ downloads):
 bun run compile        # packages the host platform's dist/climon-<host>.zip
 ```
 
-Each archive contains the Rust `install` binary, `climon-server`, and a
-`climon-alpha` sentinel; running `install` self-installs `climon` and
-`climon-server` side by side. See [docs/deployment.md](docs/deployment.md) for
-the full release and signing pipeline.
+Each archive contains the dedicated `install` binary, the client payload
+(`climon` on Unix, `climon.dll` on Windows), and `climon-server`. On Windows the
+installer also places stable `climon.exe`/`climon-server.exe` stubs that load or
+launch versioned payloads selected by pointer files, so updates do not overwrite
+locked executables. See [docs/deployment.md](docs/deployment.md) for the full
+release and signing pipeline.
 
 ## Contributing
 

@@ -15,14 +15,14 @@ no-op `spawn_host` and the tunnel was never bound to the relay
   wired to the real `spawn_devtunnel_host` (`rust/climon-remote/src/ingest.rs`).
 - **Preconditions:** A home machine running the released Rust `climon` client +
   `climon-server` dashboard with `feature.remotes` enabled. `devtunnel` is on
-  `PATH` and logged in (`devtunnel user show`). No remotes tunnel currently
-  recorded (`~/.climon/remote-host.json` absent or its `tunnelId` cleared).
+  `PATH` and logged in (`devtunnel user show`).
 - **Config-matrix cell:** Remote / dev-tunnel, home host (macOS/Linux/Windows)
 - **Platforms:** macOS, Linux, Windows
 
 **Steps:**
-1. Open the dashboard → **Remotes** dialog → click **Create tunnel
-   automatically**. Note the generated tunnel id (e.g. `tidy-mountain-….eun1`).
+1. Start or restart `climon server`, then open the dashboard → **Remotes**
+   dialog. Note the auto-managed tunnel id (for example,
+   `climon-ingest-….eun1`).
 2. Within ~5 seconds (the supervisor's reconcile interval), check that the
    ingest spawned a host process: `ps`/Task Manager shows a
    `devtunnel host <tunnelId>` process owned by the ingest.
@@ -55,12 +55,11 @@ reports one host connection. The dashboard no longer requires a manual
 1. On the devbox, run the setup script from the Remotes dialog (sets
    `remote.enabled true` and `remote.tunnelId <new id>`).
 2. Start a `climon` session on the devbox.
-3. On the home dashboard, open the **Remote hosts** flyout (and/or `GET
-   /api/remotes`).
+3. On home, run `climon remotes` and open the home dashboard.
 
-**Expected:** The devbox appears in the flyout as a live host
-(`● <hostname> (<os>) — <addr> — N sessions`), and `/api/remotes` `connections`
-is non-empty. The devbox's session is visible in the session list.
+**Expected:** The devbox appears in `climon remotes` as a live host
+(`● <hostname> (<os>) — <addr> — N sessions`). The devbox's session is visible
+in the dashboard session list.
 
 **Result-tracking row:**
 
@@ -70,25 +69,53 @@ is non-empty. The devbox's session is visible in the session list.
 
 ---
 
-## ITH-03 — Changing/removing the tunnel restarts/stops hosting
+## ITH-03 — Restarting the server keeps hosting the same tunnel
 
 - **ID:** ITH-03
-- **Feature / phase:** Remote (`climon-remote`) — supervisor reconcile
-  stop/restart on `remote-host.json` changes.
+- **Feature / phase:** Remote (`climon-remote`) — supervisor continues to host
+  the server-managed `remote-host.json` tunnel state.
 - **Preconditions:** ITH-01 passed (a `devtunnel host` is running).
 - **Config-matrix cell:** Remote / dev-tunnel, home host
 - **Platforms:** macOS, Linux, Windows
 
 **Steps:**
-1. In the Remotes dialog, click **Recreate tunnel automatically** (new id). Within
-   ~5s confirm the old `devtunnel host` process is gone and a new
-   `devtunnel host <new id>` is running.
-2. Click **Remove tunnel**. Within ~5s confirm no `devtunnel host` process
-   remains.
+1. Stop and restart `climon server`.
+2. Within ~5s confirm a `devtunnel host <same tunnel id>` process is running.
+3. Run `devtunnel show <tunnelId>` and confirm **Host connections: 1**.
 
-**Expected:** The host process tracks `remote-host.json`: it restarts for a new
-tunnel id and stops entirely when the tunnel is removed. No orphaned
-`devtunnel host` processes are left behind.
+**Expected:** The host process tracks `remote-host.json` after restart and
+continues hosting the same auto-managed tunnel. No orphaned `devtunnel host`
+processes are left behind.
+
+**Result-tracking row:**
+
+| Date | Build | Platform | Result | Notes |
+|---|---|---|---|---|
+| | | | | |
+
+---
+
+## ITH-04 — Color dropdown defaults to empty and omits `session.color`
+
+- **ID:** ITH-04
+- **Feature / phase:** Remote (`climon-remote`) — Remotes dialog setup-script
+  generation (`buildSetupScript`, `RemoteClientDialog`).
+- **Preconditions:** ITH-01 passed (a tunnel id exists, so the setup script is
+  generated).
+- **Config-matrix cell:** Remote / dev-tunnel, home host
+- **Platforms:** macOS, Linux, Windows
+
+**Steps:**
+1. Open the Remotes dialog on the home dashboard.
+2. Observe the **Color** dropdown's initial value.
+3. Read the generated setup script without changing the dropdown.
+4. Select a concrete color (e.g. `green`) and re-read the script.
+5. Re-select **Default** and re-read the script.
+
+**Expected:** The Color dropdown defaults to **Default** (empty). While
+**Default** is selected the setup script contains **no** `climon config
+session.color` line. Selecting `green` adds `climon config session.color green`;
+re-selecting **Default** removes the line again.
 
 **Result-tracking row:**
 

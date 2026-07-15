@@ -61,7 +61,13 @@ Launched as `climon __session <id>`, detached from the launcher. It:
    broadcasts it to connected clients, and applies attention transitions
    reported by the attached client (it is the single writer of session
    metadata).
-6. On PTY exit: persists final scrollback, patches metadata to
+6. Scans PTY output for terminal titles (`OSC 0`/`OSC 2`) and progress
+   (`OSC 9;4`, the ConEmu/Windows-Terminal taskbar-progress sequence),
+   debounces them, and persists the latest `terminalTitle`/`progress` to
+   metadata. Both are passthrough — the bytes are forwarded to the client
+   untouched. The dashboard renders `progress` per session (a determinate bar,
+   spinner, or error/warning icon).
+7. On PTY exit: persists final scrollback, patches metadata to
    `completed`/`failed` with the exit code, notifies clients, and shuts down.
 
 Because the daemon owns the PTY, the dashboard server can come and go freely.
@@ -70,15 +76,28 @@ Because the daemon owns the PTY, the dashboard server can come and go freely.
 
 A length-prefixed binary protocol over the socket:
 `[4-byte BE length][1-byte type][payload]`. Types: `Output`, `Input`, `Resize`,
-`Exit`, `Replay`, `PtySize`, `Attention`. `FrameDecoder`
-reassembles frames split across
-chunks. `Resize` payloads carry a `source` (`host` for the local terminal,
-`viewer` for a browser); the daemon clamps `viewer` resizes to the host
-terminal's size (configurable, on by default) and broadcasts the resulting
-`PtySize` so browsers render the same grid as the terminal. When the last
-browser viewer disconnects, the daemon reverts the PTY to the host terminal's
-size so a still-attached host terminal is not left rendering into a shrunken
-grid.
+`Exit`, `Replay`, `PtySize`, `Attention`, `Control`, `TakeControl`.
+`FrameDecoder` reassembles frames split across chunks. Every surface — the local
+terminal, a browser dashboard, or an installed PWA — attaches with a stable
+`viewerId` and a `kind` (`terminal`, `dashboard`, or `pwa`) and reports its own
+viewport with `Resize` frames.
+
+The daemon tracks exactly **one controller** at a time, and the shared PTY grid
+always matches the controller's size — there is no clamping, so whoever holds
+control sets the true dimensions. On attach the local terminal is the default
+controller. Any surface can seize control by sending a `TakeControl` frame, and
+that manual choice sticks until another `TakeControl` or a disconnect. When the
+controller disconnects the daemon falls back to the highest-priority remaining
+surface — `pwa` (3) > `dashboard` (2) > `terminal` (1), ties broken by
+most-recently-connected. On every change the daemon broadcasts a `Control` frame
+`{controllerId, cols, rows}`.
+
+A surface whose own viewport is at least as large as the controller grid in both
+dimensions **follows**: it renders the (possibly smaller) grid normally and stays
+fully interactive. A surface smaller than the controller grid in either dimension
+is **displaced**: it blanks its terminal behind a centered "being viewed
+elsewhere" notice with a **Take control** affordance, sends no input, and
+swallows every keystroke except the take-control action.
 
 ### Local client (`rust/climon-cli/src/client.rs`)
 
@@ -181,15 +200,16 @@ self-updates:
 
 - **`rust/climon-cli`** — `climon setup`, telemetry/auto-update onboarding,
   server delegation, launch hooks, and CLI entrypoints.
-- **`rust/climon-install`** — native self-install from release archives. A
-  release zip's `install`/`install.exe` is the Rust client, and the tiny
-  `climon-alpha` sentinel marker triggers the native self-install when the
-  client runs beside it.
+- **`rust/climon-install`** — the dedicated cross-platform installer shipped as
+  `install`/`install.exe` in release archives. It is separate from the `climon`
+  client, places the client and server binaries, sets up PATH/onboarding state,
+  and replaces the older `install`→`climon` rename plus `climon-alpha` sentinel
+  self-install path.
 - **`rust/climon-update`** — manifest fetch, update-state throttling,
-  downloads, detached-signature verification, atomic non-destructive binary
-  swap, background checks, and the `climon update` command. Its build script
-  reads `src/update/pubkey.ts`, which remains the shared Ed25519 public-key
-  source of truth for the Bun release tooling and Rust updater.
+  downloads, detached-signature verification, non-destructive binary swaps,
+  background checks, and the `climon update` command. Its build script reads
+  `src/update/pubkey.ts`, which remains the shared Ed25519 public-key source of
+  truth for the Bun release tooling and Rust updater.
 
 **Data flow.** Installer/onboarding writes config state (`telemetry.enabled`,
 `update.auto`, `install.id`). On `shell`/`run` launches,
@@ -200,6 +220,82 @@ artifact + detached signature, verifies the signature against the embedded
 public key, and only then performs the atomic swap — never killing running
 processes. Signing tooling lives in `scripts/gen-update-keys.ts` and
 `scripts/sign-release.ts`, wired into `.github/workflows/release.yml`.
+
+
+### Binary lifecycle and release layout
+
+Release archives now contain exactly the platform installer, client payload, and
+server payload: `install[.exe]`, `climon` on Unix or `climon.dll` on Windows, and
+`climon-server[.exe]`. The installer is a dedicated Rust binary; it is not the
+client renamed to `install`, and no `climon-alpha` sentinel is used.
+
+On **Windows**, the installed `climon.exe` is a tiny stable stub embedded in and
+placed by `install.exe`. The stub reads `climon.version`, loads
+`climon-<version>.dll` in-process, and calls the exported `climon_main` ABI. The
+server side mirrors the layout with `climon-server.exe` as the stable stub,
+`climon-server-<version>.exe` as the versioned server payload, and
+`climon-server.version` as its pointer. If a pointer is missing or corrupt, the
+stub falls back to the highest-semver matching versioned artifact in the install
+directory.
+
+This avoids overwriting a locked `climon.exe` during self-update. Windows updates
+write fresh versioned payload names, flip the pointer files atomically, and leave
+already-running terminals on the old DLL until they exit; new launches pick up the
+new pointer. The reaper, run opportunistically on interactive launch and from
+`climon cleanup`, deletes superseded versioned artifacts once Windows releases
+the file locks and skips anything still in use.
+
+On **Unix**, the client remains the `climon` executable built from `climon-cli`.
+Updates continue to use the existing rename-over swap model because POSIX allows
+replacing an executable while old processes keep their inode.
+
+For pre-release verification, `climon-update` carries a dev-only, compiled-out
+`test-update-endpoint` cargo feature: when enabled it lets `climon update` read
+its manifest URL from `CLIMON_TEST_MANIFEST_URL`, and `climon-update/build.rs`
+accepts a `CLIMON_UPDATE_PUBKEY_B64` build-time override so a test client can
+trust a throwaway signing key. `scripts/compile.ts` threads the feature into the
+served client builds (`climon-cli` and the Windows `climon-dll` stub payload)
+only when `CLIMON_TEST_UPDATE_ENDPOINT=1`; neither the feature nor any override
+is enabled by the default `compile.ts` path or `.github/workflows/release.yml`,
+so shipped binaries physically lack the override and always embed the real key.
+The `scripts/upgrade-test-harness.ts` end-to-end harness composes these to
+exercise the Windows migration/update paths (bridge→stub, stub→stub, idempotent
+`--migrate`, and brick recovery) on a real Windows box.
+
+
+### Migrating existing Windows installs (bridge release)
+
+Legacy Windows installs are a single `climon.exe` with no `climon.version`
+pointer. Shipping the stub model directly would brick them, so migration happens
+over two releases:
+
+1. **Bridge release (legacy packaging + migration-aware updater).** Cut this tag
+   from a state that still packages the legacy layout: `scripts/compile.ts` and
+   `.github/workflows/release.yml` must still emit `install.exe` as the legacy
+   client, before the stub-model packaging flip is part of the tagged commit. Old
+   installs auto-update to it exactly as before. Its only new content is the
+   migration branch in `climon-update` and installer `--migrate` mode. It does
+   not ship `climon.dll` or the dedicated installer layout.
+2. **First stub release ("C") — full stub model.** Cut this tag after the
+   packaging flip: the zip carries `install.exe` as the dedicated installer plus
+   `climon.dll` and `climon-server.exe`. When a bridge install updates to C, the
+   bridge updater sees `climon.dll` in the release, recognizes that the install
+   is still legacy because no pointer file exists, and runs
+   `install.exe --migrate` to convert it in place.
+
+Do not publish C until the bridge has had time to roll out. A very old install
+that never received the bridge and jumps straight to C will brick because its
+pre-migration updater copies C's dedicated installer over `climon.exe`; such
+installs must re-run `install.ps1`, whose installer legacy-upgrade path restores
+a working stub layout.
+
+For release engineering, the migration code must be present in the bridge tag,
+but the packaging flip must not be. In practice, tag the bridge from a commit
+that includes the migration-aware updater/installer changes but reverts or
+excludes the Phase 5 packaging changes, then land the packaging flip and tag C.
+Alternatively, land everything on `dev`, cut the bridge from a branch where
+`scripts/compile.ts` still emits the legacy layout, then merge the packaging flip
+for C.
 
 ## Data locations (`$CLIMON_HOME`, default `~/.climon`)
 
@@ -247,6 +343,19 @@ Because only cell contents are fingerprinted (not the cursor position), a
 blinking cursor is treated as static. Detection runs only while a local client is
 attached, and setting `attention.idleSeconds` to `0` or less disables it.
 
+When the daemon transitions a session to `needs-attention`, it also extracts a
+fuzzy "smart snippet" of the last relevant terminal output from its live
+`HeadlessGrid` (`rust/climon-session/src/snippet.rs`). The pure extractor runs
+a deterministic heuristic: it reads the visible lines, filters noise (borders,
+spinners, progress bars), and captures the last meaningful paragraph (capped at
+160 chars). The daemon writes this as `attentionSnippet` in the same metadata
+patch that flags `needs-attention`. The dashboard server then composes the
+notification title and body from a shared helper (`src/notification-content.ts`):
+title = session name → terminal title → command; body = snippet → terminal title
+(if not promoted to title) → "". This is gated by the `feature.smartNotifications`
+feature flag (default disabled, status experimental, scope daemon); when disabled
+the body falls back to the terminal title.
+
 ## Web Push pipeline (mobile PWA)
 
 The dashboard server (`climon-server`) gains an additive, fail-safe push pipeline
@@ -260,8 +369,8 @@ under `src/server/push/`:
   `$CLIMON_HOME/push/subscriptions.json` (deduped by endpoint).
 - `attention.ts` is a pure tracker that flags sessions newly entering
   `needs-attention` (seed-then-detect, deduped by `id:attentionMatchedAt`), and
-  `buildPushPayload` sets the notification title to `<label> needs attention`
-  with the session's terminal title as the body.
+  `buildPushPayload` sets the notification title to `<label>` (the session
+  label) with the session's terminal title as the body.
 - `presence.ts` is an in-memory registry of which push-subscription endpoints
   are currently foreground (TTL-expired, default 30s) so the server can skip
   devices that are actively viewing the dashboard.
@@ -302,8 +411,9 @@ and tapping it opens the session via
 `popSession`. Toasts are suppressed for the session the user is actively viewing
 (the client's single "viewed session", mirroring `TerminalView`'s
 `terminalVisible` rule — `App.tsx` also auto-acknowledges it so the daemon
-clears attention) and on the mobile session list, where the attention badge is
-already visible (`alertsVisible = pageVisible && (!isMobile || maximized)`).
+clears attention). Otherwise the toast fires whenever the dashboard tab is in the
+foreground — including the mobile session list — so an attention event is never
+missed (`alertsVisible = pageVisible`).
 Background OS-push suppression is done **per device on the server**, not in the
 service worker: while notifications are on, each open page runs a presence
 reporter (`src/web/pwa/presence.ts`) that POSTs `/api/push/presence`
@@ -321,8 +431,11 @@ the home machine through a Microsoft dev tunnel. The home machine runs a
 loopback-only **ingest** daemon (`climon __ingest` — the Rust client binary,
 resolved by the dashboard server; a dev source run requires the Rust binary to
 be built and never falls back to the Bun ingest) when `feature.remotes` is
-enabled and either hosts the tunnel automatically via the `devtunnel` CLI or
-records a manually-created tunnel in `~/.climon/remote-host.json`. `climon
+enabled. At startup the server derives a stable tunnel id from the anonymous
+global `install.id` (`climon-ingest-<sha256("climon-ingest"+install.id)[:20]>`),
+ensures that dev tunnel exists, labels it `climon-ingest`, records it in
+`~/.climon/remote-host.json`, and lets the ingest daemon host it. Existing
+manually-created tunnel state remains readable for compatibility. `climon
 server` no longer accepts a remotes startup flag; config is the only switch. The
 ingest also serves a loopback-only **remote-spawn control socket** (advertised
 as `controlSocket` in `ingest.json`), dual-listens on `127.0.0.1` when bound to
@@ -345,6 +458,51 @@ The uplink also emits an authoritative `session-list` snapshot each reconcile so
 the ingest can garbage-collect ghost sessions deleted on the source (including
 those left on disk by a previous connection), while preserving still-present
 disconnected sessions and never re-materializing dismissed ones.
+
+When `remote.enabled` is true, the devbox uplink auto-discovers dashboard hosts
+by running `devtunnel list --labels climon-ingest --json` every 30 seconds. It
+keeps only tunnels whose `hostConnections >= 1`, derives this machine's own
+stable ingest id from `install.id` (`climon-ingest-<sha256(...)[:20]>`) to avoid
+self-loops, and unions the discovered tunnel ids with any explicit
+`remote.tunnelId` or direct `remote.host` target. The multi-target supervisor
+fans out concurrently: each desired target owns an independent bridge task using
+the existing `devtunnel connect` → `devtunnel port list` → `run_uplink_bridge`
+path, and the poll reconciles additions/removals without disturbing other live
+targets.
+
+At session launch the client runs a synchronous Dev Tunnels probe (CLI
+availability + sign-in) before spawning the uplink. This probe is bounded by a
+5-second timeout: if `devtunnel` stalls, the launcher warns the user and spawns
+the uplink best-effort rather than blocking session start
+(`rust/climon-cli/src/launcher.rs` `probe_devtunnel_sync`, `plan_uplink_start`).
+
+## Dev-tunnel gateway (runtime-local boundary + shared failure contract)
+
+Every `devtunnel` invocation is funnelled through a per-runtime **gateway** so
+Dev Tunnels execution is centralized and consistently classified:
+
+- **Bun** owns the dashboard **Tunnel Link** and the server-side ingest
+  create/port operations (`src/devtunnel/gateway.ts`).
+- **Rust** owns discovery, connect, and ingest host
+  (`rust/climon-remote/src/devtunnel/gateway.rs`).
+
+Both runtimes classify failures through a **shared JSON contract** backed by
+golden fixtures (`fixtures/devtunnel/failures.json`), so the error `code`,
+`remediation`, and retry class are identical across Bun and Rust. Failures
+resolve to friendly outcomes — `not_authenticated`, `cli_missing`,
+`permission_denied`, `tunnel_quota_exhausted`, `tunnel_not_found`,
+`port_conflict`, transient (HTTP 429 / 5xx / network), and `unknown`. Transient
+failures retry with capped-exponential backoff (1s → 30s) plus jitter;
+actionable failures (auth, quota, permission) **pause** and wait for the user to
+fix them and Retry. climon never installs the CLI, logs in, or deletes tunnels;
+`tunnel_not_found` permits exactly one safe recreate.
+
+Status beacons (`uplink-status.json` / `ingest-status.json`) and the
+dashboard/API surfaces carry a normalized `DevtunnelHealth`
+(`{ available, authenticated, version, state, lastSuccessAt, lastFailure, retry,
+probedAt }`; `src/devtunnel/types.ts`), so the dashboard and `climon remotes`
+render the same health. The Tunnel Link entry is always visible; when the tunnel
+can't start, the dashboard shows the classified failure and a Retry action.
 
 ## Remote visibility (`ingest-status.json`, `uplink-status.json`, `climon remotes`)
 
@@ -369,19 +527,17 @@ ingest / uplink supervisor
         │  (single writer)
         ▼
 ingest-status.json / uplink-status.json   ($CLIMON_HOME, 0600)
-        │                         │
-        ▼                         ▼
-  climon remotes          GET /api/remotes (loopback-only)
-  (--watch / --json)              │
-                                  ▼  SSE "remotes" event
-                          dashboard "Remote hosts" menu + panel
+        │
+        ▼
+  climon remotes
+  (--watch / --json)
 ```
 
 `hello.hostname`/`hello.os` are untrusted remote input: the ingest sanitizes
 them at the trust boundary (cap `hostname` to 64 chars + strip control/ESC
 bytes; allowlist `os` to `darwin`/`win32`/`linux`, else `unknown`) before they
-are stored, so every downstream sink (`climon remotes` TTY, `--json`, the
-dashboard) only ever formats already-safe strings.
+are stored, so every downstream sink (`climon remotes` TTY, `--json`) only ever
+formats already-safe strings.
 
 ## Same-machine WSL <-> Windows discovery (`src/remote/peer.ts`, `discovery.ts`, `link.ts`)
 
