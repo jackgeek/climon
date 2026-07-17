@@ -211,15 +211,23 @@ pub fn run_session_host(
 
 Add `ActorUnavailable` and display it as `actor session engine is not available`.
 
-Export `pub mod engine;` from `lib.rs`.
+Export `pub(crate) mod engine;` from `lib.rs` and add a `compile_fail` doctest
+proving external callers cannot bypass the host facade.
 
 - [ ] **Step 5: Add Tokio dependencies**
 
 Add to `climon-session/Cargo.toml`:
 
 ```toml
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+```
+
+Add the test-only clock feature separately:
+
+```toml
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 ```
 
 - [ ] **Step 6: Run selector and legacy integration tests**
