@@ -8,5 +8,6 @@
 pub(crate) mod attention;
 pub(crate) mod clients;
 pub(crate) mod control;
+pub(crate) mod lifecycle;
 pub(crate) mod local_view;
 pub(crate) mod terminal;
