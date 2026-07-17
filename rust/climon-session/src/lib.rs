@@ -47,6 +47,8 @@ pub mod idle;
 pub mod replay;
 pub mod snippet;
 pub mod socket;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod title_capture;
 
 pub use error::{SessionError, SessionResult};
