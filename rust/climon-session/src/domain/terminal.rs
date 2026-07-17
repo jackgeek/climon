@@ -3,9 +3,8 @@
 //! together in the exact mutation order the legacy reader thread uses
 //! (`crate::host::legacy::spawn_reader_thread`), but with no I/O of its own.
 //!
-// Consumed by the aggregate actor state assembled in a later task (Task 8);
-// some accessors below are unused within this crate until then.
-#![allow(dead_code)]
+// Consumed by the aggregate actor state (`engine::state`); the one accessor
+// exercised only by this module's tests carries a local allowance.
 
 use std::collections::HashMap;
 
@@ -157,7 +156,9 @@ impl TerminalModel {
         self.captured_progress
     }
 
-    /// Whether `mode` (e.g. `"1000"`) is currently enabled.
+    /// Whether `mode` (e.g. `"1000"`) is currently enabled. Exercised by this
+    /// module's tests; retained for the coordinator's local-restore wiring.
+    #[allow(dead_code)]
     pub(crate) fn mouse_mode_enabled(&self, mode: &str) -> bool {
         self.mouse_mode_state.get(mode) == Some(&true)
     }

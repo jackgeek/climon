@@ -12,6 +12,7 @@ use crate::host::SessionHostOptions;
 
 pub(crate) mod effect;
 pub(crate) mod event;
+pub(crate) mod state;
 
 pub fn run_session_host(
     _id: &str,
