@@ -39,6 +39,7 @@
 
 pub mod attention;
 pub mod control;
+pub(crate) mod domain;
 pub(crate) mod engine;
 pub mod error;
 pub mod fingerprint;
