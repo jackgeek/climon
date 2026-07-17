@@ -10,6 +10,9 @@ use climon_proto::meta::SessionMeta;
 use crate::error::{SessionError, SessionResult};
 use crate::host::SessionHostOptions;
 
+pub(crate) mod effect;
+pub(crate) mod event;
+
 pub fn run_session_host(
     _id: &str,
     _meta: SessionMeta,
