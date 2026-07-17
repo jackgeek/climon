@@ -118,8 +118,8 @@ The public entry point remains:
 
 ```rust
 run_session_host(
-    env: &StoreEnv,
     id: &str,
+    meta: SessionMeta,
     options: SessionHostOptions,
 ) -> SessionResult<i32>
 ```
@@ -396,8 +396,8 @@ Supporting crates may receive narrow API changes:
   capabilities that make exclusive ownership clear
 - `climon-store`: expose an injectable metadata writer interface suitable for
   ordered adapter execution and deterministic tests
-- `climon-proto`: add an owned decoded-frame type for adapter-to-coordinator
-  delivery without changing serialized bytes
+- `climon-proto`: reuse the existing owned `DecodedFrame` for
+  adapter-to-coordinator delivery without changing serialized bytes
 
 ## Migration Strategy
 
