@@ -14,6 +14,8 @@ climon-logging = { path = "../climon-logging", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 vt100 = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "test-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

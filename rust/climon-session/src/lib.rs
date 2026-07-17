@@ -29,6 +29,7 @@
 
 pub mod attention;
 pub mod control;
+pub mod engine;
 pub mod error;
 pub mod fingerprint;
 pub mod host;
