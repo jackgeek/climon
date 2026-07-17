@@ -96,11 +96,13 @@ impl AttentionState {
     /// `payload.needs_attention` is false this is an acknowledgement attempt,
     /// accepted only via
     /// [`should_apply_user_attention_acknowledgement`]; `payload.attention_matched_at`
-    /// is the token the caller is acknowledging. When true, this is a
-    /// user-origin flag, sharing the same paused/duplicate guard as the
-    /// detector; `payload.attention_matched_at` is ignored (the daemon's
-    /// `wall_time` is authoritative for the token) and no snippet is computed
-    /// (the caller does not supply the grid here).
+    /// is the token the caller is acknowledging, and `visible_lines`/`cursor_row`
+    /// are unused. When true, this is a user-origin flag, sharing the same
+    /// paused/duplicate guard as the detector; `payload.attention_matched_at` is
+    /// ignored (the daemon's `wall_time` is authoritative for the token) and, like
+    /// [`Self::sample`], `visible_lines`/`cursor_row` are the current terminal
+    /// grid used to compute the attention snippet when snippets are enabled.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_user(
         &mut self,
         payload: AttentionPayload,
@@ -108,6 +110,8 @@ impl AttentionState {
         now_ms: i64,
         wall_time: &str,
         current_status: SessionStatus,
+        visible_lines: &[String],
+        cursor_row: Option<usize>,
     ) -> Option<AttentionTransition> {
         if !payload.needs_attention {
             if !should_apply_user_attention_acknowledgement(
@@ -125,13 +129,18 @@ impl AttentionState {
             self.detector.acknowledge(fingerprint, now_ms);
             return Some(self.clear(AttentionSource::User, wall_time, current_status));
         }
+        let snippet = if self.snippet_enabled {
+            extract_snippet(visible_lines, cursor_row)
+        } else {
+            None
+        };
         self.flag(
             AttentionSource::User,
             payload.reason,
             fingerprint,
             wall_time,
             current_status,
-            None,
+            snippet,
         )
     }
 
@@ -272,6 +281,8 @@ mod tests {
                 1_100,
                 "2026-07-17T20:00:01.100Z",
                 SessionStatus::NeedsAttention,
+                &[],
+                None,
             )
             .unwrap();
         assert_eq!(transition.status, SessionStatus::Acknowledged);
@@ -307,6 +318,8 @@ mod tests {
             1_100,
             "T1.1",
             SessionStatus::NeedsAttention,
+            &[],
+            None,
         );
         assert!(rejected.is_none());
     }
@@ -340,6 +353,8 @@ mod tests {
             1_100,
             "T1.1",
             SessionStatus::NeedsAttention,
+            &[],
+            None,
         );
         assert!(rejected.is_none());
     }
@@ -374,6 +389,8 @@ mod tests {
                 1_100,
                 "T1.1",
                 SessionStatus::NeedsAttention,
+                &[],
+                None,
             )
             .unwrap();
         assert_eq!(transition.status, SessionStatus::Acknowledged);
@@ -459,6 +476,8 @@ mod tests {
                 1_100,
                 "T1.1",
                 SessionStatus::NeedsAttention,
+                &[],
+                None,
             )
             .unwrap();
         assert_eq!(ack.status, SessionStatus::Acknowledged);
@@ -502,6 +521,8 @@ mod tests {
                 1_100,
                 "T1.1",
                 SessionStatus::NeedsAttention,
+                &[],
+                None,
             )
             .unwrap();
 
@@ -576,6 +597,8 @@ mod tests {
                 0,
                 "T0",
                 SessionStatus::Running,
+                &[],
+                None,
             )
             .unwrap();
         assert_eq!(first.status, SessionStatus::NeedsAttention);
@@ -590,8 +613,39 @@ mod tests {
             100,
             "T1",
             SessionStatus::Running,
+            &[],
+            None,
         );
         assert!(second.is_none());
+    }
+
+    #[test]
+    fn user_origin_flag_includes_snippet_when_enabled() {
+        let lines = vec!["  The deploy succeeded and traffic looks healthy.".to_string()];
+        let mut state = AttentionState::new(0, true);
+
+        let transition = state
+            .apply_user(
+                AttentionPayload {
+                    needs_attention: true,
+                    reason: Some("manual".into()),
+                    attention_matched_at: None,
+                },
+                "80x24\nprompt",
+                0,
+                "T0",
+                SessionStatus::Running,
+                &lines,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            transition.patch.attention_snippet,
+            Some(Some(
+                "The deploy succeeded and traffic looks healthy.".to_string()
+            ))
+        );
     }
 
     #[test]
@@ -622,6 +676,8 @@ mod tests {
                 1_000_000,
                 "T2",
                 SessionStatus::Running,
+                &[],
+                None,
             )
             .unwrap();
         assert_eq!(flagged.status, SessionStatus::NeedsAttention);
