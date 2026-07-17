@@ -5,8 +5,9 @@
 //! time lookups: the caller supplies a monotonic `now_ms` and an ISO wall-clock
 //! timestamp for every sample.
 //!
-// Consumed by the aggregate actor state assembled in a later task (Task 8);
-// some accessors below are unused within this crate until then.
+// The aggregate actor state (`engine::state`) drives every attention
+// transition; the diagnostic accessors below remain unused within the crate
+// until the coordinator's status logging consumes them.
 #![allow(dead_code)]
 
 use climon_proto::frame::AttentionPayload;

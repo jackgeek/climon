@@ -16,10 +16,9 @@
 //! [`LocalViewState::console_write_failed`], so a failed/late write can never
 //! be mistaken for a successful repaint.
 //!
-// Consumed by the aggregate actor state assembled in a later task (Task 8);
-// `LocalViewState`/`LocalViewAction` are only exercised by this module's
-// tests until then.
-#![allow(dead_code)]
+// Consumed by the aggregate actor state (`engine::state`) and the legacy host,
+// which share every pure decision/helper here; the one protocol variant not yet
+// emitted carries a local allowance.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -233,7 +232,10 @@ pub(crate) enum LocalViewAction {
     /// Swallow this input chunk (the local terminal is displaced/suppressed).
     SwallowInput,
     /// A console write failed while a restore was in flight: the local
-    /// terminal's screen state can no longer be trusted.
+    /// terminal's screen state can no longer be trusted. Reserved for the
+    /// coordinator; the state machine currently degrades via
+    /// [`LocalViewState::console_write_failed`] rather than emitting this.
+    #[allow(dead_code)]
     Degraded,
 }
 

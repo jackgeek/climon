@@ -3,8 +3,9 @@
 //! ordered finalization steps rather than ad hoc booleans and inline
 //! teardown code (`crate::host::legacy::run` lines ~905-1000).
 //!
-// Consumed by the aggregate actor state assembled in a later task (Task 8);
-// some accessors below are unused within this crate until then.
+// The aggregate actor state (`engine::state`) drives exit finalization; the
+// phase / bookkeeping accessors below are exercised by this module's tests and
+// reserved for the coordinator's startup supervision.
 #![allow(dead_code)]
 
 use std::collections::VecDeque;

@@ -7,9 +7,9 @@
 //! completion — is represented as a value here rather than performed inline,
 //! so the transition function stays synchronous and unit-testable.
 
-// The actor implementation that constructs and matches on these types lands
-// in a later task; until then they are only exercised by `test_support`.
-#![allow(dead_code)]
+// The aggregate actor state (`engine::state`) constructs and matches on every
+// effect variant; the coordinator that performs them against real I/O lands in
+// a later task.
 
 use std::time::Duration;
 

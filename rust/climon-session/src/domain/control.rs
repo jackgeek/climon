@@ -3,9 +3,8 @@
 //! mutable bookkeeping the actor needs — which surfaces are connected, at
 //! what size, and who currently holds the pty.
 //!
-// Consumed by the aggregate actor state assembled in a later task (Task 8);
-// some accessors below are unused within this crate until then.
-#![allow(dead_code)]
+// Consumed by the aggregate actor state (`engine::state`); the one accessor it
+// does not yet read carries a local allowance.
 
 use std::collections::HashMap;
 
@@ -202,6 +201,9 @@ impl ControlState {
         (self.applied_cols, self.applied_rows)
     }
 
+    // The aggregate reads the local view's console size directly; this
+    // control-side mirror is retained for the coordinator wiring.
+    #[allow(dead_code)]
     pub(crate) fn host_size(&self) -> (u16, u16) {
         (self.host_cols, self.host_rows)
     }

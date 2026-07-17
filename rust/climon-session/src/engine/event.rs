@@ -7,8 +7,9 @@
 //!
 //! [`Effect`]: crate::engine::effect::Effect
 
-// The actor implementation that constructs and matches on `SessionEvent`
-// lands in a later task; until then it has no non-test consumer.
+// The aggregate actor state (`engine::state`) matches on every event; the
+// variants are constructed by `test_support` now and by the coordinator that
+// feeds real I/O later, so they have no non-test constructor yet.
 #![allow(dead_code)]
 
 use climon_proto::frame::DecodedFrame;

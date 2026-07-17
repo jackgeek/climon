@@ -2,9 +2,8 @@
 //! viewers) and the surface state they negotiate, deciding which clients are
 //! eligible to receive state broadcasts.
 //!
-// Consumed by the aggregate actor state assembled in a later task (Task 8);
-// some accessors below are unused within this crate until then.
-#![allow(dead_code)]
+// Consumed by the aggregate actor state (`engine::state`); the one accessor it
+// does not yet need carries a local allowance.
 
 use std::collections::HashMap;
 
@@ -94,10 +93,21 @@ impl ClientRegistry {
         ids
     }
 
+    /// Returns every connected client id (initialized or not) sorted by numeric
+    /// id. Used to close all clients during exit finalization.
+    pub(crate) fn ids(&self) -> Vec<ClientId> {
+        let mut ids: Vec<ClientId> = self.clients.keys().copied().collect();
+        ids.sort_by_key(|id| id.0);
+        ids
+    }
+
     pub(crate) fn get(&self, id: ClientId) -> Option<&ClientState> {
         self.clients.get(&id)
     }
 
+    // Symmetric accessor the aggregate does not yet mutate through; retained
+    // for the coordinator wiring.
+    #[allow(dead_code)]
     pub(crate) fn get_mut(&mut self, id: ClientId) -> Option<&mut ClientState> {
         self.clients.get_mut(&id)
     }
@@ -159,5 +169,14 @@ mod tests {
         clients.mark_initialized(ClientId(1));
         assert_eq!(clients.get(ClientId(1)).unwrap().seq, 0);
         assert_eq!(clients.get(ClientId(2)).unwrap().seq, 1);
+    }
+
+    #[test]
+    fn ids_returns_every_connected_client_sorted_regardless_of_initialization() {
+        let mut clients = ClientRegistry::default();
+        clients.connect(ClientId(3));
+        clients.connect(ClientId(1));
+        clients.mark_initialized(ClientId(1));
+        assert_eq!(clients.ids(), vec![ClientId(1), ClientId(3)]);
     }
 }
