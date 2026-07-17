@@ -31,6 +31,11 @@ use climon_store::Env as StoreEnv;
 use crate::attention::fingerprint_body;
 use crate::attention::should_apply_user_attention_acknowledgement;
 use crate::control::{choose_controller, Surface};
+use crate::domain::local_view::{
+    jiggle_size, local_displaced_by_controller, local_exit_restore_bytes, local_restore_decision,
+    local_stdin_action, JiggleLeg, LocalRestoreDecision, LocalStdinAction, LOCAL_RESTORE_DELAY,
+    LOCAL_TAKE_CONTROL_KEY,
+};
 use crate::error::{SessionError, SessionResult};
 use crate::fingerprint::{render_screen_from_replay, HeadlessGrid};
 use crate::idle::ScreenIdleDetector;
@@ -47,14 +52,6 @@ const SESSION_ENV_VAR: &str = "CLIMON_SESSION_ID";
 const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
 const SCROLLBACK_CAP: usize = 256 * 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long the local terminal stays suppressed after a browser viewer shrinks
-/// back to (or under) the local size before the restore watcher repaints it from
-/// the parsed grid's current screen. This delay lets the PTY's resize-repaint
-/// burst (notably Windows ConPTY's clear-and-repaint, delivered asynchronously
-/// on the reader thread after the resize call) drain first, so the clean grid
-/// repaint lands last and the local terminal is not left blank or corrupted. The
-/// screen is rendered when the watcher fires, so it reflects the latest output.
-const LOCAL_RESTORE_DELAY: Duration = Duration::from_millis(250);
 
 /// Reads the *real* local console size for the displaced-notice renderer. On
 /// Windows this is `GetConsoleScreenBufferInfo`'s visible viewport (a null
@@ -1293,133 +1290,6 @@ fn spawn_connection_reader(
     })
 }
 
-/// The bytes to write to the in-process local terminal to restore its screen
-/// when the session exits, or `None` when no restore is needed.
-///
-/// A restore is needed exactly when an interactive local terminal is attached
-/// and currently suppressed — i.e. it is displaced, showing the take-control
-/// notice because a dashboard/PWA held control when the command exited. Without
-/// this the terminal is stranded on the "Press Space to take control." notice
-/// instead of the command's final screen/scrollback; there is no live output or
-/// restore-watcher tick left to repaint it, because the daemon is tearing down.
-/// Rebuilds a host-sized viewport from the final scrollback (mirroring the
-/// restore-watcher `Repaint` path) so the last screen lands cleanly over the
-/// cleared notice. Extracted as a pure function so the exit-time restore is
-/// unit-testable without a live PTY/`HostState`.
-fn local_exit_restore_bytes(
-    local_attached: bool,
-    local_output_suppressed: bool,
-    snapshot: &[u8],
-    host_cols: u16,
-    host_rows: u16,
-    mouse_mode_state: &HashMap<String, bool>,
-) -> Option<Vec<u8>> {
-    if !(local_attached && local_output_suppressed) {
-        return None;
-    }
-    let mut out =
-        build_mouse_private_mode_restore_suffix(mouse_mode_state, TRACKED_MOUSE_PRIVATE_MODES);
-    out.extend_from_slice(&render_screen_from_replay(
-        snapshot,
-        host_cols.max(1),
-        host_rows.max(1),
-    ));
-    Some(out)
-}
-
-/// Watches for a deferred local-terminal restore (a controlling surface shrank
-/// back to the local size) and, once `local_restore_at` elapses, repaints
-/// the local screen from the parsed grid's current state, then resumes live
-/// output. Deferring the repaint lets the PTY's resize-repaint burst drain first
-/// (see `LOCAL_RESTORE_DELAY`), so the clean grid repaint lands last instead of
-/// being clobbered.
-/// What the restore watcher should do on a given tick. Extracted as a pure
-/// decision (see [`local_restore_decision`]) so the fix — never resuming the
-/// local terminal while the PTY is still overgrown — is unit-testable without a
-/// live PTY/`HostState`.
-#[derive(Debug, PartialEq, Eq)]
-enum LocalRestoreDecision {
-    /// No restore is pending, or the deferral has not elapsed yet.
-    NotDue,
-    /// The deferral elapsed but the PTY is still larger than the local console
-    /// (a viewer re-grew during the delay): stay suppressed and clear the
-    /// pending restore so the next genuine shrink reschedules it.
-    SkipOvergrown,
-    /// The deferral elapsed and the PTY now fits the local console: repaint the
-    /// local screen from the grid and resume live output.
-    Repaint,
-}
-
-/// Pure decision for the restore watcher. Resuming the local terminal while the
-/// PTY is still overgrown is the Windows corruption root cause: ConPTY positions
-/// its live output absolutely for the taller grid (e.g. `\e[34;1H` for a 57-row
-/// PTY), which stacks lines / overwrites the prompt on the shorter real console.
-fn local_restore_decision(
-    restore_at: Option<Instant>,
-    now: Instant,
-    overgrown: bool,
-) -> LocalRestoreDecision {
-    match restore_at {
-        Some(at) if now >= at => {
-            if overgrown {
-                LocalRestoreDecision::SkipOvergrown
-            } else {
-                LocalRestoreDecision::Repaint
-            }
-        }
-        _ => LocalRestoreDecision::NotDue,
-    }
-}
-
-/// What to do with a chunk of in-process local-terminal stdin. Extracted as a
-/// pure decision so the take-control-while-displaced rule is unit-testable
-/// without a live PTY/`HostState`.
-#[derive(Debug, PartialEq, Eq)]
-enum LocalStdinAction {
-    /// The local terminal is displaced and the chunk contained the take-control
-    /// key (Space): reclaim control back to the local terminal and swallow the
-    /// input.
-    TakeControl,
-    /// The local terminal is displaced (output suppressed by another
-    /// controller): swallow the input so the command stays non-interactive.
-    Swallow,
-    /// The local terminal holds control: forward the input unchanged to the PTY.
-    Forward,
-}
-
-/// The key that reclaims control to the in-process local terminal while it is
-/// displaced: the space bar (0x20). Ctrl+T was avoided because host terminal
-/// emulators and browsers commonly intercept it (new tab / "go to symbol") so it
-/// never reaches climon. Space is only treated as take-control while displaced;
-/// once the local terminal controls the grid, Space is ordinary input and is
-/// forwarded to the PTY (see [`local_stdin_action`]).
-const LOCAL_TAKE_CONTROL_KEY: u8 = 0x20;
-
-/// Pure decision for in-process local stdin. While displaced, the take-control
-/// key (Space) reclaims control and every other key is swallowed (the monitored
-/// command is non-interactive). While controlling, all input is forwarded --
-/// including Space, which must reach the shell as normal input.
-fn local_stdin_action(has_take_control: bool, suppressed: bool) -> LocalStdinAction {
-    if suppressed {
-        if has_take_control {
-            LocalStdinAction::TakeControl
-        } else {
-            LocalStdinAction::Swallow
-        }
-    } else {
-        LocalStdinAction::Forward
-    }
-}
-
-/// Pure decision: is the in-process local terminal displaced? Identity-based,
-/// mirroring the dashboard/attach-client surfaces — the local terminal is
-/// displaced whenever some *other* surface (not `"local"`) is the controller,
-/// regardless of relative size. With no controller yet (session start) the
-/// local terminal owns the grid, so it is not displaced.
-fn local_displaced_by_controller(controller_id: Option<&str>) -> bool {
-    matches!(controller_id, Some(id) if id != "local")
-}
-
 fn socket_client_controls_input(
     controller_id: Option<&str>,
     client_viewer_id: Option<&str>,
@@ -1430,52 +1300,12 @@ fn socket_client_controls_input(
     )
 }
 
-/// The intermediate PTY height for a restore jiggle: one row away from `rows`,
-/// so the resize is always a real (non-deduped) change that forces the wrapped
-/// command to repaint. Steps down normally, but up when `rows <= 1` because
-/// `PtyResizer::resize` clamps to `>= 1` and the de-dupe would otherwise swallow
-/// a no-op resize. `jiggle_size` pairs this with a one-column shrink so both
-/// dimensions change.
-fn jiggle_rows(rows: u16) -> u16 {
-    if rows > 1 {
-        rows - 1
-    } else {
-        rows + 1
-    }
-}
-
-/// The intermediate PTY size for a restore jiggle: one column narrower (never
-/// wider, so the PTY never transiently overgrows the real local console — the
-/// Windows ConPTY corruption guard) and one row away (via `jiggle_rows`).
-/// Changing *both* dimensions guarantees a real `winsize` difference the wrapped
-/// command detects, and the column change busts the frame cache of TUIs (e.g.
-/// Ink/`copilot`) that skip a redraw when the new frame is byte-identical to the
-/// last. Columns clamp at `1`; rows always change, so the result never equals
-/// the input.
-fn jiggle_size(cols: u16, rows: u16) -> (u16, u16) {
-    (cols.saturating_sub(1).max(1), jiggle_rows(rows))
-}
-
-/// Which leg of a two-leg repaint jiggle runs next. Leg 1 (`Away`) drives the
-/// PTY to `jiggle_size`; Leg 2 (`Back`) returns it to the current live size. The
-/// legs run on consecutive restore-thread ticks so the ~25 ms gap between them
-/// is observable (a shorter gap coalesces and the app never samples the
-/// intermediate size).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum JiggleLeg {
-    Away,
-    Back,
-}
-
-impl JiggleLeg {
-    fn next(self) -> Option<JiggleLeg> {
-        match self {
-            JiggleLeg::Away => Some(JiggleLeg::Back),
-            JiggleLeg::Back => None,
-        }
-    }
-}
-
+/// Watches for a deferred local-terminal restore (a controlling surface shrank
+/// back to the local size) and, once `local_restore_at` elapses, repaints
+/// the local screen from the parsed grid's current state, then resumes live
+/// output. Deferring the repaint lets the PTY's resize-repaint burst drain first
+/// (see `LOCAL_RESTORE_DELAY`), so the clean grid repaint lands last instead of
+/// being clobbered.
 fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(25));
@@ -1990,144 +1820,6 @@ mod writer_thread_tests {
 }
 
 #[cfg(test)]
-mod restore_decision_tests {
-    use super::{
-        jiggle_rows, jiggle_size, local_restore_decision, JiggleLeg, LocalRestoreDecision,
-    };
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn not_due_when_no_restore_pending() {
-        let now = Instant::now();
-        assert_eq!(
-            local_restore_decision(None, now, false),
-            LocalRestoreDecision::NotDue
-        );
-        assert_eq!(
-            local_restore_decision(None, now, true),
-            LocalRestoreDecision::NotDue
-        );
-    }
-
-    #[test]
-    fn not_due_before_deferral_elapses() {
-        let now = Instant::now();
-        let future = now + Duration::from_millis(250);
-        assert_eq!(
-            local_restore_decision(Some(future), now, false),
-            LocalRestoreDecision::NotDue
-        );
-    }
-
-    #[test]
-    fn repaints_when_due_and_not_overgrown() {
-        let now = Instant::now();
-        let past = now - Duration::from_millis(1);
-        assert_eq!(
-            local_restore_decision(Some(past), now, false),
-            LocalRestoreDecision::Repaint
-        );
-    }
-
-    #[test]
-    fn jiggle_rows_steps_down_when_room() {
-        assert_eq!(jiggle_rows(24), 23);
-        assert_eq!(jiggle_rows(2), 1);
-    }
-
-    #[test]
-    fn jiggle_rows_steps_up_at_minimum() {
-        // rows == 1 cannot step down (resize clamps to >= 1, which would be a
-        // no-op the de-dupe swallows), so step up instead to force a change.
-        assert_eq!(jiggle_rows(1), 2);
-    }
-
-    #[test]
-    fn jiggle_rows_is_never_equal_to_input() {
-        for rows in [1u16, 2, 24, 50, 200, u16::MAX - 1] {
-            assert_ne!(jiggle_rows(rows), rows);
-        }
-    }
-
-    #[test]
-    fn jiggle_size_shrinks_columns_and_rows() {
-        assert_eq!(jiggle_size(80, 24), (79, 23));
-        assert_eq!(jiggle_size(2, 2), (1, 1));
-    }
-
-    #[test]
-    fn jiggle_size_clamps_columns_at_minimum() {
-        // cols cannot shrink below 1; rows step up from 1. At least one dim
-        // always changes, so the resize is never a no-op the de-dupe swallows.
-        assert_eq!(jiggle_size(1, 1), (1, 2));
-        assert_eq!(jiggle_size(1, 50), (1, 49));
-    }
-
-    #[test]
-    fn jiggle_size_is_never_equal_to_input() {
-        for (cols, rows) in [
-            (1u16, 1u16),
-            (1, 24),
-            (80, 24),
-            (200, 50),
-            (u16::MAX, u16::MAX),
-        ] {
-            assert_ne!(jiggle_size(cols, rows), (cols, rows));
-        }
-    }
-
-    #[test]
-    fn jiggle_leg_advances_away_to_back_to_done() {
-        assert_eq!(JiggleLeg::Away.next(), Some(JiggleLeg::Back));
-        assert_eq!(JiggleLeg::Back.next(), None);
-    }
-
-    #[test]
-    fn skips_when_due_but_still_overgrown() {
-        // Regression guard for the Windows corruption: a viewer re-grew the PTY
-        // during the deferral, so resuming the local terminal would expose
-        // ConPTY's tall-grid absolute-positioned output to the shorter console.
-        let now = Instant::now();
-        let past = now - Duration::from_millis(1);
-        assert_eq!(
-            local_restore_decision(Some(past), now, true),
-            LocalRestoreDecision::SkipOvergrown
-        );
-    }
-}
-
-#[cfg(test)]
-mod local_stdin_tests {
-    use super::{local_stdin_action, LocalStdinAction};
-
-    #[test]
-    fn space_is_forwarded_as_normal_input_when_controlling() {
-        // Critical: when the local terminal holds control, Space (the
-        // take-control key) is ordinary shell input and MUST be forwarded, not
-        // swallowed -- otherwise the user could never type a space.
-        assert_eq!(local_stdin_action(true, false), LocalStdinAction::Forward);
-    }
-
-    #[test]
-    fn space_takes_control_when_displaced() {
-        assert_eq!(
-            local_stdin_action(true, true),
-            LocalStdinAction::TakeControl
-        );
-    }
-
-    #[test]
-    fn displaced_input_is_swallowed() {
-        assert_eq!(local_stdin_action(false, true), LocalStdinAction::Swallow);
-    }
-
-    #[test]
-    fn ordinary_input_is_forwarded_when_controlling() {
-        assert_eq!(local_stdin_action(false, false), LocalStdinAction::Forward);
-    }
-}
-
-#[cfg(test)]
 mod socket_input_tests {
     use super::socket_client_controls_input;
 
@@ -2147,73 +1839,6 @@ mod socket_input_tests {
         ));
         assert!(!socket_client_controls_input(None, Some("dashboard-a")));
         assert!(!socket_client_controls_input(Some("dashboard-a"), None));
-    }
-}
-
-#[cfg(test)]
-mod local_displaced_tests {
-    use super::local_displaced_by_controller;
-
-    #[test]
-    fn not_displaced_when_local_is_controller() {
-        assert!(!local_displaced_by_controller(Some("local")));
-    }
-
-    #[test]
-    fn not_displaced_when_no_controller_yet() {
-        assert!(!local_displaced_by_controller(None));
-    }
-
-    #[test]
-    fn displaced_when_a_dashboard_controls_regardless_of_size() {
-        // Identity-based: any non-local controller displaces the local terminal,
-        // even a dashboard whose grid is smaller than the local console.
-        assert!(local_displaced_by_controller(Some("dashboard-abc")));
-        assert!(local_displaced_by_controller(Some("terminal-1234")));
-    }
-}
-
-#[cfg(test)]
-mod local_exit_restore_tests {
-    use super::local_exit_restore_bytes;
-    use std::collections::HashMap;
-
-    #[test]
-    fn no_restore_when_local_not_attached() {
-        // A headless daemon has no local screen to restore.
-        assert_eq!(
-            local_exit_restore_bytes(false, true, b"hello", 80, 24, &HashMap::new()),
-            None
-        );
-    }
-
-    #[test]
-    fn no_restore_when_not_suppressed() {
-        // The local terminal already holds control (not displaced): its live
-        // output already painted the final screen, so nothing to repaint.
-        assert_eq!(
-            local_exit_restore_bytes(true, false, b"hello", 80, 24, &HashMap::new()),
-            None
-        );
-    }
-
-    #[test]
-    fn restores_final_screen_when_attached_and_displaced() {
-        // The reported bug: the session exited while a dashboard controlled the
-        // grid, so the local terminal is suppressed on the take-control notice.
-        // On exit we must repaint the command's final screen from scrollback.
-        let out =
-            local_exit_restore_bytes(true, true, b"final screen output", 80, 24, &HashMap::new())
-                .expect("a displaced local terminal must be repainted on exit");
-        let text = String::from_utf8_lossy(&out);
-        assert!(
-            text.contains("final screen output"),
-            "exit restore must repaint the command's final screen; got {text:?}"
-        );
-        assert!(
-            !text.contains("Press Space to take control."),
-            "exit restore must not leave the take-control notice on screen; got {text:?}"
-        );
     }
 }
 
