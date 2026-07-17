@@ -320,9 +320,16 @@ impl LocalViewState {
                 self.restore_generation += 1;
                 self.restore_pending = false;
             }
-            self.pending_console_write = None;
+            // If a console write was in flight (queued or possibly already
+            // painted by `restore_timer_fired`'s `WriteRestore`), this new
+            // controller invalidates it: the physical terminal may end up
+            // showing the restored screen even though state now says
+            // displaced. Force the notice to be re-rendered so the FIFO
+            // ordering (`WriteRestore` then `ShowNotice`) reasserts the
+            // correct screen regardless of the idempotency guard below.
+            let invalidated_in_flight_write = self.pending_console_write.take().is_some();
             self.pending_jiggle = None;
-            self.show_notice_if_needed(&mut actions);
+            self.show_notice(&mut actions, invalidated_in_flight_write);
         } else if self.output_suppressed && !self.restore_pending {
             self.schedule_restore(&mut actions);
         }
@@ -347,7 +354,7 @@ impl LocalViewState {
         }
         let mut actions = Vec::new();
         if local_displaced_by_controller(controller_id) {
-            self.show_notice_if_needed(&mut actions);
+            self.show_notice(&mut actions, false);
         } else if controller_id == Some("local") && self.output_suppressed && !self.restore_pending
         {
             self.schedule_restore(&mut actions);
@@ -355,12 +362,17 @@ impl LocalViewState {
         actions
     }
 
-    /// Pushes [`LocalViewAction::ShowNotice`] at the current host size, unless
-    /// the notice is already showing at that exact size (the idempotency guard
-    /// that keeps a steady displaced state from re-rendering every tick).
-    fn show_notice_if_needed(&mut self, actions: &mut Vec<LocalViewAction>) {
+    /// Pushes [`LocalViewAction::ShowNotice`] at the current host size. When
+    /// `force` is `false`, the idempotency guard skips re-rendering a notice
+    /// already showing at that exact size (keeping a steady displaced state
+    /// from re-rendering every tick). `force` bypasses that guard so a caller
+    /// can reassert the notice even when the state fields alone wouldn't
+    /// otherwise trigger a render — e.g. when redisplacement invalidates a
+    /// [`LocalViewAction::WriteRestore`] that was queued or already painted.
+    fn show_notice(&mut self, actions: &mut Vec<LocalViewAction>, force: bool) {
         let notice_size = self.host_size();
-        let needs_render = !self.output_suppressed || self.notice_size != Some(notice_size);
+        let needs_render =
+            force || !self.output_suppressed || self.notice_size != Some(notice_size);
         if needs_render {
             actions.push(LocalViewAction::ShowNotice {
                 cols: notice_size.0,
@@ -639,6 +651,45 @@ mod tests {
                 delay: LOCAL_RESTORE_DELAY,
             }]
         );
+    }
+
+    #[test]
+    fn redisplacement_during_console_restore_reasserts_notice_after_repaint() {
+        let mut state = LocalViewState::attached(80, 24);
+        state.controller_changed("dash", 100, 30);
+        let scheduled = state.controller_changed("local", 80, 24);
+        assert_eq!(
+            scheduled,
+            vec![LocalViewAction::ScheduleRestore {
+                generation: 1,
+                delay: LOCAL_RESTORE_DELAY,
+            }]
+        );
+
+        let fired = state.restore_timer_fired(1, false, OperationId(9), b"repaint".to_vec());
+        assert_eq!(
+            fired,
+            LocalViewAction::WriteRestore {
+                operation_id: OperationId(9),
+                bytes: b"repaint".to_vec()
+            }
+        );
+
+        // A new non-local controller takes over while the restore write from
+        // above is still in flight. The queued/possibly-already-painted
+        // WriteRestore can no longer be trusted, so the notice must be
+        // re-rendered even though the notice size hasn't changed and output
+        // was already suppressed - otherwise the physical terminal could be
+        // left showing the restored screen while state says displaced.
+        let redisplaced = state.controller_changed("pwa", 80, 24);
+        assert_eq!(
+            redisplaced,
+            vec![LocalViewAction::ShowNotice { cols: 80, rows: 24 }]
+        );
+
+        assert!(state.output_suppressed());
+        assert!(!state.console_write_completed(OperationId(9)));
+        assert!(!state.jiggle_pending());
     }
 
     #[test]
