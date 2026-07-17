@@ -35,10 +35,8 @@ import {
   closeDashboardTunnel,
   ensureDashboardTunnel,
   fetchDashboardTunnelStatus,
-  retryDashboardTunnel,
   probeTunnelAuth,
   postPushPresence,
-  DevtunnelApiError,
   type DashboardTunnelStatus
 } from "./api.js";
 import { Sidebar } from "./components/Sidebar.js";
@@ -48,7 +46,6 @@ import { EditSessionDialog } from "./components/EditSessionDialog.js";
 import { CloseSessionDialog, ForceKillDialog } from "./components/CloseSessionDialog.js";
 import { RemoteClientDialog } from "./components/RemoteClientDialog.js";
 import { TunnelLinkDialog } from "./components/TunnelLinkDialog.js";
-import type { DevtunnelFailure } from "../devtunnel/types.js";
 import { TerminalView, type TerminalHandle, stripTerminalDecorations } from "./components/TerminalView.js";
 import { TerminalPanel, type TerminalPanelView } from "./components/TerminalPanel.js";
 import { DASHBOARD_HEADER_HEIGHT } from "./layout.js";
@@ -526,28 +523,6 @@ export function TunnelReauthOverlay({ onReauth }: { onReauth: () => void }) {
   );
 }
 
-/**
- * Normalizes any Tunnel Link error into a {@link DevtunnelFailure} so the failure
- * UI (with an explicit Retry) surfaces even for network-level rejections that never
- * reach the structured {@link DevtunnelApiError} path (offline, server down).
- */
-export function toTunnelLinkFailure(error: unknown): DevtunnelFailure {
-  if (error instanceof DevtunnelApiError) {
-    return error.failure;
-  }
-  const message = error instanceof Error ? error.message : "Failed to reach the Tunnel Link service.";
-  return {
-    code: "unknown",
-    operation: "detect",
-    summary: message || "Failed to reach the Tunnel Link service.",
-    remediation: "Check that the dashboard server is running, then retry.",
-    technicalDetail: message,
-    occurredAt: new Date().toISOString(),
-    retryClass: "transient",
-    retryable: true
-  };
-}
-
 export function App() {
   const styles = useStyles();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
@@ -592,8 +567,7 @@ export function App() {
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [tunnelLinkOpen, setTunnelLinkOpen] = useState(false);
   const [tunnelLinkStatus, setTunnelLinkStatus] = useState<DashboardTunnelStatus | null>(null);
-  const [tunnelLinkFailure, setTunnelLinkFailure] = useState<DevtunnelFailure | undefined>(undefined);
-  const [tunnelLinkRetrying, setTunnelLinkRetrying] = useState(false);
+  const [tunnelLinkError, setTunnelLinkError] = useState("");
   const [tunnelLinkCopied, setTunnelLinkCopied] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(() => readBrowserNotificationsEnabled());
@@ -1379,37 +1353,22 @@ export function App() {
 
   const handleTunnelLink = useCallback(async (): Promise<void> => {
     setTunnelLinkOpen(true);
-    setTunnelLinkFailure(undefined);
+    setTunnelLinkError("");
     setTunnelLinkCopied(false);
     try {
       setTunnelLinkStatus(await ensureDashboardTunnel());
     } catch (e) {
-      setTunnelLinkFailure(toTunnelLinkFailure(e));
+      setTunnelLinkError(e instanceof Error ? e.message : "Failed to start Tunnel Link.");
       await refreshTunnelLinkStatus();
-    }
-  }, [refreshTunnelLinkStatus]);
-
-  const handleRetryTunnelLink = useCallback(async (): Promise<void> => {
-    setTunnelLinkFailure(undefined);
-    setTunnelLinkRetrying(true);
-    try {
-      setTunnelLinkStatus(await retryDashboardTunnel());
-    } catch (e) {
-      setTunnelLinkFailure(toTunnelLinkFailure(e));
-      await refreshTunnelLinkStatus();
-    } finally {
-      setTunnelLinkRetrying(false);
     }
   }, [refreshTunnelLinkStatus]);
 
   const handleCloseTunnelLink = useCallback(async (): Promise<void> => {
-    setTunnelLinkFailure(undefined);
+    setTunnelLinkError("");
     try {
       await closeDashboardTunnel();
     } catch (e) {
-      if (e instanceof DevtunnelApiError) {
-        setTunnelLinkFailure(e.failure);
-      }
+      setTunnelLinkError(e instanceof Error ? e.message : "Failed to close Tunnel Link.");
     } finally {
       await refreshTunnelLinkStatus();
     }
@@ -1651,9 +1610,7 @@ export function App() {
       <TunnelLinkDialog
         open={tunnelLinkOpen}
         status={tunnelLinkStatus}
-        failure={tunnelLinkFailure}
-        retrying={tunnelLinkRetrying}
-        onRetry={() => void handleRetryTunnelLink()}
+        error={tunnelLinkError}
         copied={tunnelLinkCopied}
         onCopy={setTunnelLinkCopied}
         onClose={() => setTunnelLinkOpen(false)}
