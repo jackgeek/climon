@@ -7,3 +7,4 @@
 
 pub(crate) mod clients;
 pub(crate) mod control;
+pub(crate) mod terminal;
