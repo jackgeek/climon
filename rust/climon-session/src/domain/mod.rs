@@ -5,6 +5,7 @@
 //! state assembled in a later task, which is why some accessors here are
 //! currently unused from within this crate.
 
+pub(crate) mod attention;
 pub(crate) mod clients;
 pub(crate) mod control;
 pub(crate) mod terminal;
