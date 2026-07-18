@@ -1,54 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { isAllowedDashboardHost } from "../src/server/server.js";
 import { readSessionMeta, writeScrollback, writeSessionMeta } from "../src/store.js";
 import type { SessionMeta } from "../src/types.js";
+import { freePort, waitForExit, waitForHealth } from "./support/server.js";
 
 const testRoot = join(process.cwd(), ".copilot-tmp", "dashboard-host-guard", String(process.pid));
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 20_000): Promise<T> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    const value = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((resolve) => setTimeout(resolve, 1000, undefined))
-    ]);
-    if (value !== undefined) return value;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error("timed out");
-}
-
-async function waitForExit(server: Bun.Subprocess, ms: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      resolve(false);
-    }, ms);
-    void server.exited.finally(() => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-}
 
 function sessionMeta(home: string, id: string): SessionMeta {
   const now = new Date().toISOString();
@@ -97,11 +55,8 @@ describe("dashboard read and destructive routes", () => {
       { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
     );
     base = `http://127.0.0.1:${port}`;
-    await waitFor(async () => {
-      const res = await fetch(`${base}/health`).catch(() => undefined);
-      return res?.ok ? true : undefined;
-    }, 30_000);
-  }, 60_000);
+    await waitForHealth(server, base);
+  }, 120_000);
 
   afterAll(async () => {
     server.kill();

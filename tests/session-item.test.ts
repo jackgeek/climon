@@ -313,7 +313,10 @@ describe("SessionItem open terminal ordering", () => {
     );
 
     const buttonIndex = markup.indexOf("Open terminal");
-    const metaIndex = markup.indexOf('class="meta"');
+    // Assert on the stable `climon-meta` hook class rather than the makeStyles
+    // output: the styled class name depends on which @fluentui mock is active,
+    // which varies with cross-file test ordering in the shared test process.
+    const metaIndex = markup.indexOf("climon-meta");
     expect(buttonIndex).toBeGreaterThanOrEqual(0);
     expect(metaIndex).toBeGreaterThanOrEqual(0);
     expect(buttonIndex).toBeLessThan(metaIndex);

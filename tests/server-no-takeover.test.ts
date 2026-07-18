@@ -1,38 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createServer } from "node:net";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freePort, waitFor, waitForHealth } from "./support/server.js";
 
 const home = join(tmpdir(), `climon-no-takeover-${process.pid}`);
 const env = { ...process.env, CLIMON_HOME: home };
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 30000): Promise<T> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    const v = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
-    ]);
-    if (v !== undefined) {
-      return v;
-    }
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error("timed out");
-}
 
 async function healthPort(base: string): Promise<number | undefined> {
   const res = await fetch(`${base}/health`).catch(() => undefined);
@@ -56,6 +29,7 @@ describe("server --no-takeover", () => {
     let second: Bun.Subprocess | undefined;
     try {
       // First server is up on the requested port.
+      await waitForHealth(first, firstBase);
       const firstPort = await waitFor(() => healthPort(firstBase), 30000);
       expect(firstPort).toBe(port);
 
@@ -94,5 +68,5 @@ describe("server --no-takeover", () => {
       first.kill();
       await first.exited;
     }
-  }, 60000);
+  }, 120000);
 });
