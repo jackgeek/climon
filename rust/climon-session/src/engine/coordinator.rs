@@ -36,9 +36,11 @@ use crate::engine::{
     METADATA_COMMAND_CAPACITY, PTY_COMMAND_CAPACITY, PTY_EVENT_CAPACITY,
 };
 
-/// Number of immediately-available pty events drained before the control lane
+/// Maximum number of consecutive pty-lane applications before the control lane
 /// is checked, bounding the latency of a queued control event to at most this
-/// many queued pty-output events.
+/// many pty-output events. The count spans a pty event delivered by the
+/// blocking select, so that event plus the drain that follows it never exceed
+/// the bound before control is checked.
 const PTY_DRAIN_BURST: usize = 16;
 
 /// Timer route capacity. Timers are low-volume (a handful of live schedules),
@@ -359,6 +361,12 @@ impl TransitionContextSource for SystemTransitionContext {
 pub(crate) trait AppliedEventObserver {
     /// Called once per event applied to the state, in application order.
     fn on_applied(&mut self, kind: EventKind);
+
+    /// Called each time the coordinator is about to block on the arbitration
+    /// select with both lanes drained. Production ignores it; a deterministic
+    /// test uses it to observe the post-startup park before arranging
+    /// simultaneous lane readiness. Defaults to a no-op.
+    fn on_park(&mut self) {}
 }
 
 /// The production observer: applied events are not recorded anywhere.
@@ -417,16 +425,27 @@ where
     /// [`Effect::CompleteSession`] is dispatched), cancellation is requested, or
     /// a fatal condition occurs (both lanes closed, or a required route closed).
     ///
-    /// The arbitration is: drain up to [`PTY_DRAIN_BURST`] immediately-available
-    /// pty events in FIFO order (stopping early when the lane is empty), then
-    /// process one immediately-available control event; if neither is
-    /// immediately available, block on whichever lane produces the next event.
+    /// The arbitration bounds control-event latency to at most
+    /// [`PTY_DRAIN_BURST`] consecutive pty-lane applications: each loop drains
+    /// immediately-available pty events in FIFO order until the running burst
+    /// reaches that bound or the lane empties, then processes one
+    /// immediately-available control event (which restarts the burst). If
+    /// neither lane is immediately ready it blocks on whichever produces the
+    /// next event; a pty event that blocking select delivers counts as the
+    /// first of the following burst, so the selected pty plus the drain after
+    /// it never exceed the bound before control is checked.
     pub(crate) async fn run(mut self, cancel: CancellationToken) -> Result<(), CoordinatorError> {
         let startup = self.state.start();
         self.dispatch_effects(startup).await?;
         if self.completed {
             return Ok(());
         }
+
+        // Consecutive pty-lane applications since the last control check. It is
+        // carried across the blocking select so a pty event that select
+        // delivers is counted as the first of the next burst rather than
+        // starting a fresh bound after it.
+        let mut pty_burst = 0usize;
 
         loop {
             if self.completed || cancel.is_cancelled() {
@@ -435,10 +454,11 @@ where
 
             let mut progressed = false;
 
-            for _ in 0..PTY_DRAIN_BURST {
+            while pty_burst < PTY_DRAIN_BURST {
                 match self.pty_rx.try_recv() {
                     Ok(event) => {
                         self.apply_event(event).await?;
+                        pty_burst += 1;
                         progressed = true;
                         if self.completed || cancel.is_cancelled() {
                             return Ok(());
@@ -466,6 +486,10 @@ where
                 }
             }
 
+            // Checking the control lane bounds the burst: the next one starts
+            // fresh whether or not a control event was waiting.
+            pty_burst = 0;
+
             if progressed {
                 continue;
             }
@@ -474,18 +498,28 @@ where
                 return Err(CoordinatorError::EventLanesClosed);
             }
 
+            self.observer.on_park();
+
             let event = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Ok(()),
                 maybe = self.pty_rx.recv(), if self.pty_open => match maybe {
-                    Some(event) => event,
+                    Some(event) => {
+                        // The selected pty event is event one of the next burst.
+                        pty_burst = 1;
+                        event
+                    }
                     None => {
                         self.pty_open = false;
                         continue;
                     }
                 },
                 maybe = self.control_rx.recv(), if self.control_open => match maybe {
-                    Some(event) => event,
+                    Some(event) => {
+                        // A selected control event restarts pty burst accounting.
+                        pty_burst = 0;
+                        event
+                    }
                     None => {
                         self.control_open = false;
                         continue;
@@ -663,6 +697,54 @@ mod tests {
                 .all(|kind| *kind == EventKind::PtyOutput),
             "only pty output precedes shutdown: {kinds:?}"
         );
+    }
+
+    /// Arbitration guarantee across the blocking select: the pty event the
+    /// biased select delivers is event one of the next bounded burst, so a
+    /// control event queued together with a pty flood still lands after at most
+    /// sixteen pty applications — not after the select's pty plus a fresh
+    /// sixteen-event drain.
+    ///
+    /// Unlike the prequeued case above, this drives the coordinator to its
+    /// post-startup park with empty lanes, then — from a single producer (this
+    /// task) with no yields between sends, so the parked coordinator cannot
+    /// interleave — enqueues one `ShutdownRequested` followed by seventeen pty
+    /// outputs. Both lanes are therefore ready together when the coordinator
+    /// wakes, and the biased select takes pty first. The shutdown must still be
+    /// applied at index sixteen at the latest; regressed arbitration that starts
+    /// a fresh sixteen-event drain after the selected pty lands it at index 17.
+    #[tokio::test(start_paused = true)]
+    async fn selected_pty_counts_toward_the_control_arbitration_bound() {
+        let mut fixture = CoordinatorFixture::headless();
+        fixture.spawn_until_parked().await;
+
+        // Bounded sends complete immediately (lanes have ample capacity) and
+        // this task never yields between them, so the parked coordinator stays
+        // parked until both lanes hold their events.
+        fixture.queue_shutdown().await;
+        for i in 0..17u8 {
+            fixture.queue_pty_output(&[i]).await;
+        }
+
+        fixture.wait_for_applied(18).await;
+
+        let kinds = fixture.applied_kinds();
+        let idx = kinds
+            .iter()
+            .position(|kind| *kind == EventKind::ShutdownRequested)
+            .expect("shutdown was applied");
+        assert!(
+            idx <= 16,
+            "shutdown applied at index {idx} (after {idx} pty events): {kinds:?}"
+        );
+        assert!(
+            kinds[..idx]
+                .iter()
+                .all(|kind| *kind == EventKind::PtyOutput),
+            "only pty output precedes shutdown: {kinds:?}"
+        );
+
+        let _ = fixture.finish().await;
     }
 
     // Test 1: pty FIFO — two outputs then an exit keep order, with the exit's
