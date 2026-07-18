@@ -36,6 +36,7 @@ use crate::engine::coordinator::{
     IgnoreAppliedEvents, PtyEventSender, SystemTransitionContext,
 };
 use crate::engine::effect::Effect;
+use crate::engine::event::SessionEvent;
 use crate::engine::state::{SessionState, SessionStateConfig};
 use crate::error::{SessionError, SessionResult};
 use crate::host::SessionHostOptions;
@@ -51,7 +52,7 @@ const SPAWN_FAILURE_EXIT: i32 = 1;
 /// Exit code used when the coordinator ended without a clean completion.
 const CORE_FAILURE_EXIT: i32 = 1;
 /// Bounded deadline for joining every owned task during teardown.
-const JOIN_DEADLINE: Duration = Duration::from_secs(5);
+pub(crate) const JOIN_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Config-derived knobs resolved once before the actor starts.
 #[derive(Debug, Clone)]
@@ -116,17 +117,11 @@ pub(crate) enum TaskName {
     Coordinator,
 }
 
-impl TaskName {
-    /// Whether this is a core task whose unexpected early termination — before
-    /// the coordinator has completed the session — is a fatal failure. The pty
-    /// workers own the child and its authoritative exit, so losing either before
-    /// completion means the coordinator can never observe `PtyExited` and would
-    /// otherwise wait forever. The coordinator is not listed here: its own end is
-    /// observed directly through the completion route.
-    fn is_required(self) -> bool {
-        matches!(self, TaskName::PtyCommand | TaskName::PtyLifecycle)
-    }
-}
+/// A payload-safe failure synthesized into the coordinator's pty event lane when
+/// the command worker dies *without* emitting its own [`SessionEvent::PtyFailed`]
+/// (a panic), so ordered finalization and the child kill can still proceed. It
+/// carries no terminal bytes.
+const COMMAND_WORKER_LOST: &str = "pty command worker terminated unexpectedly";
 
 /// The outcome of joining one supervised task.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,18 +202,26 @@ impl TaskRegistry {
     }
 
     /// Waits for the coordinator to complete while concurrently watching every
-    /// supervised task, so a required core task that dies before completion
-    /// cannot leave the supervisor blocked on a `CompleteSession` that will never
-    /// arrive.
+    /// supervised task, so a core task that dies before completion cannot leave
+    /// the supervisor blocked on a `CompleteSession` that will never arrive.
     ///
     /// It returns as soon as the completion route resolves — a `CompleteSession`,
-    /// or the route closing because the coordinator ended — or a required core
-    /// task terminates abnormally. Peripheral terminations, and the expected
-    /// clean return of a required task once it has handed off (the pty lifecycle
-    /// returns `Ok` right after reporting `PtyExited`), are recorded and
-    /// tolerated rather than misclassified as failures. Every outcome observed
-    /// here is retained for the final join report.
-    async fn supervise(&mut self, completion_rx: &mut mpsc::Receiver<Effect>) -> SuperviseOutcome {
+    /// or the route closing because the coordinator ended — or the authoritative
+    /// pty lifecycle dies abnormally before it could report the child exit (a
+    /// [`SuperviseOutcome::RequiredTaskFailed`]). Every other early termination is
+    /// recorded and tolerated rather than misclassified as a fatal failure, so the
+    /// coordinator's in-flight finalization is never preempted — see
+    /// [`classify_early_exit`]. In particular the command worker is *not* the
+    /// child owner: an ordinary error means it already emitted its one
+    /// `PtyFailed`, and an unexpected panic is repaired by synthesizing one into
+    /// `pty_events` so finalization and the child kill still proceed. Every
+    /// outcome observed here is retained for the final join report, so a panic
+    /// still surfaces as [`SessionError::ActorTask`] after teardown.
+    async fn supervise(
+        &mut self,
+        completion_rx: &mut mpsc::Receiver<Effect>,
+        pty_events: &PtyEventSender,
+    ) -> SuperviseOutcome {
         loop {
             tokio::select! {
                 biased;
@@ -232,10 +235,26 @@ impl TaskRegistry {
                 }
                 joined = self.set.join_next(), if !self.set.is_empty() => {
                     if let Some(Ok((name, outcome))) = joined {
-                        let fatal = name.is_required() && outcome.is_abnormal();
+                        let disposition = classify_early_exit(name, &outcome);
+                        // Retain every outcome first so the join report stays
+                        // complete (a panic here still maps to `ActorTask`).
                         self.joined.push((name, outcome));
-                        if fatal {
-                            return SuperviseOutcome::RequiredTaskFailed;
+                        match disposition {
+                            EarlyExit::Fatal => return SuperviseOutcome::RequiredTaskFailed,
+                            EarlyExit::SynthesizeCommandFailure => {
+                                // The command executor died without emitting its
+                                // own `PtyFailed`; inject one so the coordinator
+                                // can finalize (and its child kill can run) rather
+                                // than waiting forever for a completion that will
+                                // never come. A closed lane means the coordinator
+                                // has already ended, handled by the completion arm.
+                                let _ = pty_events
+                                    .send(SessionEvent::PtyFailed(
+                                        COMMAND_WORKER_LOST.to_string(),
+                                    ))
+                                    .await;
+                            }
+                            EarlyExit::Tolerate => {}
                         }
                     }
                 }
@@ -280,8 +299,48 @@ enum SuperviseOutcome {
     /// The completion route closed without a completion effect — the coordinator
     /// ended (or panicked) without completing the session.
     CoordinatorEnded,
-    /// A required core task terminated abnormally before completion.
+    /// The authoritative pty lifecycle terminated abnormally before it could
+    /// report the child exit, so the coordinator can never complete.
     RequiredTaskFailed,
+}
+
+/// How [`TaskRegistry::supervise`] must react to a supervised task terminating
+/// before the coordinator completed the session.
+enum EarlyExit {
+    /// Record and keep waiting for completion. This covers every peripheral task,
+    /// the expected clean/cancelled return of a core worker (the pty lifecycle
+    /// returns `Ok` right after reporting `PtyExited`), and — crucially — an
+    /// *ordinary* command-worker error: the command worker always emits its one
+    /// `PtyFailed` before returning `Err` (or finds the lane closed because the
+    /// coordinator already ended), so its finalization is already in flight and
+    /// must not be preempted.
+    Tolerate,
+    /// The command executor died via a panic, which may have happened *before* it
+    /// emitted its own `PtyFailed`. Synthesize a `PtyFailed` into the coordinator
+    /// so ordered finalization and the child kill still proceed, then keep
+    /// waiting; the retained panic still maps to [`SessionError::ActorTask`].
+    SynthesizeCommandFailure,
+    /// The authoritative pty lifecycle — the sole owner of the child's real exit —
+    /// died abnormally before reporting it. The coordinator can never observe
+    /// `PtyExited`, so fail fast rather than wait forever.
+    Fatal,
+}
+
+/// Classifies how a supervised task's early termination should be handled. The
+/// two pty workers are the only *core* tasks (they own the child), but they are
+/// handled differently: the lifecycle owns the authoritative exit and must fail
+/// fast when it dies abnormally, whereas the command worker is a peripheral
+/// executor whose loss must never preempt the coordinator's finalization — an
+/// ordinary error is tolerated (it already emitted `PtyFailed`) and only a panic
+/// (which may have skipped that emission) is repaired by synthesizing one.
+fn classify_early_exit(name: TaskName, outcome: &TaskOutcome) -> EarlyExit {
+    match name {
+        TaskName::PtyLifecycle if outcome.is_abnormal() => EarlyExit::Fatal,
+        TaskName::PtyCommand if matches!(outcome, TaskOutcome::Panicked) => {
+            EarlyExit::SynthesizeCommandFailure
+        }
+        _ => EarlyExit::Tolerate,
+    }
 }
 
 /// The startup and teardown side effects the supervisor delegates, behind a seam
@@ -601,24 +660,35 @@ async fn run_with<B: SessionBackend>(
     // --- Step 7: mark running (respecting paused) now that adapters are up ---
     backend.mark_running(&id, &meta, pid);
 
-    // The supervisor's own lane-sender clones are no longer needed; dropping them
-    // lets the lanes close once the adapters drop theirs.
+    // The supervisor's own lane-sender clones are no longer needed for wiring;
+    // drop the control sender now. Keep one pty-lane sender so `supervise` can
+    // synthesize a `PtyFailed` if the command worker dies without emitting its
+    // own (a panic). It is dropped right after supervision so the pty lane still
+    // closes on adapter liveness during teardown.
     drop(control_tx);
+    let pty_failure_injector = pty_tx.clone();
     drop(pty_tx);
 
     // --- Run: wait for completion while supervising the core tasks ---
     // The completion route carries only `CompleteSession`; a closed route means
     // the coordinator ended without completing — a core failure. Concurrently,
-    // a required core task that dies before completion (a pty worker that panics
-    // or errors before `PtyExited` is ever observed) is also a core failure:
-    // watching for it here is what stops the supervisor from blocking forever on
-    // a completion the coordinator can no longer produce.
-    let exit_code = match registry.supervise(&mut completion_rx).await {
+    // the authoritative pty lifecycle dying before it can report `PtyExited` is a
+    // core failure too: watching for it here is what stops the supervisor from
+    // blocking forever on a completion the coordinator can no longer produce. A
+    // command-worker loss is handled without preempting finalization (an ordinary
+    // error already emitted `PtyFailed`; a panic is repaired by synthesizing one).
+    let exit_code = match registry
+        .supervise(&mut completion_rx, &pty_failure_injector)
+        .await
+    {
         SuperviseOutcome::Completed(exit_code) => exit_code,
         SuperviseOutcome::CoordinatorEnded | SuperviseOutcome::RequiredTaskFailed => {
             CORE_FAILURE_EXIT
         }
     };
+    // No longer needed: dropping it lets the pty lane close once the adapters drop
+    // their own senders during teardown.
+    drop(pty_failure_injector);
 
     // --- Teardown: cancel, terminate, join, restore, clean, return ---
     let report = drain_and_join(
@@ -856,6 +926,7 @@ mod tests {
     use tokio::runtime::Runtime;
 
     use crate::adapters::metadata::MetadataStore;
+    use crate::engine::effect::OperationId;
     use crate::engine::event::SessionEvent;
     use crate::test_support::harness::base_meta;
 
@@ -923,6 +994,27 @@ mod tests {
         RunUntilCancelled,
     }
 
+    /// How the fake pty *command* worker should behave once running. The command
+    /// worker owns the writer/resizer; unlike the lifecycle it never owns the
+    /// authoritative child exit, so its abnormal end must not preempt the
+    /// coordinator's finalization.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum CommandBehavior {
+        /// Drain the pty command route until it closes, then return `Ok` — the
+        /// FIFO worker's normal end-of-session behavior.
+        DrainUntilClosed,
+        /// After the lifecycle has emitted its terminal event, emit one
+        /// `PtyFailed` and return `Err` — the adapter's real write-failure path
+        /// (`emit_failure`) racing an in-flight child exit. Ordering the failure
+        /// after the lifecycle's `PtyExited` proves the coordinator keeps the real
+        /// exit code instead of being forced to `CORE_FAILURE_EXIT`.
+        FailAfterLifecycleTerminal,
+        /// Panic *before* emitting any `PtyFailed` — an unexpected command-executor
+        /// death. The supervisor must synthesize a `PtyFailed` so the coordinator
+        /// can still finalize and the child is killed.
+        PanicBeforeFailure,
+    }
+
     /// Shared observations the fixture inspects after a run.
     #[derive(Default)]
     struct Observations {
@@ -933,6 +1025,10 @@ mod tests {
         cleaned_socket: AtomicUsize,
         local_cancel: Mutex<Option<CancellationToken>>,
         join_report: Mutex<Option<JoinReport>>,
+        /// The `exit_code` of the terminal metadata patch (one carrying
+        /// `completed_at`) once finalization's status barrier is applied, proving
+        /// the ordered finalization actually ran rather than being preempted.
+        terminal_patch_exit_code: Mutex<Option<i32>>,
     }
 
     /// A [`ChildTerminator`] that records how many times it was asked to kill the
@@ -951,11 +1047,20 @@ mod tests {
     }
 
     /// An in-memory [`MetadataStore`] so finalization's status barrier resolves
-    /// without touching the filesystem.
-    struct FakeStore;
+    /// without touching the filesystem. It records the terminal patch's exit code
+    /// so a test can prove the ordered finalization sequence actually reached the
+    /// metadata status barrier.
+    struct FakeStore {
+        obs: Arc<Observations>,
+    }
 
     impl MetadataStore for FakeStore {
-        fn patch(&self, _patch: SessionMetaPatch) -> Result<(), String> {
+        fn patch(&self, patch: SessionMetaPatch) -> Result<(), String> {
+            // Only the terminal patch carries `completed_at`; record its exit code
+            // so the finalization sequence is observable.
+            if patch.completed_at.is_some() {
+                *self.obs.terminal_patch_exit_code.lock().unwrap() = patch.exit_code;
+            }
             Ok(())
         }
 
@@ -970,6 +1075,7 @@ mod tests {
     struct FakeBackend {
         obs: Arc<Observations>,
         behavior: PtyBehavior,
+        command: CommandBehavior,
         fail_at: FailPoint,
     }
 
@@ -985,9 +1091,44 @@ mod tests {
                 return Err(SessionError::Config("pty spawn failed".to_string()));
             }
             let behavior = self.behavior;
+            let command_behavior = self.command;
+            // Lets the command worker order its own failure strictly after the
+            // lifecycle has emitted its terminal event (a write failure racing an
+            // in-flight child exit), so the pty lane carries `PtyExited` first.
+            let terminal_emitted = Arc::new(tokio::sync::Notify::new());
+            let terminal_emitted_for_command = terminal_emitted.clone();
+            let events_for_command = events.clone();
             let command = tokio::spawn(async move {
-                while effects.recv().await.is_some() {}
-                Ok::<(), PtyAdapterError>(())
+                match command_behavior {
+                    CommandBehavior::DrainUntilClosed => {
+                        while effects.recv().await.is_some() {}
+                        Ok::<(), PtyAdapterError>(())
+                    }
+                    CommandBehavior::FailAfterLifecycleTerminal => {
+                        // Keep the pty command route open (as a FIFO worker blocked
+                        // on a write would) until after the lifecycle's terminal
+                        // event, so the coordinator applies `PtyExited` before this
+                        // `PtyFailed`.
+                        let _effects = effects;
+                        terminal_emitted_for_command.notified().await;
+                        // The adapter emits its one payload-safe `PtyFailed` before
+                        // it returns `Err`; model that exact ordering.
+                        let _ = events_for_command
+                            .send(SessionEvent::PtyFailed(
+                                "pty input write failed".to_string(),
+                            ))
+                            .await;
+                        Err(PtyAdapterError::Write {
+                            operation_id: OperationId(1),
+                            cause: "broken pipe".to_string(),
+                        })
+                    }
+                    CommandBehavior::PanicBeforeFailure => {
+                        // Die without emitting any `PtyFailed`: the supervisor must
+                        // synthesize one so the coordinator can still finalize.
+                        panic!("fake pty command worker panicked before emitting a failure");
+                    }
+                }
             });
             // The lifecycle exits on this token so a partial-startup unwind (which
             // calls `terminate`) can join a `RunUntilCancelled` fake.
@@ -997,6 +1138,8 @@ mod tests {
                 match behavior {
                     PtyBehavior::ExitWith(code) => {
                         let _ = events.send(SessionEvent::PtyExited(code)).await;
+                        // Release any command worker waiting to fail after exit.
+                        terminal_emitted.notify_one();
                     }
                     PtyBehavior::ExitThenPanic(code) => {
                         let _ = events.send(SessionEvent::PtyExited(code)).await;
@@ -1077,7 +1220,13 @@ mod tests {
             if self.fail_at == FailPoint::Metadata {
                 return Err(SessionError::Config("metadata startup failed".to_string()));
             }
-            Ok(spawn_metadata_adapter(effects, FakeStore, events))
+            Ok(spawn_metadata_adapter(
+                effects,
+                FakeStore {
+                    obs: self.obs.clone(),
+                },
+                events,
+            ))
         }
 
         fn launch_timers(
@@ -1134,86 +1283,123 @@ mod tests {
     struct SupervisorFixture {
         obs: Arc<Observations>,
         behavior: PtyBehavior,
+        command: CommandBehavior,
         fail_at: FailPoint,
     }
 
     impl SupervisorFixture {
-        /// A session whose child exits cleanly with `code`.
-        fn successful_exit(code: i32) -> Self {
+        /// Base fixture: a fresh observations set with the given lifecycle and
+        /// command-worker behavior and failure-injection point.
+        fn new(behavior: PtyBehavior, command: CommandBehavior, fail_at: FailPoint) -> Self {
             SupervisorFixture {
                 obs: Arc::new(Observations::default()),
-                behavior: PtyBehavior::ExitWith(code),
-                fail_at: FailPoint::None,
+                behavior,
+                command,
+                fail_at,
             }
+        }
+
+        /// A session whose child exits cleanly with `code`.
+        fn successful_exit(code: i32) -> Self {
+            Self::new(
+                PtyBehavior::ExitWith(code),
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::None,
+            )
         }
 
         /// A session whose pty lifecycle task panics after a clean exit.
         fn pty_panics_after_exit(code: i32) -> Self {
-            SupervisorFixture {
-                obs: Arc::new(Observations::default()),
-                behavior: PtyBehavior::ExitThenPanic(code),
-                fail_at: FailPoint::None,
-            }
+            Self::new(
+                PtyBehavior::ExitThenPanic(code),
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::None,
+            )
         }
 
         /// A session whose pty lifecycle task (a required core task) panics
         /// *before* reporting the child exit, so the coordinator never completes
         /// on its own — the supervisor must notice via concurrent supervision.
         fn pty_panics_before_exit() -> Self {
-            SupervisorFixture {
-                obs: Arc::new(Observations::default()),
-                behavior: PtyBehavior::PanicWithoutExit,
-                fail_at: FailPoint::None,
-            }
+            Self::new(
+                PtyBehavior::PanicWithoutExit,
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::None,
+            )
+        }
+
+        /// A session whose child exits cleanly with `code` while the pty *command*
+        /// worker emits its one `PtyFailed` and then returns `Err` right after the
+        /// exit — a write failure racing an in-flight child exit. The command
+        /// worker does not own the authoritative child exit, so its abnormal end
+        /// must not preempt finalization or override the real exit code.
+        fn command_fails_after_child_exit(code: i32) -> Self {
+            Self::new(
+                PtyBehavior::ExitWith(code),
+                CommandBehavior::FailAfterLifecycleTerminal,
+                FailPoint::None,
+            )
+        }
+
+        /// A session whose pty *command* worker panics *before* emitting any
+        /// `PtyFailed`, while the child is still running. The supervisor must
+        /// synthesize a `PtyFailed` so finalization runs and the child is killed,
+        /// then surface the retained panic as [`SessionError::ActorTask`].
+        fn command_panics_before_failure() -> Self {
+            Self::new(
+                PtyBehavior::RunUntilCancelled,
+                CommandBehavior::PanicBeforeFailure,
+                FailPoint::None,
+            )
         }
 
         /// A session whose child cannot be spawned.
         fn pty_spawn_fails() -> Self {
-            SupervisorFixture {
-                obs: Arc::new(Observations::default()),
-                behavior: PtyBehavior::RunUntilCancelled,
-                fail_at: FailPoint::Pty,
-            }
+            Self::new(
+                PtyBehavior::RunUntilCancelled,
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::Pty,
+            )
         }
 
         /// A session that fails to establish the local terminal after the pty is
         /// running.
         fn local_terminal_setup_fails() -> Self {
-            SupervisorFixture {
-                obs: Arc::new(Observations::default()),
-                behavior: PtyBehavior::RunUntilCancelled,
-                fail_at: FailPoint::LocalTerminal,
-            }
+            Self::new(
+                PtyBehavior::RunUntilCancelled,
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::LocalTerminal,
+            )
         }
 
         /// A session that fails to bind the ipc listener after the pty and local
         /// terminal are up.
         fn ipc_bind_fails() -> Self {
-            SupervisorFixture {
-                obs: Arc::new(Observations::default()),
-                behavior: PtyBehavior::RunUntilCancelled,
-                fail_at: FailPoint::Ipc,
-            }
+            Self::new(
+                PtyBehavior::RunUntilCancelled,
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::Ipc,
+            )
         }
 
         /// A session that fails to start the metadata adapter after the socket is
         /// bound.
         fn metadata_startup_fails() -> Self {
-            SupervisorFixture {
-                obs: Arc::new(Observations::default()),
-                behavior: PtyBehavior::RunUntilCancelled,
-                fail_at: FailPoint::Metadata,
-            }
+            Self::new(
+                PtyBehavior::RunUntilCancelled,
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::Metadata,
+            )
         }
 
         /// A session that fails to register the signal adapter after every other
         /// adapter is up.
         fn signal_startup_fails() -> Self {
-            SupervisorFixture {
-                obs: Arc::new(Observations::default()),
-                behavior: PtyBehavior::RunUntilCancelled,
-                fail_at: FailPoint::Signals,
-            }
+            Self::new(
+                PtyBehavior::RunUntilCancelled,
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::Signals,
+            )
         }
 
         fn runtime_config() -> RuntimeConfig {
@@ -1229,6 +1415,7 @@ mod tests {
             FakeBackend {
                 obs: self.obs.clone(),
                 behavior: self.behavior,
+                command: self.command,
                 fail_at: self.fail_at,
             }
         }
@@ -1328,6 +1515,73 @@ mod tests {
         let obs = fixture.obs.clone();
         let error = run_bounded(Duration::from_secs(10), move || fixture.run_sync()).unwrap_err();
         assert!(matches!(error, SessionError::ActorTask));
+        let all_joined = matches!(
+            &*obs.join_report.lock().unwrap(),
+            Some(report) if report.unjoined.is_empty()
+        );
+        assert!(
+            all_joined,
+            "every supervised task must be joined during teardown"
+        );
+    }
+
+    /// The pty command worker is not the authoritative child owner: when it emits
+    /// its one `PtyFailed` and then returns `Err` *after* the lifecycle has
+    /// already reported the real child exit, its abnormal end must not preempt the
+    /// coordinator's finalization. The supervisor waits for `CompleteSession`, so
+    /// the *real* exit code and the full ordered finalization (including the
+    /// metadata status barrier) are preserved rather than forced to
+    /// `CORE_FAILURE_EXIT`.
+    #[test]
+    fn command_failure_after_child_exit_preserves_real_exit_code() {
+        let fixture = SupervisorFixture::command_fails_after_child_exit(42);
+        let obs = fixture.obs.clone();
+        let code = run_bounded(Duration::from_secs(10), move || fixture.run_sync())
+            .expect("a command-worker failure after the child exit is not a supervisor error");
+        assert_eq!(
+            code, 42,
+            "the real finalization exit code must be preserved, not forced to CORE_FAILURE_EXIT"
+        );
+        // Finalization ran to its status barrier with the real exit code.
+        assert_eq!(
+            *obs.terminal_patch_exit_code.lock().unwrap(),
+            Some(42),
+            "ordered finalization must reach the metadata status barrier with the real code"
+        );
+        let all_joined = matches!(
+            &*obs.join_report.lock().unwrap(),
+            Some(report) if report.unjoined.is_empty()
+        );
+        assert!(
+            all_joined,
+            "every supervised task must be joined during teardown"
+        );
+    }
+
+    /// A pty command worker that panics *before* emitting any `PtyFailed` (the
+    /// child still running) must not hang the session: the coordinator would
+    /// otherwise never learn the executor is gone. The supervisor synthesizes a
+    /// `PtyFailed` so finalization runs and the child is killed, retains the
+    /// panic, and ultimately surfaces [`SessionError::ActorTask`] after a clean
+    /// teardown.
+    #[test]
+    fn command_panic_before_failure_synthesizes_finalization_then_reports_actor_task() {
+        let fixture = SupervisorFixture::command_panics_before_failure();
+        let obs = fixture.obs.clone();
+        let error = run_bounded(Duration::from_secs(10), move || fixture.run_sync()).unwrap_err();
+        assert!(
+            matches!(error, SessionError::ActorTask),
+            "a panicked command worker must ultimately map to ActorTask"
+        );
+        assert_eq!(
+            *obs.terminal_patch_exit_code.lock().unwrap(),
+            Some(CORE_FAILURE_EXIT),
+            "the synthesized failure must drive ordered finalization to the status barrier"
+        );
+        assert!(
+            obs.terminated.load(Ordering::SeqCst) >= 1,
+            "the child must be terminated during teardown"
+        );
         let all_joined = matches!(
             &*obs.join_report.lock().unwrap(),
             Some(report) if report.unjoined.is_empty()
