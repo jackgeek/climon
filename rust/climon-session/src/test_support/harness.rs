@@ -25,7 +25,7 @@ use crate::engine::state::{SessionState, SessionStateConfig, TransitionContext};
 /// Builds the deterministic base [`SessionMeta`] every harness session starts
 /// from: an 80x24 running session with a fixed id, so replay/idle/control math
 /// is reproducible.
-fn base_meta() -> SessionMeta {
+pub(crate) fn base_meta() -> SessionMeta {
     SessionMeta {
         id: "harness-session".to_string(),
         command: vec!["sh".to_string()],
@@ -60,7 +60,7 @@ fn base_meta() -> SessionMeta {
     }
 }
 
-fn base_config(local_attached: bool) -> SessionStateConfig {
+pub(crate) fn base_config(local_attached: bool) -> SessionStateConfig {
     SessionStateConfig {
         idle_seconds: 10,
         snippet_enabled: false,
