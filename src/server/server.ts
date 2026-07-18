@@ -91,7 +91,38 @@ interface ServerShutdownOptions {
 }
 
 export const DASHBOARD_IDLE_TIMEOUT_SECONDS = 255;
+export const SSE_KEEP_ALIVE_INTERVAL_MS = 15_000;
 const INGEST_DEMOTION_SHUTDOWN_SOURCE = "ingest-demotion";
+
+interface SseKeepAliveClient {
+  enqueue(chunk: Uint8Array): void;
+}
+
+interface SseKeepAliveDeps {
+  encoder?: TextEncoder;
+  setInterval?: (callback: () => void, ms: number) => unknown;
+  clearInterval?: (handle: unknown) => void;
+}
+
+export function startSseKeepAlive<T extends SseKeepAliveClient>(
+  clients: Set<T>,
+  deps: SseKeepAliveDeps = {}
+): () => void {
+  const encoder = deps.encoder ?? new TextEncoder();
+  const schedule = deps.setInterval ?? ((callback, ms) => setInterval(callback, ms));
+  const cancel = deps.clearInterval ?? ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
+  const message = encoder.encode(": keepalive\n\n");
+  const handle = schedule(() => {
+    for (const controller of clients) {
+      try {
+        controller.enqueue(message);
+      } catch {
+        clients.delete(controller);
+      }
+    }
+  }, SSE_KEEP_ALIVE_INTERVAL_MS);
+  return () => cancel(handle);
+}
 
 /** Whether the shared ingest daemon should run: either remote scenario enabled. */
 export function computeRemotesActive(config: ClimonConfig): boolean {
@@ -1296,6 +1327,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   const sseClients = new Set<ReadableStreamDefaultController<Uint8Array>>();
   const encoder = new TextEncoder();
+  let stopSseKeepAlive = () => {};
 
   function broadcastSessions(payload: string): void {
     const message = encoder.encode(`event: sessions\ndata: ${payload}\n\n`);
@@ -2107,6 +2139,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     }
     throw describeListenError(error, config.server.host, config.server.port);
   }
+  stopSseKeepAlive = startSseKeepAlive(sseClients, { encoder });
 
   startupLog("Bun.serve started; writing server state file");
   const recordedPorts = await collectServerPorts();
@@ -2145,6 +2178,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     // Does NOT remove server.json (callers decide) and does NOT touch the ingest.
     const closeListenerAndStreams = async (): Promise<void> => {
       watcher.close();
+      stopSseKeepAlive();
       if (debounce) {
         clearTimeout(debounce);
         debounce = undefined;
