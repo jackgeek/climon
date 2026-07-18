@@ -36,6 +36,9 @@ enum ReadStep {
     Chunk(Vec<u8>),
     /// Fail the `read` with this cause (an unexpected socket read error).
     Error(String),
+    /// Panic inside `read`, modelling a reader thread that dies without shutting
+    /// its socket down (so the supervisor must force the counterpart down).
+    Panic,
 }
 
 /// The shared state behind a [`FakeSessionStream`] and all of its clones (reader,
@@ -162,6 +165,14 @@ impl FakeStreamHandle {
         rx
     }
 
+    /// Queues a read step that panics inside `read`, modelling a reader thread
+    /// that dies without shutting its socket down. Wakes a parked reader so it
+    /// pops the step and panics.
+    pub(crate) fn arm_read_panic(&self) {
+        self.inner.reads.lock().unwrap().push_back(ReadStep::Panic);
+        self.inner.read_cv.notify_all();
+    }
+
     /// Arms the writer gate and a one-shot "write started" signal, so the next
     /// write records that it began (occupying the writer's in-flight slot) and
     /// then blocks until shutdown.
@@ -268,6 +279,7 @@ impl Read for FakeSessionStream {
                     return Ok(n);
                 }
                 Some(ReadStep::Error(message)) => return Err(io::Error::other(message)),
+                Some(ReadStep::Panic) => panic!("fake reader panic"),
                 None => {
                     if self.inner.read_eof.load(Ordering::SeqCst) {
                         return Ok(0);
@@ -382,6 +394,13 @@ impl RecordingEvents {
         let events = RecordingEvents::new();
         events.closed.store(true, Ordering::SeqCst);
         events
+    }
+
+    /// Closes the control event lane after the fact, so every subsequent emit
+    /// (from the manager or a blocking worker) fails with
+    /// [`IpcAdapterError::EventLaneClosed`].
+    pub(crate) fn close_lane(&self) {
+        self.closed.store(true, Ordering::SeqCst);
     }
 
     fn record(&self, event: SessionEvent) -> Result<(), IpcAdapterError> {
@@ -685,6 +704,13 @@ impl IpcFixture {
     /// The recorder every client event is emitted into.
     pub(crate) fn events(&self) -> &RecordingEvents {
         &self.events
+    }
+
+    /// Closes the control event lane after clients have connected, so a
+    /// subsequent blocking-worker emit (a decoded frame, a disconnect, or a send
+    /// failure) fails and must propagate as [`IpcAdapterError::EventLaneClosed`].
+    pub(crate) fn close_lane(&self) {
+        self.events.close_lane();
     }
 
     /// Injects a fake stream without waiting for it to connect, returning the

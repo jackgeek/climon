@@ -106,6 +106,25 @@ const ACCEPT_CHANNEL_CAPACITY: usize = 16;
 
 // ---- errors ------------------------------------------------------------
 
+/// Which blocking worker of a connection a failure originated in. Payload-free:
+/// it names the side only, never any client frame, input, or output bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkerSide {
+    /// The blocking reader/decoder task.
+    Reader,
+    /// The blocking writer task.
+    Writer,
+}
+
+impl fmt::Display for WorkerSide {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WorkerSide::Reader => write!(f, "reader"),
+            WorkerSide::Writer => write!(f, "writer"),
+        }
+    }
+}
+
 /// A failure that ends an ipc adapter worker. Every variant is payload-free: it
 /// names the failed operation (and, where useful, a payload-safe cause string)
 /// but never client frame, input, or output bytes.
@@ -118,6 +137,10 @@ pub(crate) enum IpcAdapterError {
     /// The control event lane closed, so a client event could not be delivered.
     /// The manager reports this rather than exiting silently.
     EventLaneClosed,
+    /// A connection's blocking reader or writer task panicked. Payload-free: it
+    /// names the side only. Surfaced by the connection supervisor after it has
+    /// forced the counterpart worker down and joined it.
+    WorkerPanicked(WorkerSide),
     /// The session listener could not be configured for non-blocking accept.
     ListenerConfig(String),
     /// The session listener's `accept` failed with a fatal (non-`WouldBlock`)
@@ -140,6 +163,9 @@ impl fmt::Display for IpcAdapterError {
                 f,
                 "control event lane closed before a client event was delivered"
             ),
+            IpcAdapterError::WorkerPanicked(side) => {
+                write!(f, "connection {side} worker panicked")
+            }
             IpcAdapterError::ListenerConfig(cause) => {
                 write!(f, "session listener configuration failed: {cause}")
             }
@@ -291,39 +317,52 @@ struct OutboundFrame {
 /// closed control lane it stops and, if it wins the first-wins claim, emits
 /// exactly one [`SessionEvent::ClientDisconnected`], cancels the connection, and
 /// shuts the socket down so the writer unblocks.
+///
+/// Returns `Ok(())` for a normal end (peer EOF / read failure successfully
+/// reported, or a terminal already claimed by the writer/manager). If a
+/// `blocking_emit` finds the control lane closed — for a decoded frame or for the
+/// disconnect — it returns the typed [`IpcAdapterError::EventLaneClosed`] so the
+/// supervisor and manager can surface it rather than swallowing it.
 fn run_connection_reader<E: ClientEventSink>(
     mut stream: Box<dyn SessionStream>,
     client_id: ClientId,
     reporter: Arc<TerminalReporter>,
     cancel: CancellationToken,
     events: E,
-) {
+) -> Result<(), IpcAdapterError> {
     let mut decoder = FrameDecoder::new();
     let mut buf = [0u8; READ_CHUNK];
+    let mut fatal: Option<IpcAdapterError> = None;
     'read: loop {
         let n = match stream.read(&mut buf) {
             Ok(0) | Err(_) => break,
             Ok(n) => n,
         };
         for frame in decoder.push(&buf[..n]) {
-            if events
-                .blocking_emit(SessionEvent::ClientFrame { client_id, frame })
-                .is_err()
+            if let Err(error) = events.blocking_emit(SessionEvent::ClientFrame { client_id, frame })
             {
                 // The control lane has closed; the manager surfaces that. Stop
-                // reading without a further (also-failing) terminal emit.
+                // reading and carry the typed error out instead of swallowing it.
+                fatal = Some(error);
                 break 'read;
             }
         }
     }
     // Peer EOF / read failure is a normal disconnect — but only if no writer/
-    // manager terminal has already been claimed for this connection.
-    if reporter.claim() {
+    // manager terminal has already been claimed for this connection, and only if
+    // the lane has not already closed under us.
+    if fatal.is_none() && reporter.claim() {
         cancel.cancel();
-        let _ = events.blocking_emit(SessionEvent::ClientDisconnected(client_id));
+        if let Err(error) = events.blocking_emit(SessionEvent::ClientDisconnected(client_id)) {
+            fatal = Some(error);
+        }
     }
     // Unblock a wedged writer (and idempotently close the socket).
     let _ = stream.shutdown_both();
+    match fatal {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 /// Spawns [`run_connection_reader`] on a dedicated blocking thread and returns
@@ -335,7 +374,7 @@ fn spawn_connection_reader<E: ClientEventSink>(
     reporter: Arc<TerminalReporter>,
     cancel: CancellationToken,
     events: E,
-) -> JoinHandle<()> {
+) -> JoinHandle<Result<(), IpcAdapterError>> {
     spawn_blocking(move || run_connection_reader(stream, client_id, reporter, cancel, events))
 }
 
@@ -350,6 +389,12 @@ fn spawn_connection_reader<E: ClientEventSink>(
 /// or a write fails. A write failure — and only a write failure — claims the
 /// first-wins terminal and emits one [`SessionEvent::ClientSendFailed`] carrying
 /// the failing frame's operation id.
+///
+/// Returns `Ok(())` for a normal end (a write failure successfully reported, an
+/// intentional queue close/drain, or a cancellation). If the
+/// `ClientSendFailed` `blocking_emit` finds the control lane closed it returns
+/// the typed [`IpcAdapterError::EventLaneClosed`] so the supervisor and manager
+/// can surface it rather than swallowing it.
 fn run_connection_writer<E: ClientEventSink>(
     outbound: Receiver<OutboundFrame>,
     mut stream: Box<dyn SessionStream>,
@@ -357,7 +402,8 @@ fn run_connection_writer<E: ClientEventSink>(
     reporter: Arc<TerminalReporter>,
     cancel: CancellationToken,
     events: E,
-) {
+) -> Result<(), IpcAdapterError> {
+    let mut fatal: Option<IpcAdapterError> = None;
     loop {
         if cancel.is_cancelled() {
             break;
@@ -367,10 +413,12 @@ fn run_connection_writer<E: ClientEventSink>(
                 if stream.write_all(&frame.bytes).is_err() {
                     if reporter.claim() {
                         cancel.cancel();
-                        let _ = events.blocking_emit(SessionEvent::ClientSendFailed {
+                        if let Err(error) = events.blocking_emit(SessionEvent::ClientSendFailed {
                             client_id,
                             operation_id: frame.operation_id,
-                        });
+                        }) {
+                            fatal = Some(error);
+                        }
                     }
                     break;
                 }
@@ -382,6 +430,10 @@ fn run_connection_writer<E: ClientEventSink>(
         }
     }
     let _ = stream.shutdown_both();
+    match fatal {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 /// Spawns [`run_connection_writer`] on a dedicated blocking thread and returns
@@ -394,7 +446,7 @@ fn spawn_connection_writer<E: ClientEventSink>(
     reporter: Arc<TerminalReporter>,
     cancel: CancellationToken,
     events: E,
-) -> JoinHandle<()> {
+) -> JoinHandle<Result<(), IpcAdapterError>> {
     spawn_blocking(move || {
         run_connection_writer(outbound, stream, client_id, reporter, cancel, events)
     })
@@ -402,20 +454,66 @@ fn spawn_connection_writer<E: ClientEventSink>(
 
 // ---- connection supervisor ---------------------------------------------
 
+/// Combines one joined worker into an optional fatal error, mapping a panic
+/// (`JoinError`) to a payload-free [`IpcAdapterError::WorkerPanicked`] naming the
+/// side. A worker that ended normally with `Ok(())` contributes no error; one
+/// that carried out a typed [`IpcAdapterError`] (a closed lane) contributes it.
+fn worker_outcome(
+    side: WorkerSide,
+    joined: Result<Result<(), IpcAdapterError>, tokio::task::JoinError>,
+) -> Option<IpcAdapterError> {
+    match joined {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(error),
+        Err(_join_error) => Some(IpcAdapterError::WorkerPanicked(side)),
+    }
+}
+
 /// Owns exactly one reader and one writer blocking task for a connection and
 /// joins both before returning the connection's [`ClientId`] to the manager
-/// (which then reaps it from its map). Neither worker is detached. Teardown is
-/// driven by whichever party claims the terminal (reader/writer/manager) via the
-/// shared cancellation token and socket shutdown, so the supervisor only has to
-/// join.
+/// (which then reaps it from its map). Neither worker is detached.
+///
+/// Rather than await the reader then the writer sequentially — which lets a
+/// worker that panics or exits abnormally (without shutting the socket down)
+/// wedge its counterpart forever — the supervisor selects whichever worker
+/// finishes first, then *always* cancels and force-shuts-down the connection via
+/// its own dedicated `shutdown` clone so the counterpart cannot block. Only then
+/// does it join the counterpart. The worker itself still shuts down on its
+/// normal paths; this shutdown is idempotent safety.
+///
+/// The two outcomes are combined deterministically, first (to finish) fatal
+/// wins: a closed lane ([`IpcAdapterError::EventLaneClosed`]) or a worker panic
+/// ([`IpcAdapterError::WorkerPanicked`]) is surfaced to the manager after the
+/// counterpart has been cleaned up, never ignored.
 async fn run_connection_supervisor(
     client_id: ClientId,
-    reader: JoinHandle<()>,
-    writer: JoinHandle<()>,
-) -> ClientId {
-    let _ = reader.await;
-    let _ = writer.await;
-    client_id
+    reader: JoinHandle<Result<(), IpcAdapterError>>,
+    writer: JoinHandle<Result<(), IpcAdapterError>>,
+    shutdown: Box<dyn SessionStream>,
+    cancel: CancellationToken,
+) -> Result<ClientId, IpcAdapterError> {
+    let mut reader = reader;
+    let mut writer = writer;
+
+    let (first_side, first) = tokio::select! {
+        joined = &mut reader => (WorkerSide::Reader, worker_outcome(WorkerSide::Reader, joined)),
+        joined = &mut writer => (WorkerSide::Writer, worker_outcome(WorkerSide::Writer, joined)),
+    };
+
+    // A worker has finished (possibly by panicking without shutting down). Force
+    // the connection down so the counterpart cannot block forever, then join it.
+    cancel.cancel();
+    let _ = shutdown.shutdown_both();
+
+    let second = match first_side {
+        WorkerSide::Reader => worker_outcome(WorkerSide::Writer, (&mut writer).await),
+        WorkerSide::Writer => worker_outcome(WorkerSide::Reader, (&mut reader).await),
+    };
+
+    match first.or(second) {
+        Some(error) => Err(error),
+        None => Ok(client_id),
+    }
 }
 
 // ---- listener bridge ---------------------------------------------------
@@ -488,6 +586,11 @@ enum LoopOutcome {
     Fatal(IpcAdapterError),
 }
 
+/// A supervisor's join outcome: the [`ClientId`] it managed, or a typed fatal it
+/// surfaced ([`IpcAdapterError::EventLaneClosed`] or a
+/// [`IpcAdapterError::WorkerPanicked`]) after cleaning up its counterpart.
+type SupervisorResult = Result<ClientId, IpcAdapterError>;
+
 /// A single arbitration result from the manager's `select!`.
 // `Step::Effect` carries an [`Effect`], whose `PatchMetadata` payload dwarfs the
 // other variants (the effect enum itself carries the same allowance). Boxing it
@@ -495,9 +598,31 @@ enum LoopOutcome {
 // matched on immediately, so the size difference is accepted here.
 #[allow(clippy::large_enum_variant)]
 enum Step {
-    Reaped(Option<Result<ClientId, tokio::task::JoinError>>),
+    Reaped(Option<Result<SupervisorResult, tokio::task::JoinError>>),
     Effect(Option<Effect>),
     Accepted(Option<Box<dyn SessionStream>>),
+}
+
+/// Bounded diagnostics for isolated per-connection setup failures. A setup
+/// failure is isolated (the stream is shut down) and never fails the manager, so
+/// only an aggregate matters: how many have occurred and the most recent one.
+/// This retains a fixed amount regardless of how many connections fail their
+/// setup, rather than growing an unbounded `Vec`. No payload bytes are stored.
+#[derive(Debug, Default)]
+struct SetupDiagnostics {
+    /// Total isolated setup failures observed.
+    count: usize,
+    /// The most recent failure (client id + payload-free cause), if any.
+    last: Option<(ClientId, ConnectionSetupError)>,
+}
+
+impl SetupDiagnostics {
+    /// Records one isolated setup failure: bump the count and retain it as the
+    /// most recent, dropping any earlier one so storage stays bounded.
+    fn record(&mut self, client_id: ClientId, error: ConnectionSetupError) {
+        self.count += 1;
+        self.last = Some((client_id, error));
+    }
 }
 
 /// The async ipc manager's owned state (the [`JoinSet`] of supervisors is
@@ -512,9 +637,9 @@ struct IpcManager<E: ClientEventSink> {
     accept_open: bool,
     listener_cancel: CancellationToken,
     listener_join: Option<JoinHandle<Result<(), IpcAdapterError>>>,
-    /// Isolated per-connection setup failures, retained as an internal diagnostic
-    /// rather than a daemon-wide failure.
-    setup_failures: Vec<(ClientId, ConnectionSetupError)>,
+    /// Bounded diagnostics for isolated per-connection setup failures, retained
+    /// as an internal aggregate rather than a daemon-wide failure.
+    setup_failures: SetupDiagnostics,
 }
 
 impl<E: ClientEventSink> IpcManager<E> {
@@ -524,7 +649,7 @@ impl<E: ClientEventSink> IpcManager<E> {
         &mut self,
         effects: &mut mpsc::Receiver<Effect>,
         accepted: &mut mpsc::Receiver<Box<dyn SessionStream>>,
-        join_set: &mut JoinSet<ClientId>,
+        join_set: &mut JoinSet<SupervisorResult>,
     ) -> LoopOutcome {
         loop {
             let step = tokio::select! {
@@ -533,12 +658,22 @@ impl<E: ClientEventSink> IpcManager<E> {
                 acc = accepted.recv(), if self.accept_open => Step::Accepted(acc),
             };
             match step {
-                Step::Reaped(Some(Ok(client_id))) => {
+                // A supervisor finished cleanly: reap its connection from the map.
+                Step::Reaped(Some(Ok(Ok(client_id)))) => {
                     self.connections.remove(&client_id);
                 }
-                // A panicked supervisor cannot leave a live connection behind;
-                // there is nothing to reap.
-                Step::Reaped(_) => {}
+                // A supervisor surfaced a fatal worker error (a closed control
+                // lane, or a reader/writer panic) after cleaning up its
+                // counterpart. Surface it rather than swallowing it; the owned
+                // cleanup runs in `graceful_shutdown`.
+                Step::Reaped(Some(Ok(Err(error)))) => return LoopOutcome::Fatal(error),
+                // The supervisor task itself failed to join. It catches its
+                // workers' panics and never panics itself, so this is not
+                // expected; there is no live connection or client id to recover,
+                // so continue and let the remaining supervisors be joined.
+                Step::Reaped(Some(Err(_join_error))) => {}
+                // `join_next` on an empty set: nothing to reap.
+                Step::Reaped(None) => {}
                 Step::Effect(Some(effect)) => {
                     if let Err(error) = self.handle_effect(effect).await {
                         return LoopOutcome::Fatal(error);
@@ -667,7 +802,7 @@ impl<E: ClientEventSink> IpcManager<E> {
     async fn accept_connection(
         &mut self,
         stream: Box<dyn SessionStream>,
-        join_set: &mut JoinSet<ClientId>,
+        join_set: &mut JoinSet<SupervisorResult>,
     ) -> Result<(), IpcAdapterError> {
         if self.accepting_stopped {
             let _ = stream.shutdown_both();
@@ -682,7 +817,7 @@ impl<E: ClientEventSink> IpcManager<E> {
                     .await
             }
             Err(diagnostic) => {
-                self.setup_failures.push((client_id, diagnostic));
+                self.setup_failures.record(client_id, diagnostic);
                 Ok(())
             }
         }
@@ -694,11 +829,16 @@ impl<E: ClientEventSink> IpcManager<E> {
     /// reader/writer and their supervisor, and records the connection. Any
     /// fallible step shuts the stream down and returns an isolated
     /// [`ConnectionSetupError`].
+    ///
+    /// Two independent shutdown clones are made: one the manager keeps
+    /// ([`Connection::shutdown`]) to force-isolate a full/closed queue, and one
+    /// the supervisor owns to force the connection down when the first worker
+    /// finishes so the counterpart cannot block.
     fn install_connection(
         &mut self,
         client_id: ClientId,
         stream: Box<dyn SessionStream>,
-        join_set: &mut JoinSet<ClientId>,
+        join_set: &mut JoinSet<SupervisorResult>,
     ) -> Result<(), ConnectionSetupError> {
         if let Err(error) = stream.set_nonblocking(false) {
             let _ = stream.shutdown_both();
@@ -715,7 +855,14 @@ impl<E: ClientEventSink> IpcManager<E> {
                 return Err(ConnectionSetupError::Clone(error.to_string()));
             }
         };
-        let shutdown_stream = match stream.try_clone_box() {
+        let manager_shutdown = match stream.try_clone_box() {
+            Ok(clone) => clone,
+            Err(error) => {
+                let _ = stream.shutdown_both();
+                return Err(ConnectionSetupError::Clone(error.to_string()));
+            }
+        };
+        let supervisor_shutdown = match stream.try_clone_box() {
             Ok(clone) => clone,
             Err(error) => {
                 let _ = stream.shutdown_both();
@@ -743,7 +890,13 @@ impl<E: ClientEventSink> IpcManager<E> {
             cancel.clone(),
             self.events.clone(),
         );
-        join_set.spawn(run_connection_supervisor(client_id, reader, writer));
+        join_set.spawn(run_connection_supervisor(
+            client_id,
+            reader,
+            writer,
+            supervisor_shutdown,
+            cancel.clone(),
+        ));
 
         self.connections.insert(
             client_id,
@@ -751,7 +904,7 @@ impl<E: ClientEventSink> IpcManager<E> {
                 outbound: outbound_tx,
                 cancel,
                 reporter,
-                shutdown: shutdown_stream,
+                shutdown: manager_shutdown,
             },
         );
         Ok(())
@@ -761,11 +914,17 @@ impl<E: ClientEventSink> IpcManager<E> {
     /// accepting, reject any streams accepted-but-not-installed, drop each
     /// client's outbound sender (so its writer drains queued frames then shuts
     /// down) after a silent terminal claim, and join the [`JoinSet`].
+    ///
+    /// While joining, a supervisor may report a fatal worker error it discovered
+    /// during its own cleanup (a closed control lane, or a worker panic). Those
+    /// are reconciled here — the first fatal is returned so the manager surfaces
+    /// it rather than silently returning `Ok` — while still joining *every*
+    /// supervisor. Returns `None` when all connections closed cleanly.
     async fn graceful_shutdown(
         &mut self,
         accepted: &mut mpsc::Receiver<Box<dyn SessionStream>>,
-        join_set: &mut JoinSet<ClientId>,
-    ) {
+        join_set: &mut JoinSet<SupervisorResult>,
+    ) -> Option<IpcAdapterError> {
         self.stop_accepting();
         while let Ok(stream) = accepted.try_recv() {
             let _ = stream.shutdown_both();
@@ -775,7 +934,15 @@ impl<E: ClientEventSink> IpcManager<E> {
             // `connection` (its outbound sender) drops here: the writer drains
             // remaining frames in FIFO order, then shuts the socket down.
         }
-        while join_set.join_next().await.is_some() {}
+        let mut fatal: Option<IpcAdapterError> = None;
+        while let Some(reaped) = join_set.join_next().await {
+            if let Ok(Err(error)) = reaped {
+                // Keep the first fatal (a later panic/lane close during teardown
+                // does not override it) but keep joining every supervisor.
+                fatal.get_or_insert(error);
+            }
+        }
+        fatal
     }
 }
 
@@ -802,14 +969,16 @@ async fn run_ipc_manager<E: ClientEventSink>(
         accept_open: true,
         listener_cancel,
         listener_join: Some(listener_join),
-        setup_failures: Vec::new(),
+        setup_failures: SetupDiagnostics::default(),
     };
-    let mut join_set: JoinSet<ClientId> = JoinSet::new();
+    let mut join_set: JoinSet<SupervisorResult> = JoinSet::new();
 
     let outcome = manager
         .event_loop(&mut effects, &mut accepted, &mut join_set)
         .await;
-    manager
+    // Owned cleanup: join every supervisor, reconciling any fatal a supervisor
+    // discovers during its teardown.
+    let shutdown_error = manager
         .graceful_shutdown(&mut accepted, &mut join_set)
         .await;
 
@@ -824,8 +993,14 @@ async fn run_ipc_manager<E: ClientEventSink>(
     };
 
     match outcome {
-        LoopOutcome::RouteClosed => bridge,
+        // The event loop already saw a fatal; it happened first, so it wins.
         LoopOutcome::Fatal(error) => Err(error),
+        // The route closed cleanly: a worker fatal discovered while joining wins
+        // over `Ok`, otherwise the bridge result stands.
+        LoopOutcome::RouteClosed => match shutdown_error {
+            Some(error) => Err(error),
+            None => bridge,
+        },
     }
 }
 
@@ -882,8 +1057,12 @@ mod tests {
     use climon_proto::frame::{encode_frame, encode_json_frame, ExitPayload, FrameType};
 
     use super::test_support::{FakeSessionStream, IpcFixture, RecordingEvents};
-    use super::{run_ipc_manager, spawn_listener_bridge, IpcAdapterError};
-    use crate::engine::effect::{Effect, OperationId};
+    use super::{
+        run_ipc_manager, spawn_listener_bridge, Connection, ConnectionSetupError, IpcAdapterError,
+        IpcManager, OutboundFrame, SetupDiagnostics, SupervisorResult, TerminalReporter,
+        WorkerSide,
+    };
+    use crate::engine::effect::{ClientId, Effect, OperationId};
     use crate::engine::CLIENT_OUTPUT_CAPACITY;
     use crate::socket::{connect_session_socket, listen_on_session_socket, SessionStream};
 
@@ -1075,67 +1254,76 @@ mod tests {
         assert_eq!(events.tags_for(client), vec!["connected", "disconnected"]);
     }
 
-    // ---- Test 8: closed outbound queue race ------------------------------
+    // ---- Test 8: closed outbound queue isolation -------------------------
 
-    /// When the per-client outbound queue is already closed (the writer is gone),
-    /// a send isolates the client with one [`SessionEvent::ClientSendFailed`]
-    /// carrying the failing send's operation id.
+    /// When a per-client outbound queue is already closed (its writer is gone, so
+    /// the receiver has been dropped), the manager's next send to that client
+    /// isolates it with exactly one [`SessionEvent::ClientSendFailed`] carrying
+    /// the failing send's operation id, then claims the terminal, cancels, and
+    /// forces the socket down.
+    ///
+    /// This drives the manager's isolation logic directly over a nonpanic
+    /// receiver-close: with the connection supervisor now forcing a dead
+    /// connection down and reaping it, the lingering-closed-queue window is no
+    /// longer reachable through a panicking writer without the whole adapter
+    /// surfacing a fatal `WorkerPanicked`. Dropping the outbound receiver models
+    /// the same closed queue deterministically and without a panic.
     #[tokio::test]
     async fn closed_outbound_queue_isolates_with_send_failed() {
-        let mut fixture = IpcFixture::new();
-        let events = fixture.events().clone();
-        let client = fixture.connect_client().await;
+        use std::collections::HashMap;
+        use std::sync::mpsc::sync_channel;
+        use std::sync::Arc;
 
-        // Model a writer that dies without claiming the terminal (its outbound
-        // receiver closes): the next write panics. The reader stays parked, so the
-        // connection lingers with a closed queue and an unclaimed terminal.
-        let panicking = fixture.handle(client).arm_panic();
-        fixture
-            .send_effect(Effect::SendClient {
-                client_id: client,
-                operation_id: OperationId(1),
-                bytes: b"boom".to_vec(),
-            })
-            .await;
-        panicking.await.expect("writer began the panicking write");
+        let events = RecordingEvents::new();
+        let mut manager: IpcManager<RecordingEvents> = IpcManager {
+            events: events.clone(),
+            capacity: 1,
+            connections: HashMap::new(),
+            next_id: 1,
+            accepting_stopped: false,
+            accept_open: false,
+            listener_cancel: CancellationToken::new(),
+            listener_join: None,
+            setup_failures: SetupDiagnostics::default(),
+        };
 
-        // The receiver closes during the panic unwind on the blocking thread,
-        // which races the async send; the queue stays closed once closed, so
-        // sending until the isolation is observed is a bounded, deterministic
-        // wait. The first send that observes the closed queue isolates the
-        // client (and removes it), so exactly one ClientSendFailed is emitted.
-        let mut isolated_op = None;
-        for i in 0..64 {
-            let op = OperationId(100 + i);
-            fixture
-                .send_effect(Effect::SendClient {
-                    client_id: client,
-                    operation_id: op,
-                    bytes: b"y".to_vec(),
-                })
-                .await;
-            fixture.flush_manager().await;
-            if let Some((_, op)) = events
-                .send_failed()
-                .into_iter()
-                .find(|(id, _)| *id == client)
-            {
-                isolated_op = Some(op);
-                break;
-            }
-        }
-        let isolated_op = isolated_op.expect("a closed queue isolates the client");
-        assert!(
-            (100..164).contains(&isolated_op.0),
-            "the failing send's own operation id is reported"
+        // A per-client queue whose receiver is dropped: the writer is gone.
+        let client = ClientId(0);
+        let (outbound, outbound_rx) = sync_channel::<OutboundFrame>(1);
+        drop(outbound_rx);
+        let (stream, handle) = FakeSessionStream::new();
+        let reporter = Arc::new(TerminalReporter::new());
+        let cancel = CancellationToken::new();
+        manager.connections.insert(
+            client,
+            Connection {
+                outbound,
+                cancel: cancel.clone(),
+                reporter: Arc::clone(&reporter),
+                shutdown: Box::new(stream),
+            },
         );
 
-        fixture.finish().await.unwrap();
+        manager
+            .send_client(client, OperationId(7), b"y".to_vec())
+            .await
+            .expect("the open lane accepts the isolation event");
+
         assert_eq!(
-            events.send_failed().len(),
-            1,
-            "exactly one isolation for the closed queue"
+            events.send_failed(),
+            vec![(client, OperationId(7))],
+            "the closed queue isolates the client with the failing send's op"
         );
+        assert!(
+            !manager.connections.contains_key(&client),
+            "the isolated client is removed"
+        );
+        assert!(reporter.is_claimed(), "the isolation claims the terminal");
+        assert!(
+            cancel.is_cancelled(),
+            "the isolation cancels the connection"
+        );
+        assert!(handle.is_shutdown(), "the isolation forces the socket down");
     }
 
     // ---- Test 9: stop accepting ------------------------------------------
@@ -1231,6 +1419,128 @@ mod tests {
         assert!(handle.is_shutdown(), "the connection was cleaned up");
     }
 
+    // ---- Test 12a: post-establishment lane closure on a reader frame ------
+
+    /// After a client is established, a control lane that closes while the reader
+    /// is running must propagate: the reader's `ClientFrame` emit fails, that
+    /// typed `EventLaneClosed` flows through the connection supervisor to the
+    /// manager, which cleans up (both blocking workers shut down and joined) and
+    /// returns `Err(EventLaneClosed)`. The current code swallows the reader's
+    /// `blocking_emit` error, so the manager stays running and this hangs.
+    #[tokio::test]
+    async fn post_establish_lane_close_on_reader_frame_propagates_event_lane_closed() {
+        let mut fixture = IpcFixture::new();
+        let client = fixture.connect_client().await;
+        let handle = fixture.handle(client);
+
+        // The lane is open when the client connects, then closes; a subsequently
+        // fed frame cannot be delivered.
+        fixture.close_lane();
+        fixture.feed(client, &encode_frame(FrameType::Input, b"hi"));
+
+        let result = fixture.join_manager().await;
+        assert_eq!(result, Err(IpcAdapterError::EventLaneClosed));
+        assert!(handle.is_shutdown(), "the connection was cleaned up");
+        assert!(
+            handle.shutdown_count() >= 2,
+            "reader and writer both shut down and were joined"
+        );
+    }
+
+    // ---- Test 12b: post-establishment lane closure on a writer failure ---
+
+    /// The same post-establishment lane closure on the writer's failure path: a
+    /// write fails, and the writer's `ClientSendFailed` emit finds a closed lane.
+    /// That typed `EventLaneClosed` must flow through the supervisor to the
+    /// manager, which cleans up and returns `Err(EventLaneClosed)`. The current
+    /// code swallows the writer's `blocking_emit` error, so the manager stays
+    /// running and this hangs.
+    #[tokio::test]
+    async fn post_establish_lane_close_on_writer_failure_propagates_event_lane_closed() {
+        let mut fixture = IpcFixture::new();
+        let client = fixture.connect_client().await;
+        let handle = fixture.handle(client);
+        handle.fail_next_write("broken pipe");
+
+        fixture.close_lane();
+        fixture
+            .send_effect(Effect::SendClient {
+                client_id: client,
+                operation_id: OperationId(42),
+                bytes: b"x".to_vec(),
+            })
+            .await;
+
+        let result = fixture.join_manager().await;
+        assert_eq!(result, Err(IpcAdapterError::EventLaneClosed));
+        assert!(handle.is_shutdown(), "the connection was cleaned up");
+        assert!(
+            handle.shutdown_count() >= 2,
+            "reader and writer both shut down and were joined"
+        );
+    }
+
+    // ---- Test 12c: writer panic forces reader shutdown -------------------
+
+    /// A blocking writer that panics (without shutting its socket down) must not
+    /// wedge its idle-or-parked reader counterpart: the supervisor forces
+    /// shutdown, the reader finishes, and the manager surfaces a payload-free
+    /// `WorkerPanicked(Writer)` rather than hanging. The current sequential-await
+    /// supervisor awaits the parked reader first, so it hangs without the
+    /// fixture's `Drop` force-shutdown.
+    #[tokio::test]
+    async fn writer_panic_forces_reader_shutdown_and_surfaces_worker_panicked() {
+        let mut fixture = IpcFixture::new();
+        let client = fixture.connect_client().await;
+        let handle = fixture.handle(client);
+
+        let panicking = handle.arm_panic();
+        fixture
+            .send_effect(Effect::SendClient {
+                client_id: client,
+                operation_id: OperationId(1),
+                bytes: b"boom".to_vec(),
+            })
+            .await;
+        panicking.await.expect("writer began the panicking write");
+
+        let result = fixture.join_manager().await;
+        assert_eq!(
+            result,
+            Err(IpcAdapterError::WorkerPanicked(WorkerSide::Writer))
+        );
+        assert!(
+            handle.is_shutdown(),
+            "the reader was forced down and joined"
+        );
+    }
+
+    // ---- Test 12d: reader panic unblocks the idle writer -----------------
+
+    /// A blocking reader that panics while its writer sits idle must not wedge the
+    /// writer: the supervisor cancels and forces shutdown so the idle writer
+    /// unblocks and is joined, and the manager surfaces `WorkerPanicked(Reader)`.
+    /// The current supervisor awaits the panicked reader (ignored) then the idle
+    /// writer, which never unblocks, so it hangs.
+    #[tokio::test]
+    async fn reader_panic_unblocks_idle_writer_and_surfaces_worker_panicked() {
+        let mut fixture = IpcFixture::new();
+        let client = fixture.connect_client().await;
+        let handle = fixture.handle(client);
+
+        handle.arm_read_panic();
+
+        let result = fixture.join_manager().await;
+        assert_eq!(
+            result,
+            Err(IpcAdapterError::WorkerPanicked(WorkerSide::Reader))
+        );
+        assert!(
+            handle.is_shutdown(),
+            "the idle writer was canceled/unblocked and joined"
+        );
+    }
+
     // ---- Test 13a: listener WouldBlock policy ----------------------------
 
     /// The real listener bridge parks on `WouldBlock` while no connection is
@@ -1271,6 +1581,54 @@ mod tests {
         assert!(handle.is_shutdown(), "existing client cleaned up");
     }
 
+    // ---- Test 13c: route-close cleanup surfaces a worker fatal -----------
+
+    /// When the effect route closes, the manager's graceful shutdown joins every
+    /// supervisor and must reconcile a fatal a supervisor discovered during its
+    /// own teardown (a closed lane or a worker panic): it returns that error
+    /// rather than a silent `Ok`, while still joining every supervisor. The
+    /// previous cleanup discarded supervisor outcomes entirely.
+    #[tokio::test]
+    async fn route_close_join_surfaces_worker_fatal_rather_than_swallowing() {
+        use std::collections::HashMap;
+        use tokio::task::JoinSet;
+
+        let events = RecordingEvents::new();
+        let mut manager: IpcManager<RecordingEvents> = IpcManager {
+            events,
+            capacity: 1,
+            connections: HashMap::new(),
+            next_id: 0,
+            accepting_stopped: false,
+            accept_open: false,
+            listener_cancel: CancellationToken::new(),
+            listener_join: None,
+            setup_failures: SetupDiagnostics::default(),
+        };
+
+        // Three supervisors reaped during the route-close join, one of which
+        // reports a fatal it discovered while cleaning up its counterpart.
+        let mut join_set: JoinSet<SupervisorResult> = JoinSet::new();
+        join_set.spawn(async { Ok(ClientId(0)) });
+        join_set.spawn(async { Err(IpcAdapterError::WorkerPanicked(WorkerSide::Reader)) });
+        join_set.spawn(async { Ok(ClientId(2)) });
+
+        let (_accepted_tx, mut accepted_rx) = mpsc::channel::<Box<dyn SessionStream>>(1);
+        let fatal = manager
+            .graceful_shutdown(&mut accepted_rx, &mut join_set)
+            .await;
+
+        assert_eq!(
+            fatal,
+            Some(IpcAdapterError::WorkerPanicked(WorkerSide::Reader)),
+            "the worker fatal discovered while joining is surfaced, not swallowed"
+        );
+        assert!(
+            join_set.is_empty(),
+            "every supervisor was still joined despite the fatal"
+        );
+    }
+
     // ---- Test 14: isolated setup failure ---------------------------------
 
     /// A connection whose setup fails is isolated (shut down) without failing the
@@ -1289,6 +1647,62 @@ mod tests {
             fixture.events().connected(),
             vec![good],
             "only the healthy client connected"
+        );
+    }
+
+    // ---- Test 14a: setup diagnostics stay bounded ------------------------
+
+    /// Isolated setup failures are retained as bounded diagnostics — a running
+    /// count and only the most recent failure — no matter how many connections
+    /// fail their setup, rather than an unbounded per-failure list. After many
+    /// failures only the latest is kept, so the storage never grows with the
+    /// failure count.
+    #[test]
+    fn setup_diagnostics_retain_bounded_count_and_latest_only() {
+        let mut diagnostics = SetupDiagnostics::default();
+        assert_eq!(diagnostics.count, 0);
+        assert!(diagnostics.last.is_none());
+
+        for i in 0..1000 {
+            diagnostics.record(
+                ClientId(i),
+                ConnectionSetupError::Config(format!("cause {i}")),
+            );
+        }
+
+        assert_eq!(diagnostics.count, 1000, "every setup failure is counted");
+        assert_eq!(
+            diagnostics.last,
+            Some((
+                ClientId(999),
+                ConnectionSetupError::Config("cause 999".into())
+            )),
+            "only the most recent failure is retained; earlier ones are dropped"
+        );
+    }
+
+    // ---- Test 14b: many setup failures then a valid client ---------------
+
+    /// Many connections that fail their setup are each isolated (shut down)
+    /// without failing the manager, and a later valid client still connects and
+    /// works — the manager stays healthy after a burst of bounded-diagnostic
+    /// setup failures.
+    #[tokio::test]
+    async fn many_setup_failures_stay_bounded_and_later_client_connects() {
+        let mut fixture = IpcFixture::new();
+        for _ in 0..64 {
+            let (failing, failing_handle) = FakeSessionStream::failing_write_timeout();
+            fixture.inject(failing).await;
+            failing_handle.wait_shutdown().await;
+        }
+
+        let good = fixture.connect_client().await;
+        fixture.send(good, b"ok").await.unwrap();
+        assert_eq!(fixture.read(good).await, b"ok");
+        assert_eq!(
+            fixture.events().connected(),
+            vec![good],
+            "only the healthy client connected after the failing burst"
         );
     }
 
