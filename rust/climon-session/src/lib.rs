@@ -37,6 +37,7 @@
 //! let _ = climon_session::engine::run_session_host;
 //! ```
 
+pub(crate) mod adapters;
 pub mod attention;
 pub mod control;
 pub(crate) mod domain;
