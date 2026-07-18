@@ -141,9 +141,12 @@ pub fn base_meta(id: &str, home: &PathBuf, command: Vec<String>) -> SessionMeta 
 }
 
 /// Spawns the daemon on its own thread for `engine`, returning a handle that
-/// yields the child's exit code. The engine and home are pinned inside the
-/// thread so the daemon reads them at startup regardless of what other
-/// scenarios set on the shared process env.
+/// yields the child's exit code. `CLIMON_HOME` and [`ENGINE_ENV`] are set from
+/// inside the thread purely to sequence them before `run_session_host` reads
+/// them at startup; both are **process-global** ([`std::env::set_var`] mutates
+/// the whole process, not this thread), so correctness relies on every scenario
+/// holding the [`serial`] guard for its entire body — no concurrent scenario can
+/// clobber the env while this daemon is starting.
 fn spawn_host(engine: TestEngine, id: &str, meta: SessionMeta, home: &Path) -> JoinHandle<i32> {
     let id = id.to_string();
     let home = home.to_path_buf();
@@ -388,36 +391,13 @@ impl ScenarioTrace {
         }
         NormalizedTrace {
             frames,
-            terminal_output: collapse_cr_runs(&terminal_output),
+            terminal_output,
             saw_replay,
             meta: self.final_meta.as_ref().map(NormMeta::from_meta),
             host_exit_code: self.host_exit_code,
             statuses: self.statuses.clone(),
         }
     }
-}
-
-/// Collapses runs of carriage returns to a single `\r`.
-///
-/// A PTY under output backpressure (a fast child, a slow or wedged reader)
-/// nondeterministically emits an extra `\r` before some `\r\n` line endings; the
-/// count varies run to run and, for the same reason, between engines. Both hosts
-/// relay raw PTY bytes verbatim — neither ever rewrites the output stream — so a
-/// difference in `\r`-run length is always a terminal-timing artefact, never a
-/// daemon behavioural difference. Collapsing the runs removes that artefact
-/// while preserving every payload byte, line boundary, and control sequence, so
-/// exact-content parity stays meaningful for large streamed output.
-fn collapse_cr_runs(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut prev_cr = false;
-    for &b in bytes {
-        if b == b'\r' && prev_cr {
-            continue;
-        }
-        prev_cr = b == b'\r';
-        out.push(b);
-    }
-    out
 }
 
 /// A control-plane frame in engine-independent form. `Output` frames are
@@ -686,6 +666,18 @@ pub fn run_attention_clear_scenario(engine: TestEngine) -> ScenarioTrace {
     let host = spawn_host(engine, id, meta, &home);
     let mut stream = connect_client(&socket_ref);
     let env = Env::with_home(&home);
+    let mut decoder = FrameDecoder::new();
+    let mut frames = Vec::new();
+
+    // Capture the initial wire frames (`PtySize`, `Replay`) the client receives
+    // on connect so the attention flow's frame stream is compared, not discarded.
+    read_frames_until(
+        &mut stream,
+        &mut decoder,
+        &mut frames,
+        Instant::now() + Duration::from_secs(3),
+        |f| f.frame_type == FrameType::Replay,
+    );
 
     let mut statuses = Vec::new();
 
@@ -694,6 +686,19 @@ pub fn run_attention_clear_scenario(engine: TestEngine) -> ScenarioTrace {
     });
     let token = flagged.and_then(|m| {
         statuses.push(SessionStatus::NeedsAttention);
+        // Restored: the idle detector flags with a human-readable reason that the
+        // host carries verbatim into metadata (the cross-process attention
+        // channel). Assert it at the flagged transition, not only the final
+        // cleared meta, for both engines.
+        assert_eq!(
+            m.attention_reason.as_deref(),
+            Some("Screen idle for 1s"),
+            "flagged attention metadata carries the idle reason"
+        );
+        assert!(
+            m.attention_matched_at.is_some(),
+            "flagged attention carries a match token"
+        );
         m.attention_matched_at
     });
 
@@ -714,6 +719,15 @@ pub fn run_attention_clear_scenario(engine: TestEngine) -> ScenarioTrace {
             && m.attention_reason.is_none()
             && m.status == SessionStatus::Acknowledged
     });
+    // Drain any frames the acknowledgement might have produced: there are none —
+    // the clear travels through metadata, never a broadcast `Attention` frame.
+    read_frames_until(
+        &mut stream,
+        &mut decoder,
+        &mut frames,
+        Instant::now() + Duration::from_millis(500),
+        |_| false,
+    );
     if cleared.is_some() {
         statuses.push(SessionStatus::Acknowledged);
     }
@@ -723,7 +737,7 @@ pub fn run_attention_clear_scenario(engine: TestEngine) -> ScenarioTrace {
     let _ = host.join();
     let _ = std::fs::remove_dir_all(&home);
     ScenarioTrace {
-        frames: Vec::new(),
+        frames,
         final_meta,
         host_exit_code: None,
         statuses,
@@ -736,6 +750,24 @@ pub fn assert_attention_clear(trace: &ScenarioTrace) {
         trace.statuses(),
         &[SessionStatus::NeedsAttention, SessionStatus::Acknowledged],
         "needs-attention then acknowledged"
+    );
+    // Attention is a metadata-only transition: the client's wire stream is only
+    // the initial `PtySize`+`Replay`, never a broadcast `Attention` frame. We
+    // capture and compare the real frames (instead of discarding them) so this
+    // contract is asserted per engine and compared actor-vs-legacy rather than
+    // normalized away.
+    let norm = trace.normalized();
+    assert_eq!(
+        norm.frames,
+        vec![NormFrame::PtySize { cols: 80, rows: 24 }, NormFrame::Replay,],
+        "client observes only the initial frames during the attention flow"
+    );
+    assert!(
+        !norm
+            .frames
+            .iter()
+            .any(|f| matches!(f, NormFrame::Attention { .. })),
+        "attention rides metadata, never a wire Attention frame to clients"
     );
     let meta = trace.final_meta().expect("cleared meta persisted");
     assert!(meta.attention_matched_at.is_none());
@@ -770,6 +802,13 @@ pub fn run_acknowledged_sticky_scenario(engine: TestEngine) -> ScenarioTrace {
     });
     let token = flagged.and_then(|m| {
         statuses.push(SessionStatus::NeedsAttention);
+        // Same restored metadata-reason check as the attention-clear scenario:
+        // the flag carries the idle reason, asserted at the transition.
+        assert_eq!(
+            m.attention_reason.as_deref(),
+            Some("Screen idle for 1s"),
+            "flagged attention metadata carries the idle reason"
+        );
         m.attention_matched_at
     });
 
@@ -846,6 +885,14 @@ pub fn assert_acknowledged_sticky(trace: &ScenarioTrace) {
     );
     let meta = trace.final_meta().expect("final meta persisted");
     assert_eq!(meta.status, SessionStatus::Acknowledged);
+    // The mid-flight resize must have taken effect and survived alongside the
+    // acknowledged state — proving the transition is checked, not only the
+    // terminal status.
+    assert_eq!(
+        (meta.cols, meta.rows),
+        (100, 30),
+        "resize applied and persisted while acknowledged"
+    );
 }
 
 /// Reads frames into `out` until the accumulated `Replay`/`Output` bytes
@@ -1099,9 +1146,19 @@ pub fn assert_take_control(trace: &ScenarioTrace) {
 }
 
 /// A healthy client and a wedged client (never reads) share the session while a
-/// large output burst streams. The healthy client must receive the whole
-/// stream and the exit even though the wedged client's socket buffer fills and
-/// it then disconnects — proving per-client writers are isolated.
+/// large output burst streams. The healthy client must receive the whole stream
+/// and the exit even though the wedged client's socket buffer fills and it then
+/// disconnects — proving per-client writers are isolated.
+///
+/// The burst is emitted through `tr -d` so it carries **no** line feeds. A PTY
+/// under output backpressure translates `\n`→`\r\n` (ONLCR) and, when the child's
+/// write blocks mid-translation, nondeterministically injects an extra `\r`
+/// before some line endings; the count varies run to run and between engines,
+/// purely as a kernel-TTY timing artefact. Removing the line feeds removes that
+/// trigger entirely, so the relayed bytes are the exact payload — deterministic
+/// per engine and identical across engines — even while the wedged peer stalls
+/// the fan-out. The healthy reader still drains continuously so its own socket
+/// never backs up.
 pub fn run_slow_client_scenario(engine: TestEngine) -> ScenarioTrace {
     let _guard = serial().lock().unwrap_or_else(|e| e.into_inner());
     let home = scratch_home("slow-client");
@@ -1110,14 +1167,14 @@ pub fn run_slow_client_scenario(engine: TestEngine) -> ScenarioTrace {
     let id = "uniform-victor-whiskey";
     // Delay the burst so both clients are connected before output starts (so the
     // healthy client receives it all as live `Output`, never a capped replay),
-    // then emit well over one socket buffer and exit.
+    // then emit well over one socket buffer of newline-free bytes and exit.
     let meta = base_meta(
         id,
         &home,
         vec![
             "sh".into(),
             "-c".into(),
-            "sleep 1; yes slow-client-payload | head -n 20000; sleep 1".into(),
+            "sleep 1; yes slow-client-payload | head -n 20000 | tr -d '\\n'; sleep 1".into(),
         ],
     );
     let socket_ref = meta.socket_path.clone();
@@ -1166,19 +1223,22 @@ pub fn run_slow_client_scenario(engine: TestEngine) -> ScenarioTrace {
 
 /// Concrete per-engine expectations for the slow-client scenario.
 pub fn assert_slow_client(trace: &ScenarioTrace) {
-    // The full burst is ~440 KB; a stalled/serialized daemon would truncate the
-    // healthy client well below one socket buffer.
-    assert!(
-        trace.terminal_output().len() >= 300_000,
-        "healthy client received the whole burst ({} bytes)",
-        trace.terminal_output().len()
+    // `yes slow-client-payload | head -n 20000 | tr -d '\n'` emits the 19-byte
+    // token 20000 times with no separators: the exact bytes the healthy client
+    // must receive, verbatim, despite the wedged peer. A stalled or serialized
+    // daemon would truncate this well below one socket buffer.
+    let expected: Vec<u8> = b"slow-client-payload".repeat(20_000);
+    let output = trace.terminal_output();
+    assert_eq!(
+        output.len(),
+        expected.len(),
+        "healthy client received the whole burst ({} of {} bytes)",
+        output.len(),
+        expected.len()
     );
-    assert!(
-        trace
-            .terminal_output()
-            .windows(19)
-            .any(|w| w == b"slow-client-payload"),
-        "healthy client received the payload"
+    assert_eq!(
+        output, expected,
+        "healthy client received the exact payload bytes, verbatim"
     );
     assert!(
         trace.saw_exit(0),
