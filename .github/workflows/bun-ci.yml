@@ -1,0 +1,54 @@
+name: bun-ci
+
+# Server + shared-surface CI. The Rust client is covered by rust-ci.yml; this
+# workflow guards the Bun dashboard server (src/server/, src/web/) and the shared
+# support modules the Rust client interoperates with (config, i18n messages, and
+# the config fixtures under fixtures/config/ that back the Rust <-> Bun parity
+# tests). Runs on PRs and on every long-lived gitflow branch so a release tag is
+# only ever cut from a fully-validated commit.
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "fixtures/config/**"
+      - "package.json"
+      - "bun.lock"
+      - "tsconfig.json"
+      - ".github/workflows/bun-ci.yml"
+  push:
+    branches: [main, dev, "release/**", "hotfix/**"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "fixtures/config/**"
+      - "package.json"
+      - "bun.lock"
+      - "tsconfig.json"
+      - ".github/workflows/bun-ci.yml"
+
+jobs:
+  test:
+    # ubuntu only: several socket/PTY-adjacent tests need a real Linux filesystem
+    # temp dir (Unix sockets are unreliable on some mounts), and the server is
+    # deployed on Linux. The Rust matrix already covers macOS/Windows client code.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck + message catalogue check
+        run: bun run lint
+
+      - name: Run server + parity tests
+        run: bun test tests

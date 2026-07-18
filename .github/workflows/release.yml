@@ -1,49 +1,41 @@
 name: Release
 
-# Automatically bump the patch version (and tag it) whenever `main` is updated —
-# i.e. when a pull request is merged. This replaces the old local husky
-# `post-merge` hook so the bump happens for every merge style (merge commit,
-# squash, or rebase), not just local `--no-ff` merges.
+# Tag-driven release. Under the gitflow model a release is prepared on a
+# `release/*` (or `hotfix/*`) branch: the version + CLI fixtures are bumped there
+# with `bun run release`, the branch is merged into `main` with a real merge
+# commit, and then a `vX.Y.Z` tag is pushed at the merge commit. Pushing that tag
+# is the single, explicit signal that ships a release — merging to `main` alone
+# no longer cuts one. See docs/cutting-a-release.md for the full runbook.
 #
 # The shipped client is the Rust `climon` binary. It is cross-compiled for every
 # target on a native runner in the `build-client` matrix, then the `release` job
 # assembles the five zips (with the Bun server + climon-alpha sentinel), signs,
-# verifies, and publishes them.
+# verifies, and publishes them. Finally `backmerge` opens a `main` -> `dev` PR so
+# the version bump flows back to the integration branch.
 on:
   push:
-    branches: [main]
-    # Docs-only pushes never ship a binary, so don't cut a release for them.
-    # (Mixed code+docs pushes still trigger normally.) For a non-docs push that
-    # should still skip the release, put `[skip release]` in the head commit
-    # message — see the `version` job guard below.
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "LICENSE"
-      - ".github/**/*.md"
+    tags:
+      - "v*"
 
-# Never run two releases against `main` at once.
+# Never run two releases for the same tag at once.
 concurrency:
-  group: release-main
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  # Compute the release version up front so the client matrix embeds the bumped
-  # version (the bump commit itself only lands in the `release` job).
+  # Derive the release version from the pushed tag and fail fast if the working
+  # tree at that tag disagrees with it (a mistyped tag or a forgotten
+  # `bun run release`). The tag is the source of truth for the version; the job
+  # only proves package.json + the CLI fixtures already match it.
   version:
     runs-on: ubuntu-latest
-    # Skip the bump commit the release itself pushes (`chore(release):`), otherwise
-    # it would loop. Also honor an explicit `[skip release]` marker in the head
-    # commit message so a `main` update (e.g. a docs-only dev merge) can opt out.
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') && !contains(github.event.head_commit.message, '[skip release]') }}
     outputs:
       version: ${{ steps.compute.outputs.version }}
-      tag: ${{ steps.compute.outputs.tag }}
-      existing: ${{ steps.compute.outputs.existing }}
-      prebumped: ${{ steps.compute.outputs.prebumped }}
+      tag: ${{ github.ref_name }}
     steps:
       # Fail the release immediately if the Application Insights connection string
       # secret is missing, so we never publish binaries with an empty embedded
@@ -61,62 +53,58 @@ jobs:
           echo "Telemetry connection secret present; release may proceed."
 
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install Bun
         run: |
           curl -fsSL https://bun.sh/install | bash
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
 
-      # Determine the release version. package.json is the source of truth: when
-      # its version has no tag yet, a contributor deliberately bumped it in the PR
-      # (minor/major releases), so we release that version as-is. Otherwise the
-      # current version is already released, so we auto-bump the patch — the
-      # default "merge a fix to main, ship a patch" flow.
-      - name: Compute next release version
+      - name: Derive and verify release version from tag
         id: compute
         run: |
           set -euo pipefail
-          git fetch --tags --force origin
-          pkg_tag="$(bun -e '
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error::Tag '$tag' is not a vX.Y.Z release tag."
+              exit 1
+              ;;
+          esac
+          version="${tag#v}"
+
+          pkg_version="$(bun -e '
             const { readFileSync } = require("node:fs");
             const pkg = JSON.parse(readFileSync("package.json", "utf8"));
             if (!/^\d+\.\d+\.\d+$/.test(pkg.version)) {
               throw new Error(`Invalid package version: ${pkg.version}`);
             }
-            console.log(`v${pkg.version}`);
+            console.log(pkg.version);
           ')"
-          if git rev-parse "refs/tags/$pkg_tag" >/dev/null 2>&1; then
-            # Current version already released -> auto patch-bump.
-            next_tag="$(bun -e '
-              const { readFileSync } = require("node:fs");
-              const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-              const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(pkg.version);
-              console.log(`v${m[1]}.${m[2]}.${Number(m[3]) + 1}`);
-            ')"
-            prebumped="false"
-            if git rev-parse "refs/tags/$next_tag" >/dev/null 2>&1; then
-              existing="$next_tag"
-            else
-              existing=""
-            fi
-          else
-            # Pre-bumped in the PR (minor/major) -> release package.json as-is.
-            next_tag="$pkg_tag"
-            prebumped="true"
-            existing=""
+
+          if [ "$pkg_version" != "$version" ]; then
+            echo "::error::Tag '$tag' does not match package.json version '$pkg_version'. Bump the version on the release/hotfix branch with 'bun run release' and tag the merged commit (see docs/cutting-a-release.md)."
+            exit 1
           fi
-          echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
-          echo "version=${next_tag#v}" >> "$GITHUB_OUTPUT"
-          echo "existing=$existing" >> "$GITHUB_OUTPUT"
-          echo "prebumped=$prebumped" >> "$GITHUB_OUTPUT"
+
+          # The golden CLI fixtures embed `climon v<semver>` on line 1 and are
+          # asserted byte-for-byte by the client tests. Confirm they match the tag
+          # so we never ship binaries whose --version disagrees with the release.
+          for fixture in fixtures/cli/version.txt fixtures/cli/help.txt; do
+            if ! head -n1 "$fixture" | grep -q "climon v$version"; then
+              echo "::error::$fixture does not embed 'climon v$version' on line 1. Re-run 'bun run release' so the fixtures match the tag."
+              exit 1
+            fi
+          done
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (version $version)."
 
   # Fail fast on the canonical repo if the update signing key is missing or does
   # not correspond to the public key embedded in the client (src/update/pubkey.ts).
   # Signing is otherwise a late, skippable step: an absent/mismatched key would
   # ship an unverifiable release and break `climon --update`. Gating here — before
-  # any tag/push/publish side effect — prevents that. Forks (any other repository)
+  # any build/publish side effect — prevents that. Forks (any other repository)
   # skip the check so keyless releases still build.
   verify-signing-key:
     runs-on: ubuntu-latest
@@ -137,7 +125,7 @@ jobs:
 
   # Cross-compile the Rust client for every target on a native runner. Each leg
   # uploads its `install`/`install.exe` binary as an artifact for the assemble
-  # step. CLIMON_VERSION pins the bumped version into the binary (build.rs).
+  # step. CLIMON_VERSION pins the tagged version into the binary (build.rs).
   build-client:
     needs: [version, verify-signing-key]
     strategy:
@@ -230,6 +218,7 @@ jobs:
     needs: [version, build-client, verify-signing-key]
     runs-on: ubuntu-latest
     env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
       # Non-sensitive boolean mapped at job level so the `if:` guards on the
       # signing steps can read it (step-level env is not visible to a step's own
       # `if`, and the `secrets` context is unavailable in step `if:`). The actual
@@ -239,54 +228,15 @@ jobs:
       # meanwhile.
       HAS_SIGNING_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY != '' && 'yes' || '' }}
     steps:
+      # The push event already checks out the tagged commit; no bump, no push to
+      # main. The tag was created on the merged release/hotfix commit, so this
+      # tree already carries the bumped version + fixtures verified by `version`.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          # Use a token that is allowed to push to `main`. GITHUB_TOKEN works
-          # unless branch protection forbids direct pushes; in that case set a
-          # PAT/app token in the RELEASE_TOKEN secret and it is used instead.
-          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Install Bun
         run: |
           curl -fsSL https://bun.sh/install | bash
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-
-      - name: Configure git identity
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Check out existing release tag
-        if: ${{ needs.version.outputs.existing != '' }}
-        run: |
-          git fetch --tags --force origin
-          git checkout "${{ needs.version.outputs.existing }}"
-
-      - name: Patch release (bump + commit + tag)
-        if: ${{ needs.version.outputs.existing == '' && needs.version.outputs.prebumped != 'true' }}
-        run: bun run release
-
-      # Pre-bumped (minor/major) release: package.json + CLI fixtures were already
-      # bumped in the PR, so just tag the merged HEAD — no version bump commit.
-      - name: Tag pre-bumped release
-        if: ${{ needs.version.outputs.prebumped == 'true' }}
-        env:
-          RELEASE_TAG: ${{ needs.version.outputs.tag }}
-        run: git tag -a "$RELEASE_TAG" -m "$RELEASE_TAG"
-
-      - name: Capture release tag
-        id: release-tag
-        env:
-          EXISTING_TAG: ${{ needs.version.outputs.existing }}
-        run: |
-          set -euo pipefail
-          if [ -n "$EXISTING_TAG" ]; then
-            echo "tag=$EXISTING_TAG" >> "$GITHUB_OUTPUT"
-          else
-            tag="$(git describe --tags --exact-match HEAD)"
-            echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Download prebuilt Rust clients
         uses: actions/download-artifact@v4
@@ -325,8 +275,8 @@ jobs:
         if: ${{ env.HAS_SIGNING_KEY != '' }}
         env:
           CLIMON_UPDATE_PRIVATE_KEY: ${{ secrets.CLIMON_UPDATE_PRIVATE_KEY }}
-          RELEASE_VERSION: ${{ steps.release-tag.outputs.tag }}
-          RELEASE_BASE_URL: https://github.com/jackgeek/climon/releases/download/${{ steps.release-tag.outputs.tag }}
+          RELEASE_VERSION: ${{ env.RELEASE_TAG }}
+          RELEASE_BASE_URL: https://github.com/jackgeek/climon/releases/download/${{ env.RELEASE_TAG }}
         run: bun run sign-release
 
       - name: Verify release artifacts
@@ -354,22 +304,10 @@ jobs:
           test -f dist/manifest.json
           for z in dist/climon-*.zip; do test -f "$z.sig"; done
 
-      - name: Push bump commit and tag
-        if: ${{ needs.version.outputs.existing == '' }}
-        env:
-          RELEASE_TAG: ${{ steps.release-tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          # Auto-patch adds a bump commit to push; pre-bumped only adds the tag
-          # (HEAD is already main). Push the branch fast-forward and the tag
-          # explicitly so both paths land the new tag on origin.
-          git push origin HEAD:main
-          git push origin "refs/tags/$RELEASE_TAG"
-
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.release-tag.outputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -383,3 +321,49 @@ jobs:
           else
             gh release create "$TAG" "${assets[@]}" --title "$TAG" --notes "Release $TAG"
           fi
+
+  # Back-merge the release into the integration branch. The version bump + fixture
+  # commit landed on `main` (via the release/hotfix merge); this opens a PR so it
+  # flows back to `dev` and the two branches keep a shared ancestor. The PR is
+  # intentionally NOT auto-merged — a human reviews and merges it (with a real
+  # merge commit, never a squash) so back-merge history stays clean.
+  backmerge:
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Open main -> dev back-merge PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch origin main dev --quiet
+
+          # Nothing to do if main is already an ancestor of dev (dev already
+          # contains the release commit, e.g. a docs-only or re-run scenario).
+          if git merge-base --is-ancestor origin/main origin/dev; then
+            echo "dev already contains main; no back-merge PR needed."
+            exit 0
+          fi
+
+          # Reuse an existing open back-merge PR if one is already there.
+          existing="$(gh pr list --base dev --head main --state open --json number --jq '.[0].number' || true)"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            echo "Back-merge PR #$existing (main -> dev) already open; leaving it for review."
+            exit 0
+          fi
+
+          body="$(printf '%s\n\n%s\n' \
+            "Automated back-merge of the \`${RELEASE_TAG}\` release from \`main\` into \`dev\`, carrying the version + CLI-fixture bump back to the integration branch." \
+            "Merge this with a **real merge commit** (\`gh pr merge --merge\`), never a squash or rebase, so \`main\` and \`dev\` keep a shared ancestor. See docs/cutting-a-release.md.")"
+
+          gh pr create \
+            --base dev \
+            --head main \
+            --title "chore: back-merge ${RELEASE_TAG} (main -> dev)" \
+            --body "$body"
