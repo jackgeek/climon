@@ -17,13 +17,15 @@
 //! - a **child-owner lifecycle loop** owns the reader, the authoritative
 //!   [`climon_pty::PtyWaiter`] child handle (its original-child
 //!   `try_wait`/`kill`, not the weaker cloned killer), and the last strong
-//!   master. It concurrently owns three things — the child owner/master, a
-//!   scoped reader thread's outcome channel, and the durable kill-request
-//!   channel — and drives them in a responsive poll loop rather than blocking
-//!   forever in `wait`. It reads output as [`SessionEvent::PtyOutput`], observes
-//!   the child exit / a reader error/panic / a kill request promptly, releases
-//!   the master so a Windows ConPTY reader can EOF, and emits exactly one
-//!   terminal event ([`SessionEvent::PtyExited`] or [`SessionEvent::PtyFailed`]).
+//!   master. It concurrently owns three things — the child owner/master, the
+//!   reader thread's outcome channel, and the durable kill-request channel — and
+//!   drives them in a responsive poll loop rather than blocking forever in
+//!   `wait`. It reads output as [`SessionEvent::PtyOutput`], observes the child
+//!   exit / a reader error/panic / a kill request promptly, releases the master
+//!   so a Windows ConPTY reader can EOF, and emits exactly one terminal event
+//!   ([`SessionEvent::PtyExited`] or [`SessionEvent::PtyFailed`]). It owns the
+//!   reader thread for its whole life and **always joins it** before returning —
+//!   the reader is never detached.
 //!
 //! ## Single terminal event per root failure
 //! A command failure (write/flush error, kill error, unexpected effect) is
@@ -31,8 +33,17 @@
 //! command worker requests child termination through the durable channel and the
 //! child-owner loop then converges *silently* (no second terminal event). A
 //! spontaneous failure the loop observes itself (reader error/panic, wait error)
-//! is emitted by the loop. The child-owner loop never blocks unrecoverably: on a
-//! kill error it releases the master and returns rather than waiting forever.
+//! is emitted by the loop.
+//!
+//! ## Durable teardown: a failed kill stays recoverable
+//! A [`climon_pty::PtyWaiter::kill`] is an authoritative *attempt*, not a
+//! guarantee — it can return an error. A failed kill therefore does **not** tear
+//! the loop down: it replies with the error (so the command worker emits its one
+//! failure and exits), cedes the terminal event, and keeps owning the child, the
+//! reader, and the durable receiver — staying alive and retryable. A later
+//! emergency [`PtyControlHandle::terminate`], or the child's natural exit, can
+//! then still reap the child, after which the loop drains and joins the reader
+//! and returns. It never abandons (detaches) the reader to escape a stuck child.
 //!
 //! ## Emergency control survives the command worker
 //! [`PtyAdapterHandles`] retains a cloneable [`PtyControlHandle`] to the same
@@ -331,8 +342,13 @@ impl PtyControlHandle {
     /// result, so the supervisor must invoke it from a blocking context (e.g.
     /// [`tokio::task::spawn_blocking`] or a dedicated thread), never directly on
     /// a Tokio worker. Suppresses the child-owner loop's terminal event, since
-    /// an emergency teardown is not a clean exit. Returns
-    /// [`PtyControlError::Closed`] once the lifecycle has ended.
+    /// an emergency teardown is not a clean exit.
+    ///
+    /// Returns [`PtyControlError::Kill`] if the authoritative kill attempt itself
+    /// failed — the child-owner loop stays alive and this remains **retryable**,
+    /// so a later call can try again. It returns [`PtyControlError::Closed`] only
+    /// once the lifecycle has actually ended (the child was reaped and the loop
+    /// returned), after which there is no child left to terminate.
     pub(crate) fn terminate(&self) -> Result<(), PtyControlError> {
         self.request_kill(true)
     }
@@ -547,7 +563,8 @@ impl PtyChildOwner for RealPtyChildOwner {
 /// The terminal outcome of the reader thread, delivered to the child-owner loop
 /// over the reader status channel. The reader thread sends exactly one — a
 /// panic is caught and reported as [`Panic`](ReadOutcome::Panic) — so the owner
-/// loop learns why the reader ended from the channel, never by joining it.
+/// loop learns *why* the reader ended from the channel and can react promptly,
+/// then joins the (now finished) thread to reclaim it.
 enum ReadOutcome {
     /// Clean EOF: every output chunk was read and enqueued.
     Eof,
@@ -580,15 +597,17 @@ fn read_loop<E: PtyEventSink>(mut reader: Box<dyn Read + Send>, events: &E) -> R
     }
 }
 
-/// Spawns the reader on a plain thread that reads output until it finishes, then
-/// sends its single terminal [`ReadOutcome`] on `status`. A `catch_unwind` around
+/// Spawns the single reader thread. It reads output until it finishes, then
+/// sends its one terminal [`ReadOutcome`] on `status`; a `catch_unwind` around
 /// the read loop converts a panic into [`ReadOutcome::Panic`], so the thread
 /// always reports an outcome and never re-panics.
 ///
-/// The thread is deliberately **not** scoped: if the child becomes unkillable the
-/// reader can stay blocked in `read`, and the child-owner loop must be able to
-/// return without joining it — a `std::thread::scope` would force an unbounded
-/// join. The loop joins it only once it has observed the reader's outcome.
+/// The returned handle is owned by [`run_pty_lifecycle`], which **always** joins
+/// it before returning — the reader is never detached. The lifecycle only
+/// returns once it has observed the reader's outcome (directly, or after
+/// releasing the master so a gated reader can EOF), so that join is bounded; if
+/// the reader genuinely cannot finish, the lifecycle retains ownership (stays
+/// alive) rather than dropping the handle.
 fn spawn_reader<E: PtyEventSink>(
     reader: Box<dyn Read + Send>,
     events: E,
@@ -602,45 +621,51 @@ fn spawn_reader<E: PtyEventSink>(
     })
 }
 
-/// The single terminal decision of the child-owner loop, emitted once by
-/// [`run_pty_lifecycle`].
-enum LifecycleOutcome {
-    /// The child exited (on its own or via a graceful kill) and the reader
-    /// drained; emit `PtyExited(code)`.
-    Exited(i32),
-    /// A reader read error; emit one `PtyFailed`.
+/// The reader's terminal outcome as observed on the clean-exit path, where it
+/// still decides between a clean `PtyExited` and a late reader failure that
+/// supersedes the exit.
+enum ReaderEnd {
+    Eof,
     ReadError(String),
-    /// The reader thread panicked; emit one `PtyFailed`.
-    ReaderPanic,
-    /// A `try_wait` failure; emit one `PtyFailed`.
-    WaitError(String),
-    /// The event lane closed while emitting output; return `EventLaneClosed`.
+    Panic,
     LaneClosed,
-    /// A requester (command worker / emergency handle) is emitting its own
-    /// terminal failure; converge silently with no terminal event.
-    Suppressed,
 }
 
-/// Runs the child-owner lifecycle loop to completion.
+/// Runs the child-owner lifecycle loop to completion and returns the result the
+/// lifecycle propagates.
+///
+/// The loop emits the single terminal event **itself** — a reader failure is
+/// emitted promptly so it is delivered even if the child lingers; a clean exit is
+/// emitted only after the reader has drained — so [`run_pty_lifecycle`]'s caller
+/// emits nothing.
 ///
 /// It concurrently owns the authoritative `child`, the reader thread's outcome
 /// `status_rx`, and the durable `control_rx` kill-request channel, and drives
 /// them in a responsive poll loop (parking at most [`CHILD_POLL_INTERVAL`] on
-/// `control_rx`) rather than blocking forever in a single wait. Precedence and
-/// convergence:
+/// `control_rx`). Every convergence keeps the child owned until it is *reaped*
+/// and the reader driven to an outcome, so the reader thread is always joinable
+/// (never detached) before the lifecycle returns:
 ///
-/// - a **reader error/panic** is observed promptly, best-effort kills the child
-///   to reap it, releases the master, and emits one `PtyFailed` — no exit, even
-///   if the child later exits;
+/// - a **reader error/panic** is observed promptly: the reader has already
+///   ended, so its failure is emitted at once, an authoritative kill is
+///   requested, and the loop keeps owning/polling the child until it exits (or a
+///   later emergency kill reaps it). A failed kill does **not** end the loop — it
+///   stays alive and retryable. Prior output precedes the failure.
 /// - a **child exit** releases the master (so a Windows reader can EOF), drains
-///   the reader so every output precedes it, then emits `PtyExited` — unless the
-///   reader turns out to have failed, which takes precedence;
+///   and joins the reader so every output precedes it, then emits `PtyExited` —
+///   unless the reader turns out to have failed, which takes precedence.
 /// - a **kill request** executes the authoritative child kill and replies. A
-///   graceful kill that succeeds keeps the loop running (the resulting child exit
-///   becomes `PtyExited`); a suppressing request, or a graceful kill that fails,
-///   converges the loop silently (the requester owns the terminal failure), so a
-///   kill error never blocks the loop forever;
-/// - a **closed lane** returns `EventLaneClosed` without a retry.
+///   successful graceful (non-suppressing) kill keeps the loop running until the
+///   resulting exit becomes `PtyExited`; a suppressing request marks the terminal
+///   event as owned by the requester and the loop converges silently once the
+///   child exits. A *failed* kill likewise cedes the terminal event but keeps the
+///   loop **alive and retryable** rather than returning, so the child's natural
+///   exit or a later emergency kill can still reap it.
+/// - a **closed lane** (reported by the reader) reaps the child, then returns
+///   `EventLaneClosed` without emitting.
+/// - a **wait error** emits one failure, best-effort kills, releases the master
+///   to unblock the reader, drives it to an outcome and joins it, then returns;
+///   the now-unusable child may be dropped after the kill attempt.
 fn run_pty_lifecycle<E: PtyEventSink>(
     reader: Box<dyn Read + Send>,
     mut child: Box<dyn PtyChildOwner>,
@@ -650,88 +675,101 @@ fn run_pty_lifecycle<E: PtyEventSink>(
     let (status_tx, status_rx) = std_mpsc::channel::<ReadOutcome>();
     let reader_thread = spawn_reader(reader, events.clone(), status_tx);
 
-    let (outcome, reader_done) = child_owner_loop(child.as_mut(), &status_rx, &control_rx);
+    let result = child_owner_loop(child.as_mut(), &status_rx, &control_rx, &events);
 
-    // Join the reader only when it has finished (we observed its outcome);
-    // otherwise (an unkillable child left it blocked) detach it rather than block
-    // the lifecycle — it exits on its own once the child dies or the process ends.
-    if reader_done {
-        let _ = reader_thread.join();
-    } else {
-        drop(reader_thread);
-    }
-
-    match outcome {
-        // The reader drained before this point, so `PtyExited` lands after every
-        // output.
-        LifecycleOutcome::Exited(code) => events.emit(SessionEvent::PtyExited(code)),
-        LifecycleOutcome::ReadError(cause) => {
-            emit_failure(&events, PtyAdapterError::Read { cause })
-        }
-        LifecycleOutcome::ReaderPanic => emit_failure(&events, PtyAdapterError::ReaderPanic),
-        LifecycleOutcome::WaitError(cause) => {
-            emit_failure(&events, PtyAdapterError::Wait { cause })
-        }
-        LifecycleOutcome::LaneClosed => Err(PtyAdapterError::EventLaneClosed),
-        // The command worker (or emergency handle) already emitted the terminal
-        // failure; converge with no second event.
-        LifecycleOutcome::Suppressed => Ok(()),
-    }
+    // The single, unconditional ownership path: join the reader before returning.
+    // The loop only returns once it has observed the reader's outcome (directly,
+    // or after releasing the master so a gated reader can EOF), so this join is
+    // bounded and the reader thread is never detached.
+    let _ = reader_thread.join();
+    result
 }
 
-/// The responsive poll loop. Returns the single terminal [`LifecycleOutcome`] and
-/// whether the reader thread has finished (so the caller can join vs. detach).
-fn child_owner_loop(
+/// The responsive poll loop. See [`run_pty_lifecycle`] for the convergence rules.
+/// Emits the single terminal event and returns the value the lifecycle
+/// propagates; it only returns once the reader has reported (so its thread is
+/// joinable) or, if the reader truly cannot finish, it retains ownership by
+/// blocking rather than detaching.
+fn child_owner_loop<E: PtyEventSink>(
     child: &mut dyn PtyChildOwner,
     status_rx: &std_mpsc::Receiver<ReadOutcome>,
     control_rx: &std_mpsc::Receiver<ChildControlRequest>,
-) -> (LifecycleOutcome, bool) {
+    events: &E,
+) -> Result<(), PtyAdapterError> {
     let mut reader_eof = false;
+    let mut reader_done = false;
+    // Once a failure or suppression owns the terminal result, this holds the value
+    // the lifecycle returns; the loop then only reaps the child and joins the
+    // reader before returning it. `None` means no terminal decision yet, so a
+    // clean child exit becomes `PtyExited`.
+    let mut decided: Option<Result<(), PtyAdapterError>> = None;
+
     loop {
-        // 1. Reader outcome (prompt; a reader failure takes precedence).
-        match status_rx.try_recv() {
-            Ok(ReadOutcome::Eof) => reader_eof = true,
-            Ok(ReadOutcome::ReadError(cause)) => {
-                let _ = child.kill();
-                child.release_master();
-                return (LifecycleOutcome::ReadError(cause), true);
-            }
-            Ok(ReadOutcome::Panic) => {
-                let _ = child.kill();
-                child.release_master();
-                return (LifecycleOutcome::ReaderPanic, true);
-            }
-            Ok(ReadOutcome::LaneClosed) => {
-                let _ = child.kill();
-                child.release_master();
-                return (LifecycleOutcome::LaneClosed, true);
-            }
-            Err(std_mpsc::TryRecvError::Empty) => {}
-            Err(std_mpsc::TryRecvError::Disconnected) => {
-                // The reader thread ended without sending an outcome (only
-                // possible if it never got to send one). Defensive: treat as a
-                // panic rather than spin.
-                if !reader_eof {
+        // 1. Reader outcome. The reader has emitted all its output before ending,
+        //    so a reader failure is emitted *promptly* (delivered even if the
+        //    child later lingers unkillable); the loop then reaps the child.
+        if !reader_done {
+            match status_rx.try_recv() {
+                Ok(ReadOutcome::Eof) => {
+                    reader_eof = true;
+                    reader_done = true;
+                }
+                Ok(ReadOutcome::ReadError(cause)) => {
+                    reader_done = true;
+                    if decided.is_none() {
+                        decided = Some(emit_failure(events, PtyAdapterError::Read { cause }));
+                    }
                     let _ = child.kill();
-                    child.release_master();
-                    return (LifecycleOutcome::ReaderPanic, true);
+                }
+                Ok(ReadOutcome::Panic) => {
+                    reader_done = true;
+                    if decided.is_none() {
+                        decided = Some(emit_failure(events, PtyAdapterError::ReaderPanic));
+                    }
+                    let _ = child.kill();
+                }
+                Ok(ReadOutcome::LaneClosed) => {
+                    reader_done = true;
+                    if decided.is_none() {
+                        decided = Some(Err(PtyAdapterError::EventLaneClosed));
+                    }
+                    let _ = child.kill();
+                }
+                Err(std_mpsc::TryRecvError::Empty) => {}
+                Err(std_mpsc::TryRecvError::Disconnected) => {
+                    // The reader thread ended without sending an outcome (only
+                    // reachable if it never got to send one). Defensive: treat as
+                    // a panic rather than spin.
+                    reader_done = true;
+                    if decided.is_none() {
+                        decided = Some(emit_failure(events, PtyAdapterError::ReaderPanic));
+                        let _ = child.kill();
+                    }
                 }
             }
         }
 
-        // 2. Child exit?
+        // 2. Child exit? A reaped child is the convergence point for every path:
+        //    release the master (so a gated reader can EOF), then drain and join
+        //    the reader before returning.
         match child.try_wait() {
             Ok(Some(code)) => {
-                // Clean exit: drop the master so a Windows reader can EOF, then
-                // drain the reader so every output precedes the exit.
                 child.release_master();
-                return drain_after_exit(status_rx, reader_eof, code);
+                return converge_on_exit(status_rx, events, reader_eof, reader_done, decided, code);
             }
             Ok(None) => {}
             Err(cause) => {
+                // `try_wait` itself is unusable, so the child can no longer be
+                // reaped through it. Emit one failure (unless already decided),
+                // best-effort kill, release the master to unblock the reader, then
+                // drive the reader to an outcome and join it. Dropping the now
+                // unusable child after this kill attempt is acceptable.
+                let verdict = decided
+                    .unwrap_or_else(|| emit_failure(events, PtyAdapterError::Wait { cause }));
+                let _ = child.kill();
                 child.release_master();
-                let reader_done = drain_reader_best_effort(status_rx, reader_eof);
-                return (LifecycleOutcome::WaitError(cause), reader_done);
+                await_reader_done(status_rx, reader_done);
+                return verdict;
             }
         }
 
@@ -741,20 +779,20 @@ fn child_owner_loop(
             Ok(request) => {
                 let result = child.kill();
                 let _ = request.respond.send(result.clone());
-                // A suppressing request, or a failed graceful kill, converges the
-                // loop silently: a kill error never blocks it forever, and the
-                // requester owns the single terminal failure event.
-                if request.suppress_terminal || result.is_err() {
-                    child.release_master();
-                    let reader_done = drain_reader_best_effort(status_rx, reader_eof);
-                    return (LifecycleOutcome::Suppressed, reader_done);
+                if (request.suppress_terminal || result.is_err()) && decided.is_none() {
+                    // The requester owns the single terminal event, so the loop
+                    // converges silently. Crucially a *failed* kill does not
+                    // return here: the loop stays alive and retryable, so the
+                    // child's natural exit or a later emergency kill can still
+                    // reap it. A successful graceful (non-suppressing) kill leaves
+                    // `decided` as `None`, so the resulting exit becomes
+                    // `PtyExited` with output ordered ahead of it.
+                    decided = Some(Ok(()));
                 }
-                // Graceful kill succeeded: keep looping; the resulting child exit
-                // becomes `PtyExited` with output ordered ahead of it.
             }
             Err(std_mpsc::RecvTimeoutError::Timeout) => {}
             Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                // No control senders remain (command worker exited and no
+                // No control senders remain (the command worker exited and no
                 // emergency handle is held). Keep polling the child/reader, but
                 // sleep so the disconnected channel doesn't busy-spin.
                 std::thread::sleep(CHILD_POLL_INTERVAL);
@@ -763,40 +801,72 @@ fn child_owner_loop(
     }
 }
 
-/// After a child exit, waits for the reader to finish so every output precedes
-/// the exit. A reader failure still takes precedence over the exit.
-fn drain_after_exit(
+/// Converges after the child has been reaped: ensures the reader has reported (so
+/// the caller's join is bounded), then returns the terminal result. If a failure
+/// or suppression already owns the terminal, the reader is only drained; without
+/// one, the reader's own outcome decides between a clean `PtyExited(code)` and a
+/// late reader failure that supersedes the exit.
+fn converge_on_exit<E: PtyEventSink>(
     status_rx: &std_mpsc::Receiver<ReadOutcome>,
+    events: &E,
     reader_eof: bool,
+    reader_done: bool,
+    decided: Option<Result<(), PtyAdapterError>>,
     code: i32,
-) -> (LifecycleOutcome, bool) {
-    if reader_eof {
-        return (LifecycleOutcome::Exited(code), true);
+) -> Result<(), PtyAdapterError> {
+    if let Some(verdict) = decided {
+        await_reader_done(status_rx, reader_done);
+        return verdict;
     }
-    // The master was released, so the reader will reach EOF (or has already
-    // failed): this recv is bounded.
-    match status_rx.recv() {
-        Ok(ReadOutcome::Eof) => (LifecycleOutcome::Exited(code), true),
-        Ok(ReadOutcome::ReadError(cause)) => (LifecycleOutcome::ReadError(cause), true),
-        Ok(ReadOutcome::Panic) => (LifecycleOutcome::ReaderPanic, true),
-        Ok(ReadOutcome::LaneClosed) => (LifecycleOutcome::LaneClosed, true),
-        // The reader is gone without an outcome; the child genuinely exited, so
-        // report the clean exit.
-        Err(_) => (LifecycleOutcome::Exited(code), true),
+    match await_reader_outcome(status_rx, reader_eof, reader_done) {
+        ReaderEnd::Eof => events.emit(SessionEvent::PtyExited(code)),
+        ReaderEnd::ReadError(cause) => emit_failure(events, PtyAdapterError::Read { cause }),
+        ReaderEnd::Panic => emit_failure(events, PtyAdapterError::ReaderPanic),
+        ReaderEnd::LaneClosed => Err(PtyAdapterError::EventLaneClosed),
     }
 }
 
-/// A non-blocking check of whether the reader has already finished, used on the
-/// converge / wait-error paths where the reader may still be blocked on an
-/// unkillable child and must not be waited on. Returns whether it is done.
-fn drain_reader_best_effort(status_rx: &std_mpsc::Receiver<ReadOutcome>, reader_eof: bool) -> bool {
-    reader_eof || status_rx.try_recv().is_ok()
+/// Waits for the reader's single outcome on the clean-exit path, where it still
+/// decides between a clean exit and a late reader failure. The master was
+/// released, so a gated reader will EOF and this is bounded; if the reader truly
+/// cannot finish, ownership is retained here (the loop blocks) rather than
+/// detaching.
+fn await_reader_outcome(
+    status_rx: &std_mpsc::Receiver<ReadOutcome>,
+    reader_eof: bool,
+    reader_done: bool,
+) -> ReaderEnd {
+    if reader_eof || reader_done {
+        // A clean EOF (or, defensively, any already-consumed outcome that did not
+        // set `decided`) means the reader has finished cleanly.
+        return ReaderEnd::Eof;
+    }
+    match status_rx.recv() {
+        Ok(ReadOutcome::Eof) => ReaderEnd::Eof,
+        Ok(ReadOutcome::ReadError(cause)) => ReaderEnd::ReadError(cause),
+        Ok(ReadOutcome::Panic) => ReaderEnd::Panic,
+        Ok(ReadOutcome::LaneClosed) => ReaderEnd::LaneClosed,
+        // The reader ended without an outcome; the child genuinely exited, so
+        // report the clean exit.
+        Err(_) => ReaderEnd::Eof,
+    }
+}
+
+/// Blocks until the reader has reported, so its thread is joinable, when the
+/// terminal result is already decided. The master has been released, so a gated
+/// reader will EOF and this is bounded; if the reader truly cannot finish it
+/// retains ownership here (blocks) rather than detaching.
+fn await_reader_done(status_rx: &std_mpsc::Receiver<ReadOutcome>, reader_done: bool) {
+    if !reader_done {
+        let _ = status_rx.recv();
+    }
 }
 
 /// Spawns [`run_pty_lifecycle`] on a dedicated blocking thread and returns its
 /// owned handle. The reader thread it starts reports its outcome over a channel
-/// and is joined when finished (or detached if an unkillable child left it
-/// blocked); no unbounded join is performed.
+/// and is **always** joined before the lifecycle returns — it is never detached.
+/// If a child cannot be reaped and its reader cannot finish, the lifecycle
+/// retains ownership (stays alive/retryable) rather than dropping the handle.
 pub(crate) fn spawn_pty_lifecycle<E: PtyEventSink>(
     reader: Box<dyn Read + Send>,
     child: Box<dyn PtyChildOwner>,
@@ -1087,12 +1157,18 @@ mod tests {
     /// How the [`FakeChildOwner`]'s `try_wait` should report the child.
     #[derive(Clone)]
     enum TryWaitMode {
-        /// Never exits on its own (models a child that only dies when killed).
+        /// Never exits, even when killed (models a child the kill cannot reap, so
+        /// the loop must stay alive and retryable rather than detach).
         NeverExits,
         /// Already exited with this code (a clean exit).
         CleanExit(i32),
-        /// Exits with this code only once [`PtyChildOwner::kill`] has run.
+        /// Exits with this code once any [`PtyChildOwner::kill`] has run,
+        /// regardless of the kill's reported result.
         ExitAfterKill(i32),
+        /// Exits with this code only once a [`PtyChildOwner::kill`] has returned
+        /// `Ok` — a failed kill leaves the child running, so a later retry is
+        /// required to reap it.
+        ExitAfterSuccessfulKill(i32),
         /// `try_wait` itself fails with this cause (a wait error).
         WaitError(String),
     }
@@ -1102,10 +1178,18 @@ mod tests {
     struct FakeChildState {
         log: CommandLog,
         mode: TryWaitMode,
+        /// The result returned once the scripted `kill_results` queue is drained.
         kill_result: Result<(), String>,
+        /// A scripted sequence of kill outcomes, popped one per `kill`; once
+        /// empty, `kill_result` is used. Lets a test model a first kill that fails
+        /// and a later retry that succeeds.
+        kill_results: Mutex<VecDeque<Result<(), String>>>,
         kill_gate: Option<Arc<Gate>>,
         kill_reached: Mutex<Option<mpsc::UnboundedSender<()>>>,
         killed: AtomicBool,
+        /// Set once a `kill` has returned `Ok`, driving
+        /// [`TryWaitMode::ExitAfterSuccessfulKill`].
+        killed_successfully: AtomicBool,
         kill_count: AtomicUsize,
         try_wait_some: Mutex<Option<mpsc::UnboundedSender<()>>>,
         release_gate: Option<Arc<Gate>>,
@@ -1135,6 +1219,7 @@ mod tests {
         log: Option<CommandLog>,
         mode: Option<TryWaitMode>,
         kill_result: Option<Result<(), String>>,
+        kill_results: Option<VecDeque<Result<(), String>>>,
         kill_gate: Option<Arc<Gate>>,
         kill_reached: Option<mpsc::UnboundedSender<()>>,
         try_wait_some: Option<mpsc::UnboundedSender<()>>,
@@ -1154,6 +1239,13 @@ mod tests {
 
         fn kill_error(mut self, message: &str) -> Self {
             self.kill_result = Some(Err(message.to_string()));
+            self
+        }
+
+        /// Scripts a sequence of kill outcomes, one popped per `kill`; after the
+        /// sequence drains the default `kill_result` (Ok) is used.
+        fn kill_results(mut self, results: Vec<Result<(), String>>) -> Self {
+            self.kill_results = Some(results.into_iter().collect());
             self
         }
 
@@ -1182,9 +1274,11 @@ mod tests {
                 log: self.log.unwrap_or_default(),
                 mode: self.mode.unwrap_or(TryWaitMode::NeverExits),
                 kill_result: self.kill_result.unwrap_or(Ok(())),
+                kill_results: Mutex::new(self.kill_results.unwrap_or_default()),
                 kill_gate: self.kill_gate,
                 kill_reached: Mutex::new(self.kill_reached),
                 killed: AtomicBool::new(false),
+                killed_successfully: AtomicBool::new(false),
                 kill_count: AtomicUsize::new(0),
                 try_wait_some: Mutex::new(self.try_wait_some),
                 release_gate: self.release_gate,
@@ -1217,6 +1311,13 @@ mod tests {
                         None
                     }
                 }
+                TryWaitMode::ExitAfterSuccessfulKill(code) => {
+                    if self.state.killed_successfully.load(Ordering::SeqCst) {
+                        Some(*code)
+                    } else {
+                        None
+                    }
+                }
                 TryWaitMode::WaitError(cause) => return Err(cause.clone()),
             };
             if code.is_some() {
@@ -1237,7 +1338,17 @@ mod tests {
                 gate.wait();
             }
             self.state.killed.store(true, Ordering::SeqCst);
-            self.state.kill_result.clone()
+            let result = self
+                .state
+                .kill_results
+                .lock()
+                .expect("poison")
+                .pop_front()
+                .unwrap_or_else(|| self.state.kill_result.clone());
+            if result.is_ok() {
+                self.state.killed_successfully.store(true, Ordering::SeqCst);
+            }
+            result
         }
 
         fn release_master(&mut self) {
@@ -1330,6 +1441,37 @@ mod tests {
 
     // ---- fake reader -----------------------------------------------------
 
+    /// A test-only sentinel proving the lifecycle never returns before the reader
+    /// thread has finished. It is moved into the [`FakeReader`], so it drops (and
+    /// flips `finished` to `true`) exactly when the reader thread's `read_loop`
+    /// ends — which the production lifecycle must join before it returns. If a
+    /// path detached the reader, the lifecycle could return with `finished` still
+    /// `false`, which every sentinel test forbids.
+    #[derive(Clone)]
+    struct ReaderSentinel {
+        finished: Arc<AtomicBool>,
+    }
+
+    impl ReaderSentinel {
+        fn new() -> ReaderSentinel {
+            ReaderSentinel {
+                finished: Arc::new(AtomicBool::new(false)),
+            }
+        }
+
+        /// Whether the reader thread has run to completion (its `read_loop`
+        /// returned and the guard dropped).
+        fn finished(&self) -> bool {
+            self.finished.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for ReaderSentinel {
+        fn drop(&mut self) {
+            self.finished.store(true, Ordering::SeqCst);
+        }
+    }
+
     /// A scripted step the [`FakeReader`] plays out. `Chunk` returns bytes from a
     /// `read`; `Signal` fires a channel (without returning) so a test can observe
     /// that all prior chunks have been emitted; `Gate` parks the read until
@@ -1347,13 +1489,25 @@ mod tests {
     /// A fake [`Read`] that plays out a scripted sequence of steps.
     struct FakeReader {
         steps: VecDeque<ReadStep>,
+        /// Dropped when the reader thread's `read_loop` ends, flipping the shared
+        /// sentinel flag. `None` when a test does not observe reader completion.
+        _sentinel: Option<ReaderSentinel>,
     }
 
     impl FakeReader {
         fn new(steps: impl IntoIterator<Item = ReadStep>) -> FakeReader {
             FakeReader {
                 steps: steps.into_iter().collect(),
+                _sentinel: None,
             }
+        }
+
+        /// Attaches a completion sentinel so a test can prove the reader thread
+        /// finished before the lifecycle returned (i.e. it was joined, not
+        /// detached).
+        fn with_sentinel(mut self, sentinel: ReaderSentinel) -> FakeReader {
+            self._sentinel = Some(sentinel);
+            self
         }
 
         /// A reader that immediately EOFs (no output), for tests whose focus is
@@ -1823,16 +1977,17 @@ mod tests {
     }
 
     /// Test C — a reader error while the child is still live: the error is
-    /// observed promptly (not withheld behind a blocking wait), the original
-    /// child kill is invoked to reap it, and the lifecycle returns one
-    /// `PtyFailed(Read)` without the child ever exiting naturally. (This is the
-    /// permanent form of the RED case that hangs the old block-in-wait code.)
+    /// observed promptly (not withheld behind a blocking wait) and emitted as one
+    /// `PtyFailed(Read)`, the original child kill is invoked to reap it, and the
+    /// lifecycle owns the child until that kill makes it exit — the child never
+    /// exits on its own. (This is the permanent form of the RED case that hangs
+    /// the old block-in-wait code.)
     #[tokio::test]
     async fn reader_error_with_live_child_kills_and_returns_failure() {
         let sink = RecordingSink::new();
         let (control, control_rx) = child_control_channel();
         let (child, child_state) = FakeChildOwner::builder()
-            .mode(TryWaitMode::NeverExits)
+            .mode(TryWaitMode::ExitAfterKill(137))
             .build();
         let reader = FakeReader::new([
             ReadStep::Chunk(b"a".to_vec()),
@@ -1875,14 +2030,14 @@ mod tests {
 
     /// Test D — a reader panic while the child is still live: same prompt cleanup
     /// as a read error. The panic is caught and reported as one
-    /// `PtyFailed(ReaderPanic)`, the child is killed, and the lifecycle returns
-    /// without hanging.
+    /// `PtyFailed(ReaderPanic)`, the child is killed to reap it, and the lifecycle
+    /// returns once that kill makes the child exit — without hanging.
     #[tokio::test]
     async fn reader_panic_with_live_child_kills_and_returns_failure() {
         let sink = RecordingSink::new();
         let (control, control_rx) = child_control_channel();
         let (child, child_state) = FakeChildOwner::builder()
-            .mode(TryWaitMode::NeverExits)
+            .mode(TryWaitMode::ExitAfterKill(0))
             .build();
         let reader = FakeReader::new([ReadStep::Panic]);
 
@@ -1907,26 +2062,37 @@ mod tests {
         drop(control);
     }
 
-    /// Test E — a kill error: the command worker emits exactly one
-    /// `PtyFailed(Kill)` and the lifecycle releases the master and returns rather
-    /// than blocking forever on a child that will not die. Afterwards the
-    /// emergency control handle is still callable and returns an explicit
-    /// `Closed` because the lifecycle has ended.
+    /// Test E (regression) — a **failed** child kill must not tear the lifecycle
+    /// down. The command worker emits its one `PtyFailed(Kill)` and exits, but the
+    /// child-owner loop stays alive and retryable: it keeps owning the child, the
+    /// still-blocked reader, and the durable control receiver. A later emergency
+    /// `terminate` runs a *second* original-child kill that succeeds, the child
+    /// exits, the master is released so the reader can EOF, and the lifecycle joins
+    /// the reader and converges silently — one failure total, no `PtyExited`.
+    ///
+    /// This pins the recoverability guarantee. The old code returned/detached on
+    /// the first kill error, so `terminate` would report `Closed`, only one kill
+    /// would run, and the gated reader would be dropped rather than joined.
     #[tokio::test]
-    async fn kill_error_emits_single_failure_and_lifecycle_releases() {
+    async fn kill_error_keeps_lifecycle_alive_until_emergency_retry_reaps() {
         let sink = RecordingSink::new();
         let (control, control_rx) = child_control_channel();
+        // The reader only EOFs once the master is released; a sentinel proves it
+        // is joined (never detached) before the lifecycle returns.
+        let reader_gate = Gate::new();
+        let sentinel = ReaderSentinel::new();
+        let reader = FakeReader::new([ReadStep::Gate(Arc::clone(&reader_gate))])
+            .with_sentinel(sentinel.clone());
+        // First kill fails and leaves the child running; the second (emergency)
+        // kill succeeds and reaps it.
         let (child, child_state) = FakeChildOwner::builder()
-            .mode(TryWaitMode::NeverExits)
-            .kill_error("no such process")
+            .mode(TryWaitMode::ExitAfterSuccessfulKill(0))
+            .kill_results(vec![Err("no such process".to_string()), Ok(())])
+            .release_gate(Arc::clone(&reader_gate))
             .build();
 
-        let lifecycle = spawn_pty_lifecycle(
-            Box::new(FakeReader::eof()),
-            Box::new(child),
-            control_rx,
-            sink.clone(),
-        );
+        let lifecycle =
+            spawn_pty_lifecycle(Box::new(reader), Box::new(child), control_rx, sink.clone());
 
         let target = FakeCommandTarget::builder().build();
         let (tx, rx) = mpsc::channel::<Effect>(PTY_COMMAND_CAPACITY);
@@ -1939,6 +2105,7 @@ mod tests {
         .unwrap();
         drop(tx);
 
+        // The command worker surfaces the kill error and exits.
         assert_eq!(
             tokio::time::timeout(ANTI_HANG, command)
                 .await
@@ -1949,30 +2116,57 @@ mod tests {
                 cause: "no such process".to_string(),
             })
         );
+
+        // The lifecycle is still alive: it never released the master, so the
+        // reader is still blocked (unfinished) and the child-owner loop is pending
+        // and responsive to another control request.
+        assert!(
+            !lifecycle.is_finished(),
+            "the loop must stay alive after a failed kill"
+        );
+        assert!(
+            !sentinel.finished(),
+            "the reader must still be owned (blocked), not detached"
+        );
+        assert_eq!(child_state.kill_count(), 1, "only the first kill has run");
+
+        // The surviving emergency control runs a second original-child kill that
+        // succeeds and reaps the child.
+        let emergency = control.clone();
+        let terminated = tokio::task::spawn_blocking(move || emergency.terminate())
+            .await
+            .unwrap();
+        assert_eq!(terminated, Ok(()), "the emergency retry succeeds");
+
+        // The lifecycle now converges silently — the reader is joined, not dropped.
         tokio::time::timeout(ANTI_HANG, lifecycle)
             .await
-            .expect("lifecycle releases and returns on a kill error (no unbounded wait)")
+            .expect("lifecycle converges after the emergency retry")
             .unwrap()
             .unwrap();
 
+        assert!(
+            sentinel.finished(),
+            "the reader thread finished before the lifecycle returned"
+        );
+        assert_eq!(
+            child_state.kill_count(),
+            2,
+            "the emergency retry killed again"
+        );
+        assert!(
+            child_state.released(),
+            "the master was released to EOF the reader"
+        );
         assert_eq!(
             sink.failures(),
             vec!["pty kill failed (operation 7): no such process".to_string()],
-            "exactly one failure, the kill error"
+            "exactly one failure, the kill error owned by the command worker"
         );
-        assert!(sink.exit_codes().is_empty());
         assert!(
-            child_state.released(),
-            "the master was released on the kill error"
+            sink.exit_codes().is_empty(),
+            "a suppressed convergence emits no PtyExited"
         );
-
-        // The lifecycle has ended, so its receiver is gone: the emergency handle
-        // is still callable and returns an explicit closed error, not a hang.
-        let control_after = control.clone();
-        let terminate = tokio::task::spawn_blocking(move || control_after.terminate())
-            .await
-            .unwrap();
-        assert_eq!(terminate, Err(PtyControlError::Closed));
     }
 
     /// Test F — an unexpected effect drives the same child cleanup through the
@@ -2084,6 +2278,312 @@ mod tests {
             .unwrap()
             .unwrap();
         drop(control);
+    }
+
+    // ---- reader-ownership regression tests (Task 11) ---------------------
+
+    /// Regression — a reader error whose *first* authoritative kill fails must not
+    /// end the lifecycle. The read failure is emitted promptly (one
+    /// `PtyFailed(Read)`) and the reader (already finished) is joinable, but the
+    /// loop keeps owning the still-running child and stays retryable. A later
+    /// emergency terminate succeeds, the child exits, and the lifecycle returns
+    /// the same read error — exactly one failure, no second event.
+    ///
+    /// The old code killed best-effort and returned immediately, so it could not
+    /// retry a failed kill and left the child unreaped.
+    #[tokio::test]
+    async fn reader_error_with_failed_kill_stays_retryable_until_emergency() {
+        let sink = RecordingSink::new();
+        let (control, control_rx) = child_control_channel();
+        let (first_kill_tx, mut first_kill_rx) = mpsc::unbounded_channel();
+        // The first (reader-error) kill fails and leaves the child running; the
+        // emergency retry succeeds and reaps it.
+        let (child, child_state) = FakeChildOwner::builder()
+            .mode(TryWaitMode::ExitAfterSuccessfulKill(0))
+            .kill_results(vec![Err("first".to_string()), Ok(())])
+            .kill_reached(first_kill_tx)
+            .build();
+        let sentinel = ReaderSentinel::new();
+        let reader = FakeReader::new([
+            ReadStep::Chunk(b"a".to_vec()),
+            ReadStep::Error("read boom".to_string()),
+        ])
+        .with_sentinel(sentinel.clone());
+
+        let lifecycle =
+            spawn_pty_lifecycle(Box::new(reader), Box::new(child), control_rx, sink.clone());
+
+        // The reader error is observed: its failure is emitted and the first
+        // (failing) authoritative kill runs — before any child exit.
+        first_kill_rx
+            .recv()
+            .await
+            .expect("the reader error triggers the first kill");
+        assert_eq!(
+            sink.failures(),
+            vec!["pty read failed: read boom".to_string()],
+            "the read failure is emitted promptly"
+        );
+        assert_eq!(
+            sink.outputs(),
+            vec![b"a".to_vec()],
+            "prior output precedes the failure"
+        );
+        assert!(
+            !lifecycle.is_finished(),
+            "the loop stays alive/retryable after the failed kill"
+        );
+        assert_eq!(child_state.kill_count(), 1, "only the first kill has run");
+
+        // The surviving emergency control retries and reaps the child.
+        let emergency = control.clone();
+        let terminated = tokio::task::spawn_blocking(move || emergency.terminate())
+            .await
+            .unwrap();
+        assert_eq!(terminated, Ok(()), "the emergency retry succeeds");
+
+        let result = tokio::time::timeout(ANTI_HANG, lifecycle)
+            .await
+            .expect("lifecycle returns after the child is reaped")
+            .unwrap();
+        assert_eq!(
+            result,
+            Err(PtyAdapterError::Read {
+                cause: "read boom".to_string(),
+            })
+        );
+        assert!(
+            sentinel.finished(),
+            "the reader thread was joined before the lifecycle returned"
+        );
+        assert_eq!(
+            child_state.kill_count(),
+            2,
+            "the emergency retry killed again"
+        );
+        assert_eq!(
+            sink.failures(),
+            vec!["pty read failed: read boom".to_string()],
+            "exactly one failure total"
+        );
+        assert!(
+            sink.exit_codes().is_empty(),
+            "no exit after a reader failure"
+        );
+    }
+
+    /// Regression — a successful *suppressing* cleanup kill (here a write failure)
+    /// must not return the moment the kill succeeds. The child-owner loop keeps
+    /// polling until it observes the child exit, then releases the master, drains
+    /// and **joins** the reader, and converges silently. A reader gated on a
+    /// test-controlled latch proves the loop blocks on the join (rather than
+    /// detaching): while the reader is latched the lifecycle stays pending, and it
+    /// only returns once the reader is released and finishes.
+    #[tokio::test]
+    async fn successful_suppressing_cleanup_waits_for_exit_then_joins_reader() {
+        let sink = RecordingSink::new();
+        let (control, control_rx) = child_control_channel();
+        let (exit_seen_tx, mut exit_seen_rx) = mpsc::unbounded_channel();
+        // The reader can only finish when the test releases this latch — not when
+        // the master is released — so a detaching loop would return early.
+        let reader_latch = Gate::new();
+        let sentinel = ReaderSentinel::new();
+        let reader = FakeReader::new([ReadStep::Gate(Arc::clone(&reader_latch))])
+            .with_sentinel(sentinel.clone());
+        let (child, child_state) = FakeChildOwner::builder()
+            .mode(TryWaitMode::ExitAfterKill(0))
+            .try_wait_some(exit_seen_tx)
+            .build();
+
+        let lifecycle =
+            spawn_pty_lifecycle(Box::new(reader), Box::new(child), control_rx, sink.clone());
+
+        let target = FakeCommandTarget::builder()
+            .write_error("broken pipe")
+            .build();
+        let (tx, rx) = mpsc::channel::<Effect>(PTY_COMMAND_CAPACITY);
+        let command = spawn_pty_command_worker(rx, Box::new(target), control.clone(), sink.clone());
+
+        tx.send(Effect::WritePty {
+            operation_id: OperationId(1),
+            bytes: b"secret".to_vec(),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        assert_eq!(
+            tokio::time::timeout(ANTI_HANG, command)
+                .await
+                .expect("command worker completes")
+                .unwrap(),
+            Err(PtyAdapterError::Write {
+                operation_id: OperationId(1),
+                cause: "broken pipe".to_string(),
+            })
+        );
+
+        // The loop kept polling and observed the child exit (the old suppressed
+        // path returned on the kill and never got here).
+        tokio::time::timeout(ANTI_HANG, exit_seen_rx.recv())
+            .await
+            .expect("the loop must observe the child exit before returning")
+            .expect("exit observed");
+
+        // The child has exited but the reader is still latched, so the lifecycle
+        // is blocked joining it — provably not detached.
+        assert!(
+            !lifecycle.is_finished(),
+            "the lifecycle must block on the reader join, not detach and return"
+        );
+        assert!(
+            !sentinel.finished(),
+            "the reader is still owned and running"
+        );
+
+        // Release the reader; the lifecycle joins it and converges silently.
+        reader_latch.release();
+        tokio::time::timeout(ANTI_HANG, lifecycle)
+            .await
+            .expect("lifecycle converges once the reader finishes")
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            sentinel.finished(),
+            "the reader thread finished before the lifecycle returned"
+        );
+        assert_eq!(child_state.kill_count(), 1, "one suppressing cleanup kill");
+        assert_eq!(
+            sink.failures(),
+            vec!["pty input write failed (operation 1): broken pipe".to_string()],
+            "exactly one write failure"
+        );
+        assert!(
+            sink.exit_codes().is_empty(),
+            "no PtyExited on a suppressed convergence"
+        );
+    }
+
+    /// Sentinel proof for a **clean exit**: with the reader latched by the test,
+    /// the lifecycle observes the child exit, then blocks joining the reader and
+    /// only emits `PtyExited` and returns once the reader has finished.
+    #[tokio::test]
+    async fn reader_thread_is_joined_before_clean_exit_returns() {
+        let sink = RecordingSink::new();
+        let (control, control_rx) = child_control_channel();
+        let (exit_seen_tx, mut exit_seen_rx) = mpsc::unbounded_channel();
+        let reader_latch = Gate::new();
+        let sentinel = ReaderSentinel::new();
+        let reader = FakeReader::new([ReadStep::Gate(Arc::clone(&reader_latch))])
+            .with_sentinel(sentinel.clone());
+        let (child, _child_state) = FakeChildOwner::builder()
+            .mode(TryWaitMode::CleanExit(0))
+            .try_wait_some(exit_seen_tx)
+            .build();
+
+        let lifecycle =
+            spawn_pty_lifecycle(Box::new(reader), Box::new(child), control_rx, sink.clone());
+
+        tokio::time::timeout(ANTI_HANG, exit_seen_rx.recv())
+            .await
+            .expect("the child exit is observed")
+            .expect("exit observed");
+        assert!(
+            !lifecycle.is_finished(),
+            "the exit is withheld until the reader is joined"
+        );
+        assert!(!sentinel.finished(), "the reader is still owned");
+        assert!(
+            sink.exit_codes().is_empty(),
+            "no exit emitted while joining"
+        );
+
+        reader_latch.release();
+        tokio::time::timeout(ANTI_HANG, lifecycle)
+            .await
+            .expect("lifecycle returns once the reader finishes")
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            sentinel.finished(),
+            "the reader was joined before returning"
+        );
+        assert_eq!(sink.exit_codes(), vec![0], "exit lands after the reader");
+        drop(control);
+    }
+
+    /// Sentinel proof for a **successful graceful kill**: a `KillPty` that succeeds
+    /// keeps the loop running until the child exit, which — like a clean exit —
+    /// waits for the reader to be joined before `PtyExited` is emitted.
+    #[tokio::test]
+    async fn reader_thread_is_joined_before_graceful_kill_exit_returns() {
+        let sink = RecordingSink::new();
+        let (control, control_rx) = child_control_channel();
+        let (exit_seen_tx, mut exit_seen_rx) = mpsc::unbounded_channel();
+        let reader_latch = Gate::new();
+        let sentinel = ReaderSentinel::new();
+        let reader = FakeReader::new([ReadStep::Gate(Arc::clone(&reader_latch))])
+            .with_sentinel(sentinel.clone());
+        let (child, child_state) = FakeChildOwner::builder()
+            .mode(TryWaitMode::ExitAfterKill(0))
+            .try_wait_some(exit_seen_tx)
+            .build();
+
+        let lifecycle =
+            spawn_pty_lifecycle(Box::new(reader), Box::new(child), control_rx, sink.clone());
+
+        let target = FakeCommandTarget::builder().build();
+        let (tx, rx) = mpsc::channel::<Effect>(PTY_COMMAND_CAPACITY);
+        let command = spawn_pty_command_worker(rx, Box::new(target), control.clone(), sink.clone());
+        tx.send(Effect::KillPty {
+            operation_id: OperationId(1),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        tokio::time::timeout(ANTI_HANG, command)
+            .await
+            .expect("command worker completes")
+            .unwrap()
+            .unwrap();
+
+        tokio::time::timeout(ANTI_HANG, exit_seen_rx.recv())
+            .await
+            .expect("the graceful kill's exit is observed")
+            .expect("exit observed");
+        assert!(
+            !lifecycle.is_finished(),
+            "the exit is withheld until the reader is joined"
+        );
+        assert!(!sentinel.finished(), "the reader is still owned");
+
+        reader_latch.release();
+        tokio::time::timeout(ANTI_HANG, lifecycle)
+            .await
+            .expect("lifecycle returns once the reader finishes")
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            sentinel.finished(),
+            "the reader was joined before returning"
+        );
+        assert_eq!(
+            child_state.kill_count(),
+            1,
+            "the graceful kill went through"
+        );
+        assert_eq!(
+            sink.exit_codes(),
+            vec![0],
+            "a successful graceful kill exits cleanly"
+        );
+        assert!(
+            sink.failures().is_empty(),
+            "no failure on a clean graceful kill"
+        );
     }
 
     // ---- lifecycle output-ordering / anti-deadlock tests (H) --------------
@@ -2234,10 +2734,12 @@ mod tests {
     }
 
     /// A `try_wait` failure emits exactly one `PtyFailed(Wait)` and no
-    /// `PtyExited`; the master is released so a prior reader can drain.
+    /// `PtyExited`; the master is released so a prior reader can drain, and the
+    /// reader thread is joined (never detached) before the lifecycle returns.
     #[tokio::test]
     async fn wait_error_emits_failure_and_no_exit() {
-        let reader = FakeReader::eof();
+        let sentinel = ReaderSentinel::new();
+        let reader = FakeReader::eof().with_sentinel(sentinel.clone());
         let (child, child_state) = FakeChildOwner::builder()
             .mode(TryWaitMode::WaitError("wait boom".to_string()))
             .build();
@@ -2266,14 +2768,21 @@ mod tests {
             child_state.released(),
             "the master was released on the wait error"
         );
+        assert!(
+            sentinel.finished(),
+            "the reader thread was joined before the lifecycle returned"
+        );
         drop(control);
     }
 
     /// A closed pty event lane surfaces an explicit error from the lifecycle
-    /// without panicking when the reader cannot deliver its output.
+    /// without panicking when the reader cannot deliver its output, and still
+    /// joins the reader thread before returning.
     #[tokio::test]
     async fn closed_event_lane_returns_error_without_panic() {
-        let reader = FakeReader::new([ReadStep::Chunk(b"a".to_vec())]);
+        let sentinel = ReaderSentinel::new();
+        let reader =
+            FakeReader::new([ReadStep::Chunk(b"a".to_vec())]).with_sentinel(sentinel.clone());
         let (child, _child_state) = FakeChildOwner::builder()
             .mode(TryWaitMode::CleanExit(0))
             .build();
@@ -2289,6 +2798,10 @@ mod tests {
 
         assert_eq!(result, Err(PtyAdapterError::EventLaneClosed));
         assert!(sink.kinds().is_empty(), "a closed lane records nothing");
+        assert!(
+            sentinel.finished(),
+            "the reader thread was joined before the lifecycle returned"
+        );
         drop(control);
     }
 

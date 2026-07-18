@@ -198,7 +198,11 @@ impl Pty {
         }
     }
 
-    /// Kills the child process.
+    /// Attempts to kill the child process through the original child handle.
+    ///
+    /// This is an authoritative kill *attempt*, not a guarantee: it can return an
+    /// error (e.g. the platform kill call failed), so callers must handle `Err`
+    /// rather than assume the child has terminated.
     pub fn kill(&mut self) -> PtyResult<()> {
         self.child.kill().map_err(backend)
     }
@@ -225,12 +229,14 @@ impl Pty {
     /// ## Authoritative vs. best-effort termination
     /// Authoritative termination goes through the [`waiter`]'s
     /// [`kill`](PtyWaiter::kill), which uses the **original** child handle
-    /// (Unix escalation to `SIGKILL`; Windows success reported as `Ok`). The
-    /// separately cloned [`killer`] is only a best-effort independent signaller
-    /// (Unix `SIGHUP`-only; Windows misreports a successful `TerminateProcess`
-    /// as an error) usable from another thread without a shared mutex — it is
-    /// **not** a guaranteed-termination primitive, so production callers that
-    /// need the child dead must use [`PtyWaiter::kill`].
+    /// (Unix escalation to `SIGKILL`; Windows success reported as `Ok`). That is
+    /// the strongest kill *attempt* available — but still an attempt, not a
+    /// guarantee: it can return an error, so callers must handle `Err`. The
+    /// separately cloned [`killer`] is weaker still: a best-effort independent
+    /// signaller (Unix `SIGHUP`-only; Windows misreports a successful
+    /// `TerminateProcess` as an error) usable from another thread without a
+    /// shared mutex. Production callers that need to drive the child toward exit
+    /// use [`PtyWaiter::kill`] and handle a failed attempt (e.g. retry).
     ///
     /// [`reader`]: PtyParts::reader
     /// [`writer`]: PtyParts::writer
@@ -313,8 +319,9 @@ pub struct PtyParts {
     pub waiter: PtyWaiter,
     /// A best-effort, independently cloned signaller — **not** authoritative
     /// termination (Unix `SIGHUP`-only, no escalation; Windows misreports a
-    /// successful `TerminateProcess`). Use [`PtyWaiter::kill`] to guarantee the
-    /// child is terminated; this handle is for advisory out-of-band signalling.
+    /// successful `TerminateProcess`). Drive authoritative termination through
+    /// [`PtyWaiter::kill`] (the strongest kill *attempt*, which can still fail);
+    /// this handle is for advisory out-of-band signalling.
     pub killer: PtyKiller,
 }
 
@@ -376,14 +383,18 @@ impl PtyWaiter {
             .map(|status| status.exit_code() as i32))
     }
 
-    /// Terminates the child through the **original** child handle
+    /// Attempts to terminate the child through the **original** child handle
     /// ([`ChildKiller::kill`] on the spawned [`Child`]), preserving
     /// [`Pty::kill`]'s semantics: on Unix a `SIGHUP` with a grace period and
     /// escalation to `SIGKILL`; on Windows a `TerminateProcess` reported as `Ok`.
     ///
-    /// This is the authoritative kill. It is intentionally stronger than the
-    /// cloned [`PtyKiller`], which only sends `SIGHUP` on Unix (no escalation)
-    /// and misreports a successful `TerminateProcess` as an error on Windows.
+    /// This is the authoritative kill *attempt* — the strongest available, and
+    /// intentionally stronger than the cloned [`PtyKiller`] (which only sends
+    /// `SIGHUP` on Unix, without escalation, and misreports a successful
+    /// `TerminateProcess` as an error on Windows). It is **not** an unconditional
+    /// guarantee: it can return `Err` if the underlying kill fails, so a caller
+    /// that needs the child reaped must handle the error (e.g. retry, or keep
+    /// owning and polling the child) rather than assume termination.
     ///
     /// [`ChildKiller::kill`]: portable_pty::ChildKiller::kill
     /// [`Child`]: portable_pty::Child
@@ -427,14 +438,14 @@ impl PtyWaiter {
 /// An independently cloned child killer obtained from [`Pty::into_parts`] via
 /// [`ChildKiller::clone_killer`].
 ///
-/// It is a **best-effort, independent signaller**, not a guaranteed-termination
-/// primitive: on Unix it only delivers `SIGHUP` (unlike the authoritative
-/// [`PtyWaiter::kill`], it never escalates to `SIGKILL`, so a child that ignores
-/// `SIGHUP` survives), and on Windows the cloned killer misreports a successful
-/// `TerminateProcess` as an error. Use it only for advisory, out-of-band
-/// signalling that can run on a different thread from the [`PtyWaiter`] without a
-/// shared mutex; drive authoritative termination through [`PtyWaiter::kill`],
-/// which uses the original child handle.
+/// It is a **best-effort, independent signaller**, weaker than the authoritative
+/// [`PtyWaiter::kill`]: on Unix it only delivers `SIGHUP` (it never escalates to
+/// `SIGKILL`, so a child that ignores `SIGHUP` survives), and on Windows the
+/// cloned killer misreports a successful `TerminateProcess` as an error. Use it
+/// only for advisory, out-of-band signalling that can run on a different thread
+/// from the [`PtyWaiter`] without a shared mutex; drive authoritative termination
+/// through [`PtyWaiter::kill`] (the strongest kill attempt, which uses the
+/// original child handle and can still fail).
 ///
 /// [`ChildKiller::clone_killer`]: portable_pty::ChildKiller::clone_killer
 pub struct PtyKiller {
@@ -443,7 +454,8 @@ pub struct PtyKiller {
 
 impl PtyKiller {
     /// Best-effort signal to terminate the child (see the type-level note on the
-    /// platform caveats). For guaranteed semantics use [`PtyWaiter::kill`].
+    /// platform caveats). For the strongest available kill attempt use
+    /// [`PtyWaiter::kill`]; neither is an unconditional guarantee.
     pub fn kill(&mut self) -> PtyResult<()> {
         self.inner.kill().map_err(backend)
     }
