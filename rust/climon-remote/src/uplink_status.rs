@@ -8,7 +8,6 @@ use climon_config::config::{get_climon_home, Env as ConfigEnv};
 use climon_store::atomic::atomic_write;
 use serde::{Deserialize, Serialize};
 
-use crate::devtunnel::DevtunnelHealth;
 use crate::process::is_process_alive;
 
 pub const UPLINK_STATUS_BASENAME: &str = "uplink-status.json";
@@ -44,12 +43,6 @@ pub struct UplinkStatus {
     pub session_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    // Normalized dev-tunnel health for this beacon. `#[serde(default)]` keeps
-    // existing status JSON (written before this field) parsing as `None`.
-    // `last_error` is retained for backward compatibility and populated from the
-    // failure summary; its removal is out of scope for this change.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub devtunnel: Option<DevtunnelHealth>,
 }
 
 pub fn get_uplink_status_path(config_env: &ConfigEnv) -> std::path::PathBuf {
@@ -105,54 +98,6 @@ pub fn is_uplink_status_stale_now(status: &UplinkStatus, now_ms: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::devtunnel::{
-        DevtunnelErrorCode, DevtunnelFailure, DevtunnelHealth, DevtunnelOperation,
-        DevtunnelRetryClass, DevtunnelRetryState, DevtunnelState,
-    };
-
-    fn quota_health() -> DevtunnelHealth {
-        DevtunnelHealth::from_failure(
-            DevtunnelState::Paused,
-            DevtunnelFailure {
-                code: DevtunnelErrorCode::TunnelQuotaExhausted,
-                operation: DevtunnelOperation::CreateTunnel,
-                summary: "You have reached your dev tunnel limit.".into(),
-                remediation: "Delete an unused tunnel with `devtunnel delete`.".into(),
-                technical_detail: "raw stderr: quota exhausted (429)".into(),
-                occurred_at: "2026-07-11T13:00:00.000Z".into(),
-                retry_class: DevtunnelRetryClass::Actionable,
-                retryable: false,
-                retry_after_ms: None,
-                status: Some(429),
-            },
-            Some(DevtunnelRetryState {
-                attempt: 0,
-                next_retry_at: None,
-                paused: true,
-            }),
-            "2026-07-11T13:00:00.000Z".into(),
-        )
-    }
-
-    #[test]
-    fn roundtrips_with_devtunnel_health_camel_case() {
-        let mut status = sample();
-        status.devtunnel = Some(quota_health());
-        let json = serialize_uplink_status(&status);
-        assert!(json.contains("\"devtunnel\""));
-        assert!(json.contains("\"technicalDetail\""));
-        assert!(json.contains("\"occurredAt\""));
-        assert!(json.contains("\"retryClass\""));
-        assert_eq!(parse_uplink_status(&json), Some(status));
-    }
-
-    #[test]
-    fn parses_old_status_without_devtunnel_field() {
-        let raw = "{\"pid\":42,\"updatedAt\":123,\"state\":\"connected\",\"sessionCount\":1}";
-        let parsed = parse_uplink_status(raw).expect("old status must parse");
-        assert_eq!(parsed.devtunnel, None);
-        assert_eq!(parsed.state, "connected");
-    }
 
     fn env_for(home: &Path) -> ConfigEnv {
         ConfigEnv::new(Some(home.to_str().unwrap()), home.to_path_buf())
@@ -186,7 +131,6 @@ mod tests {
             connected_at: Some(900_000),
             session_count: 3,
             last_error: None,
-            devtunnel: None,
         }
     }
 

@@ -53,7 +53,6 @@ result-tracking row.
 | — | Legacy Bun client removal — Rust client plus maintained Bun dashboard/server workflow | [phase17-legacy-client-removal.md](phase17-legacy-client-removal.md) |
 | — | Remote devbox auto-discovery + multi-target fan-out | [phase18-remote-discovery.md](phase18-remote-discovery.md) |
 | — | Dev tunnel re-auth (PWA) | [dev-tunnel-reauth.md](dev-tunnel-reauth.md) |
-| — | Dev-tunnel resilience — installation, authentication, quota, retry, and status | [devtunnel-resilience.md](devtunnel-resilience.md) |
 | — | PWA notification click opens the originating session terminal | [pwa-notification-click.md](pwa-notification-click.md) |
 | — | Foreground attention toast (in-app toast instead of system notification) | [foreground-attention-toast.md](foreground-attention-toast.md) |
 | — | PWA zoom lock & no overscroll (pinch-zoom disabled, page pinned 1:1 on swipe) | [pwa-zoom-lock.md](pwa-zoom-lock.md) |

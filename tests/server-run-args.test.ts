@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   DASHBOARD_IDLE_TIMEOUT_SECONDS,
+  SSE_KEEP_ALIVE_INTERVAL_MS,
   buildRunArgs,
   buildSpawnArgs,
   resolveParentSpawnColor,
-  resolveParentSpawnCwd
+  resolveParentSpawnCwd,
+  startSseKeepAlive
 } from "../src/server/server.js";
 import type { SpawnMetaOptions } from "../src/server/server.js";
 
@@ -64,6 +66,39 @@ describe("buildRunArgs", () => {
   describe("dashboard server timeout", () => {
     test("uses a long idle timeout for dashboard SSE and WebSocket connections", () => {
       expect(DASHBOARD_IDLE_TIMEOUT_SECONDS).toBeGreaterThan(10);
+    });
+
+    test("keeps idle SSE connections alive through tunnel proxy timeouts", () => {
+      const messages: string[] = [];
+      const clients = new Set([
+        {
+          enqueue(chunk: Uint8Array) {
+            messages.push(new TextDecoder().decode(chunk));
+          }
+        }
+      ]);
+      let tick: (() => void) | undefined;
+      let scheduledMs = 0;
+      let clearedHandle: unknown;
+
+      const stop = startSseKeepAlive(clients, {
+        setInterval(callback, ms) {
+          tick = callback;
+          scheduledMs = ms;
+          return "heartbeat";
+        },
+        clearInterval(handle) {
+          clearedHandle = handle;
+        }
+      });
+
+      expect(scheduledMs).toBe(SSE_KEEP_ALIVE_INTERVAL_MS);
+      expect(scheduledMs).toBeLessThan(30_000);
+      tick?.();
+      expect(messages).toEqual([": keepalive\n\n"]);
+
+      stop();
+      expect(clearedHandle).toBe("heartbeat");
     });
   });
 

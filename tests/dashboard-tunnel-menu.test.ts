@@ -12,10 +12,10 @@ describe("Tunnel Link menu labels", () => {
     expect(closeTunnelLinkMenuLabel).toBe("Close Tunnel Link");
   });
 
-  test("always shows Tunnel Link so missing installations are discoverable", () => {
+  test("shows Tunnel Link only when devtunnel is available", () => {
     expect(shouldShowTunnelLink({ devtunnelAvailable: true })).toBe(true);
-    expect(shouldShowTunnelLink({ devtunnelAvailable: false })).toBe(true);
-    expect(shouldShowTunnelLink(null)).toBe(true);
+    expect(shouldShowTunnelLink({ devtunnelAvailable: false })).toBe(false);
+    expect(shouldShowTunnelLink(null)).toBe(false);
   });
 
   test("shows Close Tunnel Link only while a dashboard tunnel is running", () => {

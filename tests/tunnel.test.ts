@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureClimonHome, getRemoteHostPath } from "../src/config.js";
-import { DevtunnelError } from "../src/devtunnel/types.js";
 import { deriveIngestTunnelId } from "../src/remote/ingest-tunnel-id.js";
 import * as tunnel from "../src/remote/tunnel.js";
 
@@ -158,83 +157,6 @@ describe("ensureIngestTunnel", () => {
     const state = await tunnel.ensureIngestTunnel(7072, { env: localEnv, runner });
     expect(calls.some((a) => a[0] === "create")).toBe(true);
     expect(state.ingestPort).toBe(7072);
-    rmSync(localEnv.CLIMON_HOME!, { recursive: true, force: true });
-  });
-});
-
-describe("ensureIngestTunnel failures", () => {
-  async function catchFailure(fn: () => Promise<unknown>): Promise<DevtunnelError | undefined> {
-    try {
-      await fn();
-      return undefined;
-    } catch (e) {
-      return e as DevtunnelError;
-    }
-  }
-
-  test("reports not_authenticated without writing remote-host.json", async () => {
-    const localEnv = tempHome("00000000-0000-4000-8000-000000000000");
-    const runner = async (_cmd: string, args: string[]) => {
-      if (args[0] === "show") return { status: 1, stdout: "", stderr: "User is not logged in." };
-      return { status: 0, stdout: "", stderr: "" };
-    };
-    const failure = await catchFailure(() => tunnel.ensureIngestTunnel(7100, { env: localEnv, runner }));
-    expect(failure).toBeInstanceOf(DevtunnelError);
-    expect(failure?.failure.code).toBe("not_authenticated");
-    expect(existsSync(getRemoteHostPath(localEnv))).toBe(false);
-    rmSync(localEnv.CLIMON_HOME!, { recursive: true, force: true });
-  });
-
-  test("reports tunnel_quota_exhausted from create without writing state", async () => {
-    const localEnv = tempHome("11111111-2222-4333-8444-555555555555");
-    const runner = async (_cmd: string, args: string[]) => {
-      if (args[0] === "show") return { status: 1, stdout: "", stderr: "tunnel not found" };
-      if (args[0] === "create") return { status: 1, stdout: "", stderr: "maximum number of tunnels reached" };
-      return { status: 0, stdout: "", stderr: "" };
-    };
-    const failure = await catchFailure(() => tunnel.ensureIngestTunnel(7101, { env: localEnv, runner }));
-    expect(failure).toBeInstanceOf(DevtunnelError);
-    expect(failure?.failure.code).toBe("tunnel_quota_exhausted");
-    expect(existsSync(getRemoteHostPath(localEnv))).toBe(false);
-    rmSync(localEnv.CLIMON_HOME!, { recursive: true, force: true });
-  });
-
-  test("surfaces a transient port failure in the reuse path without writing state", async () => {
-    const installId = "22222222-3333-4444-8555-666666666666";
-    const localEnv = tempHome(installId);
-    const id = deriveIngestTunnelId(installId);
-    const runner = async (_cmd: string, args: string[]) => {
-      if (args[0] === "show") return { status: 0, stdout: JSON.stringify({ tunnel: { tunnelId: `${id}.eun1` } }), stderr: "" };
-      if (args[0] === "port" && args[1] === "create") return { status: 1, stdout: "", stderr: "network is unreachable" };
-      return { status: 0, stdout: "", stderr: "" };
-    };
-    const failure = await catchFailure(() => tunnel.ensureIngestTunnel(7102, { env: localEnv, runner }));
-    expect(failure).toBeInstanceOf(DevtunnelError);
-    expect(failure?.failure.code).toBe("network_unavailable");
-    expect(existsSync(getRemoteHostPath(localEnv))).toBe(false);
-    rmSync(localEnv.CLIMON_HOME!, { recursive: true, force: true });
-  });
-});
-
-describe("reconcileTunnelPort failures", () => {
-  test("returns a typed failure when recreation fails and leaves the old state intact", async () => {
-    const localEnv = tempHome("33333333-4444-4555-8666-777777777777");
-    await tunnel.useManualTunnel(
-      { tunnelId: "climon-ingest-abcdef.eun1", ingestPort: 3132 },
-      { devtunnelAvailable: true, env: localEnv, runner: async () => ({ status: 0, stdout: "", stderr: "" }) }
-    );
-    const runner = async (_cmd: string, args: string[]) => {
-      if (args[0] === "port" && args[1] === "delete") return { status: 0, stdout: "", stderr: "" };
-      if (args[0] === "port" && args[1] === "create") return { status: 1, stdout: "", stderr: "network is unreachable" };
-      if (args[0] === "create") return { status: 1, stdout: "", stderr: "maximum number of tunnels reached" };
-      return { status: 0, stdout: "", stderr: "" };
-    };
-    const result = await tunnel.reconcileTunnelPort(4000, { env: localEnv, runner });
-    expect(result.changed).toBe(false);
-    expect(result.failure).toBeDefined();
-    expect(result.failure?.code).toBe("tunnel_quota_exhausted");
-    const raw = JSON.parse(readFileSync(getRemoteHostPath(localEnv), "utf8"));
-    expect(raw.ingestPort).toBe(3132);
     rmSync(localEnv.CLIMON_HOME!, { recursive: true, force: true });
   });
 });
