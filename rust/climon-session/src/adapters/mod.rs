@@ -18,3 +18,20 @@ pub(crate) mod metadata;
 pub(crate) mod pty;
 pub(crate) mod signals;
 pub(crate) mod timers;
+
+#[cfg(test)]
+mod production_api_tests {
+    use crate::engine::coordinator::ControlEventSender;
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_signal_spawner_is_reachable_by_sibling_modules() {
+        let _spawn = super::signals::spawn_signal_adapter::<ControlEventSender>;
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_resize_spawner_is_reachable_by_sibling_modules() {
+        let _spawn = super::signals::spawn_resize_adapter::<ControlEventSender>;
+    }
+}

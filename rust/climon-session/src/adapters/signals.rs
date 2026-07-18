@@ -364,6 +364,13 @@ mod platform {
     }
 }
 
+#[cfg(windows)]
+#[allow(unused_imports)]
+pub(crate) use platform::spawn_resize_adapter;
+#[cfg(unix)]
+#[allow(unused_imports)]
+pub(crate) use platform::spawn_signal_adapter;
+
 /// Spawns the resize-only adapter used to observe local size changes. On Windows
 /// this is the console-size poller; on Unix, resize arrives via `SIGWINCH` in the
 /// signal adapter, so this is provided for cross-platform callers as the
