@@ -393,40 +393,6 @@ the existing `devtunnel connect` → `devtunnel port list` → `run_uplink_bridg
 path, and the poll reconciles additions/removals without disturbing other live
 targets.
 
-At session launch the client runs a synchronous Dev Tunnels probe (CLI
-availability + sign-in) before spawning the uplink. This probe is bounded by a
-5-second timeout: if `devtunnel` stalls, the launcher warns the user and spawns
-the uplink best-effort rather than blocking session start
-(`rust/climon-cli/src/launcher.rs` `probe_devtunnel_sync`, `plan_uplink_start`).
-
-## Dev-tunnel gateway (runtime-local boundary + shared failure contract)
-
-Every `devtunnel` invocation is funnelled through a per-runtime **gateway** so
-Dev Tunnels execution is centralized and consistently classified:
-
-- **Bun** owns the dashboard **Tunnel Link** and the server-side ingest
-  create/port operations (`src/devtunnel/gateway.ts`).
-- **Rust** owns discovery, connect, and ingest host
-  (`rust/climon-remote/src/devtunnel/gateway.rs`).
-
-Both runtimes classify failures through a **shared JSON contract** backed by
-golden fixtures (`fixtures/devtunnel/failures.json`), so the error `code`,
-`remediation`, and retry class are identical across Bun and Rust. Failures
-resolve to friendly outcomes — `not_authenticated`, `cli_missing`,
-`permission_denied`, `tunnel_quota_exhausted`, `tunnel_not_found`,
-`port_conflict`, transient (HTTP 429 / 5xx / network), and `unknown`. Transient
-failures retry with capped-exponential backoff (1s → 30s) plus jitter;
-actionable failures (auth, quota, permission) **pause** and wait for the user to
-fix them and Retry. climon never installs the CLI, logs in, or deletes tunnels;
-`tunnel_not_found` permits exactly one safe recreate.
-
-Status beacons (`uplink-status.json` / `ingest-status.json`) and the
-dashboard/API surfaces carry a normalized `DevtunnelHealth`
-(`{ available, authenticated, version, state, lastSuccessAt, lastFailure, retry,
-probedAt }`; `src/devtunnel/types.ts`), so the dashboard and `climon remotes`
-render the same health. The Tunnel Link entry is always visible; when the tunnel
-can't start, the dashboard shows the classified failure and a Retry action.
-
 ## Remote visibility (`ingest-status.json`, `uplink-status.json`, `climon remotes`)
 
 Two single-writer status beacons under `$CLIMON_HOME` make the live remote

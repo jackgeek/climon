@@ -354,14 +354,12 @@ metadata); when there are no sessions, a global **[+]** appears in the sidebar.
 Your dashboard normally binds to loopback only. To reach it from your phone (or
 any other device) without exposing it to the network, use **Tunnel Link**:
 
-1. From the dashboard's ☰ menu, choose **Tunnel Link** (it's **always
-   available**, even before Dev Tunnels is ready). climon starts an
+1. From the dashboard's ☰ menu, choose **Tunnel Link**. climon starts an
    authenticated Microsoft [dev tunnel](https://learn.microsoft.com/azure/developer/dev-tunnels/)
    in front of your local dashboard and gives you an HTTPS `*.devtunnels.ms` URL.
    The tunnel is **private to your account** — it's tied to your dev tunnel
    identity and can't be shared with anyone else — and it stays up until you
-   choose **Close Tunnel Link**. If it can't start, the dialog shows a friendly
-   error with remediation and a **Retry** button (see below).
+   choose **Close Tunnel Link**.
 2. Open the link on your phone and tap **Install as PWA** to add climon to your
    home screen.
 3. Enable notifications from the menu to receive **Web Push alerts when a session
@@ -386,16 +384,8 @@ shared terminal to fit your view. See [docs/usage.md](docs/usage.md).
 > happens on Microsoft's relay before traffic reaches climon, so it also can't
 > install the PWA over an authenticated tunnel.
 
-> **Requires the `devtunnel` CLI** on the machine running the dashboard (climon
-> won't install it for you — follow the [install
-> instructions](#optional-the-devtunnel-cli)). Sign in manually with `devtunnel
-> user login`, and if you hit your tunnel limit remove unused tunnels yourself
-> with `devtunnel list` / `devtunnel delete` — climon never logs in or deletes
-> tunnels on your behalf. climon retries transient failures automatically (capped
-> backoff) and surfaces a **Retry** action with a friendly error and remediation;
-> `climon remotes` reports the current failure/status (`--json` for technical
-> detail). When the tunnel closes, the installed PWA shows a banner asking you to
-> uninstall it.
+> **Requires the `devtunnel` CLI** on the machine running the dashboard. When the
+> tunnel closes, the installed PWA shows a banner asking you to uninstall it.
 
 - Android (Chrome): **Install as PWA → Install**.
 - iPhone (Chrome, iOS 16.4+): **Share → Add to Home Screen**, then open climon
@@ -424,10 +414,7 @@ network-exposed dashboard.
 
 > **Requires the `devtunnel` CLI** on both the home machine (to host the tunnel)
 > and the devbox (to connect through it), each logged in with the same identity
-> (`devtunnel user login`). climon won't install the CLI, log in, or delete
-> tunnels for you. Tunnel failures are classified with a code and remediation and
-> transient ones are retried automatically; run `climon remotes` (add `--json`
-> for technical detail) to see the current failure/status.
+> (`devtunnel user login`).
 
 See [docs/usage.md](docs/usage.md) and [docs/security.md](docs/security.md) for
 the full setup and threat model.

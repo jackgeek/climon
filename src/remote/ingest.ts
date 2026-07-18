@@ -10,6 +10,7 @@
  * and `src/web/` is NOT legacy and is still maintained.)
  */
 import { createServer as createNetServer, type Server, type Socket } from "node:net";
+import { spawn, type ChildProcess } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
@@ -18,7 +19,7 @@ import { patchSessionMeta, writeSessionMeta } from "../store.js";
 import type { AnsiColor, PriorityReason, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { encodeControl, encodeData, MuxDecoder, type ControlMessage } from "./mux.js";
 import { ReplayGuard, verifySignedControl, signNow, DEFAULT_FRESHNESS_WINDOW_MS } from "./spawn-auth.js";
-import { createDevtunnelGateway } from "../devtunnel/gateway.js";
+import { devtunnelEnv } from "./tunnel.js";
 import { cleanupSessionSocket, formatSessionSocketRef, listenOnSessionSocket } from "../session-socket.js";
 import type { IngestState } from "./ingest-state.js";
 import { resolveIngestBindHost } from "./ingest-bind-host.js";
@@ -572,10 +573,20 @@ export async function readRemoteHostState(env: NodeJS.ProcessEnv = process.env):
 }
 
 function defaultSpawnHost(tunnelId: string): HostProcess {
-  // Route through the centralized gateway so `devtunnel` is only ever spawned
-  // from src/devtunnel/. The returned DevtunnelProcess structurally satisfies
-  // HostProcess (it also exposes isAlive()).
-  return createDevtunnelGateway().spawnHost(tunnelId);
+  const child: ChildProcess = spawn("devtunnel", ["host", tunnelId], {
+    stdio: ["ignore", "inherit", "inherit"],
+    env: devtunnelEnv(),
+    windowsHide: true
+  });
+  return {
+    stop: () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    }
+  };
 }
 
 /**

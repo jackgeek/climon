@@ -17,7 +17,6 @@
 
 pub mod client_id;
 pub mod demotion;
-pub mod devtunnel;
 pub mod discovery;
 pub mod ingest;
 pub mod ingest_bind_host;
