@@ -62,3 +62,70 @@ pub(crate) enum SessionEvent {
     /// The host requested a graceful shutdown.
     ShutdownRequested,
 }
+
+/// The lane a [`SessionEvent`] is delivered on. The pty lane carries only the
+/// pty's own output/exit/failure; every other event travels the control lane.
+/// The coordinator's typed lane senders use this to reject wrong-lane events
+/// instead of silently rerouting them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventLane {
+    /// Pty output/exit/failure only.
+    Pty,
+    /// Everything else (client, local, timer, completion, shutdown).
+    Control,
+}
+
+/// A payload-free classification of a [`SessionEvent`]. Recording and logging
+/// use this instead of the event itself so terminal/user bytes (pty output,
+/// local input, client frames) never enter a trace or log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventKind {
+    PtyOutput,
+    PtyExited,
+    PtyFailed,
+    ClientConnected,
+    ClientFrame,
+    ClientDisconnected,
+    ClientSendFailed,
+    LocalInput,
+    LocalResized,
+    ConsoleWriteCompleted,
+    ConsoleWriteFailed,
+    TimerFired,
+    MetadataCompleted,
+    MetadataFailed,
+    ShutdownRequested,
+}
+
+impl SessionEvent {
+    /// The payload-free [`EventKind`] of this event, safe to record or log.
+    pub(crate) fn kind(&self) -> EventKind {
+        match self {
+            SessionEvent::PtyOutput(_) => EventKind::PtyOutput,
+            SessionEvent::PtyExited(_) => EventKind::PtyExited,
+            SessionEvent::PtyFailed(_) => EventKind::PtyFailed,
+            SessionEvent::ClientConnected(_) => EventKind::ClientConnected,
+            SessionEvent::ClientFrame { .. } => EventKind::ClientFrame,
+            SessionEvent::ClientDisconnected(_) => EventKind::ClientDisconnected,
+            SessionEvent::ClientSendFailed { .. } => EventKind::ClientSendFailed,
+            SessionEvent::LocalInput(_) => EventKind::LocalInput,
+            SessionEvent::LocalResized { .. } => EventKind::LocalResized,
+            SessionEvent::ConsoleWriteCompleted(_) => EventKind::ConsoleWriteCompleted,
+            SessionEvent::ConsoleWriteFailed { .. } => EventKind::ConsoleWriteFailed,
+            SessionEvent::TimerFired { .. } => EventKind::TimerFired,
+            SessionEvent::MetadataCompleted(_) => EventKind::MetadataCompleted,
+            SessionEvent::MetadataFailed { .. } => EventKind::MetadataFailed,
+            SessionEvent::ShutdownRequested => EventKind::ShutdownRequested,
+        }
+    }
+
+    /// The [`EventLane`] this event must be delivered on.
+    pub(crate) fn lane(&self) -> EventLane {
+        match self {
+            SessionEvent::PtyOutput(_)
+            | SessionEvent::PtyExited(_)
+            | SessionEvent::PtyFailed(_) => EventLane::Pty,
+            _ => EventLane::Control,
+        }
+    }
+}
