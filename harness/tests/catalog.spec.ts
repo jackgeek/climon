@@ -56,7 +56,7 @@ command: rm -rf /
   ).rejects.toThrow("unsupported harness field: command");
 });
 
-test("rejects duplicate ids and timeout values outside 1 through 600", async () => {
+test("rejects duplicate case IDs with a clear duplicate-ID message", async () => {
   await expect(
     catalogue(`
 ## CIH-01 — First
@@ -66,7 +66,7 @@ status: automated
 suite: smoke
 scenario: client-server.headless-dashboard
 platforms: [linux]
-timeoutSeconds: 0
+timeoutSeconds: 90
 \`\`\`
 ## CIH-01 — Second
 - **ID:** CIH-01
@@ -75,10 +75,26 @@ status: manual
 suite: smoke
 scenario: client-server.attached-pty
 platforms: [linux]
-timeoutSeconds: 90
+timeoutSeconds: 60
 \`\`\`
 `)
-  ).rejects.toThrow();
+  ).rejects.toThrow("duplicate ID: CIH-01");
+});
+
+test("rejects a timeout value outside 1 through 600", async () => {
+  await expect(
+    catalogue(`
+## CIH-01 — Invalid timeout
+- **ID:** CIH-01
+\`\`\`yaml harness
+status: automated
+suite: smoke
+scenario: client-server.headless-dashboard
+platforms: [linux]
+timeoutSeconds: 0
+\`\`\`
+`)
+  ).rejects.toThrow("timeoutSeconds must be an integer from 1 to 600");
 });
 
 test("loads real docs/manual-tests directory and finds CIH-01 and CIH-02 as automated smoke cases", async () => {
