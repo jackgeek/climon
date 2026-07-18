@@ -216,13 +216,21 @@ impl Pty {
     /// ## Ownership of the master (Windows load-bearing)
     /// The returned [`PtyWaiter`] owns the last strong reference to the PTY
     /// master; the [`PtyResizer`] holds only a [`Weak`], and the [`reader`],
-    /// [`writer`], and [`killer`] hold none. Dropping the waiter (which its
-    /// consuming [`wait`](PtyWaiter::wait) does immediately after the child
-    /// exits) therefore closes the master — on Windows this closes the ConPTY
-    /// pseudoconsole, so a cloned reader finally reaches EOF. The [`killer`] is
-    /// cloned via [`ChildKiller::clone_killer`], so it can terminate the child
-    /// from another thread while the waiter is blocked in `wait`, without a
-    /// shared mutex.
+    /// [`writer`], and [`killer`] hold none. Releasing that master — either the
+    /// early [`release_master`](PtyWaiter::release_master) or the consuming
+    /// [`wait`](PtyWaiter::wait) that drops it before returning — closes the
+    /// master; on Windows this closes the ConPTY pseudoconsole, so a cloned
+    /// reader finally reaches EOF.
+    ///
+    /// ## Authoritative vs. best-effort termination
+    /// Authoritative termination goes through the [`waiter`]'s
+    /// [`kill`](PtyWaiter::kill), which uses the **original** child handle
+    /// (Unix escalation to `SIGKILL`; Windows success reported as `Ok`). The
+    /// separately cloned [`killer`] is only a best-effort independent signaller
+    /// (Unix `SIGHUP`-only; Windows misreports a successful `TerminateProcess`
+    /// as an error) usable from another thread without a shared mutex — it is
+    /// **not** a guaranteed-termination primitive, so production callers that
+    /// need the child dead must use [`PtyWaiter::kill`].
     ///
     /// [`reader`]: PtyParts::reader
     /// [`writer`]: PtyParts::writer
@@ -250,14 +258,19 @@ impl Pty {
             pid,
         };
 
-        // Clone an independent killer *before* moving the child into the waiter,
-        // so kill and wait can run on separate threads without a shared mutex.
+        // Clone an independent *best-effort* signaller before moving the child
+        // into the waiter. This is retained for the approved `PtyParts` contract
+        // and out-of-band signalling only; authoritative termination is the
+        // waiter's `kill`, which uses the original child handle.
         let killer = PtyKiller {
             inner: child.clone_killer(),
         };
 
         // The waiter owns the child and the final strong master reference.
-        let waiter = PtyWaiter { child, master };
+        let waiter = PtyWaiter {
+            child,
+            master: Some(master),
+        };
 
         Ok(PtyParts {
             pid,
@@ -291,24 +304,53 @@ pub struct PtyParts {
     pub writer: Box<dyn Write + Send>,
     /// A cloneable [`Weak`] resize handle that never keeps the master alive.
     pub resizer: PtyResizer,
-    /// Owns the child and the last strong master reference; its consuming
-    /// [`wait`](PtyWaiter::wait) blocks for the exit code then drops the master.
+    /// Owns the child and the last strong master reference; the authoritative
+    /// child-control handle. Exposes non-blocking
+    /// [`try_wait`](PtyWaiter::try_wait)/[`kill`](PtyWaiter::kill)/[`release_master`](PtyWaiter::release_master)
+    /// for a responsive control loop, plus the consuming
+    /// [`wait`](PtyWaiter::wait) that blocks for the exit code then drops the
+    /// master.
     pub waiter: PtyWaiter,
-    /// An independently cloned killer, usable concurrently with the waiter.
+    /// A best-effort, independently cloned signaller — **not** authoritative
+    /// termination (Unix `SIGHUP`-only, no escalation; Windows misreports a
+    /// successful `TerminateProcess`). Use [`PtyWaiter::kill`] to guarantee the
+    /// child is terminated; this handle is for advisory out-of-band signalling.
     pub killer: PtyKiller,
 }
 
 /// Owns a spawned child and the last strong reference to its PTY master.
 ///
+/// This is the authoritative child-control handle. It drives the child through
+/// the **original** `portable-pty` [`Child`]/[`ChildKiller`] handle, so its
+/// [`kill`](PtyWaiter::kill) preserves [`Pty::kill`]'s semantics exactly — on
+/// Unix a `SIGHUP` followed by a grace period and escalation to `SIGKILL`; on
+/// Windows a `TerminateProcess` whose success is reported as `Ok`. That is
+/// deliberately **not** the weaker cloned [`PtyKiller`] (Unix `SIGHUP`-only, no
+/// escalation; Windows reports a successful `TerminateProcess` as an error).
+///
+/// It exposes both a non-blocking control surface — [`try_wait`](PtyWaiter::try_wait),
+/// [`kill`](PtyWaiter::kill), and [`release_master`](PtyWaiter::release_master) —
+/// for an owned child-control loop that must stay responsive, and the original
+/// consuming [`wait`](PtyWaiter::wait) for callers that can block for the exit
+/// code.
+///
 /// [`wait`](PtyWaiter::wait) consumes the waiter: it blocks for the child's exit
 /// code and then drops the master **before returning**, on both success and
 /// failure. On Windows that master drop closes the ConPTY pseudoconsole, which
 /// is the only thing that lets a previously cloned reader reach EOF; on Unix the
-/// reader already EOFs from the slave drop at spawn, so the drop is a harmless
-/// no-op there.
+/// reader already EOFs when the child exits, so the drop is a harmless no-op
+/// there. [`release_master`](PtyWaiter::release_master) performs that same master
+/// drop early, without consuming the waiter, so a responsive control loop can
+/// unblock a Windows reader while it keeps polling or killing the child.
+///
+/// [`Child`]: portable_pty::Child
+/// [`ChildKiller`]: portable_pty::ChildKiller
 pub struct PtyWaiter {
     child: Box<dyn Child + Send + Sync>,
-    master: SharedMaster,
+    /// The last strong master reference, held in an [`Option`] so it can be
+    /// released early via [`release_master`](PtyWaiter::release_master) while the
+    /// child handle is retained for polling/killing.
+    master: Option<SharedMaster>,
 }
 
 impl PtyWaiter {
@@ -317,12 +359,57 @@ impl PtyWaiter {
         self.child.process_id()
     }
 
+    /// Polls the child without blocking, via the original [`Child::try_wait`].
+    /// Returns `Ok(Some(code))` once it has exited, `Ok(None)` while it is still
+    /// running, or `Err` if the wait itself failed.
+    ///
+    /// This is the responsive counterpart to [`wait`](PtyWaiter::wait) for an
+    /// owned control loop that must also service kill requests and reader
+    /// outcomes rather than block indefinitely in a single `wait`.
+    ///
+    /// [`Child::try_wait`]: portable_pty::Child::try_wait
+    pub fn try_wait(&mut self) -> PtyResult<Option<i32>> {
+        Ok(self
+            .child
+            .try_wait()
+            .map_err(backend)?
+            .map(|status| status.exit_code() as i32))
+    }
+
+    /// Terminates the child through the **original** child handle
+    /// ([`ChildKiller::kill`] on the spawned [`Child`]), preserving
+    /// [`Pty::kill`]'s semantics: on Unix a `SIGHUP` with a grace period and
+    /// escalation to `SIGKILL`; on Windows a `TerminateProcess` reported as `Ok`.
+    ///
+    /// This is the authoritative kill. It is intentionally stronger than the
+    /// cloned [`PtyKiller`], which only sends `SIGHUP` on Unix (no escalation)
+    /// and misreports a successful `TerminateProcess` as an error on Windows.
+    ///
+    /// [`ChildKiller::kill`]: portable_pty::ChildKiller::kill
+    /// [`Child`]: portable_pty::Child
+    pub fn kill(&mut self) -> PtyResult<()> {
+        self.child.kill().map_err(backend)
+    }
+
+    /// Releases the last strong master reference early — the same drop that the
+    /// consuming [`wait`](PtyWaiter::wait) performs before returning — without
+    /// consuming the waiter, so the child handle is retained for further
+    /// [`try_wait`](PtyWaiter::try_wait)/[`kill`](PtyWaiter::kill) calls.
+    ///
+    /// On Windows this closes the ConPTY pseudoconsole so a previously cloned
+    /// reader can reach EOF; on Unix it is a harmless no-op for the reader.
+    /// Idempotent: dropping the master a second time does nothing.
+    pub fn release_master(&mut self) {
+        self.master = None;
+    }
+
     /// Blocks until the child exits and returns its exit code, then releases the
     /// child and the last strong master reference.
     ///
     /// The master is dropped **before this returns**, on both the success and
     /// the error path, so a Windows ConPTY cloned reader can EOF as soon as the
-    /// wait resolves regardless of outcome.
+    /// wait resolves regardless of outcome. If [`release_master`](PtyWaiter::release_master)
+    /// already ran, the drop here is a no-op.
     pub fn wait(self) -> PtyResult<i32> {
         let PtyWaiter { mut child, master } = self;
         let outcome = child.wait();
@@ -340,15 +427,23 @@ impl PtyWaiter {
 /// An independently cloned child killer obtained from [`Pty::into_parts`] via
 /// [`ChildKiller::clone_killer`].
 ///
-/// It holds no reference to the master, so killing never keeps the
-/// pseudoconsole alive, and it can run on a different thread from the
-/// [`PtyWaiter`] without a shared mutex.
+/// It is a **best-effort, independent signaller**, not a guaranteed-termination
+/// primitive: on Unix it only delivers `SIGHUP` (unlike the authoritative
+/// [`PtyWaiter::kill`], it never escalates to `SIGKILL`, so a child that ignores
+/// `SIGHUP` survives), and on Windows the cloned killer misreports a successful
+/// `TerminateProcess` as an error. Use it only for advisory, out-of-band
+/// signalling that can run on a different thread from the [`PtyWaiter`] without a
+/// shared mutex; drive authoritative termination through [`PtyWaiter::kill`],
+/// which uses the original child handle.
+///
+/// [`ChildKiller::clone_killer`]: portable_pty::ChildKiller::clone_killer
 pub struct PtyKiller {
     inner: Box<dyn ChildKiller + Send + Sync>,
 }
 
 impl PtyKiller {
-    /// Terminates the child process.
+    /// Best-effort signal to terminate the child (see the type-level note on the
+    /// platform caveats). For guaranteed semantics use [`PtyWaiter::kill`].
     pub fn kill(&mut self) -> PtyResult<()> {
         self.inner.kill().map_err(backend)
     }

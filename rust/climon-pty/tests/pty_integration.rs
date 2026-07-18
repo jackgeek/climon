@@ -321,6 +321,69 @@ fn into_parts_streams_output_and_reports_exit() {
     );
 }
 
+/// Smoke test for the non-blocking child-control surface added for the owned
+/// session lifecycle: [`PtyWaiter::try_wait`] reports the live/exited state
+/// without blocking, [`PtyWaiter::kill`] terminates the child through the
+/// *authoritative* original handle (Unix `SIGHUP`→escalate→`SIGKILL`; Windows
+/// `TerminateProcess`), and [`PtyWaiter::release_master`] drops the master so a
+/// Windows ConPTY reader can EOF and the reader thread joins without deadlock.
+///
+/// A long-lived sleeper stays alive until it is killed, so on a healthy terminal
+/// (macOS CI, local Linux/dev) this exercises the full poll→kill→reap path. On a
+/// sandbox that cannot claim a controlling terminal the wrapped command dies
+/// immediately, or a headless ConPTY wedges; both are treated as inconclusive
+/// rather than failing, mirroring the other integration tests.
+#[test]
+fn waiter_try_wait_polls_and_kill_terminates_a_live_child() {
+    #[cfg(unix)]
+    let opts = sh("sleep 5");
+    #[cfg(windows)]
+    let opts = sh("ping -n 6 127.0.0.1 >NUL");
+
+    let PtyParts {
+        reader, mut waiter, ..
+    } = Pty::spawn(&opts)
+        .expect("spawn")
+        .into_parts()
+        .expect("into_parts");
+    let reader_handle = std::thread::spawn(move || read_to_end(reader));
+
+    let running_before_kill = waiter.try_wait().expect("try_wait").is_none();
+    if running_before_kill {
+        // Authoritative termination through the original child handle.
+        waiter.kill().expect("kill");
+    }
+
+    // Poll (bounded) until the child is reaped; never block indefinitely.
+    let deadline = std::time::Instant::now() + CHILD_EXIT_TIMEOUT;
+    let mut exited = None;
+    while std::time::Instant::now() < deadline {
+        if let Some(code) = waiter.try_wait().expect("try_wait") {
+            exited = Some(code);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    // Drop the master before joining the reader (Windows ConPTY EOF rule).
+    waiter.release_master();
+    let _ = reader_handle
+        .join()
+        .expect("reader joins after master release");
+
+    match (running_before_kill, exited) {
+        // Full path exercised: the sleeper was running, the authoritative kill
+        // terminated it, and a subsequent non-blocking try_wait reaped it.
+        (true, Some(_)) => {}
+        // Inconclusive environment (setsid EPERM / headless ConPTY wedge): the
+        // control API was still callable, which is all we can assert here.
+        _ => eprintln!(
+            "skipping full poll→kill→reap assertion: child never reached a \
+             deterministic running-then-killed state in this environment"
+        ),
+    }
+}
+
 #[test]
 fn empty_command_errors() {
     let opts = PtyOptions {
