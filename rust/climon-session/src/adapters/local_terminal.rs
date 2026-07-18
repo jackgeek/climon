@@ -6,12 +6,13 @@
 //!
 //! - a **synchronous platform setup** ([`setup_local_terminal`]) the supervisor
 //!   (a later task) calls *before* pty output or any adapter starts. It decides
-//!   whether a real local terminal is attached, reports the initial `(cols,rows)`
-//!   size, installs the platform raw/console-mode guard, and — only when attached
-//!   — spawns the cancellable input worker. A headless session, or one whose
-//!   stdin/stdout is not a console, returns unattached with no worker and does
-//!   **not** mutate any terminal mode. The guard restores every mode it changed
-//!   on `Drop`, so the launching shell is never left in raw mode.
+//!   whether a real local output terminal is attached, reports the initial
+//!   `(cols,rows)` size, installs the platform raw/console-mode guard, and spawns
+//!   the cancellable input worker whenever stdin is interactive. Redirected
+//!   stdout therefore remains unattached while preserving legacy stdin
+//!   forwarding. A headless session or redirected stdin returns no worker and
+//!   mutates no mode. The guard restores every mode it changed on `Drop`, so the
+//!   launching shell is never left in raw mode.
 //! - a **blocking FIFO console writer** ([`run_console_adapter`]) that drains the
 //!   coordinator's console effect route directly, executes each
 //!   [`Effect::WriteConsole`] as `write_all` then `flush`, and emits
@@ -21,10 +22,11 @@
 //!   I/O never blocks a Tokio runtime worker.
 //! - a **cancellable input worker** ([`run_input_worker`]) that owns the local
 //!   input source and emits [`SessionEvent::LocalInput`] chunks (4096 parity) on
-//!   the control lane. It polls the source with a timeout before each read so an
-//!   idle stdin never wedges an un-cancellable, permanently-blocked thread; EOF
-//!   or cancellation exits cleanly, and a read failure is an isolated typed
-//!   adapter error — never a synthesized `ShutdownRequested` or core failure.
+//!   the control lane. Unix polls with a timeout; Windows pairs its native
+//!   blocking VT-byte read with an owned synchronous-I/O interrupter. Idle stdin
+//!   therefore remains cancellable and joinable on both platforms. EOF or
+//!   cancellation exits cleanly, and a read failure is an isolated typed adapter
+//!   error — never a synthesized `ShutdownRequested` or core failure.
 //!
 //! The domain state already filters local input (take-control / swallow /
 //! forward), so the input worker forwards raw chunks and never duplicates that
@@ -41,6 +43,7 @@
 // lands.
 #![allow(dead_code)]
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, Write};
 use std::time::Duration;
@@ -61,6 +64,40 @@ const INPUT_CHUNK: usize = 4096;
 /// cancellation token. Bounds the cancellation latency of an idle stdin without
 /// a busy loop.
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+#[derive(Default)]
+struct Utf16InputBuffer {
+    pending: VecDeque<u8>,
+    high_surrogate: Option<u16>,
+}
+
+impl Utf16InputBuffer {
+    fn push(&mut self, units: &[u16]) {
+        let mut complete =
+            Vec::with_capacity(units.len() + usize::from(self.high_surrogate.is_some()));
+        if let Some(high) = self.high_surrogate.take() {
+            complete.push(high);
+        }
+        complete.extend_from_slice(units);
+        if complete
+            .last()
+            .is_some_and(|unit| (0xD800..=0xDBFF).contains(unit))
+        {
+            self.high_surrogate = complete.pop();
+        }
+        self.pending
+            .extend(String::from_utf16_lossy(&complete).into_bytes());
+    }
+
+    fn take_chunk(&mut self, limit: usize) -> Vec<u8> {
+        let take = limit.min(self.pending.len());
+        self.pending.drain(..take).collect()
+    }
+
+    fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+}
 
 // ---- errors ------------------------------------------------------------
 
@@ -85,6 +122,8 @@ pub(crate) enum LocalTerminalError {
     /// Reading local input failed. Isolated to the input worker — it is **not**
     /// turned into a synthesized `ShutdownRequested` or a core failure.
     InputRead(String),
+    /// Interrupting a platform blocking input read during teardown failed.
+    InputInterrupt(String),
     /// The input worker's blocking task panicked; observed when the guard owner
     /// joins it.
     InputWorkerPanicked,
@@ -112,6 +151,9 @@ impl fmt::Display for LocalTerminalError {
                 operation_id.0
             ),
             LocalTerminalError::InputRead(cause) => write!(f, "local input read failed: {cause}"),
+            LocalTerminalError::InputInterrupt(cause) => {
+                write!(f, "failed to interrupt local input read: {cause}")
+            }
             LocalTerminalError::InputWorkerPanicked => write!(f, "local input worker panicked"),
         }
     }
@@ -329,8 +371,8 @@ pub(crate) enum InputPoll {
 
 /// The local input source the input worker owns. Kept behind a trait so tests
 /// can script input/idle/EOF/error sequences without a real stdin. Each `poll`
-/// waits at most `timeout` for input so an idle stdin never wedges a
-/// permanently-blocked, un-cancellable read.
+/// either waits at most `timeout` or is paired with a platform interrupter so an
+/// idle stdin never wedges a permanently-blocked, un-cancellable read.
 pub(crate) trait LocalInputSource: Send + 'static {
     /// Waits up to `timeout` for input, then returns the read outcome. A
     /// payload-free `Err` string describes an unexpected read failure.
@@ -367,6 +409,7 @@ where
             }
             Ok(InputPoll::Idle) => {}
             Ok(InputPoll::Eof) => return Ok(()),
+            Err(_) if cancel.is_cancelled() => return Ok(()),
             Err(cause) => return Err(LocalTerminalError::InputRead(cause)),
         }
     }
@@ -396,6 +439,13 @@ where
 /// nothing.
 pub(crate) trait ModeGuard: Send {}
 
+/// A platform-owned way to wake a blocking local-input read during teardown.
+/// Unix polls with a bounded timeout and needs no interrupter; Windows uses this
+/// to cancel the exact synchronous read issued by the input worker.
+pub(crate) trait InputInterrupt: Send {
+    fn interrupt(&self) -> Result<(), String>;
+}
+
 /// The no-op guard used for an unattached (headless or non-console) session: it
 /// owns nothing and restores nothing on drop.
 pub(crate) struct NoopModeGuard;
@@ -403,13 +453,15 @@ pub(crate) struct NoopModeGuard;
 impl ModeGuard for NoopModeGuard {}
 
 /// The result of a platform's synchronous mode configuration: the attachment
-/// decision, the initial visible size, the owned mode guard, and — only when
-/// attached — the local input source the worker will drain.
+/// decision, the initial visible size, the owned mode guard, and — whenever
+/// stdin is interactive — the local input source the worker will drain plus any
+/// platform interrupter needed to wake a blocking read.
 pub(crate) struct PlatformConfiguration {
     attached: bool,
     size: (u16, u16),
     guard: Box<dyn ModeGuard>,
     input: Option<Box<dyn LocalInputSource>>,
+    input_interrupt: Option<Box<dyn InputInterrupt>>,
 }
 
 /// The synchronous platform mode configuration. Kept behind a trait so tests can
@@ -424,14 +476,15 @@ pub(crate) trait TerminalPlatform {
 
 /// The owned local-terminal setup the supervisor holds: the attachment decision,
 /// the initial size, the raw/console-mode guard (restored on teardown), and —
-/// when attached — the owned input worker handle. The guard owner cancels and
-/// joins the worker via [`shutdown`](LocalTerminalSetup::shutdown), then drops
-/// the guard so modes are restored only after the worker has stopped.
+/// when stdin is interactive — the owned input worker handle. The guard owner
+/// cancels and joins the worker via [`shutdown`](LocalTerminalSetup::shutdown),
+/// then drops the guard so modes are restored only after the worker has stopped.
 pub(crate) struct LocalTerminalSetup {
     pub(crate) attached: bool,
     pub(crate) size: (u16, u16),
     guard: Box<dyn ModeGuard>,
     input: Option<JoinHandle<Result<(), LocalTerminalError>>>,
+    input_interrupt: Option<Box<dyn InputInterrupt>>,
     cancel: CancellationToken,
 }
 
@@ -441,6 +494,12 @@ impl LocalTerminalSetup {
     /// Returns the worker's result; a cancelled join is a clean `Ok(())`.
     pub(crate) async fn shutdown(self) -> Result<(), LocalTerminalError> {
         self.cancel.cancel();
+        let interrupt_result = self
+            .input_interrupt
+            .as_ref()
+            .map(|interrupt| interrupt.interrupt())
+            .transpose()
+            .map_err(LocalTerminalError::InputInterrupt);
         let result = match self.input {
             Some(handle) => match handle.await {
                 Ok(result) => result,
@@ -451,13 +510,14 @@ impl LocalTerminalSetup {
         };
         // Dropping the guard here restores modes only after the worker is joined.
         drop(self.guard);
+        interrupt_result?;
         result
     }
 }
 
-/// Configures the real local terminal, spawning the input worker only when a
-/// real console is attached, and returns the owned [`LocalTerminalSetup`]. This
-/// is the synchronous entry point the supervisor calls before pty output starts.
+/// Configures the real local terminal, spawning the input worker whenever stdin
+/// is interactive, and returns the owned [`LocalTerminalSetup`]. This is the
+/// synchronous entry point the supervisor calls before pty output starts.
 pub(crate) fn setup_local_terminal<E: LocalTerminalEventSink>(
     headless: bool,
     events: E,
@@ -466,10 +526,11 @@ pub(crate) fn setup_local_terminal<E: LocalTerminalEventSink>(
     setup_local_terminal_with(RealTerminalPlatform, headless, events, cancel)
 }
 
-/// Platform-agnostic setup core: configure modes, then — only when attached —
-/// spawn the cancellable input worker. Enabling modes happens synchronously in
-/// [`TerminalPlatform::configure`] *before* the worker is spawned, so no worker
-/// or console output can run before the mode is in effect.
+/// Platform-agnostic setup core: configure modes, then spawn the cancellable
+/// input worker whenever the platform supplied an interactive input source.
+/// Enabling modes happens synchronously in [`TerminalPlatform::configure`]
+/// *before* the worker is spawned, so no worker or console output can run before
+/// the mode is in effect.
 fn setup_local_terminal_with<P, E>(
     platform: P,
     headless: bool,
@@ -481,15 +542,15 @@ where
     E: LocalTerminalEventSink,
 {
     let config = platform.configure(headless);
-    let input = match config.input {
-        Some(source) if config.attached => Some(spawn_input_worker(source, events, cancel.clone())),
-        _ => None,
-    };
+    let input = config
+        .input
+        .map(|source| spawn_input_worker(source, events, cancel.clone()));
     LocalTerminalSetup {
         attached: config.attached,
         size: config.size,
         guard: config.guard,
         input,
+        input_interrupt: config.input_interrupt,
         cancel,
     }
 }
@@ -586,31 +647,33 @@ mod platform {
     impl TerminalPlatform for RealTerminalPlatform {
         fn configure(&self, headless: bool) -> PlatformConfiguration {
             let size = terminal_size(libc::STDIN_FILENO);
-            // Attached requires an interactive session with both stdin and stdout
-            // real terminals. Anything else is unattached and mutates no mode.
             let stdin_tty = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
             let stdout_tty = unsafe { libc::isatty(libc::STDOUT_FILENO) } == 1;
-            if headless || !stdin_tty || !stdout_tty {
+            if headless || !stdin_tty {
                 return PlatformConfiguration {
                     attached: false,
                     size,
                     guard: Box::new(super::NoopModeGuard),
                     input: None,
+                    input_interrupt: None,
                 };
             }
-            // `RawMode::enable` is a no-op on a non-tty, but stdin is a tty here.
+            // Preserve legacy redirected-output behavior: interactive stdin still
+            // forwards input even when stdout is not a terminal.
             match RawMode::enable(libc::STDIN_FILENO) {
                 Ok(raw) => PlatformConfiguration {
-                    attached: true,
+                    attached: stdout_tty,
                     size,
                     guard: Box::new(UnixModeGuard { _raw: raw }),
                     input: Some(Box::new(UnixStdinSource::new())),
+                    input_interrupt: None,
                 },
                 Err(_) => PlatformConfiguration {
-                    attached: false,
+                    attached: stdout_tty,
                     size,
                     guard: Box::new(super::NoopModeGuard),
-                    input: None,
+                    input: Some(Box::new(UnixStdinSource::new())),
+                    input_interrupt: None,
                 },
             }
         }
@@ -620,22 +683,27 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use super::{
-        InputPoll, LocalInputSource, ModeGuard, PlatformConfiguration, RealTerminalPlatform,
-        TerminalPlatform, INPUT_CHUNK,
+        InputInterrupt, InputPoll, LocalInputSource, ModeGuard, PlatformConfiguration,
+        RealTerminalPlatform, TerminalPlatform, INPUT_CHUNK,
     };
-    use std::io::{self, Read};
-    use std::time::Duration;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     use climon_pty::terminal_size;
     use windows_sys::Win32::Foundation::{
-        HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0,
+        CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
+        WAIT_FAILED, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Console::{
-        GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
-        ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-        STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        GetConsoleMode, GetStdHandle, ReadConsoleW, SetConsoleMode, ENABLE_ECHO_INPUT,
+        ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
     };
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, GetCurrentThread, WaitForSingleObject,
+    };
+    use windows_sys::Win32::System::IO::CancelSynchronousIo;
 
     /// Restores the console's input/output modes on drop, so the user's
     /// cmd.exe/PowerShell is never left in raw mode. Handles are stored as
@@ -664,28 +732,153 @@ mod platform {
         }
     }
 
-    /// Reads local input from the console. Each poll first waits on the input
-    /// handle with a timeout so an idle console never wedges an un-cancellable
-    /// read; when signalled it reads the available VT byte stream (up to
-    /// [`INPUT_CHUNK`] bytes).
+    #[derive(Default)]
+    struct WindowsReadState {
+        thread_handle: isize,
+        cancelled: bool,
+        reading: bool,
+        finished: bool,
+    }
+
+    struct WindowsReadControl {
+        state: Mutex<WindowsReadState>,
+    }
+
+    impl WindowsReadControl {
+        fn new() -> WindowsReadControl {
+            WindowsReadControl {
+                state: Mutex::new(WindowsReadState::default()),
+            }
+        }
+
+        fn prepare_poll(&self) -> Result<bool, String> {
+            let mut state = self.state.lock().map_err(|error| error.to_string())?;
+            if state.cancelled {
+                return Ok(false);
+            }
+            if state.thread_handle == 0 {
+                let mut handle: HANDLE = std::ptr::null_mut();
+                let duplicated = unsafe {
+                    DuplicateHandle(
+                        GetCurrentProcess(),
+                        GetCurrentThread(),
+                        GetCurrentProcess(),
+                        &mut handle,
+                        0,
+                        0,
+                        DUPLICATE_SAME_ACCESS,
+                    )
+                };
+                if duplicated == 0 {
+                    return Err(io::Error::last_os_error().to_string());
+                }
+                state.thread_handle = handle as isize;
+            }
+            Ok(true)
+        }
+
+        fn begin_read(&self) -> Result<bool, String> {
+            let mut state = self.state.lock().map_err(|error| error.to_string())?;
+            if state.cancelled {
+                return Ok(false);
+            }
+            state.reading = true;
+            Ok(true)
+        }
+
+        fn finish_read(&self) {
+            if let Ok(mut state) = self.state.lock() {
+                state.reading = false;
+            }
+        }
+
+        fn finish_worker(&self) {
+            if let Ok(mut state) = self.state.lock() {
+                state.reading = false;
+                state.finished = true;
+                if state.thread_handle != 0 {
+                    unsafe {
+                        CloseHandle(state.thread_handle as HANDLE);
+                    }
+                    state.thread_handle = 0;
+                }
+            }
+        }
+
+        fn interrupt(&self) -> Result<(), String> {
+            const ERROR_NOT_FOUND: i32 = 1168;
+            const RETRY_WINDOW: Duration = Duration::from_secs(1);
+
+            let deadline = Instant::now() + RETRY_WINDOW;
+            loop {
+                let mut state = self.state.lock().map_err(|error| error.to_string())?;
+                state.cancelled = true;
+                if state.finished || !state.reading {
+                    return Ok(());
+                }
+                let cancelled = unsafe { CancelSynchronousIo(state.thread_handle as HANDLE) } != 0;
+                if cancelled {
+                    return Ok(());
+                }
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(ERROR_NOT_FOUND) {
+                    return Err(error.to_string());
+                }
+                drop(state);
+                if Instant::now() >= deadline {
+                    return Err("timed out cancelling the console input read".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    struct WindowsInputInterrupt {
+        control: Arc<WindowsReadControl>,
+    }
+
+    impl InputInterrupt for WindowsInputInterrupt {
+        fn interrupt(&self) -> Result<(), String> {
+            self.control.interrupt()
+        }
+    }
+
+    /// Reads the native VT byte stream from the Windows console. The paired
+    /// [`WindowsInputInterrupt`] owns a duplicate of this worker thread's handle,
+    /// allowing teardown to cancel a synchronous `ReadConsoleW` even when a
+    /// non-character console record caused the handle to become signalled.
     struct WindowsStdinSource {
         handle: isize,
-        stdin: io::Stdin,
-        buf: Vec<u8>,
+        wide_buf: Vec<u16>,
+        utf8: super::Utf16InputBuffer,
+        control: Arc<WindowsReadControl>,
     }
 
     impl WindowsStdinSource {
-        fn new(handle: HANDLE) -> WindowsStdinSource {
+        fn new(handle: HANDLE, control: Arc<WindowsReadControl>) -> WindowsStdinSource {
             WindowsStdinSource {
                 handle: handle as isize,
-                stdin: io::stdin(),
-                buf: vec![0u8; INPUT_CHUNK],
+                wide_buf: vec![0u16; INPUT_CHUNK],
+                utf8: super::Utf16InputBuffer::default(),
+                control,
             }
+        }
+    }
+
+    impl Drop for WindowsStdinSource {
+        fn drop(&mut self) {
+            self.control.finish_worker();
         }
     }
 
     impl LocalInputSource for WindowsStdinSource {
         fn poll(&mut self, timeout: Duration) -> Result<InputPoll, String> {
+            if self.utf8.has_pending() {
+                return Ok(InputPoll::Chunk(self.utf8.take_chunk(INPUT_CHUNK)));
+            }
+            if !self.control.prepare_poll()? {
+                return Ok(InputPoll::Idle);
+            }
             let timeout_ms = timeout.as_millis().min(u32::MAX as u128) as u32;
             // SAFETY: `handle` is the process console input handle for its lifetime.
             let wait = unsafe { WaitForSingleObject(self.handle as HANDLE, timeout_ms) };
@@ -696,13 +889,33 @@ mod platform {
                 // Timed out (or an abandoned/other wake): re-check cancellation.
                 return Ok(InputPoll::Idle);
             }
-            // Signalled: read the available bytes (VT input mode → byte stream).
-            let mut lock = self.stdin.lock();
-            match lock.read(&mut self.buf) {
-                Ok(0) => Ok(InputPoll::Eof),
-                Ok(n) => Ok(InputPoll::Chunk(self.buf[..n].to_vec())),
-                Err(ref error) if error.kind() == io::ErrorKind::Interrupted => Ok(InputPoll::Idle),
-                Err(error) => Err(error.to_string()),
+            if !self.control.begin_read()? {
+                return Ok(InputPoll::Idle);
+            }
+            let mut read = 0;
+            let read_result = unsafe {
+                ReadConsoleW(
+                    self.handle as HANDLE,
+                    self.wide_buf.as_mut_ptr().cast(),
+                    self.wide_buf.len() as u32,
+                    &mut read,
+                    std::ptr::null_mut(),
+                )
+            };
+            let read_error = (read_result == 0).then(io::Error::last_os_error);
+            self.control.finish_read();
+            if let Some(error) = read_error {
+                return if error.kind() == io::ErrorKind::Interrupted {
+                    Ok(InputPoll::Idle)
+                } else {
+                    Err(error.to_string())
+                };
+            }
+            if read == 0 {
+                Ok(InputPoll::Eof)
+            } else {
+                self.utf8.push(&self.wide_buf[..read as usize]);
+                Ok(InputPoll::Chunk(self.utf8.take_chunk(INPUT_CHUNK)))
             }
         }
     }
@@ -718,6 +931,7 @@ mod platform {
                 size,
                 guard: Box::new(super::NoopModeGuard),
                 input: None,
+                input_interrupt: None,
             };
             let size = terminal_size(std::ptr::null_mut());
             if headless {
@@ -735,42 +949,42 @@ mod platform {
                 if GetConsoleMode(in_handle, &mut saved_in) == 0 {
                     return unattached(size);
                 }
-                // Best-effort VT output; attached requires it (parity with the
-                // legacy host's `out_active`). Attempt it before mutating stdin so
-                // a failure leaves no lasting change.
+                let raw_in = (saved_in
+                    & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+                    | ENABLE_VIRTUAL_TERMINAL_INPUT;
+                if SetConsoleMode(in_handle, raw_in) == 0 {
+                    return unattached(size);
+                }
+
+                // Best-effort VT output. A failure leaves the local output
+                // unattached but must not disable stdin forwarding.
                 let out_handle = GetStdHandle(STD_OUTPUT_HANDLE);
                 let mut saved_out: u32 = 0;
                 let out_active = is_valid(out_handle)
                     && GetConsoleMode(out_handle, &mut saved_out) != 0
                     && SetConsoleMode(out_handle, saved_out | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
                         != 0;
-                if !out_active {
-                    return unattached(size);
-                }
-                // Attached: enable raw console input (no line/echo/processed, VT
-                // input on) now that VT output is confirmed.
-                let raw_in = (saved_in
-                    & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
-                    | ENABLE_VIRTUAL_TERMINAL_INPUT;
-                if SetConsoleMode(in_handle, raw_in) == 0 {
-                    // Could not raw the input: undo the VT-output change and bail.
-                    SetConsoleMode(out_handle, saved_out);
-                    return unattached(size);
-                }
                 let guard = WindowsModeGuard {
                     in_handle: in_handle as isize,
                     out_handle: out_handle as isize,
                     saved_in,
                     saved_out,
                     in_active: true,
-                    out_active: true,
+                    out_active,
                 };
+                let read_control = Arc::new(WindowsReadControl::new());
                 PlatformConfiguration {
-                    attached: true,
+                    attached: out_active,
                     // Prime from the real console: the launcher's size is unix-only.
                     size: terminal_size(std::ptr::null_mut()),
                     guard: Box::new(guard),
-                    input: Some(Box::new(WindowsStdinSource::new(in_handle))),
+                    input: Some(Box::new(WindowsStdinSource::new(
+                        in_handle,
+                        read_control.clone(),
+                    ))),
+                    input_interrupt: Some(Box::new(WindowsInputInterrupt {
+                        control: read_control,
+                    })),
                 }
             }
         }
@@ -789,8 +1003,8 @@ mod tests {
 
     use super::{
         run_console_adapter, run_input_worker, setup_local_terminal_with, ConsoleCommand,
-        ConsoleWriter, InputPoll, LocalInputSource, LocalTerminalError, LocalTerminalEventSink,
-        ModeGuard, PlatformConfiguration, TerminalPlatform,
+        ConsoleWriter, InputInterrupt, InputPoll, LocalInputSource, LocalTerminalError,
+        LocalTerminalEventSink, ModeGuard, PlatformConfiguration, TerminalPlatform,
     };
     use crate::engine::effect::{Effect, OperationId};
     use crate::engine::event::SessionEvent;
@@ -1461,6 +1675,62 @@ mod tests {
         }
     }
 
+    struct BlockingInput {
+        gate: Arc<(Mutex<bool>, Condvar)>,
+        started: Arc<AtomicBool>,
+    }
+
+    impl LocalInputSource for BlockingInput {
+        fn poll(&mut self, _timeout: Duration) -> Result<InputPoll, String> {
+            self.started.store(true, Ordering::SeqCst);
+            let (released, cvar) = &*self.gate;
+            let mut released = released.lock().unwrap();
+            while !*released {
+                released = cvar.wait(released).unwrap();
+            }
+            Err("read cancelled".to_string())
+        }
+    }
+
+    struct GateInterrupt {
+        gate: Arc<(Mutex<bool>, Condvar)>,
+        called: Arc<AtomicBool>,
+    }
+
+    impl InputInterrupt for GateInterrupt {
+        fn interrupt(&self) -> Result<(), String> {
+            self.called.store(true, Ordering::SeqCst);
+            let (released, cvar) = &*self.gate;
+            *released.lock().unwrap() = true;
+            cvar.notify_all();
+            Ok(())
+        }
+    }
+
+    struct InterruptiblePlatform {
+        gate: Arc<(Mutex<bool>, Condvar)>,
+        started: Arc<AtomicBool>,
+        interrupted: Arc<AtomicBool>,
+    }
+
+    impl TerminalPlatform for InterruptiblePlatform {
+        fn configure(&self, _headless: bool) -> PlatformConfiguration {
+            PlatformConfiguration {
+                attached: true,
+                size: (80, 24),
+                guard: Box::new(super::NoopModeGuard),
+                input: Some(Box::new(BlockingInput {
+                    gate: self.gate.clone(),
+                    started: self.started.clone(),
+                })),
+                input_interrupt: Some(Box::new(GateInterrupt {
+                    gate: self.gate.clone(),
+                    called: self.interrupted.clone(),
+                })),
+            }
+        }
+    }
+
     struct FakePlatform {
         attached: bool,
         size: (u16, u16),
@@ -1498,6 +1768,24 @@ mod tests {
             })
         }
 
+        fn input_only(size: (u16, u16)) -> Arc<FakePlatform> {
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let input_dropped = Arc::new(AtomicBool::new(false));
+            let mut source =
+                ScriptedInputSource::new([InputStep::Chunk(b"z".to_vec())], input_dropped.clone());
+            let log_for_poll = log.clone();
+            source.on_first_poll = Some(Box::new(move || {
+                log_for_poll.lock().unwrap().push("polled");
+            }));
+            Arc::new(FakePlatform {
+                attached: false,
+                size,
+                log,
+                input_dropped,
+                input: Mutex::new(Some(source)),
+            })
+        }
+
         fn log(&self) -> Vec<&'static str> {
             self.log.lock().unwrap().clone()
         }
@@ -1505,12 +1793,14 @@ mod tests {
 
     impl TerminalPlatform for Arc<FakePlatform> {
         fn configure(&self, headless: bool) -> PlatformConfiguration {
-            if headless || !self.attached {
+            let has_input = self.input.lock().unwrap().is_some();
+            if headless || (!self.attached && !has_input) {
                 return PlatformConfiguration {
                     attached: false,
                     size: self.size,
                     guard: Box::new(super::NoopModeGuard),
                     input: None,
+                    input_interrupt: None,
                 };
             }
             // Mode is enabled synchronously, before any worker is spawned.
@@ -1522,12 +1812,13 @@ mod tests {
                 .take()
                 .map(|source| Box::new(source) as Box<dyn LocalInputSource>);
             PlatformConfiguration {
-                attached: true,
+                attached: self.attached,
                 size: self.size,
                 guard: Box::new(FakeModeGuard {
                     log: self.log.clone(),
                 }),
                 input,
+                input_interrupt: None,
             }
         }
     }
@@ -1602,7 +1893,92 @@ mod tests {
         assert!(!setup.attached);
         assert!(setup.input.is_none());
         assert!(platform.log().is_empty());
-        setup.shutdown().await.expect("shutdown");
+        tokio::time::timeout(ANTI_HANG, setup.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn setup_forwards_input_when_stdout_is_redirected() {
+        let platform = FakePlatform::input_only((80, 24));
+        let (event_sink, mut events, _closed) = sink();
+        let cancel = CancellationToken::new();
+        let setup = setup_local_terminal_with(platform.clone(), false, event_sink, cancel);
+
+        assert!(!setup.attached, "redirected stdout is not locally attached");
+        assert!(
+            setup.input.is_some(),
+            "interactive stdin must still forward input"
+        );
+        assert!(matches!(
+            tokio::time::timeout(ANTI_HANG, events.recv())
+                .await
+                .expect("input timed out"),
+            Some(SessionEvent::LocalInput(bytes)) if bytes == b"z"
+        ));
+
+        tokio::time::timeout(ANTI_HANG, setup.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .expect("shutdown");
+        assert!(platform.input_dropped.load(Ordering::SeqCst));
+        assert_eq!(platform.log().last().copied(), Some("restored"));
+    }
+
+    #[tokio::test]
+    async fn setup_interrupts_a_blocking_input_read_before_joining() {
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let started = Arc::new(AtomicBool::new(false));
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let platform = InterruptiblePlatform {
+            gate,
+            started: started.clone(),
+            interrupted: interrupted.clone(),
+        };
+        let (event_sink, _events, _closed) = sink();
+        let setup =
+            setup_local_terminal_with(platform, false, event_sink, CancellationToken::new());
+
+        tokio::time::timeout(ANTI_HANG, async {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("input read never started");
+
+        tokio::time::timeout(ANTI_HANG, setup.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .expect("cancelled input read should exit cleanly");
+        assert!(interrupted.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn windows_utf16_input_preserves_non_ascii_and_split_surrogates() {
+        use super::Utf16InputBuffer;
+
+        let mut input = Utf16InputBuffer::default();
+        input.push(&['é' as u16, 0xD83D]);
+        assert_eq!(input.take_chunk(4096), "é".as_bytes());
+
+        input.push(&[0xDE00]);
+        assert_eq!(input.take_chunk(4096), "😀".as_bytes());
+    }
+
+    #[test]
+    fn windows_utf16_input_caps_forwarded_chunks_without_losing_bytes() {
+        use super::Utf16InputBuffer;
+
+        let mut input = Utf16InputBuffer::default();
+        input.push(&vec!['é' as u16; 3_000]);
+
+        let first = input.take_chunk(4096);
+        let second = input.take_chunk(4096);
+        assert_eq!(first.len(), 4096);
+        assert_eq!(second.len(), 1904);
+        assert_eq!([first, second].concat(), "é".repeat(3_000).as_bytes());
     }
 
     // Step 9 (platform smoke): the real platform is unattached under `cargo test`
