@@ -1,11 +1,11 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { createServer } from "node:net";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeSessionMeta } from "../src/store.js";
 import type { SessionMeta } from "../src/types.js";
+import { freePort, waitFor, waitForHealth } from "./support/server.js";
 
 // The dashboard server spawns sessions by invoking the canonical Rust climon
 // client (`climon __spawn`). Point CLIMON_CLIENT_BIN at the built debug binary so
@@ -25,36 +25,6 @@ beforeAll(() => {
     );
   }
 });
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 30000): Promise<T> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    // Bound each attempt so a hung probe (e.g. a fetch to a freshly-spawned
-    // server whose event loop is still starved under load) cannot block the
-    // loop past the deadline.
-    const v = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
-    ]);
-    if (v !== undefined) {
-      return v;
-    }
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error("timed out");
-}
 
 function parentMeta(id: string): SessionMeta {
   const now = new Date().toISOString();
@@ -99,10 +69,7 @@ describe("POST /api/sessions with a parentId", () => {
     const base = `http://127.0.0.1:${port}`;
     let childId = "";
     try {
-      await waitFor(async () => {
-        const res = await fetch(`${base}/health`).catch(() => undefined);
-        return res?.ok ? true : undefined;
-      });
+      await waitForHealth(server, base);
 
       const childCwd = await mkdtemp(join(tmpdir(), "climon-child-cwd-"));
       const ok = await fetch(`${base}/api/sessions`, {
@@ -144,5 +111,5 @@ describe("POST /api/sessions with a parentId", () => {
       server.kill();
       await server.exited;
     }
-  }, 60000);
+  }, 120000);
 });

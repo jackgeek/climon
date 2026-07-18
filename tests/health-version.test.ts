@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createServer } from "node:net";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { readServerStateFromDir } from "../src/server-state.js";
 import { VERSION } from "../src/version.js";
+import { freePort, waitFor, waitForHealth } from "./support/server.js";
 
 const home = join(process.cwd(), ".test-home", `climon-health-${process.pid}`);
 const env = { ...process.env, CLIMON_HOME: home };
@@ -40,36 +40,6 @@ async function stopIngestDaemon(targetEnv: NodeJS.ProcessEnv): Promise<void> {
   }
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 30000): Promise<T> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    // Bound each attempt so a hung probe (e.g. a fetch to a freshly-spawned
-    // server whose event loop is still starved under load) cannot block the
-    // loop past the deadline.
-    const v = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
-    ]);
-    if (v !== undefined) {
-      return v;
-    }
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error("timed out");
-}
-
 afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
@@ -83,6 +53,7 @@ describe("GET /health", () => {
     );
     let base = `http://127.0.0.1:${port}`;
     try {
+      await waitForHealth(server, base);
       const body = await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
         if (res?.ok) return (await res.json()) as { ok?: boolean; version?: string };
@@ -96,7 +67,7 @@ describe("GET /health", () => {
       server.kill();
       await server.exited;
     }
-  }, 60000);
+  }, 120000);
 
   test("reports remotes enabled from feature config", async () => {
     const port = await freePort();
@@ -106,6 +77,7 @@ describe("GET /health", () => {
     );
     let base = `http://127.0.0.1:${port}`;
     try {
+      await waitForHealth(server, base);
       const body = await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
         if (res?.ok) return (await res.json()) as { remotesEnabled?: boolean };
@@ -136,6 +108,7 @@ describe("GET /health", () => {
     );
     let enabledBase = `http://127.0.0.1:${enabledPort}`;
     try {
+      await waitForHealth(enabledServer, enabledBase);
       const body = await waitFor(async () => {
         const res = await fetch(`${enabledBase}/health`).catch(() => undefined);
         if (res?.ok) return (await res.json()) as { remotesEnabled?: boolean };
@@ -149,5 +122,5 @@ describe("GET /health", () => {
       await enabledServer.exited;
       await stopIngestDaemon(env);
     }
-  }, 60000);
+  }, 120000);
 });

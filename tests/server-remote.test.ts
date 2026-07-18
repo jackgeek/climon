@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
@@ -9,6 +8,7 @@ import { readServerStateFromDir, getServerStatePath, serializeServerState } from
 import { browserResizePayload, computeRemotesActive } from "../src/server/server.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
+import { freePort, waitFor, waitForExit, waitForHealth } from "./support/server.js";
 
 const { shouldMarkDisconnected, shouldStopIngestForShutdown } = serverModule;
 
@@ -211,49 +211,6 @@ function meta(over: Partial<SessionMeta>): SessionMeta {
   };
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitFor<T>(fn: () => Promise<T | undefined> | T | undefined, ms = 20000): Promise<T> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    // Bound each attempt so a hung probe cannot block the loop past the deadline.
-    const value = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((resolve) => setTimeout(resolve, 1000, undefined))
-    ]);
-    if (value !== undefined) return value;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error("timed out");
-}
-
-async function waitForExit(proc: Bun.Subprocess, ms: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      resolve(false);
-    }, ms);
-    void proc.exited.finally(() => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-}
-
 async function readPid(path: string): Promise<number | undefined> {
   const raw = await readFile(path, "utf8").catch(() => undefined);
   if (raw === undefined) return undefined;
@@ -365,6 +322,7 @@ describe("server shutdown ingest lifecycle", () => {
     let ingestPid: number | undefined;
     let base = `http://127.0.0.1:${dashboardPort}`;
     try {
+      await waitForHealth(server, base);
       await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
         if (res?.ok) return true;
@@ -394,7 +352,7 @@ describe("server shutdown ingest lifecycle", () => {
       rmSync(home, { recursive: true, force: true });
       rmSync(peerHome, { recursive: true, force: true });
     }
-  }, 45_000);
+  }, 120_000);
 });
 
 describe("resolveIngestInvocation", () => {

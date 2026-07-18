@@ -497,15 +497,19 @@ the full release and signing pipeline.
 
 ## Contributing
 
-Day-to-day work goes through the `dev` branch:
+Day-to-day work goes through the `dev` branch under a **gitflow** model with
+**tag-driven releases**:
 
-- **Open pull requests against `dev`, never `main`.** Pushing to `main` triggers
-  the [Release](.github/workflows/release.yml) workflow, which bumps the version,
-  tags, and publishes artifacts.
-- **`dev` is merged into `main` only when you deliberately want to ship a
-  release.** Docs-only pushes to `main` skip the release automatically. To land a
-  non-docs `main` update without releasing, include `[skip release]` in the head
-  (merge) commit message.
+- **Open pull requests against `dev`, never `main`.** `dev` is the integration
+  branch; feature/fix PRs are squash-merged into it.
+- **Releases ship only when a `vX.Y.Z` tag is pushed.** Merging `dev` → `main`
+  (with a real merge commit) no longer cuts a release on its own — the tag is the
+  single explicit ship signal that runs the
+  [Release](.github/workflows/release.yml) workflow.
+- **Prepare a release on a `release/*` branch** (or `hotfix/*` off `main`), bump
+  the version + CLI fixtures there with `bun run release`, merge to `main`, then
+  tag. See the full runbook in
+  [docs/cutting-a-release.md](docs/cutting-a-release.md).
 
 Build and test the client with `cargo build` / `cargo test` / `cargo clippy` in
 `rust/`; test the server with `bun test tests`. New features
