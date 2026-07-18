@@ -170,11 +170,15 @@ differ per cell call it out.
 - **Preconditions:** Built client; a running dashboard; a browser and (optionally)
   the installed PWA.
 - **Config-matrix cell:** all (attached local terminal + browser/PWA); local
-  terminal-size behaviour is authoritative on macOS/Linux (on Windows the
-  daemon's local terminal size is a fixed stub, so local-size-dependent PTY
-  sizing is not exercised there — Space reclaim + repaint still are)
-- **Platforms:** macOS, Linux (local-size authoritative); Windows (Space reclaim
-  + repaint)
+  terminal-size behaviour is authoritative on **every** platform, Windows
+  included. An attached Windows host reads the *real* console size — the visible
+  window rectangle from `GetConsoleScreenBufferInfo` (`climon_pty::terminal_size`,
+  used by `local_terminal.rs`) — and a 200 ms poller (`signals.rs`) emits
+  `LocalResized` on each console-size change, the same local-size → PTY path
+  macOS/Linux drive via the pty size and `SIGWINCH`. It is **not** a fixed stub,
+  so local-size-dependent PTY sizing is exercised on Windows too.
+- **Platforms:** macOS, Linux, Windows (local-size authoritative on all three;
+  Space reclaim + repaint on all three)
 
 **Steps:**
 1. Start an attached actor session: `CLIMON_SESSION_ENGINE=actor climon shell`.
@@ -189,6 +193,13 @@ differ per cell call it out.
    phone-sized viewer) and take control there; confirm the newest take-control
    wins and the previous controller becomes displaced.
 5. In the local terminal, press **Space** to reclaim control.
+6. **Local-size → PTY (all platforms, Windows included):** with the local
+   terminal back in control (no browser/PWA controller), resize the local
+   terminal/console window and confirm the shared PTY grid follows the new local
+   size — a full-screen app reflows to it. On Windows this is real, not a stub:
+   the attached host reads the console viewport size and a 200 ms poller emits
+   `LocalResized` on each change, the same local-size → PTY path macOS/Linux
+   drive via the pty size and `SIGWINCH`.
 
 **Expected result:**
 - The daemon tracks exactly one controller and the shared PTY grid always equals
@@ -198,7 +209,10 @@ differ per cell call it out.
   to the local terminal, and requests a fresh replay so the screen repaints
   immediately (never left blank on an idle screen); Space is take-control input
   only while displaced, and ordinary shell input once the local terminal
-  controls the grid.
+  controls the grid. This holds on **every** platform: the local controller's
+  size is the real terminal size on Windows as well (console viewport read +
+  200 ms resize poller), not a fixed stub, so local-size-driven PTY sizing is
+  exercised everywhere.
 
 **Result-tracking row:**
 
@@ -302,11 +316,28 @@ differ per cell call it out.
 **Steps:**
 1. Start an actor session: `CLIMON_SESSION_ENGINE=actor climon shell`, open in the
    dashboard.
-2. Set a window title: `printf '\033]0;dar-title\007'` (and try the `OSC 2` form
-   `printf '\033]2;dar-title-2\007'`).
-3. Emit determinate progress: `printf '\033]9;4;1;42\007'`, then clear it with
-   `printf '\033]9;4;0;0\007'`. Optionally try the non-determinate states:
-   `3` (indeterminate), `2` (error), `4` (warning).
+2. Set a window title. **Unix:** `printf '\033]0;dar-title\007'` (and the `OSC 2`
+   form `printf '\033]2;dar-title-2\007'`). **Windows (PowerShell)** — from a
+   PowerShell prompt via `climon run`; single-quote the `-Command` payload so the
+   *outer* PowerShell passes it literally to `climon run` and the *inner*
+   PowerShell expands `$e`/`$b` (ESC `[char]27`, BEL `[char]7`):
+   ```powershell
+   climon run powershell -NoProfile -Command '$e=[char]27;$b=[char]7;[Console]::Write("$e]0;dar-title$b")'
+   climon run powershell -NoProfile -Command '$e=[char]27;$b=[char]7;[Console]::Write("$e]2;dar-title-2$b")'
+   ```
+   (When the attached `climon shell` session is itself PowerShell, run the inner
+   statement at its prompt: `$e=[char]27; $b=[char]7; [Console]::Write("$e]0;dar-title$b")`.)
+3. Emit determinate progress. **Unix:** `printf '\033]9;4;1;42\007'`, then clear
+   it with `printf '\033]9;4;0;0\007'`. **Windows (PowerShell)** via `climon run`
+   (append `;Start-Sleep 30` to keep the session alive long enough to observe on
+   the dashboard):
+   ```powershell
+   climon run powershell -NoProfile -Command '$e=[char]27;$b=[char]7;[Console]::Write("$e]9;4;1;42$b")'
+   climon run powershell -NoProfile -Command '$e=[char]27;$b=[char]7;[Console]::Write("$e]9;4;0;0$b")'
+   ```
+   Optionally try the non-determinate states: `3` (indeterminate), `2` (error),
+   `4` (warning) — e.g. `printf '\033]9;4;3;0\007'` /
+   `[Console]::Write("$e]9;4;3;0$b")`.
 4. Observe the dashboard subtitle and the per-session progress indicator, and
    inspect the persisted metadata `sessions/<id>.json` (`terminalTitle`,
    `progress`).
@@ -420,37 +451,74 @@ differ per cell call it out.
 - **Feature / phase:** Daemon actor rewrite — signals/resize adapter
   (`adapters/signals.rs`), child reap and terminal restore on teardown, Windows
   console-input cancellation
-- **Preconditions:** An actor session; know the daemon PID — the `daemonPid`
-  field in the session metadata `$CLIMON_HOME/sessions/<id>.json` (`climon ls`
-  does not print the PID).
-- **Config-matrix cell:** all (signal delivery is Unix-specific; process
+- **Preconditions:** An actor session and its **session id** (printed by
+  `climon run --headless`, or shown by `climon ls`). Signals must target the
+  detached **daemon host** — the `climon __session <id>` process that runs the
+  signal loop — **not** the metadata `daemonPid`. `daemonPid` is the PTY *child*
+  (the monitored command, e.g. `sleep 300`), a direct child of the host, not the
+  host itself; signaling it would kill the child and bypass the signal loop
+  entirely. The host PID is not stored in metadata; resolve it from the process
+  command line each time you need it (steps below). `climon ls` does not print it.
+- **Config-matrix cell:** all (signal delivery is Unix-specific; forced process
   termination and console-resize polling are called out per cell)
-- **Platforms:** macOS, Linux (signals); Windows (resize poller + termination)
+- **Platforms:** macOS, Linux (SIGINT/SIGTERM/SIGWINCH → graceful shutdown);
+  Windows (forced host termination + resize poller)
 
 **Steps:**
-1. **Unix — SIGINT/SIGTERM:** start a headless actor session
-   `CLIMON_SESSION_ENGINE=actor climon run --headless sleep 300`; read its
-   `daemonPid` from `$CLIMON_HOME/sessions/<id>.json`; send `kill -INT <pid>`
-   (and, in a second run, `kill -TERM <pid>`). Optionally send the same signal
-   twice to confirm idempotency.
+1. **Unix — SIGINT/SIGTERM (signal the host; re-resolve before each signal):**
+   start a headless actor session
+   `CLIMON_SESSION_ENGINE=actor climon run --headless sleep 300` and note the
+   printed `<id>`. **Immediately before each signal**, re-resolve the host PID
+   from its command line so you never reuse a stale or OS-recycled PID —
+   `host=$(pgrep -f "__session <id>")` (`pgrep` excludes itself; the session id
+   is unique, and the child runs `sleep`, so this matches only the host). Verify
+   it is a single climon host — `ps -p "$host" -o pid=,args=` — then signal only
+   that PID: `kill -INT "$host"`. Repeat the resolve-then-signal for `kill -TERM
+   "$host"` in a second run, and optionally re-resolve and send the same signal
+   twice to confirm idempotency. Do **not** `kill` `daemonPid`.
 2. **Unix — SIGWINCH:** with an attached actor session
    (`CLIMON_SESSION_ENGINE=actor climon shell`) running a full-screen app, resize
    the terminal window and confirm the app reflows to the new size.
-3. **Windows — termination:** start an actor session, then terminate the daemon
-   with `climon kill <id>` (or `taskkill /PID <pid>`). Resize the console during a
-   run and confirm redraws only happen when the size actually changes.
+3. **Windows — forced host termination + resize poller:** start an actor session
+   and note its `<id>`. Force-terminate the **host** (not `daemonPid`). Re-resolve
+   it from the command line immediately before stopping it, verify a single
+   match, then terminate only that process — a real `TerminateProcess`, which is
+   forced, not graceful:
+   ```powershell
+   $p = Get-CimInstance Win32_Process -Filter "Name = 'climon.exe'" |
+        Where-Object { $_.CommandLine -like '*__session <id>*' }
+   $p | Select-Object ProcessId, CommandLine   # verify exactly one host
+   Stop-Process -Id $p.ProcessId -Force        # forced TerminateProcess — no cleanup
+   ```
+   Separately, while a session runs, resize the console and confirm redraws only
+   happen when the size actually changes.
 
 **Expected result:**
-- On Unix the signal loop registers `SIGTERM`/`SIGINT`/`SIGWINCH`:
-  `SIGTERM`/`SIGINT` emit `ShutdownRequested` (idempotent; they never kill the
-  PTY directly) which drives the ordered finalization, and `SIGWINCH` reads the
-  current local size and emits `LocalResized` so the grid/app reflows. On Windows
-  (no `SIGWINCH`) a 200 ms poller emits `LocalResized` only when the console size
-  changes, and terminating the daemon tears it down cleanly. Either way the
-  child-owner loop reaps the child, the cancellable input worker interrupts a
-  blocked read (on Windows via `CancelSynchronousIo` on the exact `ReadConsoleW`
-  thread) so teardown stays bounded, and the session is finalized — terminal
-  restored, socket cleaned, and a terminal status + final scrollback persisted.
+- **Unix (SIGINT/SIGTERM) — graceful.** The signal loop registers
+  `SIGTERM`/`SIGINT`/`SIGWINCH` for the **host** process. `SIGTERM`/`SIGINT` emit
+  `ShutdownRequested` (idempotent; they never kill the PTY child directly), which
+  drives the ordered finalization: the child-owner loop reaps the child, the
+  adapters and cancellable input worker are cancelled and joined within the
+  bounded deadline, the local terminal is restored, the socket is cleaned, and a
+  terminal status + final scrollback are persisted. `SIGWINCH` reads the current
+  local size and emits `LocalResized` so the grid/app reflows. Targeting the host
+  is what delivers the signal to the loop — signaling `daemonPid` would instead
+  kill the monitored child and fall through the normal child-exit path (DAR-07).
+- **Windows — forced, not graceful.** The actor engine installs **no** Windows
+  console-control (SIGTERM-equivalent) shutdown handler, and the detached host has
+  no attached console, so `Stop-Process`/`TerminateProcess` kills it **abruptly**
+  and the ordered finalization does **not** run. Do **not** expect graceful
+  metadata, finalization, or socket cleanup from a forced kill: the metadata can
+  be left `running` (stale), the socket/port is left until reclaimed, and no final
+  scrollback is flushed by a shutdown path. The dead daemon is instead surfaced by
+  liveness — its closed socket fails the dashboard's probe, so the dashboard marks
+  the session disconnected — and `climon kill <id>` reconciles the on-disk
+  metadata (patches it to `failed` and removes the record), rather than the daemon
+  finalizing itself. The graceful bounded teardown — child reap, `CancelSynchronousIo`
+  on the exact `ReadConsoleW` thread, socket cleanup, and finalization — **is**
+  exercised on Windows, but by the normal child-exit path (DAR-07), not by a
+  forced host kill. The one guaranteed in-process Windows behaviour here is the
+  200 ms resize poller: it emits `LocalResized` only when the console size changes.
 
 **Result-tracking row:**
 
