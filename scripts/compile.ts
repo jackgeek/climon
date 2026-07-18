@@ -34,6 +34,8 @@ import {
 import { resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { zipSync, unzipSync, type ZipOptions } from "fflate";
+import { EMBEDDED_DEFINE_ARGS } from "./server-build.js";
+export { EMBEDDED_DEFINE_ARGS };
 
 const projectRoot = dirname(dirname(import.meta.path));
 const rustDir = resolve(projectRoot, "rust");
@@ -48,17 +50,6 @@ const INSTALLER_SENTINEL =
   "climon self-install sentinel — its presence next to the executable triggers the native installer.\n";
 
 const assembleMode = process.env.CLIMON_ASSEMBLE === "1";
-
-/**
- * `bun build` flags that activate the embedded-asset code path in
- * `src/server/assets.ts` (the `__CLIMON_EMBEDDED__` define). EVERY build that
- * ships a self-contained server — the compiled `climon-server` binary — must
- * pass these, otherwise the server falls back to an on-the-fly source build that
- * does not exist on an end user's machine and the dashboard assets 404. Exported
- * so the server smoke test compiles the binary the same way and can never
- * silently desync from the real pipeline.
- */
-export const EMBEDDED_DEFINE_ARGS: string[] = ["--define", "__CLIMON_EMBEDDED__=true"];
 
 /**
  * `bun build` flags that bake the Application Insights connection string into the
