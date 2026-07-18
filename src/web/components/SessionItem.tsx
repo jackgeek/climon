@@ -428,7 +428,7 @@ export function SessionItem({
           Open terminal
         </Button>
       )}
-      <div className={mergeClasses(styles.meta, compact && styles.compactMeta)}>
+      <div className={mergeClasses("climon-meta", styles.meta, compact && styles.compactMeta)}>
         <StatusBadge status={session.status} compact={compact} showTitle={!compact} />
         {session.progress && (
           <SessionProgressIcon progress={session.progress} noMotion={stateIconNoMotion} styles={styles} />
