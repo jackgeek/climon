@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use climon_proto::frame::{encode_json_frame, DecodedFrame, FrameType, ResizePayload, SurfaceKind};
 use tokio::sync::mpsc;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -51,12 +52,14 @@ impl TransitionContextSource for StaticContext {
 
 /// Records every applied event's payload-free [`EventKind`] and, once a
 /// configured count is reached, cancels the coordinator so a test can run it for
-/// exactly N applied events.
+/// exactly N applied events. Also signals each time the coordinator parks on the
+/// arbitration select, so a test can synchronize on the post-startup park.
 #[derive(Clone)]
 pub(crate) struct RecordingObserver {
     kinds: Arc<Mutex<Vec<EventKind>>>,
     stop_after: Arc<AtomicUsize>,
     cancel: CancellationToken,
+    parked: Arc<Notify>,
 }
 
 impl AppliedEventObserver for RecordingObserver {
@@ -66,6 +69,10 @@ impl AppliedEventObserver for RecordingObserver {
         if kinds.len() >= self.stop_after.load(Ordering::Relaxed) {
             self.cancel.cancel();
         }
+    }
+
+    fn on_park(&mut self) {
+        self.parked.notify_one();
     }
 }
 
@@ -95,6 +102,7 @@ pub(crate) struct CoordinatorFixture {
     kinds: Arc<Mutex<Vec<EventKind>>>,
     stop_after: Arc<AtomicUsize>,
     cancel: CancellationToken,
+    parked: Arc<Notify>,
     handle: Option<JoinHandle<Result<(), CoordinatorError>>>,
 }
 
@@ -124,10 +132,12 @@ impl CoordinatorFixture {
         let kinds = Arc::new(Mutex::new(Vec::new()));
         let stop_after = Arc::new(AtomicUsize::new(usize::MAX));
         let cancel = CancellationToken::new();
+        let parked = Arc::new(Notify::new());
         let observer = RecordingObserver {
             kinds: kinds.clone(),
             stop_after: stop_after.clone(),
             cancel: cancel.clone(),
+            parked: parked.clone(),
         };
         let context = StaticContext {
             now_ms: 0,
@@ -150,6 +160,7 @@ impl CoordinatorFixture {
             kinds,
             stop_after,
             cancel,
+            parked,
             handle: None,
         }
     }
@@ -207,6 +218,15 @@ impl CoordinatorFixture {
         );
         let cancel = self.cancel.clone();
         self.handle = Some(tokio::spawn(coordinator.run(cancel)));
+    }
+
+    /// Spawns the coordinator and yields until it has parked on the arbitration
+    /// select with both lanes drained (the initial post-startup park). Lets a
+    /// test arrange simultaneous lane readiness against a known-parked
+    /// coordinator so the biased select is exercised deterministically.
+    pub(crate) async fn spawn_until_parked(&mut self) {
+        self.spawn();
+        self.parked.notified().await;
     }
 
     /// Spawns and runs the coordinator until it has applied exactly `n` events
