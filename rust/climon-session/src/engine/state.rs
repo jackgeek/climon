@@ -1543,6 +1543,49 @@ mod tests {
     }
 
     #[test]
+    fn attached_displaced_exit_writes_shared_local_restore_to_console() {
+        use std::collections::HashMap;
+
+        use crate::domain::local_view::local_exit_restore_bytes;
+        use crate::test_support::trace::ObservableTrace;
+
+        // The local terminal is attached at the host's 80x24; a dashboard then
+        // seizes a larger grid, displacing (suppressing) the local terminal.
+        let mut harness = ActorHarness::attached();
+        harness.connect(2);
+        harness.resize(2, "dash", SurfaceKind::Dashboard, 120, 40);
+        harness.take_control(2);
+        assert!(
+            harness.state().local_view.output_suppressed(),
+            "dashboard control displaces the local terminal"
+        );
+
+        // The command exits while the local terminal is still displaced.
+        // Finalization pauses on the terminal-status barrier; resolving it drives
+        // the ordered exit-frame send and then the local-screen restore write.
+        let started = harness.pty_exited(0);
+        let finished = harness.metadata_completed(barrier_metadata_op(&started));
+
+        let mut trace = ObservableTrace::default();
+        for effect in &finished {
+            trace.record_effect(effect);
+        }
+
+        // The bytes the actor writes to the local console equal the shared
+        // `local_exit_restore_bytes` the legacy host writes at exit for the same
+        // displaced local terminal (an empty scrollback rebuilt at the host size,
+        // with no mouse modes to reassert), proving byte-for-byte parity on the
+        // displaced-exit local-restore path.
+        let expected = local_exit_restore_bytes(true, true, &[], 80, 24, &HashMap::new())
+            .expect("a displaced local terminal restores at exit");
+        assert_eq!(
+            trace.console_bytes(),
+            expected,
+            "actor's displaced-exit local restore matches the legacy shared bytes"
+        );
+    }
+
+    #[test]
     fn shutdown_kills_pty_once_and_never_while_finalizing() {
         let mut harness = ActorHarness::headless();
         let first = harness.shutdown();
