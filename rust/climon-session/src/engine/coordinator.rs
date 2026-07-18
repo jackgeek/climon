@@ -168,6 +168,30 @@ impl PtyEventSender {
             .await
             .map_err(|_| LaneSendError::Closed(kind))
     }
+
+    /// Blocking-thread counterpart to [`send`](PtyEventSender::send), for the
+    /// pty adapter's reader and lifecycle workers which run off the Tokio
+    /// runtime (a `spawn_blocking` task or a scoped std reader thread). It
+    /// applies the identical lane validation — a wrong-lane event is rejected
+    /// with [`LaneSendError::WrongLane`] and never enqueued — and otherwise
+    /// blocks the current thread until the event is accepted (bounded
+    /// backpressure) or the lane has closed.
+    ///
+    /// # Panics
+    /// Panics if called from within an async task (Tokio forbids blocking a
+    /// runtime worker); callers must invoke it only from a blocking thread.
+    pub(crate) fn blocking_send(&self, event: SessionEvent) -> Result<(), LaneSendError> {
+        if event.lane() != EventLane::Pty {
+            return Err(LaneSendError::WrongLane {
+                lane: EventLane::Pty,
+                kind: event.kind(),
+            });
+        }
+        let kind = event.kind();
+        self.0
+            .blocking_send(event)
+            .map_err(|_| LaneSendError::Closed(kind))
+    }
 }
 
 /// Sends every non-pty event to the coordinator's control lane. Rejects a pty
@@ -821,6 +845,42 @@ mod tests {
             .send(SessionEvent::ShutdownRequested)
             .await
             .is_ok());
+    }
+
+    // Test 3b: `PtyEventSender::blocking_send` is the blocking-thread delivery
+    // path the pty adapter's reader/lifecycle workers use (they run off the
+    // Tokio workers). It preserves the exact lane validation of the async `send`
+    // — a wrong-lane event is rejected without enqueuing — and otherwise
+    // delivers to the pty lane with the same bounded backpressure. It blocks the
+    // calling thread, so the test drives it through `spawn_blocking`.
+    #[tokio::test]
+    async fn pty_blocking_send_validates_lane_and_delivers() {
+        let (pty_tx, _control_tx, mut lanes) = event_lanes();
+
+        let reject_tx = pty_tx.clone();
+        let err = tokio::task::spawn_blocking(move || {
+            reject_tx.blocking_send(SessionEvent::ShutdownRequested)
+        })
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(
+            err,
+            LaneSendError::WrongLane {
+                lane: EventLane::Pty,
+                kind: EventKind::ShutdownRequested,
+            }
+        );
+
+        let ok_tx = pty_tx.clone();
+        tokio::task::spawn_blocking(move || ok_tx.blocking_send(SessionEvent::PtyExited(7)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            lanes.pty.recv().await,
+            Some(SessionEvent::PtyExited(7))
+        ));
     }
 
     // Test 4a: every effect variant is categorized to exactly one route.

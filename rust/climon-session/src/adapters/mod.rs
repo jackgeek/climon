@@ -11,3 +11,4 @@
 //! [`JoinHandle`]: tokio::task::JoinHandle
 
 pub(crate) mod metadata;
+pub(crate) mod pty;

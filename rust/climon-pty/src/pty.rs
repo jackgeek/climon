@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
 use crate::command::{build_spawn_argv, find_setsid, next_size};
 use crate::error::{PtyError, PtyResult};
@@ -202,6 +202,156 @@ impl Pty {
     pub fn kill(&mut self) -> PtyResult<()> {
         self.child.kill().map_err(backend)
     }
+
+    /// Consumes the PTY, splitting it into the exclusively-owned handles a
+    /// single session adapter drives: the one cloned [`reader`], the one taken
+    /// [`writer`], a [`Weak`] [`resizer`], the child [`waiter`] that owns the
+    /// last strong master reference, and an independently cloned [`killer`].
+    ///
+    /// This is the idiomatic, move-based counterpart to cloning a reader,
+    /// taking a writer, and sharing `&Pty`: after `into_parts` there is exactly
+    /// one owner of each capability, so no `Arc<Mutex<Pty>>` is needed to drive
+    /// the session.
+    ///
+    /// ## Ownership of the master (Windows load-bearing)
+    /// The returned [`PtyWaiter`] owns the last strong reference to the PTY
+    /// master; the [`PtyResizer`] holds only a [`Weak`], and the [`reader`],
+    /// [`writer`], and [`killer`] hold none. Dropping the waiter (which its
+    /// consuming [`wait`](PtyWaiter::wait) does immediately after the child
+    /// exits) therefore closes the master — on Windows this closes the ConPTY
+    /// pseudoconsole, so a cloned reader finally reaches EOF. The [`killer`] is
+    /// cloned via [`ChildKiller::clone_killer`], so it can terminate the child
+    /// from another thread while the waiter is blocked in `wait`, without a
+    /// shared mutex.
+    ///
+    /// [`reader`]: PtyParts::reader
+    /// [`writer`]: PtyParts::writer
+    /// [`resizer`]: PtyParts::resizer
+    /// [`waiter`]: PtyParts::waiter
+    /// [`killer`]: PtyParts::killer
+    /// [`wait`]: PtyWaiter::wait
+    pub fn into_parts(self) -> PtyResult<PtyParts> {
+        let Pty {
+            master,
+            child,
+            applied_size,
+            pid,
+        } = self;
+
+        // Obtain the single reader and writer once, up front.
+        let reader = master.lock().unwrap().try_clone_reader().map_err(backend)?;
+        let writer = master.lock().unwrap().take_writer().map_err(backend)?;
+
+        // The resizer keeps only a `Weak` to the master, so it never extends the
+        // pseudoconsole's lifetime.
+        let resizer = PtyResizer {
+            master: Arc::downgrade(&master),
+            applied_size,
+            pid,
+        };
+
+        // Clone an independent killer *before* moving the child into the waiter,
+        // so kill and wait can run on separate threads without a shared mutex.
+        let killer = PtyKiller {
+            inner: child.clone_killer(),
+        };
+
+        // The waiter owns the child and the final strong master reference.
+        let waiter = PtyWaiter { child, master };
+
+        Ok(PtyParts {
+            pid,
+            reader,
+            writer,
+            resizer,
+            waiter,
+            killer,
+        })
+    }
+}
+
+/// The exclusively-owned handles produced by [`Pty::into_parts`].
+///
+/// One adapter owns the whole `PtyParts`; the split lets it drive input,
+/// resize, wait, kill, and output on independent threads without wrapping the
+/// PTY in a shared mutex. Every field is `Send`, so ownership can move onto a
+/// blocking worker thread.
+///
+/// The [`waiter`](PtyParts::waiter) holds the last strong master reference; the
+/// [`resizer`](PtyParts::resizer) holds a [`Weak`], and the
+/// [`reader`](PtyParts::reader), [`writer`](PtyParts::writer), and
+/// [`killer`](PtyParts::killer) hold none — see [`Pty::into_parts`].
+pub struct PtyParts {
+    /// The child process id, if known.
+    pub pid: Option<u32>,
+    /// The single blocking reader over the PTY's output. On Windows it only
+    /// EOFs once the [`waiter`](PtyParts::waiter) drops the master.
+    pub reader: Box<dyn Read + Send>,
+    /// The single writer to the PTY's input.
+    pub writer: Box<dyn Write + Send>,
+    /// A cloneable [`Weak`] resize handle that never keeps the master alive.
+    pub resizer: PtyResizer,
+    /// Owns the child and the last strong master reference; its consuming
+    /// [`wait`](PtyWaiter::wait) blocks for the exit code then drops the master.
+    pub waiter: PtyWaiter,
+    /// An independently cloned killer, usable concurrently with the waiter.
+    pub killer: PtyKiller,
+}
+
+/// Owns a spawned child and the last strong reference to its PTY master.
+///
+/// [`wait`](PtyWaiter::wait) consumes the waiter: it blocks for the child's exit
+/// code and then drops the master **before returning**, on both success and
+/// failure. On Windows that master drop closes the ConPTY pseudoconsole, which
+/// is the only thing that lets a previously cloned reader reach EOF; on Unix the
+/// reader already EOFs from the slave drop at spawn, so the drop is a harmless
+/// no-op there.
+pub struct PtyWaiter {
+    child: Box<dyn Child + Send + Sync>,
+    master: SharedMaster,
+}
+
+impl PtyWaiter {
+    /// The child process id, if known.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.process_id()
+    }
+
+    /// Blocks until the child exits and returns its exit code, then releases the
+    /// child and the last strong master reference.
+    ///
+    /// The master is dropped **before this returns**, on both the success and
+    /// the error path, so a Windows ConPTY cloned reader can EOF as soon as the
+    /// wait resolves regardless of outcome.
+    pub fn wait(self) -> PtyResult<i32> {
+        let PtyWaiter { mut child, master } = self;
+        let outcome = child.wait();
+        // Release the child and the final strong master reference now — before
+        // returning and on both success and failure — so the pseudoconsole
+        // closes and a cloned reader EOFs (Windows ConPTY; no-op on Unix).
+        drop(child);
+        drop(master);
+        outcome
+            .map(|status| status.exit_code() as i32)
+            .map_err(backend)
+    }
+}
+
+/// An independently cloned child killer obtained from [`Pty::into_parts`] via
+/// [`ChildKiller::clone_killer`].
+///
+/// It holds no reference to the master, so killing never keeps the
+/// pseudoconsole alive, and it can run on a different thread from the
+/// [`PtyWaiter`] without a shared mutex.
+pub struct PtyKiller {
+    inner: Box<dyn ChildKiller + Send + Sync>,
+}
+
+impl PtyKiller {
+    /// Terminates the child process.
+    pub fn kill(&mut self) -> PtyResult<()> {
+        self.inner.kill().map_err(backend)
+    }
 }
 
 /// A cloneable resize handle for a [`Pty`], usable from any thread.
@@ -307,4 +457,28 @@ fn apply_env(cmd: &mut CommandBuilder, env: Option<&HashMap<String, String>>) {
 
 fn backend<E: std::fmt::Display>(e: E) -> PtyError {
     PtyError::Backend(e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`Pty::into_parts`] hands a single owner every handle it needs to drive
+    /// the PTY, and each part is `Send` so one adapter task (or its scoped
+    /// worker threads) can own them across threads. The ownership split is:
+    ///
+    /// - `reader`/`writer`: the one cloned reader and taken writer (independent
+    ///   OS handles).
+    /// - `resizer`: a `Weak` resize handle that never keeps the master alive.
+    /// - `waiter`: owns the child *and* the last strong master; its consuming
+    ///   `wait` drops that master, letting a Windows ConPTY cloned reader EOF.
+    /// - `killer`: an independently cloned killer, so `wait` and `kill` run
+    ///   concurrently without a shared mutex.
+    #[test]
+    fn into_parts_exposes_single_owner_handles() {
+        fn assert_send<T: Send>() {}
+        assert_send::<PtyParts>();
+        assert_send::<PtyWaiter>();
+        assert_send::<PtyKiller>();
+    }
 }

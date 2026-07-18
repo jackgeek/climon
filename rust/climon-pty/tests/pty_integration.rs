@@ -4,8 +4,11 @@
 //! Windows ConPTY). They are intentionally part of `cargo test --workspace`.
 
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
 
-use climon_pty::{Pty, PtyOptions};
+use climon_pty::{Pty, PtyOptions, PtyParts};
 
 #[cfg(unix)]
 fn sh(script: &str) -> PtyOptions {
@@ -239,6 +242,83 @@ fn dropping_pty_releases_master_and_makes_resizer_inert() {
     // A late resize through the cloned handle is a no-op rather than a panic
     // or a resurrected master.
     assert!(!resizer.resize(120, 50));
+}
+
+/// Drives a spawned command through [`Pty::into_parts`] — the production split —
+/// instead of the borrowed `&Pty` helpers, proving the owned reader, waiter, and
+/// independently-cloned killer wire up to real portable-pty handles.
+///
+/// It follows the same two Windows teardown rules as [`spawn_wait_capture`], but
+/// expressed through the owned parts: a watchdog thread bounds the otherwise
+/// unbounded [`PtyWaiter::wait`] by killing the child through the *concurrent*
+/// [`PtyKiller`] (the whole point of the separate killer), and the consuming
+/// `wait` drops the master before the reader thread is joined. Returns `None`
+/// when the child wedges (headless ConPTY), mirroring `spawn_wait_capture`.
+fn into_parts_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
+    let PtyParts {
+        reader,
+        waiter,
+        mut killer,
+        ..
+    } = Pty::spawn(opts)
+        .expect("spawn")
+        .into_parts()
+        .expect("into_parts");
+
+    let reader_handle = std::thread::spawn(move || read_to_end(reader));
+
+    // Bound the blocking wait: a wedged headless ConPTY child never reaches its
+    // own `ExitProcess`, so `waiter.wait()` would block forever. The cloned
+    // killer terminates it from this watchdog thread *while* the main thread is
+    // parked in `wait`, with no shared mutex between them.
+    let wedged = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let wedged_watch = Arc::clone(&wedged);
+    let watchdog = std::thread::spawn(move || {
+        if done_rx.recv_timeout(CHILD_EXIT_TIMEOUT).is_err() {
+            wedged_watch.store(true, Ordering::SeqCst);
+            let _ = killer.kill();
+        }
+    });
+
+    // Consuming wait: blocks for the exit code, then drops the master (closing
+    // the pseudoconsole on Windows) so the cloned reader EOFs below.
+    let exit = waiter.wait();
+    let _ = done_tx.send(());
+    let out = reader_handle
+        .join()
+        .expect("reader joins after master drop");
+    let _ = watchdog.join();
+
+    if wedged.load(Ordering::SeqCst) {
+        return None;
+    }
+    Some((exit.expect("wait"), out))
+}
+
+/// Smoke test: the production [`Pty::into_parts`] path streams child output
+/// through its owned reader and reports the exit code from its consuming waiter,
+/// on a real PTY. Reuses the reliable `printf` fixture and the same
+/// inconclusive-skip guards as the borrowed-API tests, so it adds no flaky shell
+/// assumptions.
+#[test]
+fn into_parts_streams_output_and_reports_exit() {
+    let (code, out) = match into_parts_wait_capture(&sh("printf hi")) {
+        Some(captured) => captured,
+        None => {
+            conpty_wedged_skip();
+            return;
+        }
+    };
+    if no_controlling_terminal(&out) {
+        return;
+    }
+    assert_eq!(code, 0);
+    assert!(
+        out.windows(2).any(|w| w == b"hi"),
+        "expected 'hi' in output, got: {:?}",
+        String::from_utf8_lossy(&out)
+    );
 }
 
 #[test]
