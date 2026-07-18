@@ -144,8 +144,7 @@ differ per cell call it out.
 3. Confirm a detached daemon is running: `climon ls` shows the session `running`,
    and `logs/daemon/<id>.log` exists.
 4. After the command has emitted a good amount of output, open the session in the
-   dashboard (or attach a CLI client with `climon attach <id>`) — attaching
-   mid-stream.
+   dashboard — attaching mid-stream.
 5. Observe the initial render, then continued live output.
 
 **Expected result:**
@@ -253,7 +252,7 @@ differ per cell call it out.
   detection (daemon screen-idle sampling), user acknowledgement, and
   resize-is-not-activity (`domain/attention.rs`, `attention.rs`, `idle.rs`)
 - **Preconditions:** An actor session with a viewer; `attention.idleSeconds`
-  known (default 10 — optionally set it small, e.g. `climon config set
+  known (default 10 — optionally set it small, e.g. `climon config
   attention.idleSeconds 3`, for a quicker run).
 - **Config-matrix cell:** all (local terminal + one browser viewer)
 - **Platforms:** macOS, Linux, Windows
@@ -421,8 +420,9 @@ differ per cell call it out.
 - **Feature / phase:** Daemon actor rewrite — signals/resize adapter
   (`adapters/signals.rs`), child reap and terminal restore on teardown, Windows
   console-input cancellation
-- **Preconditions:** An actor session; know the daemon PID (`daemon_pid` in
-  metadata, also shown by `climon ls`).
+- **Preconditions:** An actor session; know the daemon PID — the `daemonPid`
+  field in the session metadata `$CLIMON_HOME/sessions/<id>.json` (`climon ls`
+  does not print the PID).
 - **Config-matrix cell:** all (signal delivery is Unix-specific; process
   termination and console-resize polling are called out per cell)
 - **Platforms:** macOS, Linux (signals); Windows (resize poller + termination)
@@ -430,8 +430,9 @@ differ per cell call it out.
 **Steps:**
 1. **Unix — SIGINT/SIGTERM:** start a headless actor session
    `CLIMON_SESSION_ENGINE=actor climon run --headless sleep 300`; read its
-   `daemon_pid`; send `kill -INT <pid>` (and, in a second run, `kill -TERM
-   <pid>`). Optionally send the same signal twice to confirm idempotency.
+   `daemonPid` from `$CLIMON_HOME/sessions/<id>.json`; send `kill -INT <pid>`
+   (and, in a second run, `kill -TERM <pid>`). Optionally send the same signal
+   twice to confirm idempotency.
 2. **Unix — SIGWINCH:** with an attached actor session
    (`CLIMON_SESSION_ENGINE=actor climon shell`) running a full-screen app, resize
    the terminal window and confirm the app reflows to the new size.
@@ -479,9 +480,11 @@ differ per cell call it out.
    behaviour returns to the legacy engine. This is the one-variable rollback
    lever — no rebuild.
 4. **Invalid value:** run with `CLIMON_SESSION_ENGINE=future`. For an attached run
-   the error surfaces to the terminal; for a headless daemon it is logged to
-   `logs/daemon/<id>.log` and the daemon exits immediately without starting the
-   session.
+   the error surfaces to the terminal; for a headless daemon engine selection
+   fails **before** the daemon logger is initialized, so the error is written to
+   the detached daemon's redirected stderr in `sessions/<id>.log` (not the daemon
+   log `logs/daemon/<id>.log`) and the daemon exits immediately without starting
+   the session.
 
 **Expected result:**
 - `run_session_host` selects the engine from `CLIMON_SESSION_ENGINE`: unset /
