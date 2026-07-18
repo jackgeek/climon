@@ -116,6 +116,18 @@ pub(crate) enum TaskName {
     Coordinator,
 }
 
+impl TaskName {
+    /// Whether this is a core task whose unexpected early termination — before
+    /// the coordinator has completed the session — is a fatal failure. The pty
+    /// workers own the child and its authoritative exit, so losing either before
+    /// completion means the coordinator can never observe `PtyExited` and would
+    /// otherwise wait forever. The coordinator is not listed here: its own end is
+    /// observed directly through the completion route.
+    fn is_required(self) -> bool {
+        matches!(self, TaskName::PtyCommand | TaskName::PtyLifecycle)
+    }
+}
+
 /// The outcome of joining one supervised task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TaskOutcome {
@@ -127,6 +139,14 @@ pub(crate) enum TaskOutcome {
     Panicked,
     /// The task's join handle was cancelled/aborted.
     Cancelled,
+}
+
+impl TaskOutcome {
+    /// Whether this outcome is an abnormal termination — a returned error or a
+    /// panic — as opposed to a clean completion or a deliberate cancellation.
+    fn is_abnormal(&self) -> bool {
+        matches!(self, TaskOutcome::Failed(_) | TaskOutcome::Panicked)
+    }
 }
 
 /// The result of joining every supervised task under the deadline.
@@ -153,6 +173,9 @@ impl JoinReport {
 pub(crate) struct TaskRegistry {
     set: JoinSet<(TaskName, TaskOutcome)>,
     names: Vec<TaskName>,
+    /// Outcomes already observed while supervising the running session, retained
+    /// so the final [`JoinReport`] stays complete no matter when a task ended.
+    joined: Vec<(TaskName, TaskOutcome)>,
 }
 
 impl TaskRegistry {
@@ -160,6 +183,7 @@ impl TaskRegistry {
         TaskRegistry {
             set: JoinSet::new(),
             names: Vec::new(),
+            joined: Vec::new(),
         }
     }
 
@@ -182,12 +206,50 @@ impl TaskRegistry {
         });
     }
 
-    /// Joins every registered task, waiting at most `deadline` in total. Tasks
-    /// that have not joined by the deadline are reported as `unjoined` and their
-    /// forwarding tasks aborted (a best-effort net; blocking work may outlive the
-    /// process only until it exits).
-    async fn join_all(mut self, deadline: Duration) -> JoinReport {
-        let mut joined: Vec<(TaskName, TaskOutcome)> = Vec::new();
+    /// Waits for the coordinator to complete while concurrently watching every
+    /// supervised task, so a required core task that dies before completion
+    /// cannot leave the supervisor blocked on a `CompleteSession` that will never
+    /// arrive.
+    ///
+    /// It returns as soon as the completion route resolves — a `CompleteSession`,
+    /// or the route closing because the coordinator ended — or a required core
+    /// task terminates abnormally. Peripheral terminations, and the expected
+    /// clean return of a required task once it has handed off (the pty lifecycle
+    /// returns `Ok` right after reporting `PtyExited`), are recorded and
+    /// tolerated rather than misclassified as failures. Every outcome observed
+    /// here is retained for the final join report.
+    async fn supervise(&mut self, completion_rx: &mut mpsc::Receiver<Effect>) -> SuperviseOutcome {
+        loop {
+            tokio::select! {
+                biased;
+                completion = completion_rx.recv() => {
+                    return match completion {
+                        Some(Effect::CompleteSession { exit_code }) => {
+                            SuperviseOutcome::Completed(exit_code)
+                        }
+                        _ => SuperviseOutcome::CoordinatorEnded,
+                    };
+                }
+                joined = self.set.join_next(), if !self.set.is_empty() => {
+                    if let Some(Ok((name, outcome))) = joined {
+                        let fatal = name.is_required() && outcome.is_abnormal();
+                        self.joined.push((name, outcome));
+                        if fatal {
+                            return SuperviseOutcome::RequiredTaskFailed;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Joins every remaining registered task, waiting until the shared teardown
+    /// `deadline`. Tasks still running at the deadline are reported as `unjoined`
+    /// and their forwarding tasks aborted (a best-effort net; blocking work may
+    /// outlive the process only until it exits). Outcomes already observed during
+    /// supervision are retained in the report.
+    async fn join_all(mut self, deadline: tokio::time::Instant) -> JoinReport {
+        let mut joined = std::mem::take(&mut self.joined);
         let drain = async {
             while let Some(result) = self.set.join_next().await {
                 if let Ok(entry) = result {
@@ -195,7 +257,7 @@ impl TaskRegistry {
                 }
             }
         };
-        let unjoined = match tokio::time::timeout(deadline, drain).await {
+        let unjoined = match tokio::time::timeout_at(deadline, drain).await {
             Ok(()) => Vec::new(),
             Err(_) => {
                 let joined_names: Vec<TaskName> = joined.iter().map(|(name, _)| *name).collect();
@@ -209,6 +271,17 @@ impl TaskRegistry {
         self.set.abort_all();
         JoinReport { joined, unjoined }
     }
+}
+
+/// The result of [`TaskRegistry::supervise`]: how the running session ended.
+enum SuperviseOutcome {
+    /// The coordinator emitted `CompleteSession { exit_code }`.
+    Completed(i32),
+    /// The completion route closed without a completion effect — the coordinator
+    /// ended (or panicked) without completing the session.
+    CoordinatorEnded,
+    /// A required core task terminated abnormally before completion.
+    RequiredTaskFailed,
 }
 
 /// The startup and teardown side effects the supervisor delegates, behind a seam
@@ -292,29 +365,48 @@ pub(crate) trait SessionBackend {
     fn record_join_report(&mut self, _report: &JoinReport) {}
 }
 
-/// Cancels adapters, terminates the child (off-runtime), joins every task under
-/// the deadline, and restores the local terminal — the shared teardown for both
-/// the normal completion path and every partial-startup unwind. `routes` and
-/// `lanes` must already be closed (the coordinator drops them on completion; an
-/// early failure drops them at the call site) so the registered adapters can
-/// drain and exit.
+/// Cancels adapters, terminates the child (off-runtime), joins every owned
+/// worker under one shared deadline, and restores the local terminal — the
+/// shared teardown for both the normal completion path and every partial-startup
+/// unwind. `routes` and `lanes` must already be closed (the coordinator drops
+/// them on completion; an early failure drops them at the call site) so the
+/// registered adapters can drain and exit.
+///
+/// One `deadline` budget bounds the joinable owned workers that can genuinely
+/// block — the supervised-task drain and the local input worker's join — so no
+/// single stuck worker (most importantly a local input read that ignores
+/// cancellation) can wedge shutdown. The child reap runs first and is awaited
+/// unconditionally: a kill is non-blocking, so the reap stays deterministic and
+/// is never detached, and it must precede the task drain so the pty lifecycle
+/// loop sees EOF and can reach its join. The terminal is restored regardless:
+/// even if the local join is abandoned at the deadline, dropping the `shutdown`
+/// future drops the mode guard. `deadline` is injected (production passes
+/// [`JOIN_DEADLINE`]) so shutdown-timing tests can drive it deterministically
+/// without wall-clock sleeps.
 async fn drain_and_join(
     root_cancel: &CancellationToken,
     terminator: Arc<dyn ChildTerminator>,
     registry: TaskRegistry,
     local: Option<LocalTerminalSetup>,
+    deadline: Duration,
 ) -> JoinReport {
     // Stop the signal adapter and any cancellation-driven work.
     root_cancel.cancel();
     // Ensure the child is gone so the pty lifecycle loop can reach its join.
-    // `terminate` is blocking, so it runs off the Tokio workers.
+    // `terminate` is a non-blocking kill run off the Tokio workers; it is awaited
+    // unconditionally (a deterministic reap, never detached) before the joins.
     let _ = tokio::task::spawn_blocking(move || terminator.terminate()).await;
-    // Join every supervised task within the deadline.
-    let report = registry.join_all(JOIN_DEADLINE).await;
+    // One absolute deadline shared by every remaining joinable owned worker.
+    let deadline_at = tokio::time::Instant::now() + deadline;
+    // Join every supervised task within the shared deadline.
+    let report = registry.join_all(deadline_at).await;
     // Interrupt any blocked local input, join the input worker, and restore
-    // terminal modes only after the workers have stopped.
+    // terminal modes only after the workers have stopped — bounded by the same
+    // deadline so a stuck read cannot outlast teardown. Even if the join is
+    // abandoned at the deadline, dropping the `shutdown` future drops the mode
+    // guard, so the terminal is still restored.
     if let Some(local) = local {
-        let _ = local.shutdown().await;
+        let _ = tokio::time::timeout_at(deadline_at, local.shutdown()).await;
     }
     report
 }
@@ -401,7 +493,8 @@ async fn run_with<B: SessionBackend>(
                 // command worker drains, then terminate and join it.
                 drop(routes);
                 drop(lanes);
-                let report = drain_and_join(&root_cancel, terminator, registry, None).await;
+                let report =
+                    drain_and_join(&root_cancel, terminator, registry, None, JOIN_DEADLINE).await;
                 backend.record_join_report(&report);
                 return Err(error);
             }
@@ -418,7 +511,14 @@ async fn run_with<B: SessionBackend>(
         Err(error) => {
             drop(routes);
             drop(lanes);
-            let report = drain_and_join(&root_cancel, terminator, registry, Some(local)).await;
+            let report = drain_and_join(
+                &root_cancel,
+                terminator,
+                registry,
+                Some(local),
+                JOIN_DEADLINE,
+            )
+            .await;
             backend.record_join_report(&report);
             return Err(error);
         }
@@ -433,7 +533,14 @@ async fn run_with<B: SessionBackend>(
         Err(error) => {
             drop(routes);
             drop(lanes);
-            let report = drain_and_join(&root_cancel, terminator, registry, Some(local)).await;
+            let report = drain_and_join(
+                &root_cancel,
+                terminator,
+                registry,
+                Some(local),
+                JOIN_DEADLINE,
+            )
+            .await;
             backend.cleanup_socket(&resolved_ref);
             backend.record_join_report(&report);
             return Err(error);
@@ -453,7 +560,14 @@ async fn run_with<B: SessionBackend>(
         Err(error) => {
             drop(routes);
             drop(lanes);
-            let report = drain_and_join(&root_cancel, terminator, registry, Some(local)).await;
+            let report = drain_and_join(
+                &root_cancel,
+                terminator,
+                registry,
+                Some(local),
+                JOIN_DEADLINE,
+            )
+            .await;
             backend.cleanup_socket(&resolved_ref);
             backend.record_join_report(&report);
             return Err(error);
@@ -492,16 +606,29 @@ async fn run_with<B: SessionBackend>(
     drop(control_tx);
     drop(pty_tx);
 
-    // --- Run: wait for the coordinator's completion effect ---
-    // The completion route carries only `CompleteSession`; a `None` means the
-    // coordinator ended (dropping the route) without completing — a core failure.
-    let exit_code = match completion_rx.recv().await {
-        Some(Effect::CompleteSession { exit_code }) => exit_code,
-        _ => CORE_FAILURE_EXIT,
+    // --- Run: wait for completion while supervising the core tasks ---
+    // The completion route carries only `CompleteSession`; a closed route means
+    // the coordinator ended without completing — a core failure. Concurrently,
+    // a required core task that dies before completion (a pty worker that panics
+    // or errors before `PtyExited` is ever observed) is also a core failure:
+    // watching for it here is what stops the supervisor from blocking forever on
+    // a completion the coordinator can no longer produce.
+    let exit_code = match registry.supervise(&mut completion_rx).await {
+        SuperviseOutcome::Completed(exit_code) => exit_code,
+        SuperviseOutcome::CoordinatorEnded | SuperviseOutcome::RequiredTaskFailed => {
+            CORE_FAILURE_EXIT
+        }
     };
 
     // --- Teardown: cancel, terminate, join, restore, clean, return ---
-    let report = drain_and_join(&root_cancel, terminator, registry, Some(local)).await;
+    let report = drain_and_join(
+        &root_cancel,
+        terminator,
+        registry,
+        Some(local),
+        JOIN_DEADLINE,
+    )
+    .await;
     backend.cleanup_socket(&resolved_ref);
     backend.record_join_report(&report);
 
@@ -741,6 +868,36 @@ mod tests {
             .expect("multi-thread runtime")
     }
 
+    /// Runs `f` on a dedicated OS thread and fails the test if it does not finish
+    /// within `bound` of real time. A supervision or teardown hang thus surfaces
+    /// as a clean assertion failure instead of an indefinitely blocked (and
+    /// undroppable) runtime. The worker thread is intentionally leaked on a hang;
+    /// the test process reaps it on exit.
+    fn run_bounded<T, F>(bound: Duration, f: F) -> T
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        match rx.recv_timeout(bound) {
+            Ok(value) => value,
+            Err(_) => {
+                panic!("operation did not finish within {bound:?}: teardown/supervision hang")
+            }
+        }
+    }
+
+    /// A [`ChildTerminator`] that records nothing and does nothing, for teardown
+    /// tests that do not model a real child.
+    struct NoopTerminator;
+
+    impl ChildTerminator for NoopTerminator {
+        fn terminate(&self) {}
+    }
+
     /// Which startup step the fake backend should fail at (for unwind tests).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum FailPoint {
@@ -759,6 +916,9 @@ mod tests {
         ExitWith(i32),
         /// Emit `PtyExited(code)` then panic (a task panic after a clean exit).
         ExitThenPanic(i32),
+        /// Panic *before* emitting `PtyExited` (a required task dying before the
+        /// coordinator can ever complete, so completion never arrives).
+        PanicWithoutExit,
         /// Stay alive until cancelled (for partial-startup unwind tests).
         RunUntilCancelled,
     }
@@ -841,6 +1001,13 @@ mod tests {
                     PtyBehavior::ExitThenPanic(code) => {
                         let _ = events.send(SessionEvent::PtyExited(code)).await;
                         panic!("fake pty lifecycle panicked after a clean exit");
+                    }
+                    PtyBehavior::PanicWithoutExit => {
+                        // Panic before reporting the child exit: the coordinator
+                        // never observes `PtyExited`, so it never emits
+                        // `CompleteSession`. Only concurrent task supervision can
+                        // notice this required task's death.
+                        panic!("fake pty lifecycle panicked before reporting exit");
                     }
                     PtyBehavior::RunUntilCancelled => {
                         cancel_for_task.cancelled().await;
@@ -985,6 +1152,17 @@ mod tests {
             SupervisorFixture {
                 obs: Arc::new(Observations::default()),
                 behavior: PtyBehavior::ExitThenPanic(code),
+                fail_at: FailPoint::None,
+            }
+        }
+
+        /// A session whose pty lifecycle task (a required core task) panics
+        /// *before* reporting the child exit, so the coordinator never completes
+        /// on its own — the supervisor must notice via concurrent supervision.
+        fn pty_panics_before_exit() -> Self {
+            SupervisorFixture {
+                obs: Arc::new(Observations::default()),
+                behavior: PtyBehavior::PanicWithoutExit,
                 fail_at: FailPoint::None,
             }
         }
@@ -1139,6 +1317,27 @@ mod tests {
         assert!(fixture.all_tasks_joined());
     }
 
+    /// A required core task that dies *before* the coordinator can complete (no
+    /// `PtyExited` was reported, so no `CompleteSession` is ever produced) is
+    /// observed concurrently with the completion route: the supervisor tears
+    /// everything down and surfaces [`SessionError::ActorTask`] instead of
+    /// blocking forever on `completion_rx`.
+    #[test]
+    fn required_task_panic_before_completion_is_reported_not_hung() {
+        let fixture = SupervisorFixture::pty_panics_before_exit();
+        let obs = fixture.obs.clone();
+        let error = run_bounded(Duration::from_secs(10), move || fixture.run_sync()).unwrap_err();
+        assert!(matches!(error, SessionError::ActorTask));
+        let all_joined = matches!(
+            &*obs.join_report.lock().unwrap(),
+            Some(report) if report.unjoined.is_empty()
+        );
+        assert!(
+            all_joined,
+            "every supervised task must be joined during teardown"
+        );
+    }
+
     /// A pty spawn failure persists a `failed` session and returns exit code 1
     /// (legacy parity), with no tasks spawned or leaked.
     #[test]
@@ -1208,5 +1407,53 @@ mod tests {
         assert_eq!(fixture.cleaned_socket(), 1);
         assert_eq!(fixture.marked_running(), 0);
         assert!(fixture.all_tasks_joined());
+    }
+
+    /// The teardown deadline must bound *every* joinable owned worker, including
+    /// the local input worker. A worker that never honours cancellation or
+    /// interruption must not wedge teardown: the injected deadline abandons the
+    /// join, teardown still returns, and the mode guard still restores the
+    /// terminal. The deadline is injected small so a real timer fires quickly
+    /// (paused time cannot auto-advance past a pending `spawn_blocking` join),
+    /// and a real-time watchdog turns any remaining hang into a failure.
+    #[test]
+    fn teardown_deadline_bounds_stuck_local_input() {
+        let (unjoined_empty, restored) = run_bounded(Duration::from_secs(10), || {
+            let rt = build_runtime();
+            let result = rt.block_on(async {
+                let root_cancel = CancellationToken::new();
+                // No supervised tasks: isolate the local input worker's join so
+                // the only thing the deadline can be bounding is `shutdown`.
+                let registry = TaskRegistry::new();
+                let terminator: Arc<dyn ChildTerminator> = Arc::new(NoopTerminator);
+                let local_cancel = CancellationToken::new();
+                let (local, restored) =
+                    crate::adapters::local_terminal::stuck_local_terminal_for_test(local_cancel);
+
+                let report = drain_and_join(
+                    &root_cancel,
+                    terminator,
+                    registry,
+                    Some(local),
+                    Duration::from_millis(250),
+                )
+                .await;
+
+                (report.unjoined.is_empty(), restored.load(Ordering::SeqCst))
+            });
+            // The stuck input worker is intentionally leaked; shut the runtime
+            // down without waiting for it so this helper thread can return
+            // (a real supervisor exits the process, reaping the worker).
+            rt.shutdown_background();
+            result
+        });
+        assert!(
+            unjoined_empty,
+            "no supervised tasks were registered, so none can be unjoined"
+        );
+        assert!(
+            restored,
+            "terminal modes must be restored even when the input worker is abandoned at the deadline"
+        );
     }
 }

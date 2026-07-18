@@ -555,6 +555,77 @@ where
     }
 }
 
+/// Test-only: builds a [`LocalTerminalSetup`] whose input worker never returns
+/// (it ignores both the cancellation token and its interrupter) so joining it
+/// depends entirely on the caller's teardown deadline. The returned flag flips to
+/// `true` when the mode guard is dropped, proving the terminal is still restored
+/// even when the worker has to be abandoned at the deadline. Constructing the
+/// setup requires access to the module-private fields, so it lives here beside
+/// the type rather than in a downstream test module.
+#[cfg(test)]
+pub(crate) fn stuck_local_terminal_for_test(
+    cancel: CancellationToken,
+) -> (
+    LocalTerminalSetup,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// An input source that blocks forever, ignoring the poll timeout and
+    /// cancellation — a read the deadline must abandon rather than join.
+    struct StuckInput;
+    impl LocalInputSource for StuckInput {
+        fn poll(&mut self, _timeout: Duration) -> Result<InputPoll, String> {
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+
+    /// An interrupter that cannot wake the stuck read.
+    struct DeadInterrupt;
+    impl InputInterrupt for DeadInterrupt {
+        fn interrupt(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// A guard that records its restoration (drop) so tests can assert the
+    /// terminal was restored despite the abandoned worker.
+    struct RestoreFlagGuard {
+        restored: Arc<AtomicBool>,
+    }
+    impl ModeGuard for RestoreFlagGuard {}
+    impl Drop for RestoreFlagGuard {
+        fn drop(&mut self) {
+            self.restored.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// The worker never emits, so the sink only needs to exist.
+    struct DiscardSink;
+    impl LocalTerminalEventSink for DiscardSink {
+        fn emit(&self, _event: SessionEvent) -> Result<(), LocalTerminalError> {
+            Ok(())
+        }
+    }
+
+    let restored = Arc::new(AtomicBool::new(false));
+    let input = spawn_input_worker(StuckInput, DiscardSink, cancel.clone());
+    let setup = LocalTerminalSetup {
+        attached: true,
+        size: (80, 24),
+        guard: Box::new(RestoreFlagGuard {
+            restored: restored.clone(),
+        }),
+        input: Some(input),
+        input_interrupt: Some(Box::new(DeadInterrupt)),
+        cancel,
+    };
+    (setup, restored)
+}
+
 /// The production [`TerminalPlatform`]. The Unix and Windows implementations own
 /// the platform mode setup that the legacy host performed inline; here they are
 /// isolated behind the trait so the rest of the adapter is platform-agnostic and
