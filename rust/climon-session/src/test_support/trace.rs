@@ -75,6 +75,21 @@ impl ObservableTrace {
     pub(crate) fn records(&self) -> &[TraceRecord] {
         &self.records
     }
+
+    /// Every byte written to the local console, concatenated in record order.
+    ///
+    /// Lets a characterization test assert the exact local-terminal output a
+    /// sequence of effects produced (e.g. the displaced-exit restore) without
+    /// reaching into individual [`TraceRecord`]s.
+    pub(crate) fn console_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for record in &self.records {
+            if let TraceRecord::ConsoleBytes(bytes) = record {
+                out.extend_from_slice(bytes);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
