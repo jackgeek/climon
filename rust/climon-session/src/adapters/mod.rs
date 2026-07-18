@@ -10,5 +10,6 @@
 //! [`SessionEvent`]: crate::engine::event::SessionEvent
 //! [`JoinHandle`]: tokio::task::JoinHandle
 
+pub(crate) mod ipc;
 pub(crate) mod metadata;
 pub(crate) mod pty;
