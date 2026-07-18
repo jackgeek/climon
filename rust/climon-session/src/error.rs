@@ -19,6 +19,8 @@ pub enum SessionError {
     InvalidEngine(String),
     /// The actor session engine was selected but is not yet available.
     ActorUnavailable,
+    /// A supervised actor task panicked.
+    ActorTask,
 }
 
 /// Convenience result alias for the session host.
@@ -38,6 +40,9 @@ impl fmt::Display for SessionError {
             ),
             SessionError::ActorUnavailable => {
                 write!(f, "actor session engine is not available")
+            }
+            SessionError::ActorTask => {
+                write!(f, "a supervised actor task panicked")
             }
         }
     }

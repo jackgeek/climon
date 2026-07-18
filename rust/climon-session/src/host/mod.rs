@@ -25,8 +25,8 @@ fn selected_engine(value: Option<&str>) -> SessionResult<Engine> {
 }
 
 /// Runs the session host, selecting the legacy thread-based engine or the
-/// (not yet available) actor engine based on the `CLIMON_SESSION_ENGINE`
-/// environment variable. Defaults to the legacy engine.
+/// actor engine based on the `CLIMON_SESSION_ENGINE` environment variable.
+/// Defaults to the legacy engine.
 pub fn run_session_host(
     id: &str,
     meta: SessionMeta,
