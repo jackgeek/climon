@@ -1,65 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, readFile, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { parseBrowserStatusPatch, validateBrowserStatusTransition } from "../src/server/server.js";
 import { readSessionMeta, writeSessionMeta } from "../src/store.js";
 import type { PriorityReason, SessionMeta, SessionStatus } from "../src/types.js";
+import { freePort, waitFor, waitForExit, waitForHealth } from "./support/server.js";
 
 const testRoot = join(tmpdir(), "climon-server-status-patch");
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 20000): Promise<T> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    // Bound each attempt so a hung probe (e.g. a fetch to a freshly-spawned
-    // server whose event loop is still starved under load) cannot block the
-    // loop past the deadline.
-    const v = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
-    ]);
-    if (v !== undefined) {
-      return v;
-    }
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error("timed out");
-}
-
-async function waitForExit(server: Bun.Subprocess, ms: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) {
-        return;
-      }
-      done = true;
-      resolve(false);
-    }, ms);
-    void server.exited.finally(() => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-}
 
 function priorityReasonFor(status: SessionStatus): PriorityReason {
   switch (status) {
@@ -172,11 +121,8 @@ describe("PATCH /api/sessions/:id status", () => {
       { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
     );
     base = `http://127.0.0.1:${port}`;
-    await waitFor(async () => {
-      const res = await fetch(`${base}/health`).catch(() => undefined);
-      return res?.ok ? true : undefined;
-    }, 30_000);
-  }, 60_000);
+    await waitForHealth(server, base);
+  }, 120_000);
 
   afterAll(async () => {
     server.kill();
