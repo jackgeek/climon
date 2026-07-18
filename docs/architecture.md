@@ -50,27 +50,77 @@ Unix-only session-group handling.
 
 ### Session daemon (`rust/climon-session/`)
 
-Launched as `climon __session <id>`, detached from the launcher. It:
+Launched as `climon __session <id>`, detached from the launcher (an attached
+`climon <cmd>` runs the same host in-process). It reads the session metadata and
+owns the PTY (`rust/climon-pty`), the per-session socket, the scrollback shadow
+(~256 KB ring, replayed to each new client), the session's status transitions,
+terminal-title/progress capture, and the final persisted output. It is the
+**single writer** of session metadata: it patches `running` with its PID at
+startup, applies attention transitions, and on exit persists the final scrollback
+and patches `completed`/`failed` with the exit code. It also scans PTY output for
+terminal titles (`OSC 0`/`OSC 2`) and progress (`OSC 9;4`, the
+ConEmu/Windows-Terminal taskbar-progress sequence), debounces them, and persists
+the latest `terminalTitle`/`progress` to metadata; both are passthrough (the
+bytes still reach the client untouched) and the dashboard renders `progress` per
+session as a determinate bar, spinner, or error/warning icon. Because the daemon
+owns the PTY, the dashboard server can come and go freely.
 
-1. Reads the session metadata file.
-2. Spawns the PTY and **synchronously** attaches `onData`/`onExit`.
-3. Patches metadata to `running` with its PID.
-4. Listens on the per-session socket (`createServer`), replaying the scrollback
-   buffer to each new client.
-5. Appends PTY output to a ring buffer (~256 KB),
-   broadcasts it to connected clients, and applies attention transitions
-   reported by the attached client (it is the single writer of session
-   metadata).
-6. Scans PTY output for terminal titles (`OSC 0`/`OSC 2`) and progress
-   (`OSC 9;4`, the ConEmu/Windows-Terminal taskbar-progress sequence),
-   debounces them, and persists the latest `terminalTitle`/`progress` to
-   metadata. Both are passthrough — the bytes are forwarded to the client
-   untouched. The dashboard renders `progress` per session (a determinate bar,
-   spinner, or error/warning icon).
-7. On PTY exit: persists final scrollback, patches metadata to
-   `completed`/`failed` with the exit code, notifies clients, and shuts down.
+The daemon has **two interchangeable engines**, selected per start by the
+`CLIMON_SESSION_ENGINE` environment variable in `host/mod.rs`:
 
-Because the daemon owns the PTY, the dashboard server can come and go freely.
+- **`legacy`** — the original host in `host/legacy.rs`, a direct port of the
+  TypeScript session host/daemon. This is the value used when the variable is
+  unset, empty, or `legacy`, and is the **shipping default**.
+- **`actor`** — the idiomatic-Rust actor engine under `engine/` + `adapters/`.
+  Opt-in only, gated behind the cross-platform release matrix in
+  [`manual-tests/daemon-actor-rewrite.md`](manual-tests/daemon-actor-rewrite.md).
+
+Both engines present identical external behaviour and the same wire protocol, and
+an unknown value is rejected, so switching (or unsetting) `CLIMON_SESSION_ENGINE`
+is a complete rollback with no rebuild.
+
+**Actor engine.** The actor engine replaces shared, lock-guarded aggregate state
+with a single owner and message passing:
+
+- **A pure domain core.** `engine/state.rs` composes the crate-private `domain/`
+  modules (clients, control handoff, attention, terminal model, local view,
+  lifecycle) into one synchronous `(state, event) -> Vec<Effect>` transition
+  (`SessionState::apply`). It performs no I/O and reads no clock: every external
+  input — including the current time — arrives as an event, and every interaction
+  with the outside world is *returned* as an `Effect` value, which keeps the
+  whole core deterministic and unit-testable.
+- **One coordinator actor.** `engine/coordinator.rs` is the single async task
+  that owns `SessionState`. Two bounded mpsc **event lanes** feed it — a pty lane
+  for the pty's own output/exit/failure and a control lane for everything else —
+  and it dispatches the effects each event produces to six bounded,
+  route-specific **effect channels** (pty, client, console, metadata, timer,
+  completion). It awaits channel capacity so a slow adapter backpressures the
+  actor rather than dropping work; the console is the one exception — a
+  *degradable peripheral* whose saturated or closed route degrades the local view
+  instead of stalling the core.
+- **Resource-owning adapters.** Each adapter under `adapters/` exclusively owns
+  its OS resource and translates effects into real I/O, feeding results back as
+  events; no resource sits behind an `Arc<Mutex>`. They are `pty` (split
+  reader/writer workers plus a durable emergency child terminator), `ipc` (the
+  `SessionListener` and every accepted client, each with its own bounded outbound
+  queue so one slow viewer can never block the others), `local_terminal` (the
+  raw/console-mode guard, the FIFO console writer, and a cancellable input
+  worker), `metadata` (strict-FIFO, retrying patch/scrollback writes), `timers`,
+  and `signals` (`SIGTERM`/`SIGINT` → shutdown, `SIGWINCH` or a Windows poll →
+  resize). Blocking work runs on `spawn_blocking`, never on a runtime worker.
+- **An explicit lifecycle.** `engine/supervisor.rs` owns startup, finalization,
+  cancellation, and join. It builds a multi-thread Tokio runtime, brings the
+  adapters up in a defined order (pty → local terminal → ipc → metadata → timers
+  → signals), spawns the coordinator, and marks the session `running`. On
+  completion **or any partial-startup failure** it runs one shared teardown:
+  cancel the adapters (a `CancellationToken`), terminate and reap the child
+  off-runtime, join every owned task within a bounded deadline, restore the local
+  terminal, and clean the socket. Every task is registered and joined — none is
+  detached — and a task panic is repaired into ordered finalization and surfaced
+  as an error. Exit finalization itself is a fixed ordered sequence in
+  `domain/lifecycle.rs`: persist the final scrollback → patch terminal status
+  (`completed`/`failed` + exit code) → send `Exit` frames → restore the local
+  screen → close clients.
 
 ### IPC framing (`rust/climon-proto/`)
 

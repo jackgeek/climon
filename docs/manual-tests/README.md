@@ -88,6 +88,7 @@ result-tracking row.
 | — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |
 | — | Jiggle-repaint on local restore (force wrapped app to redraw when the local terminal regains control) | [jiggle-repaint-on-restore.md](jiggle-repaint-on-restore.md) |
 | — | Terminal fade-in on (re)attach — xterm starts invisible over the theme background and fades in once the replay/reflow settles, masking the jiggle | [terminal-fade-in-on-attach.md](terminal-fade-in-on-attach.md) |
+| — | Daemon actor rewrite — cross-platform release-gate matrix for the opt-in actor session engine (`CLIMON_SESSION_ENGINE=actor`; default stays the legacy engine): attached/headless I/O, take-control, jiggle, attention, title/progress, exit finalization, viewer isolation, signals, and engine rollback | [daemon-actor-rewrite.md](daemon-actor-rewrite.md) |
 
 ## Recording results
 
