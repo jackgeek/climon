@@ -215,6 +215,30 @@ impl ControlEventSender {
             .await
             .map_err(|_| LaneSendError::Closed(kind))
     }
+
+    /// Blocking-thread counterpart to [`send`](ControlEventSender::send), for the
+    /// ipc adapter's per-connection reader/writer workers which run off the Tokio
+    /// runtime (dedicated `spawn_blocking` tasks). It applies the identical lane
+    /// validation — a wrong-lane (pty) event is rejected with
+    /// [`LaneSendError::WrongLane`] and never enqueued — and otherwise blocks the
+    /// current thread until the event is accepted (bounded backpressure) or the
+    /// lane has closed.
+    ///
+    /// # Panics
+    /// Panics if called from within an async task (Tokio forbids blocking a
+    /// runtime worker); callers must invoke it only from a blocking thread.
+    pub(crate) fn blocking_send(&self, event: SessionEvent) -> Result<(), LaneSendError> {
+        if event.lane() != EventLane::Control {
+            return Err(LaneSendError::WrongLane {
+                lane: EventLane::Control,
+                kind: event.kind(),
+            });
+        }
+        let kind = event.kind();
+        self.0
+            .blocking_send(event)
+            .map_err(|_| LaneSendError::Closed(kind))
+    }
 }
 
 /// The coordinator-side receivers for the two event lanes.
@@ -881,6 +905,57 @@ mod tests {
             lanes.pty.recv().await,
             Some(SessionEvent::PtyExited(7))
         ));
+    }
+
+    // `ControlEventSender::blocking_send` is the blocking-thread delivery path
+    // the ipc adapter's per-connection reader/writer workers use (they run off
+    // the Tokio workers). Like the pty counterpart it preserves the async
+    // `send`'s exact lane validation — a wrong-lane (pty) event is rejected
+    // without enqueuing — and otherwise delivers to the control lane with the
+    // same bounded backpressure.
+    #[tokio::test]
+    async fn control_blocking_send_validates_lane_and_delivers() {
+        let (_pty_tx, control_tx, mut lanes) = event_lanes();
+
+        let reject_tx = control_tx.clone();
+        let err = tokio::task::spawn_blocking(move || {
+            reject_tx.blocking_send(SessionEvent::PtyExited(0))
+        })
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(
+            err,
+            LaneSendError::WrongLane {
+                lane: EventLane::Control,
+                kind: EventKind::PtyExited,
+            }
+        );
+
+        let ok_tx = control_tx.clone();
+        tokio::task::spawn_blocking(move || ok_tx.blocking_send(SessionEvent::ShutdownRequested))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            lanes.control.recv().await,
+            Some(SessionEvent::ShutdownRequested)
+        ));
+    }
+
+    // A closed control lane surfaces to a blocking sender as `Closed`, never a
+    // panic or a silent drop.
+    #[tokio::test]
+    async fn control_blocking_send_reports_closed_lane() {
+        let (_pty_tx, control_tx, lanes) = event_lanes();
+        drop(lanes);
+        let err = tokio::task::spawn_blocking(move || {
+            control_tx.blocking_send(SessionEvent::ShutdownRequested)
+        })
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(err, LaneSendError::Closed(EventKind::ShutdownRequested));
     }
 
     // Test 4a: every effect variant is categorized to exactly one route.
