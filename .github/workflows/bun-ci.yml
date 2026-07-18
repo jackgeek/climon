@@ -35,7 +35,7 @@ jobs:
     # temp dir (Unix sockets are unreliable on some mounts), and the server is
     # deployed on Linux. The Rust matrix already covers macOS/Windows client code.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +46,20 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      # Some tests under tests/ drive the compiled Rust client and hard-fail if
+      # rust/target/debug/climon is absent (e.g. create-session-parent,
+      # spawn-feature-gate). Build it so `bun test tests` exercises the real
+      # cross-boundary path instead of erroring out.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build Rust client (debug)
+        working-directory: rust
+        run: cargo build -p climon-cli
 
       - name: Typecheck + message catalogue check
         run: bun run lint
