@@ -69,7 +69,7 @@ use std::fmt;
 use std::future::Future;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -222,6 +222,36 @@ fn effect_variant_name(effect: &Effect) -> &'static str {
         Effect::CancelTimer { .. } => "CancelTimer",
         Effect::CompleteSession { .. } => "CompleteSession",
     }
+}
+
+/// The component tag shared by every ipc adapter observability record.
+const IPC_COMPONENT: &str = "session.ipc";
+
+/// Emits a structured, payload-safe record when a client's bounded outbound queue
+/// overflows and the client is isolated: the client/operation ids, the payload
+/// *length* only (never the frame bytes), whether it was a saturation (a full
+/// queue) versus a closed one, and the failure class. No-op unless a process
+/// logger is installed, so an uninstrumented run has no logging side effects.
+fn log_client_overflow(
+    client_id: ClientId,
+    operation_id: OperationId,
+    bytes_len: usize,
+    saturated: bool,
+) {
+    if !climon_logging::logger::is_initialized() {
+        return;
+    }
+    climon_logging::logger::child(IPC_COMPONENT).log_with(
+        climon_logging::level::LogLevel::Debug,
+        serde_json::json!({
+            "client_id": client_id.0,
+            "operation_id": operation_id.0,
+            "bytes_len": bytes_len,
+            "saturation": saturated,
+            "failure_class": "client_send_overflow",
+        }),
+        "client outbound queue saturated",
+    );
 }
 
 // ---- event sink --------------------------------------------------------
@@ -735,21 +765,27 @@ impl<E: ClientEventSink> IpcManager<E> {
         operation_id: OperationId,
         bytes: Vec<u8>,
     ) -> Result<(), IpcAdapterError> {
-        let overflowed = match self.connections.get(&client_id) {
-            None => false,
-            Some(connection) if connection.reporter.is_claimed() => false,
-            Some(connection) => connection
-                .outbound
-                .try_send(OutboundFrame {
-                    operation_id,
-                    bytes,
-                })
-                .is_err(),
+        let bytes_len = bytes.len();
+        // `Some(saturated)` marks an overflow to isolate; `saturated` is `true`
+        // for a full queue (backpressure) and `false` for a closed one.
+        let saturated = match self.connections.get(&client_id) {
+            None => None,
+            Some(connection) if connection.reporter.is_claimed() => None,
+            Some(connection) => match connection.outbound.try_send(OutboundFrame {
+                operation_id,
+                bytes,
+            }) {
+                Ok(()) => None,
+                Err(TrySendError::Full(_)) => Some(true),
+                Err(TrySendError::Disconnected(_)) => Some(false),
+            },
         };
-        if !overflowed {
+        let Some(saturated) = saturated else {
             return Ok(());
-        }
-        // `try_send` returned `Full`/`Disconnected`: take ownership and isolate.
+        };
+        // A classified, payload-safe adapter failure record (length only).
+        log_client_overflow(client_id, operation_id, bytes_len, saturated);
+        // Take ownership and isolate.
         let connection = self
             .connections
             .remove(&client_id)

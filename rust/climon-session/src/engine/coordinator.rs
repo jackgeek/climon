@@ -55,6 +55,11 @@ const COMPLETION_CAPACITY: usize = 1;
 /// closes; the state degrades the local view rather than failing the core.
 const CONSOLE_ROUTE_CLOSED: &str = "console route closed";
 
+/// Error text stamped on the failure event synthesized when the console route is
+/// saturated (a wedged console peripheral); the write is dropped and the local
+/// view degrades, but the coordinator is never blocked.
+const CONSOLE_ROUTE_SATURATED: &str = "console route saturated";
+
 // ---- effect routing ----------------------------------------------------
 
 /// The exact bounded effect route an [`Effect`] is dispatched to. Every effect
@@ -192,6 +197,21 @@ impl PtyEventSender {
             .blocking_send(event)
             .map_err(|_| LaneSendError::Closed(kind))
     }
+
+    /// The lane's total bound (its buffer size). Paired with [`capacity`] this
+    /// lets a test-support wrapper compute the lane's current occupancy without
+    /// any production domain inspection API.
+    ///
+    /// [`capacity`]: PtyEventSender::capacity
+    pub(crate) fn max_capacity(&self) -> usize {
+        self.0.max_capacity()
+    }
+
+    /// The lane's currently available send capacity (free permits). The current
+    /// occupancy a test-support depth gauge samples is `max_capacity - capacity`.
+    pub(crate) fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
 }
 
 /// Sends every non-pty event to the coordinator's control lane. Rejects a pty
@@ -239,6 +259,17 @@ impl ControlEventSender {
             .blocking_send(event)
             .map_err(|_| LaneSendError::Closed(kind))
     }
+
+    /// The lane's total bound (its buffer size), for a test-support depth gauge.
+    pub(crate) fn max_capacity(&self) -> usize {
+        self.0.max_capacity()
+    }
+
+    /// The lane's currently available send capacity (free permits); occupancy is
+    /// `max_capacity - capacity`.
+    pub(crate) fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
 }
 
 /// The coordinator-side receivers for the two event lanes.
@@ -250,8 +281,18 @@ pub(crate) struct EventLanes {
 /// Builds the two bounded event lanes using the module capacity constants,
 /// returning the typed senders and the coordinator-side receivers.
 pub(crate) fn event_lanes() -> (PtyEventSender, ControlEventSender, EventLanes) {
-    let (pty_tx, pty_rx) = mpsc::channel(PTY_EVENT_CAPACITY);
-    let (control_tx, control_rx) = mpsc::channel(CONTROL_EVENT_CAPACITY);
+    event_lanes_with_capacities(PTY_EVENT_CAPACITY, CONTROL_EVENT_CAPACITY)
+}
+
+/// Builds the two bounded event lanes with explicit capacities (test knob for
+/// exercising backpressure with a small bound), returning the typed senders and
+/// the coordinator-side receivers.
+pub(crate) fn event_lanes_with_capacities(
+    pty_cap: usize,
+    control_cap: usize,
+) -> (PtyEventSender, ControlEventSender, EventLanes) {
+    let (pty_tx, pty_rx) = mpsc::channel(pty_cap);
+    let (control_tx, control_rx) = mpsc::channel(control_cap);
     (
         PtyEventSender(pty_tx),
         ControlEventSender(control_tx),
@@ -488,6 +529,7 @@ where
         if self.completed {
             return Ok(());
         }
+        log_phase("running");
 
         // Consecutive pty-lane applications since the last control check. It is
         // carried across the blocking select so a pty event that select
@@ -614,6 +656,7 @@ where
             EffectRoute::Metadata => self.send_required(EffectRoute::Metadata, effect).await,
             EffectRoute::Timer => self.send_required(EffectRoute::Timer, effect).await,
             EffectRoute::Completion => {
+                log_phase("stopped");
                 self.send_required(EffectRoute::Completion, effect).await?;
                 self.completed = true;
                 Ok(())
@@ -637,10 +680,13 @@ where
             .map_err(|_| CoordinatorError::RequiredEffectRouteClosed(route))
     }
 
-    /// Dispatches a console effect. A closed console route is recoverable: the
-    /// original write's operation id is fed back as
-    /// [`SessionEvent::ConsoleWriteFailed`] so the state degrades the local view
-    /// rather than failing the core.
+    /// Dispatches a console effect. The console is a *degradable peripheral*, so
+    /// its route is never awaited: a wedged (full) or closed console feeds the
+    /// original write's operation id back as [`SessionEvent::ConsoleWriteFailed`]
+    /// so the state degrades the local view rather than blocking the coordinator.
+    /// Awaiting a saturated console route instead would let a blocked console
+    /// stall the whole actor — the bidirectional-backpressure deadlock this
+    /// non-blocking dispatch avoids.
     async fn dispatch_console(
         &mut self,
         effect: Effect,
@@ -650,12 +696,25 @@ where
             Effect::WriteConsole { operation_id, .. } => Some(*operation_id),
             _ => None,
         };
-        if self.routes.console.send(effect).await.is_err() {
+        let bytes_len = match &effect {
+            Effect::WriteConsole { bytes, .. } => bytes.len(),
+            _ => 0,
+        };
+        if let Err(error) = self.routes.console.try_send(effect) {
+            let saturated = matches!(error, mpsc::error::TrySendError::Full(_));
+            if saturated {
+                log_route_saturated("console", "WriteConsole", bytes_len);
+            }
             if let Some(operation_id) = operation_id {
+                let reason = if saturated {
+                    CONSOLE_ROUTE_SATURATED
+                } else {
+                    CONSOLE_ROUTE_CLOSED
+                };
                 self.resynthesize(
                     SessionEvent::ConsoleWriteFailed {
                         operation_id,
-                        error: CONSOLE_ROUTE_CLOSED.to_string(),
+                        error: reason.to_string(),
                     },
                     pending,
                 );
@@ -704,6 +763,46 @@ where
         self.observer.on_applied(kind);
         pending.extend(effects);
     }
+}
+
+// ---- structured, payload-safe observability ----------------------------
+
+/// The component tag shared by every coordinator observability record.
+const COORDINATOR_COMPONENT: &str = "session.coordinator";
+
+/// Emits a structured lifecycle-phase record. Payload-free: it carries only the
+/// phase name. No-op unless a process logger is installed, so an uninstrumented
+/// run (e.g. a fixture that installs no logger) has no logging side effects.
+fn log_phase(phase: &str) {
+    if !climon_logging::logger::is_initialized() {
+        return;
+    }
+    climon_logging::logger::child(COORDINATOR_COMPONENT).log_with(
+        climon_logging::level::LogLevel::Debug,
+        serde_json::json!({ "phase": phase }),
+        "coordinator phase",
+    );
+}
+
+/// Emits a structured effect-route-saturation record: the saturated route, the
+/// effect kind that could not be enqueued, and the payload *length* only (never
+/// the bytes), classified as a `route_saturated` degradation. No-op unless a
+/// process logger is installed.
+fn log_route_saturated(route: &str, effect_kind: &str, bytes_len: usize) {
+    if !climon_logging::logger::is_initialized() {
+        return;
+    }
+    climon_logging::logger::child(COORDINATOR_COMPONENT).log_with(
+        climon_logging::level::LogLevel::Debug,
+        serde_json::json!({
+            "route": route,
+            "effect_kind": effect_kind,
+            "bytes_len": bytes_len,
+            "saturation": true,
+            "failure_class": "route_saturated",
+        }),
+        "effect route saturated",
+    );
 }
 
 #[cfg(test)]

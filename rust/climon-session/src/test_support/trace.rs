@@ -1,11 +1,26 @@
-//! Normalized, deterministic recordings of actor [`Effect`]s for tests.
+//! Normalized, deterministic recordings of actor [`Effect`]s for tests, plus a
+//! recording logging sink for asserting the structured, payload-safe
+//! observability records the coordinator and adapters emit.
 //!
 //! [`ObservableTrace`] strips operation/timer bookkeeping (ids that only exist
 //! to correlate a completion event back to its effect) so assertions can
 //! focus on the externally observable behavior of the actor: which bytes went
 //! to which client, what was written to the pty/console, and so on.
 //!
+//! [`RecordingLogSink`] installs an in-process sink on the process-global logger
+//! so a test can assert the *structured fields* of the emitted records (phase,
+//! effect/failure kind, saturation, ids, payload lengths) rather than any
+//! formatted NDJSON text — and prove no record ever carries payload bytes.
+//!
 //! [`Effect`]: crate::engine::effect::Effect
+
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::Value;
 
 use crate::engine::effect::Effect;
 
@@ -90,6 +105,114 @@ impl ObservableTrace {
         }
         out
     }
+}
+
+// ---- recording logging sink --------------------------------------------
+
+/// Serializes every test that installs a [`RecordingLogSink`], so two of them
+/// cannot race on the process-global logger.
+fn log_sink_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// An in-process byte buffer wired into the process-global logger as an extra
+/// sink, capturing the NDJSON records emitted while installed.
+#[derive(Clone)]
+struct CaptureBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for CaptureBuffer {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("capture buffer poisoned")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A recording logging sink installed on the process-global daemon logger. While
+/// held it captures every emitted record; on drop it restores the logger. It
+/// serializes against other sinks via a process lock so parallel tests cannot
+/// race the global logger, and points `CLIMON_HOME` at a throwaway directory so
+/// the mandatory role log file never touches the real home.
+pub(crate) struct RecordingLogSink {
+    buffer: Arc<Mutex<Vec<u8>>>,
+    _guard: MutexGuard<'static, ()>,
+}
+
+impl RecordingLogSink {
+    /// Installs the recording sink at `trace` level and returns it. Assertions
+    /// read [`records`](RecordingLogSink::records) / [`raw`](RecordingLogSink::raw).
+    pub(crate) fn install() -> Self {
+        let guard = log_sink_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        climon_logging::logger::reset_logger_for_tests();
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let home = scratch_log_home();
+        climon_logging::logger::init_logger(
+            climon_logging::sinks::LogRole::Daemon,
+            climon_logging::logger::LoggerInitOptions {
+                level: Some(climon_logging::level::LogLevel::Trace),
+                env: Some(climon_logging::env::Env::from_pairs([(
+                    "CLIMON_HOME",
+                    home.to_string_lossy().as_ref(),
+                )])),
+                session_id: Some("stress-observability".to_string()),
+                extra_streams: vec![(
+                    climon_logging::level::LogLevel::Trace,
+                    Box::new(CaptureBuffer(buffer.clone())),
+                )],
+                ..Default::default()
+            },
+        );
+        RecordingLogSink {
+            buffer,
+            _guard: guard,
+        }
+    }
+
+    /// The captured records, parsed from NDJSON into structured values so a test
+    /// can assert on *fields*, never on formatted text.
+    pub(crate) fn records(&self) -> Vec<Value> {
+        let bytes = self.buffer.lock().expect("capture buffer poisoned").clone();
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    }
+
+    /// The raw captured bytes, for asserting that no payload bytes ever appear.
+    pub(crate) fn raw(&self) -> String {
+        String::from_utf8_lossy(&self.buffer.lock().expect("capture buffer poisoned")).into_owned()
+    }
+}
+
+impl Drop for RecordingLogSink {
+    fn drop(&mut self) {
+        climon_logging::logger::reset_logger_for_tests();
+    }
+}
+
+/// A unique throwaway `CLIMON_HOME` under `target/` (never the system temp dir),
+/// so the daemon role log file the logger insists on creating is isolated.
+fn scratch_log_home() -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let home = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/climon-session-stress-logs")
+        .join(format!("{}-{nanos}-{n}", std::process::id()));
+    let _ = std::fs::create_dir_all(&home);
+    home
 }
 
 #[cfg(test)]
