@@ -1077,6 +1077,9 @@ mod tests {
         behavior: PtyBehavior,
         command: CommandBehavior,
         fail_at: FailPoint,
+        /// When set, the (peripheral) signal adapter task panics right after it
+        /// starts, modeling a peripheral adapter dying via a panic.
+        panic_signal: bool,
     }
 
     impl SessionBackend for FakeBackend {
@@ -1247,7 +1250,13 @@ mod tests {
                     "signal registration failed",
                 )));
             }
+            let panic_signal = self.panic_signal;
             Ok(tokio::spawn(async move {
+                if panic_signal {
+                    // A peripheral adapter dying via a panic: the supervisor must
+                    // observe it (never detach it) and join it during teardown.
+                    panic!("fake signal adapter panicked");
+                }
                 cancel.cancelled().await;
                 Ok::<(), SignalAdapterError>(())
             }))
@@ -1285,6 +1294,7 @@ mod tests {
         behavior: PtyBehavior,
         command: CommandBehavior,
         fail_at: FailPoint,
+        panic_signal: bool,
     }
 
     impl SupervisorFixture {
@@ -1296,7 +1306,21 @@ mod tests {
                 behavior,
                 command,
                 fail_at,
+                panic_signal: false,
             }
+        }
+
+        /// A session whose child exits cleanly with `code` while a *peripheral*
+        /// adapter (the signal task) panics: the supervisor must join every
+        /// sibling during teardown and surface the panic as [`SessionError::ActorTask`].
+        fn peripheral_adapter_panics(code: i32) -> Self {
+            let mut fixture = Self::new(
+                PtyBehavior::ExitWith(code),
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::None,
+            );
+            fixture.panic_signal = true;
+            fixture
         }
 
         /// A session whose child exits cleanly with `code`.
@@ -1417,6 +1441,7 @@ mod tests {
                 behavior: self.behavior,
                 command: self.command,
                 fail_at: self.fail_at,
+                panic_signal: self.panic_signal,
             }
         }
 
@@ -1589,6 +1614,33 @@ mod tests {
         assert!(
             all_joined,
             "every supervised task must be joined during teardown"
+        );
+    }
+
+    /// A *peripheral* adapter dying via a panic (here the signal task) must never
+    /// be detached: the supervisor observes it, tears the session down, cancels
+    /// and joins every sibling task, terminates the child, and surfaces the panic
+    /// as [`SessionError::ActorTask`] after a clean teardown.
+    #[test]
+    fn peripheral_adapter_panic_joins_all_siblings_and_reports_actor_task() {
+        let fixture = SupervisorFixture::peripheral_adapter_panics(9);
+        let obs = fixture.obs.clone();
+        let error = run_bounded(Duration::from_secs(10), move || fixture.run_sync()).unwrap_err();
+        assert!(
+            matches!(error, SessionError::ActorTask),
+            "a panicked peripheral adapter must surface as ActorTask"
+        );
+        assert!(
+            obs.terminated.load(Ordering::SeqCst) >= 1,
+            "the child must be terminated during teardown"
+        );
+        let all_joined = matches!(
+            &*obs.join_report.lock().unwrap(),
+            Some(report) if report.unjoined.is_empty()
+        );
+        assert!(
+            all_joined,
+            "every sibling task must be joined during teardown — none detached"
         );
     }
 

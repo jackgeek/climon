@@ -17,6 +17,8 @@ pub(crate) mod coordinator;
 pub(crate) mod effect;
 pub(crate) mod event;
 pub(crate) mod state;
+#[cfg(test)]
+mod stress;
 pub(crate) mod supervisor;
 
 /// Bounded capacity of the pty event lane (pty output/exit/failure).
