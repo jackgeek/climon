@@ -21,17 +21,36 @@ function freePort(): Promise<number> {
   });
 }
 
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 30000): Promise<T> {
+// Wait for the spawned dashboard server to answer /health. Unlike a blind poll,
+// this also watches for the server process exiting early: cold-start of
+// src/server.ts (React/Fluent import graph) can be slow on a loaded CI runner,
+// so we allow generous headroom but fail fast with the captured stderr if the
+// process dies, instead of silently timing out.
+async function waitForHealth(
+  server: Bun.Subprocess,
+  base: string,
+  ms = 60000
+): Promise<void> {
+  let exitCode: number | undefined;
+  server.exited.then((code) => {
+    exitCode = code;
+  });
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const v = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
-    ]);
-    if (v !== undefined) return v;
-    await new Promise((r) => setTimeout(r, 50));
+    if (exitCode !== undefined) {
+      // Process already exited: stderr is closed, so reading it completes.
+      const stderr = server.stderr instanceof ReadableStream ? await Bun.readableStreamToText(server.stderr).catch(() => "") : "";
+      throw new Error(`server exited early (code ${exitCode}) before /health was ready\n${stderr}`);
+    }
+    const res = await fetch(`${base}/health`).catch(() => undefined);
+    if (res?.ok) return;
+    await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error("timed out");
+  // Kill first so the still-open stderr stream closes and can be drained.
+  server.kill();
+  await server.exited;
+  const stderr = server.stderr instanceof ReadableStream ? await Bun.readableStreamToText(server.stderr).catch(() => "") : "";
+  throw new Error(`timed out waiting ${ms}ms for ${base}/health\n${stderr}`);
 }
 
 afterEach(async () => {
@@ -65,10 +84,7 @@ async function startServer(label: string) {
     { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
   );
   const base = `http://127.0.0.1:${port}`;
-  await waitFor(async () => {
-    const res = await fetch(`${base}/health`).catch(() => undefined);
-    return res?.ok ? true : undefined;
-  });
+  await waitForHealth(server, base);
   return { server, base, argvFile, home };
 }
 
@@ -90,7 +106,7 @@ describe("POST /api/sessions headless vs visible routing", () => {
       server.kill();
       await server.exited;
     }
-  }, 60000);
+  }, 120000);
 
   test("default (visible) returns 202 and omits --headless", async () => {
     const { server, base, argvFile, home } = await startServer("visible");
@@ -108,5 +124,5 @@ describe("POST /api/sessions headless vs visible routing", () => {
       server.kill();
       await server.exited;
     }
-  }, 60000);
+  }, 120000);
 });
