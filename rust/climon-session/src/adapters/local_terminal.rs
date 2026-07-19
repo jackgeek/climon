@@ -1932,6 +1932,92 @@ mod tests {
         assert_eq!(platform.log().last().copied(), Some("restored"));
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn shutdown_restores_cooked_flags_and_preserves_unread_input_despite_pendin() {
+        use std::io::{Read, Write};
+        use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+
+        struct PtyModeGuard {
+            _raw: climon_pty::RawMode,
+        }
+        impl ModeGuard for PtyModeGuard {}
+
+        struct PtyPlatform {
+            fd: RawFd,
+        }
+        impl TerminalPlatform for PtyPlatform {
+            fn configure(&self, _headless: bool) -> PlatformConfiguration {
+                PlatformConfiguration {
+                    attached: true,
+                    size: (80, 24),
+                    guard: Box::new(PtyModeGuard {
+                        _raw: climon_pty::RawMode::enable(self.fd).expect("enable raw mode"),
+                    }),
+                    input: None,
+                    input_interrupt: None,
+                }
+            }
+        }
+
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        let rc = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
+        let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        let mut slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+
+        let mut before: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut before) },
+            0
+        );
+
+        let (event_sink, _events, _closed) = sink();
+        let setup = setup_local_terminal_with(
+            PtyPlatform {
+                fd: slave.as_raw_fd(),
+            },
+            false,
+            event_sink,
+            CancellationToken::new(),
+        );
+        master.write_all(b"queued-input\n").expect("queue input");
+        setup.shutdown().await.expect("shutdown");
+
+        let mut after: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut after) }, 0);
+        let cooked_mask = libc::ECHO | libc::ICANON | libc::ISIG | libc::IEXTEN;
+        assert_eq!(
+            after.c_lflag & cooked_mask,
+            before.c_lflag & cooked_mask,
+            "functional cooked-mode flags must be restored"
+        );
+        assert_ne!(
+            after.c_lflag & libc::PENDIN,
+            0,
+            "macOS should expose unread raw-mode input through the transient PENDIN status bit"
+        );
+
+        let mut pfd = libc::pollfd {
+            fd: slave.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert_eq!(unsafe { libc::poll(&mut pfd, 1, 1000) }, 1);
+        let mut queued = [0u8; 32];
+        let count = slave.read(&mut queued).expect("read queued input");
+        assert_eq!(&queued[..count], b"queued-input\n");
+    }
+
     // Step 9: a headless/unattached setup spawns no worker and mutates no mode.
     #[tokio::test]
     async fn setup_unattached_spawns_no_worker_and_mutates_nothing() {

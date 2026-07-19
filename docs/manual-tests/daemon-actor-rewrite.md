@@ -103,8 +103,12 @@ differ per cell call it out.
    reaches the child and output/redraw render correctly.
 4. Exit the TUI and the shell (`exit` / Ctrl-D).
 5. Back at your original shell, confirm the terminal is restored to cooked mode:
-   local echo and line editing work and there are no raw-mode artifacts. (Unix:
-   re-run `stty -a` and confirm it matches step 1.)
+   local echo, canonical line editing, signal keys, and extended input processing
+   work and there are no raw-mode artifacts. On Unix, compare the functional
+   `ECHO`, `ICANON`, `ISIG`, and `IEXTEN` flags from `stty -a`; do not fail solely
+   because macOS reports the transient `PENDIN` kernel status bit after unread
+   input crossed the raw-to-cooked transition. If `PENDIN` differs, confirm the
+   pending input remains readable rather than being discarded.
 
 **Expected result:**
 - The actor engine hosts the attached session with full interactive fidelity:
@@ -115,7 +119,10 @@ differ per cell call it out.
   so the launching shell is never left in raw mode. On Windows the console
   input/output modes set via `SetConsoleMode` are restored by the Windows mode
   guard, and console input read as UTF-16 via `ReadConsoleW` is converted to
-  UTF-8 before it reaches the child.
+  UTF-8 before it reaches the child. On macOS, `PENDIN` may be set by the kernel
+  when unread input is reprocessed after canonical mode is restored; this is not
+  a mode-restoration failure when the functional cooked flags are restored and
+  the queued input is preserved.
 
 **Result-tracking row:**
 
