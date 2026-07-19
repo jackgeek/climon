@@ -757,7 +757,8 @@ impl SessionBackend for RealBackend {
             rows: meta.rows,
             env: Some(build_child_env(id)),
         })?;
-        let parts = pty.into_parts()?;
+        let mut parts = pty.into_parts()?;
+        climon_pty::prime_headless_conpty(&mut *parts.writer, meta.headless.unwrap_or(false))?;
         let handles = crate::adapters::pty::spawn_pty_adapter(parts, effects, events);
         Ok(PtyLaunch {
             pid: handles.pid,

@@ -114,15 +114,9 @@ fn conpty_wedged_skip() {
 #[test]
 fn detached_process_captures_conpty_output() {
     use std::collections::HashMap;
-    use std::mem::size_of;
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-    use windows_sys::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, WaitForSingleObject, CREATE_NEW_CONSOLE,
-        PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOW,
-    };
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     const ROLE_VAR: &str = "__CLIMON_TEST_DETACHED_CONPTY_ROLE";
     const RESULT_VAR: &str = "__CLIMON_TEST_DETACHED_CONPTY_RESULT";
@@ -157,8 +151,7 @@ fn detached_process_captures_conpty_output() {
 
             let mut pty = Pty::spawn(&opts).expect("spawn payload in ConPTY");
             let mut writer = pty.take_writer().expect("take ConPTY writer");
-            writer
-                .write_all(b"\x1b[1;1R")
+            climon_pty::prime_headless_conpty(&mut *writer, true)
                 .expect("answer ConPTY cursor-position query");
             let reader = pty.try_clone_reader().expect("clone ConPTY reader");
             let reader_handle = std::thread::spawn(move || read_to_end(reader));
@@ -186,59 +179,31 @@ fn detached_process_captures_conpty_output() {
         std::process::id()
     ));
 
-    let exe = std::env::current_exe().expect("current test executable");
-    let mut exe_wide = exe
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let mut command_line = format!("\"{}\" --exact {TEST_NAME} --nocapture", exe.display())
-        .encode_utf16()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let startup = STARTUPINFOW {
-        cb: size_of::<STARTUPINFOW>() as u32,
-        dwFlags: STARTF_USESHOWWINDOW,
-        wShowWindow: 0,
-        ..Default::default()
-    };
-    let mut process = PROCESS_INFORMATION::default();
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut child = Command::new(std::env::current_exe().expect("current test executable"))
+        .args(["--exact", TEST_NAME, "--nocapture"])
+        .env(ROLE_VAR, "detached")
+        .env(RESULT_VAR, &result_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+        .spawn()
+        .expect("spawn detached test process");
 
-    std::env::set_var(ROLE_VAR, "detached");
-    std::env::set_var(RESULT_VAR, &result_path);
-    let spawned = unsafe {
-        CreateProcessW(
-            exe_wide.as_mut_ptr(),
-            command_line.as_mut_ptr(),
-            ptr::null(),
-            ptr::null(),
-            0,
-            CREATE_NEW_CONSOLE,
-            ptr::null(),
-            ptr::null(),
-            &startup,
-            &mut process,
-        )
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll detached process") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "detached ConPTY test process did not exit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
     };
-    std::env::remove_var(ROLE_VAR);
-    std::env::remove_var(RESULT_VAR);
-    assert_ne!(spawned, 0, "spawn hidden-console test process");
-    unsafe {
-        CloseHandle(process.hThread);
-    }
-
-    let wait = unsafe { WaitForSingleObject(process.hProcess, 20_000) };
-    assert_eq!(
-        wait, WAIT_OBJECT_0,
-        "hidden-console ConPTY test process did not exit"
-    );
-    let mut exit_code = 1;
-    let got_exit = unsafe { GetExitCodeProcess(process.hProcess, &mut exit_code) };
-    unsafe {
-        CloseHandle(process.hProcess);
-    }
-    assert_ne!(got_exit, 0, "read hidden-console process exit code");
-    assert_eq!(exit_code, 0, "hidden-console test process failed");
+    assert!(status.success(), "detached test process failed: {status}");
 
     let output = std::fs::read(&result_path).expect("read captured ConPTY output");
     std::fs::remove_file(&result_path).ok();

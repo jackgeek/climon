@@ -793,7 +793,8 @@ pub fn run_session_host(
     };
     let pid = pty.pid();
     let reader = pty.try_clone_reader()?;
-    let writer = pty.take_writer()?;
+    let mut writer = pty.take_writer()?;
+    climon_pty::prime_headless_conpty(&mut *writer, headless)?;
     let resizer = pty.resizer();
     let pty_writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(writer));
 
