@@ -49,7 +49,7 @@ jobs:
 
       # Some tests under tests/ drive the compiled Rust client and hard-fail if
       # rust/target/debug/climon is absent (e.g. create-session-parent,
-      # spawn-feature-gate). Build it so `bun test tests` exercises the real
+      # spawn-feature-gate). Build it so `bun run test` exercises the real
       # cross-boundary path instead of erroring out.
       - uses: dtolnay/rust-toolchain@stable
 
@@ -65,4 +65,4 @@ jobs:
         run: bun run lint
 
       - name: Run server + parity tests
-        run: bun test tests
+        run: bun run test

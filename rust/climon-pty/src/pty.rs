@@ -48,6 +48,24 @@ pub struct PtyOptions {
 type SharedMaster = Arc<Mutex<Box<dyn MasterPty + Send>>>;
 type AppliedSize = Arc<Mutex<(u16, u16)>>;
 
+/// Answers the cursor-position query ConPTY emits before starting its child.
+///
+/// An attached terminal emulator answers this query naturally. A headless
+/// Windows session has no emulator yet, so ConPTY otherwise waits indefinitely
+/// before the monitored command can run. The initial cursor is always at 1,1.
+pub fn prime_headless_conpty(writer: &mut (dyn Write + Send), headless: bool) -> PtyResult<()> {
+    #[cfg(windows)]
+    if headless {
+        writer.write_all(b"\x1b[1;1R")?;
+        writer.flush()?;
+    }
+
+    #[cfg(not(windows))]
+    let _ = (writer, headless);
+
+    Ok(())
+}
+
 /// A spawned PTY plus its child process.
 ///
 /// Obtain the reader/writer once up front, then drive the session: [`resize`]
