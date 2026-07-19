@@ -480,6 +480,20 @@ pub(crate) struct Coordinator<S, O> {
     pty_open: bool,
     control_open: bool,
     completed: bool,
+    /// A resize to apply the moment [`Coordinator::run`] starts, strictly
+    /// before the bounded pty-lane burst gets a chance to drain any event
+    /// already queued in either lane. Sending the same
+    /// [`SessionEvent::LocalResized`] on the control lane instead (as a
+    /// caller could do before the coordinator is even spawned) does not give
+    /// this guarantee: it is still subject to the same
+    /// at-most-[`PTY_DRAIN_BURST`]-pty-events-per-control-check arbitration
+    /// every other control event uses, so already-buffered pty output (e.g.
+    /// a real child that started writing before the coordinator was spawned)
+    /// can be applied first. Production use is Windows-only (seeding the
+    /// real attached console size before any pty output can be rendered at
+    /// the launcher's Unix-only, always-80x24-on-Windows placeholder size),
+    /// but the mechanism itself is platform-agnostic.
+    initial_resize: Option<(u16, u16)>,
 }
 
 impl<S, O> Coordinator<S, O>
@@ -507,14 +521,30 @@ where
             pty_open: true,
             control_open: true,
             completed: false,
+            initial_resize: None,
         }
+    }
+
+    /// Seeds a resize to be applied before [`Coordinator::run`]'s loop begins,
+    /// bypassing the lanes entirely so it cannot lose the pty-burst
+    /// arbitration race. `None` (the default) applies no startup resize,
+    /// matching prior behavior exactly.
+    pub(crate) fn with_initial_resize(mut self, resize: Option<(u16, u16)>) -> Self {
+        self.initial_resize = resize;
+        self
     }
 
     /// Runs the coordinator until the session completes (a
     /// [`Effect::CompleteSession`] is dispatched), cancellation is requested, or
     /// a fatal condition occurs (both lanes closed, or a required route closed).
     ///
-    /// The arbitration bounds control-event latency to at most
+    /// Immediately after startup, an [`initial_resize`](Self::with_initial_resize)
+    /// (if seeded) is applied before either lane is touched, so it is
+    /// unconditionally ordered ahead of every pty/control event the lanes
+    /// already hold — including a full [`PTY_DRAIN_BURST`] of already-queued
+    /// pty output.
+    ///
+    /// After that, the arbitration bounds control-event latency to at most
     /// [`PTY_DRAIN_BURST`] consecutive pty-lane applications: each loop drains
     /// immediately-available pty events in FIFO order until the running burst
     /// reaches that bound or the lane empties, then processes one
@@ -529,6 +559,15 @@ where
         if self.completed {
             return Ok(());
         }
+
+        if let Some((cols, rows)) = self.initial_resize.take() {
+            self.apply_event(SessionEvent::LocalResized { cols, rows })
+                .await?;
+            if self.completed {
+                return Ok(());
+            }
+        }
+
         log_phase("running");
 
         // Consecutive pty-lane applications since the last control check. It is
@@ -892,6 +931,39 @@ mod tests {
         );
 
         let _ = fixture.finish().await;
+    }
+
+    /// DAR-01 follow-up: [`Coordinator::with_initial_resize`] must apply the
+    /// seeded resize before the run loop's bounded pty-lane burst can drain
+    /// any event already queued in either lane. This is the structural fix
+    /// for the reviewer-flagged defect in the prior seeding approach (sending
+    /// an ordinary `LocalResized` on the control lane before the coordinator
+    /// was even spawned, mirroring what `supervisor::run_with` did): that
+    /// approach was still bound by the same
+    /// at-most-[`PTY_DRAIN_BURST`]-pty-events-per-control-check arbitration
+    /// every other control event uses, so a real console's first frames
+    /// could be applied at the stale size before the resize was even checked
+    /// once (confirmed by a since-removed regression test whose RED run is
+    /// recorded in the DAR-01 follow-up report). Prequeuing twenty pty
+    /// outputs ahead of spawning models that exact race; the resize must
+    /// land at index zero regardless.
+    #[tokio::test(start_paused = true)]
+    async fn initial_resize_is_applied_before_any_queued_pty_output() {
+        let mut fixture = CoordinatorFixture::attached();
+        for i in 0..20u8 {
+            fixture.queue_pty_output(&[i]).await;
+        }
+        fixture.seed_initial_resize(137, 51);
+
+        fixture.run_until_applied(21).await;
+
+        let kinds = fixture.applied_kinds();
+        assert_eq!(
+            kinds.first(),
+            Some(&EventKind::LocalResized),
+            "a seeded initial resize must be applied before any queued pty \
+             output: {kinds:?}"
+        );
     }
 
     // Test 1: pty FIFO — two outputs then an exit keep order, with the exit's

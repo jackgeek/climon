@@ -588,18 +588,18 @@ async fn run_with<B: SessionBackend>(
     // its own initial sample, so without seeding the real size here the
     // pty/grid stay at that bogus 80x24 for the whole session unless the user
     // later resizes the window — this produced the reported diagonal `~` /
-    // misplaced status line rendering in Vim. Feed the real size in as an
-    // ordinary `LocalResized` event (the same event the poller emits on a real
-    // change) so it is applied through the already-tested resize handling
-    // before any pty output is produced. The lane cannot be closed this early
-    // in startup, so a send failure here is intentionally ignored.
+    // misplaced status line rendering in Vim. Capture the real size to seed
+    // via `Coordinator::with_initial_resize` (Step 5/6, below) instead of
+    // sending it as an ordinary control-lane event here: the coordinator's
+    // bounded pty-lane burst can drain up to `PTY_DRAIN_BURST` already-queued
+    // pty events before ever checking the control lane, so a control-lane
+    // send this early does not guarantee the resize is applied before any
+    // pty output the child may have already produced by now.
+    // `with_initial_resize` bypasses the lanes entirely, applying the resize
+    // synchronously before the coordinator's run loop begins, so it is
+    // unconditionally ordered ahead of any buffered pty output.
     #[cfg(windows)]
-    if local_attached {
-        let (cols, rows) = local.size;
-        let _ = control_tx
-            .send(SessionEvent::LocalResized { cols, rows })
-            .await;
-    }
+    let windows_initial_resize = local_attached.then_some(local.size);
     registry.register(
         TaskName::Console,
         backend.launch_console(console_effects, control_tx.clone()),
@@ -693,6 +693,8 @@ async fn run_with<B: SessionBackend>(
         routes,
         lanes,
     );
+    #[cfg(windows)]
+    let coordinator = coordinator.with_initial_resize(windows_initial_resize);
     registry.register(
         TaskName::Coordinator,
         tokio::spawn(coordinator.run(root_cancel.clone())),
@@ -2041,19 +2043,19 @@ mod tests {
         assert!(on_disk.completed_at.is_some());
     }
 
-    /// DAR-01 regression: on Windows, the launcher's `meta.cols`/`meta.rows`
-    /// come from a Unix-only `terminal_size()` call and are always the 80x24
-    /// placeholder (`base_meta()` models this exactly). The Windows resize
-    /// poller (`adapters::signals::spawn_resize_adapter`) only reports *changes*
-    /// from its own initial sample, so without an explicit initial resize the
-    /// pty/grid stayed at that bogus 80x24 for the whole session unless the user
-    /// happened to resize the window later — this is exactly what produced the
-    /// reported diagonal `~` / misplaced status line in Vim on a real Windows
-    /// Terminal tab whose actual size was not 80x24. When the local terminal
-    /// reports it is attached at a real size that differs from the launch
-    /// metadata, the supervisor must seed the coordinator with that real size
-    /// before the session is considered started, so the pty is resized to match
-    /// the real console right away rather than waiting for a subsequent resize.
+    /// DAR-01 follow-up: the Windows startup resize seed
+    /// (`Coordinator::with_initial_resize`, wired from
+    /// `supervisor::run_with`'s Step 3) must apply the seeded resize before
+    /// the coordinator's run loop begins, bypassing the lanes entirely —
+    /// unlike the prior control-lane `LocalResized` send, which the
+    /// coordinator's bounded pty-lane burst (`PTY_DRAIN_BURST`) could apply
+    /// after up to sixteen already-queued pty events, so it never guaranteed
+    /// the real console size was applied before any pty output. When the
+    /// local terminal reports it is attached at a real size that differs from
+    /// the launch metadata, the supervisor must seed the coordinator with
+    /// that real size before the session is considered started, so the pty
+    /// is resized to match the real console right away rather than waiting
+    /// for a subsequent resize.
     #[cfg(windows)]
     #[test]
     fn windows_attached_local_terminal_seeds_real_console_size_at_startup() {
@@ -2065,6 +2067,29 @@ mod tests {
             vec![(137, 51)],
             "the pty must be resized to the real console size at startup instead of \
              staying at the launch metadata's 80x24"
+        );
+    }
+
+    /// DAR-01 follow-up negative path: an unattached Windows local terminal
+    /// (headless — no real console, e.g. a redirected/non-interactive
+    /// stdin/stdout such as a service invocation) has no real console size to
+    /// seed from, so `local.attached` gates the seed off entirely — mirroring
+    /// the pre-existing `if local_attached` guard, now expressed as
+    /// `local_attached.then_some(local.size)`. Every other fixture in this
+    /// module already exercises this path implicitly (`run_sync` always sets
+    /// `headless: true` unless a size override is supplied); this test makes
+    /// the "no startup resize" guarantee explicit and independently
+    /// verifiable.
+    #[cfg(windows)]
+    #[test]
+    fn windows_unattached_local_terminal_does_not_seed_a_startup_resize() {
+        let fixture = SupervisorFixture::successful_exit(0);
+        let code = fixture.run_sync().expect("session completes");
+        assert_eq!(code, 0);
+        assert!(
+            fixture.resized_to().is_empty(),
+            "an unattached local terminal must not seed a startup resize: {:?}",
+            fixture.resized_to()
         );
     }
 }

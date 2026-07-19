@@ -104,6 +104,12 @@ pub(crate) struct CoordinatorFixture {
     cancel: CancellationToken,
     parked: Arc<Notify>,
     handle: Option<JoinHandle<Result<(), CoordinatorError>>>,
+
+    /// A resize to seed via [`Coordinator::with_initial_resize`] on the next
+    /// [`Self::spawn`], modeling the Windows attached-startup path
+    /// structurally rather than by queuing a same-shaped event on the control
+    /// lane (see [`Self::seed_initial_resize`]).
+    initial_resize: Option<(u16, u16)>,
 }
 
 impl CoordinatorFixture {
@@ -162,6 +168,7 @@ impl CoordinatorFixture {
             cancel,
             parked,
             handle: None,
+            initial_resize: None,
         }
     }
 
@@ -205,6 +212,15 @@ impl CoordinatorFixture {
         });
     }
 
+    /// Seeds a resize the coordinator will apply the moment it is spawned,
+    /// via [`Coordinator::with_initial_resize`] — bypassing the lanes
+    /// entirely, unlike [`Self::queue_control`], so it cannot lose the
+    /// pty-burst arbitration race. Models the Windows attached-console
+    /// startup path structurally.
+    pub(crate) fn seed_initial_resize(&mut self, cols: u16, rows: u16) {
+        self.initial_resize = Some((cols, rows));
+    }
+
     // ---- spawning / running ---------------------------------------------
 
     /// Spawns the coordinator as an owned task, moving the ingredients in.
@@ -215,7 +231,8 @@ impl CoordinatorFixture {
             self.observer.take().expect("already spawned"),
             self.routes.take().expect("already spawned"),
             self.lanes.take().expect("already spawned"),
-        );
+        )
+        .with_initial_resize(self.initial_resize.take());
         let cancel = self.cancel.clone();
         self.handle = Some(tokio::spawn(coordinator.run(cancel)));
     }
