@@ -478,9 +478,9 @@ impl PtyWaiter {
         match &self.backend {
             PtyWaiterBackend::Portable { child, .. } => child.process_id(),
             #[cfg(windows)]
-            PtyWaiterBackend::HeadlessConpty { process } => process
-                .as_ref()
-                .map(|process| process.lock().unwrap().pid()),
+            PtyWaiterBackend::HeadlessConpty { process } => {
+                process.as_ref().map(crate::headless_conpty::pid)
+            }
         }
     }
 
@@ -591,7 +591,7 @@ pub struct PtyKiller {
 enum PtyKillerBackend {
     Portable(Box<dyn ChildKiller + Send + Sync>),
     #[cfg(windows)]
-    HeadlessConpty(Weak<Mutex<conpty::Process>>),
+    HeadlessConpty(Weak<crate::headless_conpty::HeadlessConpty>),
 }
 
 impl PtyKiller {
@@ -626,7 +626,7 @@ pub struct PtyResizer {
 enum PtyResizerBackend {
     Portable(Weak<Mutex<Box<dyn MasterPty + Send>>>),
     #[cfg(windows)]
-    HeadlessConpty(Weak<Mutex<conpty::Process>>),
+    HeadlessConpty(Weak<crate::headless_conpty::HeadlessConpty>),
 }
 
 impl PtyResizer {
@@ -793,5 +793,162 @@ mod tests {
         assert_send::<PtyParts>();
         assert_send::<PtyWaiter>();
         assert_send::<PtyKiller>();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn raw_conpty_wait_does_not_block_concurrent_resize_or_kill() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let options = PtyOptions {
+            command: "cmd".to_string(),
+            args: vec![
+                "/c".to_string(),
+                "echo CLIMON-RAW-CONPTY-LIVE & pause >NUL".to_string(),
+            ],
+            cwd: std::env::current_dir().expect("cwd"),
+            cols: 80,
+            rows: 24,
+            env: None,
+            headless_conpty: false,
+        };
+        let PtyParts {
+            pid,
+            reader,
+            writer,
+            resizer,
+            waiter,
+            mut killer,
+        } = Pty::spawn(&options.for_headless_session())
+            .expect("spawn raw ConPTY")
+            .into_parts()
+            .expect("split raw ConPTY");
+
+        let (output_ready_tx, output_ready_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut reader = reader;
+            let mut output = Vec::new();
+            let mut buf = [0u8; 1024];
+            let mut reported_ready = false;
+            while let Ok(read) = reader.read(&mut buf) {
+                if read == 0 {
+                    break;
+                }
+                output.extend_from_slice(&buf[..read]);
+                if !reported_ready
+                    && String::from_utf8_lossy(&output).contains("CLIMON-RAW-CONPTY-LIVE")
+                {
+                    let _ = output_ready_tx.send(());
+                    reported_ready = true;
+                }
+            }
+            output
+        });
+        output_ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the raw ConPTY child must write before concurrent operations");
+
+        let wait_entered = crate::headless_conpty::wait_entry_receiver();
+        let waiter = std::thread::spawn(move || waiter.wait());
+        wait_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("waiter must enter the live raw-ConPTY wait");
+
+        let (resize_done_tx, resize_done_rx) = mpsc::channel();
+        let resize = std::thread::spawn(move || {
+            let _ = resizer.resize(100, 40);
+            let _ = resize_done_tx.send(());
+        });
+        let (kill_done_tx, kill_done_rx) = mpsc::channel();
+        let kill = std::thread::spawn(move || {
+            let _ = killer.kill();
+            let _ = kill_done_tx.send(());
+        });
+
+        let resize_completed = resize_done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        let kill_completed = kill_done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+
+        if !resize_completed || !kill_completed {
+            let pid = pid.expect("raw ConPTY pid");
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .status();
+        }
+        drop(writer);
+        let _ = waiter.join().expect("waiter joins after test cleanup");
+        resize.join().expect("resizer joins after test cleanup");
+        kill.join().expect("killer joins after test cleanup");
+        let output = reader.join().expect("reader joins after test cleanup");
+
+        assert!(
+            String::from_utf8_lossy(&output).contains("CLIMON-RAW-CONPTY-LIVE"),
+            "the raw ConPTY child must be live before the concurrent operations"
+        );
+        assert!(
+            resize_completed,
+            "resize must not block behind a live raw-ConPTY waiter"
+        );
+        assert!(
+            kill_completed,
+            "kill must not block behind a live raw-ConPTY waiter"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn raw_conpty_with_no_environment_inherits_parent_environment() {
+        let inherited_key = "CLIMON_RAW_CONPTY_INHERITANCE_TEST";
+        let inherited_value = "dar-02-parent-environment";
+        let old_inherited = std::env::var_os(inherited_key);
+        let old_term = std::env::var_os("TERM");
+        std::env::set_var(inherited_key, inherited_value);
+        std::env::remove_var("TERM");
+
+        let options = PtyOptions {
+            command: "cmd".to_string(),
+            args: vec!["/c".to_string(), format!("echo %{inherited_key}%")],
+            cwd: std::env::current_dir().expect("cwd"),
+            cols: 80,
+            rows: 24,
+            env: None,
+            headless_conpty: false,
+        };
+        let mut pty = Pty::spawn(&options.for_headless_session()).expect("spawn raw ConPTY");
+        let mut reader = pty.try_clone_reader().expect("reader");
+
+        if let Some(value) = old_term {
+            std::env::set_var("TERM", value);
+        } else {
+            std::env::remove_var("TERM");
+        }
+        if let Some(value) = old_inherited {
+            std::env::set_var(inherited_key, value);
+        } else {
+            std::env::remove_var(inherited_key);
+        }
+
+        let exit = pty
+            .wait_timeout(Duration::from_secs(2))
+            .expect("wait for environment probe");
+        if exit.is_none() {
+            pty.kill().expect("kill wedged environment probe");
+        }
+        drop(pty);
+
+        let mut output = Vec::new();
+        let mut buffer = [0u8; 1024];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => output.extend_from_slice(&buffer[..read]),
+            }
+        }
+        assert_eq!(exit, Some(0), "environment probe must exit");
+        assert!(
+            String::from_utf8_lossy(&output).contains(inherited_value),
+            "env: None must inherit the parent environment; output: {:?}",
+            String::from_utf8_lossy(&output)
+        );
     }
 }

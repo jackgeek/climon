@@ -3,10 +3,86 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows_sys::Win32::System::Threading::{
+    GetExitCodeProcess, OpenProcess, TerminateProcess, WaitForSingleObject,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+};
+
 use crate::error::{PtyError, PtyResult};
 use crate::pty::PtyOptions;
 
-pub(super) type ProcessHandle = Arc<Mutex<conpty::Process>>;
+pub(super) type ProcessHandle = Arc<HeadlessConpty>;
+
+/// Owns the raw ConPTY plus a separately opened handle to its child process.
+///
+/// `conpty::Process` exposes `wait` with `&self`, but its resize/kill APIs take
+/// `&mut self`, so the former implementation put every operation behind one
+/// mutex. A blocking wait then prevented a dashboard resize or kill from ever
+/// acquiring that mutex. The duplicated child handle gives wait and termination
+/// independent Win32 handles while the mutex remains limited to the ConPTY
+/// operations that truly require exclusive mutable access.
+pub(super) struct HeadlessConpty {
+    console: Mutex<conpty::Process>,
+    child: ChildHandle,
+    pid: u32,
+}
+
+struct ChildHandle(isize);
+
+impl ChildHandle {
+    fn open(pid: u32) -> PtyResult<Self> {
+        // SAFETY: `pid` belongs to the process returned by `conpty`; this handle
+        // is closed exactly once by `Drop`.
+        let handle = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+                0,
+                pid,
+            )
+        };
+        if handle.is_null() {
+            return Err(win32_error("open raw ConPTY child process"));
+        }
+        Ok(Self(handle as isize))
+    }
+}
+
+impl Drop for ChildHandle {
+    fn drop(&mut self) {
+        // SAFETY: `ChildHandle::open` only constructs instances from a successful
+        // `OpenProcess` result, and this is its unique owner.
+        unsafe {
+            let _ = CloseHandle(self.0 as HANDLE);
+        }
+    }
+}
+
+#[cfg(test)]
+static WAIT_ENTERED: std::sync::OnceLock<Mutex<Option<std::sync::mpsc::Sender<()>>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(super) fn wait_entry_receiver() -> std::sync::mpsc::Receiver<()> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    *WAIT_ENTERED
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = Some(sender);
+    receiver
+}
+
+#[cfg(test)]
+fn notify_wait_entered() {
+    if let Some(sender) = WAIT_ENTERED
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .take()
+    {
+        let _ = sender.send(());
+    }
+}
 
 pub(super) fn spawn(options: &PtyOptions, cols: u16, rows: u16) -> PtyResult<(ProcessHandle, u32)> {
     // `conpty` builds CreateProcessW's command line from these strings without
@@ -26,56 +102,58 @@ pub(super) fn spawn(options: &PtyOptions, cols: u16, rows: u16) -> PtyResult<(Pr
         .spawn(command)
         .map_err(|error| PtyError::Backend(error.to_string()))?;
     let pid = process.pid();
-    Ok((Arc::new(Mutex::new(process)), pid))
+    let child = ChildHandle::open(pid)?;
+    Ok((
+        Arc::new(HeadlessConpty {
+            console: Mutex::new(process),
+            child,
+            pid,
+        }),
+        pid,
+    ))
 }
 
 pub(super) fn reader(process: &ProcessHandle) -> PtyResult<Box<dyn Read + Send>> {
-    let mut process = process.lock().unwrap();
-    process
+    let mut console = process.console.lock().unwrap();
+    console
         .output()
         .map(|reader| Box::new(reader) as Box<dyn Read + Send>)
         .map_err(|error| PtyError::Backend(error.to_string()))
 }
 
 pub(super) fn writer(process: &ProcessHandle) -> PtyResult<Box<dyn Write + Send>> {
-    let mut process = process.lock().unwrap();
-    process
+    let mut console = process.console.lock().unwrap();
+    console
         .input()
         .map(|writer| Box::new(writer) as Box<dyn Write + Send>)
         .map_err(|error| PtyError::Backend(error.to_string()))
 }
 
 pub(super) fn resize(process: &ProcessHandle, cols: u16, rows: u16) {
-    let _ = process.lock().unwrap().resize(
+    let _ = process.console.lock().unwrap().resize(
         cols.min(i16::MAX as u16) as i16,
         rows.min(i16::MAX as u16) as i16,
     );
 }
 
 pub(super) fn try_wait(process: &ProcessHandle) -> PtyResult<Option<i32>> {
-    let process = process.lock().unwrap();
-    match process.wait(Some(0)) {
-        Ok(code) => Ok(Some(code as i32)),
-        Err(conpty::error::Error::Timeout(_)) => Ok(None),
-        Err(error) => Err(PtyError::Backend(error.to_string())),
-    }
+    wait_for_child(&process.child, 0)
 }
 
 pub(super) fn wait(process: &ProcessHandle) -> PtyResult<i32> {
-    process
-        .lock()
-        .unwrap()
-        .wait(None)
-        .map(|code| code as i32)
-        .map_err(|error| PtyError::Backend(error.to_string()))
+    #[cfg(test)]
+    notify_wait_entered();
+    wait_for_child(&process.child, u32::MAX)?.ok_or_else(|| {
+        PtyError::Backend("raw ConPTY child wait timed out unexpectedly".to_string())
+    })
 }
 
 pub(super) fn kill(process: &ProcessHandle) -> PtyResult<()> {
-    process
-        .lock()
-        .unwrap()
-        .exit(1)
-        .map_err(|error| PtyError::Backend(error.to_string()))
+    // SAFETY: `child` is a valid process handle retained by `HeadlessConpty`.
+    if unsafe { TerminateProcess(process.child.0 as HANDLE, 1) } == 0 {
+        return Err(win32_error("terminate raw ConPTY child process"));
+    }
+    Ok(())
 }
 
 fn apply_env(command: &mut std::process::Command, env: Option<&HashMap<String, String>>) {
@@ -88,11 +166,43 @@ fn apply_env(command: &mut std::process::Command, env: Option<&HashMap<String, S
             }
         }
 
-        None if std::env::var_os("TERM").is_none() => {
-            command.env("TERM", "xterm-256color");
+        None => {
+            // `conpty` serializes only `Command::get_envs()` into CreateProcessW's
+            // environment block. Make the portable backend's inheritance contract
+            // explicit before layering its TERM default.
+            command.envs(std::env::vars_os());
+            if std::env::var_os("TERM").is_none() {
+                command.env("TERM", "xterm-256color");
+            }
         }
-        None => {}
     }
+}
+
+pub(super) fn pid(process: &ProcessHandle) -> u32 {
+    process.pid
+}
+
+fn wait_for_child(child: &ChildHandle, timeout_ms: u32) -> PtyResult<Option<i32>> {
+    // SAFETY: `child` owns a valid process handle until all raw-ConPTY owners
+    // release it. Waiting on one process handle is independent of ConPTY I/O.
+    match unsafe { WaitForSingleObject(child.0 as HANDLE, timeout_ms) } {
+        WAIT_OBJECT_0 => exit_code(child).map(Some),
+        WAIT_TIMEOUT => Ok(None),
+        _ => Err(win32_error("wait for raw ConPTY child process")),
+    }
+}
+
+fn exit_code(child: &ChildHandle) -> PtyResult<i32> {
+    let mut code = 0;
+    // SAFETY: `child` owns a valid process handle and `code` is writable.
+    if unsafe { GetExitCodeProcess(child.0 as HANDLE, &mut code) } == 0 {
+        return Err(win32_error("read raw ConPTY child exit code"));
+    }
+    Ok(code as i32)
+}
+
+fn win32_error(operation: &str) -> PtyError {
+    PtyError::Backend(format!("{operation}: {}", std::io::Error::last_os_error()))
 }
 
 fn quote_windows_argument(argument: &str) -> String {
