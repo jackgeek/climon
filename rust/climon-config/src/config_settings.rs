@@ -346,7 +346,8 @@ pub fn config_settings() -> Vec<ConfigSetting> {
             "Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.",
             vec![Daemon],
         )
-        .default(Value::from(10)),
+        .default(Value::from(10))
+        .accept_input(),
         ConfigSetting::new(
             "remote.enabled",
             Boolean,
@@ -922,6 +923,14 @@ mod tests {
     }
 
     #[test]
+    fn attention_idle_seconds_accepts_user_input() {
+        let setting =
+            find_config_setting("attention.idleSeconds").expect("attention setting exists");
+        assert!(setting.accept_input);
+        assert!(accepted_config_keys().contains(&"attention.idleSeconds".to_string()));
+    }
+
+    #[test]
     fn remote_spawn_secret_is_sensitive_string_client_and_server() {
         let s = find_config_setting("remote.spawnSecret").expect("setting exists");
         assert_eq!(s.kind, ConfigType::String);
@@ -950,6 +959,7 @@ mod tests {
                 "dashboard.theme",
                 "dashboard.keyBarPinned",
                 "dashboard.stateIconNoMotion",
+                "attention.idleSeconds",
                 "remote.enabled",
                 "remote.host",
                 "remote.ingestHost",

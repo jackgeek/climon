@@ -279,11 +279,15 @@ differ per cell call it out.
 3. Confirm the session flips to `needs-attention` (in the dashboard and in
    `climon ls`).
 4. Acknowledge from the dashboard (focus/open the session). Confirm attention
-   clears and the status returns to `running`.
-5. Idle again to re-flag `needs-attention`. While flagged, resize the terminal or
-   the browser viewport (a dimension change only, with no new program output).
-   Confirm the flag **stays**.
-6. After the resize, acknowledge again from the dashboard and confirm the
+   clears and the status becomes `acknowledged`.
+5. Produce a deterministic visible screen-body change, not transient output that
+   settles back to the same screen. For example, at a shell prompt run
+   `printf 'DAR-05 changed body\n'` and leave that line visible. Confirm the
+   status first returns to `running`, then wait a complete new
+   `attention.idleSeconds` interval and confirm it re-flags `needs-attention`.
+6. While flagged, resize the terminal or the browser viewport (a dimension
+   change only, with no new program output). Confirm the flag **stays**.
+7. After the resize, acknowledge again from the dashboard and confirm the
    acknowledgement is still accepted.
 
 **Expected result:**
@@ -291,10 +295,14 @@ differ per cell call it out.
   an internal screen fingerprint that is never sent over the wire) flips the
   session to `needs-attention`. A user acknowledgement clears attention only when
   it references the current attention token **and** the screen has not changed
-  since it was flagged; a differing dimension header (a resize reflow) makes the
-  content comparison meaningless, so the acknowledgement passes through. A pure
-  resize is **not** program activity — the fingerprint body ignores the
-  `{cols}x{rows}` header — so `needs-attention` stays sticky across a resize.
+  since it was flagged, and records the durable `acknowledged` state. The
+  acknowledged screen does not re-flag while unchanged. A genuine fingerprint
+  body change clears acknowledgement to `running`, starts a fresh idle window,
+  and re-flags only after that full window. A differing dimension header (a
+  resize reflow) makes the content comparison meaningless, so the
+  acknowledgement passes through. A pure resize is **not** program activity —
+  the fingerprint body ignores the `{cols}x{rows}` header — so
+  `needs-attention` stays sticky across a resize.
 
 **Result-tracking row:**
 

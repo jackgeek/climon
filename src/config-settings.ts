@@ -159,7 +159,8 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     type: "number",
     defaultValue: 10,
     purpose: "Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.",
-    scope: ["daemon"]
+    scope: ["daemon"],
+    acceptInput: true
   },
   {
     path: "remote.enabled",

@@ -496,6 +496,75 @@ mod tests {
     }
 
     #[test]
+    fn acknowledged_screen_change_reflags_after_a_fresh_idle_window() {
+        let mut state = AttentionState::new(1, false);
+        assert!(state
+            .sample("80x24\nprompt", 0, "T0", SessionStatus::Running, &[], None)
+            .is_none());
+        state
+            .sample(
+                "80x24\nprompt",
+                1_000,
+                "T1",
+                SessionStatus::Running,
+                &[],
+                None,
+            )
+            .unwrap();
+        let ack = state
+            .apply_user(
+                AttentionPayload {
+                    needs_attention: false,
+                    reason: None,
+                    attention_matched_at: Some("T1".into()),
+                },
+                "80x24\nprompt",
+                1_100,
+                "T1.1",
+                SessionStatus::NeedsAttention,
+                &[],
+                None,
+            )
+            .unwrap();
+        assert_eq!(ack.status, SessionStatus::Acknowledged);
+
+        let changed = state
+            .sample(
+                "80x24\nprompt\nchanged-body",
+                1_200,
+                "T2",
+                SessionStatus::Acknowledged,
+                &[],
+                None,
+            )
+            .unwrap();
+        assert_eq!(changed.status, SessionStatus::Running);
+
+        assert!(state
+            .sample(
+                "80x24\nprompt\nchanged-body",
+                2_199,
+                "T3",
+                SessionStatus::Running,
+                &[],
+                None,
+            )
+            .is_none());
+        let reflagged = state
+            .sample(
+                "80x24\nprompt\nchanged-body",
+                2_200,
+                "T4",
+                SessionStatus::Running,
+                &[],
+                None,
+            )
+            .unwrap();
+        assert_eq!(reflagged.status, SessionStatus::NeedsAttention);
+        assert_eq!(reflagged.source, AttentionSource::Detector);
+    }
+
+    #[test]
     fn resize_settle_preserves_acknowledged() {
         let mut state = AttentionState::new(1, false);
         assert!(state

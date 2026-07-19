@@ -79,6 +79,13 @@ describe("config settings registry", () => {
     expect(setting?.internal).not.toBe(true);
   });
 
+  test("attention.idleSeconds accepts user input", () => {
+    const setting = findConfigSetting("attention.idleSeconds");
+    expect(setting).toBeDefined();
+    expect(setting?.acceptInput).toBe(true);
+    expect(acceptedConfigKeys()).toContain("attention.idleSeconds");
+  });
+
   test("remote.spawnSecret is a sensitive client+server string", () => {
     const s = CONFIG_SETTINGS.find((c) => c.path === "remote.spawnSecret");
     expect(s).toBeDefined();
@@ -147,6 +154,7 @@ describe("config settings registry", () => {
       "dashboard.theme",
       "dashboard.keyBarPinned",
       "dashboard.stateIconNoMotion",
+      "attention.idleSeconds",
       "remote.enabled",
       "remote.host",
       "remote.ingestHost",
