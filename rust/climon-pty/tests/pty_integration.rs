@@ -86,6 +86,8 @@ const CHILD_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 ///    regardless, which is why the bug was Windows-only.
 fn spawn_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
     let mut pty = Pty::spawn(opts).expect("spawn");
+    let mut writer = pty.take_writer().expect("writer");
+    climon_pty::prime_headless_conpty(&mut *writer, true).expect("prime headless ConPTY");
     let reader = pty.try_clone_reader().expect("reader");
     let handle = std::thread::spawn(move || read_to_end(reader));
     let exit = pty.wait_timeout(CHILD_EXIT_TIMEOUT).expect("wait_timeout");
@@ -94,6 +96,7 @@ fn spawn_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
         // the pseudoconsole can close and the reader can EOF.
         pty.kill().ok();
     }
+    drop(writer);
     // Must precede `join`; see rule 2 in the doc comment above.
     drop(pty);
     let out = handle.join().expect("join");
@@ -310,6 +313,8 @@ fn resize_dedupes_and_does_not_panic() {
     let opts = sh("ping -n 2 127.0.0.1 >NUL");
 
     let mut pty = Pty::spawn(&opts).expect("spawn");
+    let mut writer = pty.take_writer().expect("writer");
+    climon_pty::prime_headless_conpty(&mut *writer, true).expect("prime headless ConPTY");
     let reader = pty.try_clone_reader().expect("reader");
     let handle = std::thread::spawn(move || read_to_end(reader));
 
@@ -337,6 +342,7 @@ fn resize_dedupes_and_does_not_panic() {
         // the pseudoconsole can close and the reader can EOF below.
         pty.kill().ok();
     }
+    drop(writer);
     // This test interleaves resizes between spawn and wait, so it can't use
     // `spawn_wait_capture`, but it must follow the same teardown rules: bound the
     // wait and drop the master before joining the reader (see that helper's doc
@@ -358,6 +364,8 @@ fn dropping_pty_releases_master_and_makes_resizer_inert() {
     let opts = sh("ping -n 6 127.0.0.1 >NUL");
 
     let mut pty = Pty::spawn(&opts).expect("spawn");
+    let mut writer = pty.take_writer().expect("writer");
+    climon_pty::prime_headless_conpty(&mut *writer, true).expect("prime headless ConPTY");
     let reader = pty.try_clone_reader().expect("reader");
     let handle = std::thread::spawn(move || read_to_end(reader));
 
@@ -371,6 +379,7 @@ fn dropping_pty_releases_master_and_makes_resizer_inert() {
     // without this the cloned reader never EOFs. The resizer holds only a Weak
     // ref, so it must not keep the master alive and becomes inert after drop.
     pty.kill().ok();
+    drop(writer);
     drop(pty);
 
     // The reader thread must observe EOF and finish (would hang on regression).
@@ -393,6 +402,7 @@ fn dropping_pty_releases_master_and_makes_resizer_inert() {
 fn into_parts_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
     let PtyParts {
         reader,
+        mut writer,
         waiter,
         mut killer,
         ..
@@ -400,7 +410,8 @@ fn into_parts_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
         .expect("spawn")
         .into_parts()
         .expect("into_parts");
-
+    climon_pty::prime_headless_conpty(&mut *writer, true).expect("prime headless ConPTY");
+    climon_pty::prime_headless_conpty(&mut *writer, true).expect("prime headless ConPTY");
     let reader_handle = std::thread::spawn(move || read_to_end(reader));
 
     // Bound the blocking wait: a wedged headless ConPTY child never reaches its
@@ -420,6 +431,7 @@ fn into_parts_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
     // Consuming wait: blocks for the exit code, then drops the master (closing
     // the pseudoconsole on Windows) so the cloned reader EOFs below.
     let exit = waiter.wait();
+    drop(writer);
     let _ = done_tx.send(());
     let out = reader_handle
         .join()
@@ -491,11 +503,15 @@ fn waiter_try_wait_polls_and_kill_terminates_a_live_child() {
     let opts = sh("ping -n 6 127.0.0.1 >NUL");
 
     let PtyParts {
-        reader, mut waiter, ..
+        reader,
+        mut writer,
+        mut waiter,
+        ..
     } = Pty::spawn(&opts)
         .expect("spawn")
         .into_parts()
         .expect("into_parts");
+    climon_pty::prime_headless_conpty(&mut *writer, true).expect("prime headless ConPTY");
     let reader_handle = std::thread::spawn(move || read_to_end(reader));
 
     let running_before_kill = waiter.try_wait().expect("try_wait").is_none();
@@ -517,6 +533,7 @@ fn waiter_try_wait_polls_and_kill_terminates_a_live_child() {
 
     // Drop the master before joining the reader (Windows ConPTY EOF rule).
     waiter.release_master();
+    drop(writer);
     let _ = reader_handle
         .join()
         .expect("reader joins after master release");
