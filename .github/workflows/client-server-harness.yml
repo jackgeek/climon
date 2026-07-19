@@ -1,4 +1,4 @@
-name: Client-Server Harness
+name: Client/server harness
 
 on:
   workflow_dispatch: {}
@@ -18,6 +18,7 @@ on:
 
 jobs:
   smoke:
+    name: smoke (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
@@ -44,20 +45,23 @@ jobs:
           node-version: 24
 
       - run: bun install --frozen-lockfile
+        name: Install dependencies
 
-      - name: Install browser (Linux)
-        if: matrix.platform == 'linux'
+      - name: Install Chromium and Linux browser dependencies
+        if: runner.os == 'Linux'
         run: npx playwright install --with-deps chromium
 
-      - name: Install browser
-        if: matrix.platform != 'linux'
+      - name: Install Chromium
+        if: runner.os != 'Linux'
         run: npx playwright install chromium
 
-      - run: bun run test:harness:smoke
+      - name: Run harness
+        run: bun run test:harness:smoke
         env:
           CLIMON_HARNESS_ARTIFACT_DIR: .test-tmp/harness/${{ matrix.platform }}
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload harness evidence
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: client-server-harness-${{ matrix.platform }}
@@ -80,20 +84,25 @@ jobs:
           bun-version: "1.3.10"
 
       - run: bun install --frozen-lockfile
+        name: Install dependencies
 
       - uses: actions/download-artifact@v4
         with:
           pattern: client-server-harness-*
           path: .test-tmp/harness-results
 
-      - run: bun run harness:aggregate -- .test-tmp/harness-results docs/manual-tests smoke
+      - name: Aggregate cross-platform results
+        run: bun run harness:aggregate -- .test-tmp/harness-results docs/manual-tests smoke
 
-      - run: cat .test-tmp/harness-results/summary.md >> $GITHUB_STEP_SUMMARY
+      - name: Publish aggregate summary
+        if: always()
+        run: cat .test-tmp/harness-results/summary.md >> $GITHUB_STEP_SUMMARY
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload aggregate summary
+        uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: harness-aggregate-summary
+          name: client-server-harness-summary
           path: |
             .test-tmp/harness-results/summary.json
             .test-tmp/harness-results/summary.md
