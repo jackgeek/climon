@@ -48,7 +48,7 @@ From the repo root (the project uses Bun and TypeScript ESM):
 ```bash
 bun install            # install dependencies (checks for the Rust toolchain)
 bun run build            # build the dashboard bundle, server entrypoint, and Rust client
-bun test tests         # run the full Bun suite
+bun run test           # run the full Bun suite
 bun run lint           # typecheck + message-catalog check
 bun run typecheck      # tsc --noEmit only
 ```

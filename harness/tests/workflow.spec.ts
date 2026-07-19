@@ -7,6 +7,11 @@ const workflowPath = resolve(
   import.meta.dirname,
   "../../.github/workflows/client-server-harness.yml"
 );
+const bunWorkflowPath = resolve(
+  import.meta.dirname,
+  "../../.github/workflows/bun-ci.yml"
+);
+const packagePath = resolve(import.meta.dirname, "../../package.json");
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -15,6 +20,11 @@ type YamlDoc = Record<string, any>;
 
 async function loadWorkflow(): Promise<YamlDoc> {
   const raw = await readFile(workflowPath, "utf8");
+  return yaml.parse(raw) as YamlDoc;
+}
+
+async function loadBunWorkflow(): Promise<YamlDoc> {
+  const raw = await readFile(bunWorkflowPath, "utf8");
   return yaml.parse(raw) as YamlDoc;
 }
 
@@ -63,6 +73,19 @@ test("workflow: pull_request has path filters", async () => {
   expect(
     paths.some((p) => p.includes("client-server-harness"))
   ).toBe(true);
+});
+
+test("repository Bun tests target only the root tests directory", async () => {
+  const pkg = JSON.parse(await readFile(packagePath, "utf8")) as {
+    scripts?: Record<string, string>;
+  };
+  expect(pkg.scripts?.test).toBe("bun test ./tests");
+
+  const wf = await loadBunWorkflow();
+  const testStep = (wf.jobs?.test?.steps ?? []).find(
+    (step: YamlDoc) => step.name === "Run server + parity tests"
+  );
+  expect(testStep?.run).toBe("bun run test");
 });
 
 // ── Smoke job ─────────────────────────────────────────────────────────────────
@@ -171,6 +194,18 @@ test("workflow: smoke has test:harness:smoke step with CLIMON_HARNESS_ARTIFACT_D
   expect(
     String(testStep?.env?.CLIMON_HARNESS_ARTIFACT_DIR)
   ).toContain("matrix.platform");
+});
+
+test("workflow: Linux harness disables setsid on hosted runners", async () => {
+  const wf = await loadWorkflow();
+  const testStep = smokeSteps(wf).find(
+    (step) =>
+      typeof step.run === "string" && step.run.includes("test:harness:smoke")
+  );
+  expect(testStep).toBeDefined();
+  const disableSetsid = String(testStep?.env?.CLIMON_DISABLE_SETSID ?? "");
+  expect(disableSetsid).toContain("runner.os == 'Linux'");
+  expect(disableSetsid).toContain("'1'");
 });
 
 test("workflow: smoke uploads artifacts always with if-no-files-found error", async () => {

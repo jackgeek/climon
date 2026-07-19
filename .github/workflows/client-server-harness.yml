@@ -59,6 +59,7 @@ jobs:
         run: bun run test:harness:smoke
         env:
           CLIMON_HARNESS_ARTIFACT_DIR: .test-tmp/harness/${{ matrix.platform }}
+          CLIMON_DISABLE_SETSID: ${{ runner.os == 'Linux' && '1' || '' }}
 
       - name: Upload harness evidence
         uses: actions/upload-artifact@v4

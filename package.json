@@ -25,7 +25,7 @@
     "check:peers": "bun scripts/check-peer-deps.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "bun run typecheck && bun run messages:check",
-    "test": "bun test tests",
+    "test": "bun test ./tests",
     "release": "bun scripts/release.ts",
     "dev": "bun scripts/dev.ts",
     "server": "bun src/server.ts server",

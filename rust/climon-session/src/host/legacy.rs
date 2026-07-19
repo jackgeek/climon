@@ -1989,8 +1989,9 @@ mod local_output_thread_tests {
 
         let (tx, rx) = channel::<Vec<u8>>();
 
-        let shared: Arc<Mutex<MockHostState>> =
-            Arc::new(Mutex::new(MockHostState { local_out: Some(tx) }));
+        let shared: Arc<Mutex<MockHostState>> = Arc::new(Mutex::new(MockHostState {
+            local_out: Some(tx),
+        }));
 
         // Simulate detached stdin/SIGWINCH threads retaining Arc clones
         let _detached_clone1 = Arc::clone(&shared);

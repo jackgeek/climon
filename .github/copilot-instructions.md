@@ -34,7 +34,7 @@
 - Build all runtime artifacts with `bun run build` (`build:web` dashboard bundle, `build:server` server entrypoint, `build:rust` Rust `climon` client). The `build:rust` step (`scripts/build-rust.ts`) installs a minimal Rust toolchain via rustup on demand when `cargo` is missing (skip with `CLIMON_SKIP_RUST_INSTALL=1`); the `postinstall` hook (`scripts/rust-toolchain.ts`) only reports toolchain status and never downloads during `bun install`.
 - Compile release binaries with `bun run compile`; bump the version and create the matching git tag with `bun run release`.
 - Type-check/lint with `bun run lint` or `bun run typecheck` (`tsc -p tsconfig.json --noEmit`).
-- Run the full suite with `bun test tests`.
+- Run the full suite with `bun run test`.
 - Run a single test file with `bun test tests/config.test.ts`.
 - Run one test by name with `bun test tests/config.test.ts -t "default config binds to localhost"`.
 - Useful local entrypoints: `bun src/server.ts server` (canonical dashboard server) or `cargo run -p climon-cli -- <args>` from `rust/` (the client).
