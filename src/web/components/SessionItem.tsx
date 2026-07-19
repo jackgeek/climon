@@ -283,6 +283,20 @@ export function sessionAccessibleLabel(
   return `${sessionDisplayTitle(session)}, ${STATUS_LABELS[session.status]}`;
 }
 
+export function sessionAutomationAttributes(
+  session: Pick<SessionMeta, "id" | "status">
+): Readonly<{
+  "data-testid": string;
+  "data-session-id": string;
+  "data-session-status": string;
+}> {
+  return {
+    "data-testid": "session-item",
+    "data-session-id": session.id,
+    "data-session-status": session.status
+  } as const;
+}
+
 export function SessionItem({
   session,
   active,
@@ -327,6 +341,7 @@ export function SessionItem({
           onSelect(session.id);
         }
       }}
+      {...sessionAutomationAttributes(session)}
     >
       {active && session.color && (
         <span

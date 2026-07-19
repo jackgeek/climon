@@ -79,7 +79,7 @@ mock.module("@fluentui/react-icons", () => ({
   ...iconStubs
 }));
 
-const { SessionItem, sessionAccessibleLabel, sessionDisplayTitle } = await import(
+const { SessionItem, sessionAccessibleLabel, sessionDisplayTitle, sessionAutomationAttributes } = await import(
   "../src/web/components/SessionItem.js"
 );
 
@@ -346,5 +346,20 @@ describe("SessionItem take control", () => {
     expect(source).not.toContain("climon-take-control");
     expect(source).not.toContain("onTakeControl");
     expect(source).not.toContain("lockBtn");
+  });
+});
+
+describe("sessionAutomationAttributes", () => {
+  test("returns stable test selectors for the session id and status", () => {
+    const attributes = sessionAutomationAttributes({
+      id: "quiet-otters-run",
+      status: "running"
+    });
+
+    expect(attributes).toEqual({
+      "data-testid": "session-item",
+      "data-session-id": "quiet-otters-run",
+      "data-session-status": "running"
+    });
   });
 });
