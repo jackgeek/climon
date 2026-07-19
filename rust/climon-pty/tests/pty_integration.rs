@@ -19,6 +19,8 @@ fn sh(script: &str) -> PtyOptions {
         cols: 80,
         rows: 24,
         env: None,
+        #[cfg(windows)]
+        headless_conpty: false,
     }
 }
 
@@ -31,6 +33,7 @@ fn sh(script: &str) -> PtyOptions {
         cols: 80,
         rows: 24,
         env: None,
+        headless_conpty: false,
     }
 }
 
@@ -153,6 +156,48 @@ fn spawns_and_reads_output() {
     );
 }
 
+/// A detached daemon has no local terminal to answer ConPTY's initial cursor
+/// position query. The shared PTY layer must therefore let a trivial child start,
+/// write, and exit without any input from an external terminal.
+#[cfg(windows)]
+#[test]
+fn headless_conpty_child_outputs_and_exits_without_external_cursor_reply() {
+    let marker = "CLIMON HEADLESS CONPTY";
+    let mut pty = Pty::spawn(&sh(&format!("echo {marker}")).for_headless_session()).expect("spawn");
+    let reader = pty.try_clone_reader().expect("reader");
+    let reader_handle = std::thread::spawn(move || read_to_end(reader));
+
+    // This bound is test cleanup only: the regression leaves the child alive
+    // forever, so kill it before asserting to avoid leaking a test process.
+    let exit = pty
+        .wait_timeout(std::time::Duration::from_secs(2))
+        .expect("wait_timeout");
+    if exit.is_none() {
+        pty.kill().expect("kill wedged child");
+    }
+    drop(pty);
+    let output = reader_handle.join().expect("reader joins");
+
+    assert_eq!(
+        exit,
+        Some(0),
+        "a headless ConPTY child must exit without an external cursor reply; output: {:?}",
+        String::from_utf8_lossy(&output)
+    );
+    assert!(
+        String::from_utf8_lossy(&output).contains(marker),
+        "expected {marker:?} in output, got: {:?}",
+        String::from_utf8_lossy(&output)
+    );
+    assert!(
+        !output
+            .windows(b"\x1b[6n".len())
+            .any(|bytes| bytes == b"\x1b[6n"),
+        "the headless backend must not emit an inherited-cursor query: {:?}",
+        String::from_utf8_lossy(&output)
+    );
+}
+
 #[test]
 fn propagates_nonzero_exit_code() {
     let (code, out) = match spawn_wait_capture(&sh("exit 7")) {
@@ -246,30 +291,29 @@ fn dropping_pty_releases_master_and_makes_resizer_inert() {
 
 /// Drives a spawned command through [`Pty::into_parts`] — the production split —
 /// instead of the borrowed `&Pty` helpers, proving the owned reader, waiter, and
-/// independently-cloned killer wire up to real portable-pty handles.
+/// independently-cloned killer wire up to real PTY handles.
 ///
 /// It follows the same two Windows teardown rules as [`spawn_wait_capture`], but
 /// expressed through the owned parts: a watchdog thread bounds the otherwise
 /// unbounded [`PtyWaiter::wait`] by killing the child through the *concurrent*
 /// [`PtyKiller`] (the whole point of the separate killer), and the consuming
-/// `wait` drops the master before the reader thread is joined. Returns `None`
-/// when the child wedges (headless ConPTY), mirroring `spawn_wait_capture`.
+/// `wait` drops the master before the reader thread is joined.
 fn into_parts_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
     let PtyParts {
         reader,
+        writer: _writer,
         waiter,
         mut killer,
         ..
-    } = Pty::spawn(opts)
+    } = Pty::spawn(&opts.clone().for_headless_session())
         .expect("spawn")
         .into_parts()
         .expect("into_parts");
 
     let reader_handle = std::thread::spawn(move || read_to_end(reader));
 
-    // Bound the blocking wait: a wedged headless ConPTY child never reaches its
-    // own `ExitProcess`, so `waiter.wait()` would block forever. The cloned
-    // killer terminates it from this watchdog thread *while* the main thread is
+    // Bound the blocking wait so a regression cannot hang the test. The cloned
+    // killer terminates it from this watchdog thread while the main thread is
     // parked in `wait`, with no shared mutex between them.
     let wedged = Arc::new(AtomicBool::new(false));
     let (done_tx, done_rx) = mpsc::channel::<()>();
@@ -298,12 +342,14 @@ fn into_parts_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
 
 /// Smoke test: the production [`Pty::into_parts`] path streams child output
 /// through its owned reader and reports the exit code from its consuming waiter,
-/// on a real PTY. Reuses the reliable `printf` fixture and the same
-/// inconclusive-skip guards as the borrowed-API tests, so it adds no flaky shell
-/// assumptions.
+/// on a real PTY.
 #[test]
 fn into_parts_streams_output_and_reports_exit() {
-    let (code, out) = match into_parts_wait_capture(&sh("printf hi")) {
+    #[cfg(unix)]
+    let opts = sh("printf hi");
+    #[cfg(windows)]
+    let opts = sh("echo hi");
+    let (code, out) = match into_parts_wait_capture(&opts) {
         Some(captured) => captured,
         None => {
             conpty_wedged_skip();
@@ -393,6 +439,8 @@ fn empty_command_errors() {
         cols: 80,
         rows: 24,
         env: None,
+        #[cfg(windows)]
+        headless_conpty: false,
     };
     assert!(Pty::spawn(&opts).is_err());
 }

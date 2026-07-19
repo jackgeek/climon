@@ -743,14 +743,22 @@ pub fn run_session_host(
 
     // --- Spawn PTY ---
     let (file, args) = resolve_command(&meta.command)?;
-    let mut pty = match Pty::spawn(&PtyOptions {
+    let pty_options = PtyOptions {
         command: file,
         args,
         cwd: std::path::PathBuf::from(&meta.cwd),
         cols: meta.cols,
         rows: meta.rows,
         env: Some(build_child_env(id)),
-    }) {
+        #[cfg(windows)]
+        headless_conpty: false,
+    };
+    let pty_options = if headless {
+        pty_options.for_headless_session()
+    } else {
+        pty_options
+    };
+    let mut pty = match Pty::spawn(&pty_options) {
         Ok(pty) => pty,
         Err(e) => {
             let now = now_iso();

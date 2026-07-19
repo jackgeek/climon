@@ -518,7 +518,10 @@ pub(crate) async fn run(
         scrollback_cap: SCROLLBACK_CAP,
     };
 
-    let backend = RealBackend { env };
+    let backend = RealBackend {
+        env,
+        headless: options.headless,
+    };
     run_with(backend, runtime_config, id, meta, options).await
 }
 
@@ -789,6 +792,7 @@ fn build_child_env(id: &str) -> std::collections::HashMap<String, String> {
 /// timer, and signal resources, and the legacy startup metadata patches.
 struct RealBackend {
     env: climon_store::Env,
+    headless: bool,
 }
 
 impl SessionBackend for RealBackend {
@@ -800,14 +804,22 @@ impl SessionBackend for RealBackend {
         events: PtyEventSender,
     ) -> SessionResult<PtyLaunch> {
         let (file, args) = climon_pty::resolve_command(&meta.command)?;
-        let pty = climon_pty::Pty::spawn(&climon_pty::PtyOptions {
+        let pty_options = climon_pty::PtyOptions {
             command: file,
             args,
             cwd: std::path::PathBuf::from(&meta.cwd),
             cols: meta.cols,
             rows: meta.rows,
             env: Some(build_child_env(id)),
-        })?;
+            #[cfg(windows)]
+            headless_conpty: false,
+        };
+        let pty_options = if self.headless {
+            pty_options.for_headless_session()
+        } else {
+            pty_options
+        };
+        let pty = climon_pty::Pty::spawn(&pty_options)?;
         let parts = pty.into_parts()?;
         let handles = crate::adapters::pty::spawn_pty_adapter(parts, effects, events);
         Ok(PtyLaunch {
@@ -1988,7 +2000,10 @@ mod tests {
         meta.completed_at = Some("1970-01-01T00:00:01.000Z".to_string());
         climon_store::meta::write_session_meta(&env, &meta).expect("write terminal meta");
 
-        let mut backend = RealBackend { env: env.clone() };
+        let mut backend = RealBackend {
+            env: env.clone(),
+            headless: false,
+        };
         backend.mark_failed(&id, CORE_FAILURE_MESSAGE);
 
         let on_disk = climon_store::meta::read_session_meta(&env, &id)
@@ -2030,7 +2045,10 @@ mod tests {
         meta.priority_reason = PriorityReason::Running;
         climon_store::meta::write_session_meta(&env, &meta).expect("write running meta");
 
-        let mut backend = RealBackend { env: env.clone() };
+        let mut backend = RealBackend {
+            env: env.clone(),
+            headless: false,
+        };
         backend.mark_failed(&id, "spawn failed");
 
         let on_disk = climon_store::meta::read_session_meta(&env, &id)

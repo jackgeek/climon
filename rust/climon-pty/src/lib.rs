@@ -29,6 +29,8 @@
 pub mod command;
 pub mod descendants;
 pub mod error;
+#[cfg(windows)]
+mod headless_conpty;
 pub mod pty;
 pub mod scrollback;
 pub mod term;

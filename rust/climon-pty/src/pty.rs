@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -43,10 +44,40 @@ pub struct PtyOptions {
     /// `None`, the parent environment is inherited. `TERM` defaults to
     /// `xterm-256color` when not already set either way.
     pub env: Option<HashMap<String, String>>,
+    /// Uses the raw ConPTY backend for a detached session, avoiding the inherited
+    /// cursor protocol that requires an attached terminal host.
+    #[cfg(windows)]
+    pub headless_conpty: bool,
+}
+
+impl PtyOptions {
+    /// Configures a PTY for a session with no local terminal.
+    #[cfg(windows)]
+    pub fn for_headless_session(mut self) -> Self {
+        self.headless_conpty = true;
+        self
+    }
+
+    /// Configures a PTY for a session with no local terminal.
+    #[cfg(not(windows))]
+    pub fn for_headless_session(self) -> Self {
+        self
+    }
 }
 
 type SharedMaster = Arc<Mutex<Box<dyn MasterPty + Send>>>;
 type AppliedSize = Arc<Mutex<(u16, u16)>>;
+
+enum PtyBackend {
+    Portable {
+        master: SharedMaster,
+        child: Box<dyn portable_pty::Child + Send + Sync>,
+    },
+    #[cfg(windows)]
+    HeadlessConpty {
+        process: crate::headless_conpty::ProcessHandle,
+    },
+}
 
 /// A spawned PTY plus its child process.
 ///
@@ -58,8 +89,8 @@ type AppliedSize = Arc<Mutex<(u16, u16)>>;
 /// [`wait`]: Pty::wait
 /// [`kill`]: Pty::kill
 pub struct Pty {
-    master: SharedMaster,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    backend: PtyBackend,
+    writer_taken: AtomicBool,
     applied_size: AppliedSize,
     pid: Option<u32>,
 }
@@ -78,6 +109,17 @@ impl Pty {
 
         let cols = options.cols.max(1);
         let rows = options.rows.max(1);
+
+        #[cfg(windows)]
+        if options.headless_conpty {
+            let (process, pid) = crate::headless_conpty::spawn(options, cols, rows)?;
+            return Ok(Pty {
+                backend: PtyBackend::HeadlessConpty { process },
+                writer_taken: AtomicBool::new(false),
+                applied_size: Arc::new(Mutex::new((cols, rows))),
+                pid: Some(pid),
+            });
+        }
 
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -105,8 +147,11 @@ impl Pty {
         let pid = child.process_id();
 
         Ok(Pty {
-            master: Arc::new(Mutex::new(pair.master)),
-            child,
+            backend: PtyBackend::Portable {
+                master: Arc::new(Mutex::new(pair.master)),
+                child,
+            },
+            writer_taken: AtomicBool::new(false),
             applied_size: Arc::new(Mutex::new((cols, rows))),
             pid,
         })
@@ -120,17 +165,32 @@ impl Pty {
     /// Clones a blocking reader over the PTY's output. Output produced before
     /// the first read is held in the kernel PTY buffer, so nothing is lost.
     pub fn try_clone_reader(&self) -> PtyResult<Box<dyn Read + Send>> {
-        self.master
-            .lock()
-            .unwrap()
-            .try_clone_reader()
-            .map_err(backend)
+        match &self.backend {
+            PtyBackend::Portable { master, .. } => {
+                master.lock().unwrap().try_clone_reader().map_err(backend)
+            }
+            #[cfg(windows)]
+            PtyBackend::HeadlessConpty { process } => crate::headless_conpty::reader(process),
+        }
     }
 
     /// Takes the PTY's writer. Each PTY yields a single writer; the caller
     /// typically wraps it in a mutex to share across threads.
     pub fn take_writer(&self) -> PtyResult<Box<dyn Write + Send>> {
-        self.master.lock().unwrap().take_writer().map_err(backend)
+        if self.writer_taken.swap(true, Ordering::AcqRel) {
+            return Err(PtyError::WriterTaken);
+        }
+        let result = match &self.backend {
+            PtyBackend::Portable { master, .. } => {
+                master.lock().unwrap().take_writer().map_err(backend)
+            }
+            #[cfg(windows)]
+            PtyBackend::HeadlessConpty { process } => crate::headless_conpty::writer(process),
+        };
+        if result.is_err() {
+            self.writer_taken.store(false, Ordering::Release);
+        }
+        result
     }
 
     /// Applies a new terminal size. Clamps to `>= 1`, de-dupes against the last
@@ -138,7 +198,7 @@ impl Pty {
     /// descendant so nested TUIs re-read the size. Returns whether the size
     /// changed (and was therefore applied).
     pub fn resize(&self, cols: u16, rows: u16) -> bool {
-        apply_resize(&self.master, &self.applied_size, self.pid, cols, rows)
+        apply_resize(&self.backend, &self.applied_size, self.pid, cols, rows)
     }
 
     /// Returns a cheap, cloneable, `Send + Sync` handle that can [`resize`] the
@@ -153,8 +213,17 @@ impl Pty {
     ///
     /// [`resize`]: PtyResizer::resize
     pub fn resizer(&self) -> PtyResizer {
+        let backend = match &self.backend {
+            PtyBackend::Portable { master, .. } => {
+                PtyResizerBackend::Portable(Arc::downgrade(master))
+            }
+            #[cfg(windows)]
+            PtyBackend::HeadlessConpty { process } => {
+                PtyResizerBackend::HeadlessConpty(Arc::downgrade(process))
+            }
+        };
         PtyResizer {
-            master: Arc::downgrade(&self.master),
+            backend,
             applied_size: Arc::clone(&self.applied_size),
             pid: self.pid,
         }
@@ -169,8 +238,14 @@ impl Pty {
     /// `portable-pty`'s `ExitStatus::exit_code()` (matching Bun's
     /// number-or-signal exit semantics).
     pub fn wait(&mut self) -> PtyResult<i32> {
-        let status = self.child.wait().map_err(backend)?;
-        Ok(status.exit_code() as i32)
+        match &mut self.backend {
+            PtyBackend::Portable { child, .. } => {
+                let status = child.wait().map_err(backend)?;
+                Ok(status.exit_code() as i32)
+            }
+            #[cfg(windows)]
+            PtyBackend::HeadlessConpty { process } => crate::headless_conpty::wait(process),
+        }
     }
 
     /// Waits up to `timeout` for the child to exit, polling `try_wait`
@@ -187,8 +262,18 @@ impl Pty {
     pub fn wait_timeout(&mut self, timeout: Duration) -> PtyResult<Option<i32>> {
         let deadline = Instant::now() + timeout;
         loop {
-            if let Some(status) = self.child.try_wait().map_err(backend)? {
-                return Ok(Some(status.exit_code() as i32));
+            let exited = match &mut self.backend {
+                PtyBackend::Portable { child, .. } => child
+                    .try_wait()
+                    .map_err(backend)?
+                    .map(|status| status.exit_code() as i32),
+                #[cfg(windows)]
+                PtyBackend::HeadlessConpty { process } => {
+                    crate::headless_conpty::try_wait(process)?
+                }
+            };
+            if let Some(code) = exited {
+                return Ok(Some(code));
             }
             let now = Instant::now();
             if now >= deadline {
@@ -204,7 +289,11 @@ impl Pty {
     /// error (e.g. the platform kill call failed), so callers must handle `Err`
     /// rather than assume the child has terminated.
     pub fn kill(&mut self) -> PtyResult<()> {
-        self.child.kill().map_err(backend)
+        match &mut self.backend {
+            PtyBackend::Portable { child, .. } => child.kill().map_err(backend),
+            #[cfg(windows)]
+            PtyBackend::HeadlessConpty { process } => crate::headless_conpty::kill(process),
+        }
     }
 
     /// Consumes the PTY, splitting it into the exclusively-owned handles a
@@ -246,36 +335,55 @@ impl Pty {
     /// [`wait`]: PtyWaiter::wait
     pub fn into_parts(self) -> PtyResult<PtyParts> {
         let Pty {
-            master,
-            child,
+            backend: pty_backend,
+            writer_taken,
             applied_size,
             pid,
         } = self;
 
         // Obtain the single reader and writer once, up front.
-        let reader = master.lock().unwrap().try_clone_reader().map_err(backend)?;
-        let writer = master.lock().unwrap().take_writer().map_err(backend)?;
-
-        // The resizer keeps only a `Weak` to the master, so it never extends the
-        // pseudoconsole's lifetime.
-        let resizer = PtyResizer {
-            master: Arc::downgrade(&master),
-            applied_size,
-            pid,
-        };
-
-        // Clone an independent *best-effort* signaller before moving the child
-        // into the waiter. This is retained for the approved `PtyParts` contract
-        // and out-of-band signalling only; authoritative termination is the
-        // waiter's `kill`, which uses the original child handle.
-        let killer = PtyKiller {
-            inner: child.clone_killer(),
-        };
-
-        // The waiter owns the child and the final strong master reference.
-        let waiter = PtyWaiter {
-            child,
-            master: Some(master),
+        if writer_taken.swap(true, Ordering::AcqRel) {
+            return Err(PtyError::WriterTaken);
+        }
+        let (reader, writer, resizer, killer, waiter) = match pty_backend {
+            PtyBackend::Portable { master, child } => {
+                let reader = master.lock().unwrap().try_clone_reader().map_err(backend)?;
+                let writer = master.lock().unwrap().take_writer().map_err(backend)?;
+                let resizer = PtyResizer {
+                    backend: PtyResizerBackend::Portable(Arc::downgrade(&master)),
+                    applied_size: Arc::clone(&applied_size),
+                    pid,
+                };
+                let killer = PtyKiller {
+                    backend: PtyKillerBackend::Portable(child.clone_killer()),
+                };
+                let waiter = PtyWaiter {
+                    backend: PtyWaiterBackend::Portable {
+                        child,
+                        master: Some(master),
+                    },
+                };
+                (reader, writer, resizer, killer, waiter)
+            }
+            #[cfg(windows)]
+            PtyBackend::HeadlessConpty { process } => {
+                let reader = crate::headless_conpty::reader(&process)?;
+                let writer = crate::headless_conpty::writer(&process)?;
+                let resizer = PtyResizer {
+                    backend: PtyResizerBackend::HeadlessConpty(Arc::downgrade(&process)),
+                    applied_size: Arc::clone(&applied_size),
+                    pid,
+                };
+                let killer = PtyKiller {
+                    backend: PtyKillerBackend::HeadlessConpty(Arc::downgrade(&process)),
+                };
+                let waiter = PtyWaiter {
+                    backend: PtyWaiterBackend::HeadlessConpty {
+                        process: Some(process),
+                    },
+                };
+                (reader, writer, resizer, killer, waiter)
+            }
         };
 
         Ok(PtyParts {
@@ -327,13 +435,10 @@ pub struct PtyParts {
 
 /// Owns a spawned child and the last strong reference to its PTY master.
 ///
-/// This is the authoritative child-control handle. It drives the child through
-/// the **original** `portable-pty` [`Child`]/[`ChildKiller`] handle, so its
-/// [`kill`](PtyWaiter::kill) preserves [`Pty::kill`]'s semantics exactly — on
-/// Unix a `SIGHUP` followed by a grace period and escalation to `SIGKILL`; on
-/// Windows a `TerminateProcess` whose success is reported as `Ok`. That is
-/// deliberately **not** the weaker cloned [`PtyKiller`] (Unix `SIGHUP`-only, no
-/// escalation; Windows reports a successful `TerminateProcess` as an error).
+/// This is the authoritative child-control handle. The portable backend drives
+/// the original `portable-pty` [`Child`]/[`ChildKiller`], while the headless
+/// Windows backend drives its owned raw-ConPTY process. That is deliberately
+/// stronger than the best-effort [`PtyKiller`].
 ///
 /// It exposes both a non-blocking control surface — [`try_wait`](PtyWaiter::try_wait),
 /// [`kill`](PtyWaiter::kill), and [`release_master`](PtyWaiter::release_master) —
@@ -353,17 +458,30 @@ pub struct PtyParts {
 /// [`Child`]: portable_pty::Child
 /// [`ChildKiller`]: portable_pty::ChildKiller
 pub struct PtyWaiter {
-    child: Box<dyn Child + Send + Sync>,
-    /// The last strong master reference, held in an [`Option`] so it can be
-    /// released early via [`release_master`](PtyWaiter::release_master) while the
-    /// child handle is retained for polling/killing.
-    master: Option<SharedMaster>,
+    backend: PtyWaiterBackend,
+}
+
+enum PtyWaiterBackend {
+    Portable {
+        child: Box<dyn Child + Send + Sync>,
+        master: Option<SharedMaster>,
+    },
+    #[cfg(windows)]
+    HeadlessConpty {
+        process: Option<crate::headless_conpty::ProcessHandle>,
+    },
 }
 
 impl PtyWaiter {
     /// The child process id, if known.
     pub fn pid(&self) -> Option<u32> {
-        self.child.process_id()
+        match &self.backend {
+            PtyWaiterBackend::Portable { child, .. } => child.process_id(),
+            #[cfg(windows)]
+            PtyWaiterBackend::HeadlessConpty { process } => process
+                .as_ref()
+                .map(|process| process.lock().unwrap().pid()),
+        }
     }
 
     /// Polls the child without blocking, via the original [`Child::try_wait`].
@@ -376,11 +494,17 @@ impl PtyWaiter {
     ///
     /// [`Child::try_wait`]: portable_pty::Child::try_wait
     pub fn try_wait(&mut self) -> PtyResult<Option<i32>> {
-        Ok(self
-            .child
-            .try_wait()
-            .map_err(backend)?
-            .map(|status| status.exit_code() as i32))
+        match &mut self.backend {
+            PtyWaiterBackend::Portable { child, .. } => Ok(child
+                .try_wait()
+                .map_err(backend)?
+                .map(|status| status.exit_code() as i32)),
+            #[cfg(windows)]
+            PtyWaiterBackend::HeadlessConpty { process } => match process {
+                Some(process) => crate::headless_conpty::try_wait(process),
+                None => Ok(None),
+            },
+        }
     }
 
     /// Attempts to terminate the child through the **original** child handle
@@ -399,7 +523,14 @@ impl PtyWaiter {
     /// [`ChildKiller::kill`]: portable_pty::ChildKiller::kill
     /// [`Child`]: portable_pty::Child
     pub fn kill(&mut self) -> PtyResult<()> {
-        self.child.kill().map_err(backend)
+        match &mut self.backend {
+            PtyWaiterBackend::Portable { child, .. } => child.kill().map_err(backend),
+            #[cfg(windows)]
+            PtyWaiterBackend::HeadlessConpty { process } => match process {
+                Some(process) => crate::headless_conpty::kill(process),
+                None => Ok(()),
+            },
+        }
     }
 
     /// Releases the last strong master reference early — the same drop that the
@@ -411,7 +542,11 @@ impl PtyWaiter {
     /// reader can reach EOF; on Unix it is a harmless no-op for the reader.
     /// Idempotent: dropping the master a second time does nothing.
     pub fn release_master(&mut self) {
-        self.master = None;
+        match &mut self.backend {
+            PtyWaiterBackend::Portable { master, .. } => *master = None,
+            #[cfg(windows)]
+            PtyWaiterBackend::HeadlessConpty { process } => *process = None,
+        }
     }
 
     /// Blocks until the child exits and returns its exit code, then releases the
@@ -422,34 +557,41 @@ impl PtyWaiter {
     /// wait resolves regardless of outcome. If [`release_master`](PtyWaiter::release_master)
     /// already ran, the drop here is a no-op.
     pub fn wait(self) -> PtyResult<i32> {
-        let PtyWaiter { mut child, master } = self;
-        let outcome = child.wait();
-        // Release the child and the final strong master reference now — before
-        // returning and on both success and failure — so the pseudoconsole
-        // closes and a cloned reader EOFs (Windows ConPTY; no-op on Unix).
-        drop(child);
-        drop(master);
-        outcome
-            .map(|status| status.exit_code() as i32)
-            .map_err(backend)
+        match self.backend {
+            PtyWaiterBackend::Portable { mut child, master } => {
+                let outcome = child.wait();
+                drop(child);
+                drop(master);
+                outcome
+                    .map(|status| status.exit_code() as i32)
+                    .map_err(backend)
+            }
+            #[cfg(windows)]
+            PtyWaiterBackend::HeadlessConpty { process } => match process {
+                Some(process) => {
+                    let outcome = crate::headless_conpty::wait(&process);
+                    drop(process);
+                    outcome
+                }
+                None => Err(PtyError::Backend("pty master already released".to_string())),
+            },
+        }
     }
 }
 
-/// An independently cloned child killer obtained from [`Pty::into_parts`] via
-/// [`ChildKiller::clone_killer`].
+/// An independent best-effort child killer obtained from [`Pty::into_parts`].
 ///
-/// It is a **best-effort, independent signaller**, weaker than the authoritative
-/// [`PtyWaiter::kill`]: on Unix it only delivers `SIGHUP` (it never escalates to
-/// `SIGKILL`, so a child that ignores `SIGHUP` survives), and on Windows the
-/// cloned killer misreports a successful `TerminateProcess` as an error. Use it
-/// only for advisory, out-of-band signalling that can run on a different thread
-/// from the [`PtyWaiter`] without a shared mutex; drive authoritative termination
-/// through [`PtyWaiter::kill`] (the strongest kill attempt, which uses the
-/// original child handle and can still fail).
-///
-/// [`ChildKiller::clone_killer`]: portable_pty::ChildKiller::clone_killer
+/// It is weaker than the authoritative [`PtyWaiter::kill`] and is only for
+/// advisory, out-of-band signalling that can run on a different thread from the
+/// waiter. Drive authoritative termination through [`PtyWaiter::kill`].
 pub struct PtyKiller {
-    inner: Box<dyn ChildKiller + Send + Sync>,
+    backend: PtyKillerBackend,
+}
+
+enum PtyKillerBackend {
+    Portable(Box<dyn ChildKiller + Send + Sync>),
+    #[cfg(windows)]
+    HeadlessConpty(Weak<Mutex<conpty::Process>>),
 }
 
 impl PtyKiller {
@@ -457,7 +599,14 @@ impl PtyKiller {
     /// platform caveats). For the strongest available kill attempt use
     /// [`PtyWaiter::kill`]; neither is an unconditional guarantee.
     pub fn kill(&mut self) -> PtyResult<()> {
-        self.inner.kill().map_err(backend)
+        match &mut self.backend {
+            PtyKillerBackend::Portable(killer) => killer.kill().map_err(backend),
+            #[cfg(windows)]
+            PtyKillerBackend::HeadlessConpty(process) => match process.upgrade() {
+                Some(process) => crate::headless_conpty::kill(&process),
+                None => Ok(()),
+            },
+        }
     }
 }
 
@@ -468,19 +617,45 @@ impl PtyKiller {
 /// [`Pty`] has been dropped.
 #[derive(Clone)]
 pub struct PtyResizer {
-    master: Weak<Mutex<Box<dyn MasterPty + Send>>>,
+    backend: PtyResizerBackend,
     applied_size: AppliedSize,
     pid: Option<u32>,
+}
+
+#[derive(Clone)]
+enum PtyResizerBackend {
+    Portable(Weak<Mutex<Box<dyn MasterPty + Send>>>),
+    #[cfg(windows)]
+    HeadlessConpty(Weak<Mutex<conpty::Process>>),
 }
 
 impl PtyResizer {
     /// See [`Pty::resize`]. Returns `false` if the size was unchanged or if the
     /// owning [`Pty`] has already been dropped.
     pub fn resize(&self, cols: u16, rows: u16) -> bool {
-        let Some(master) = self.master.upgrade() else {
-            return false;
-        };
-        apply_resize(&master, &self.applied_size, self.pid, cols, rows)
+        match &self.backend {
+            PtyResizerBackend::Portable(master) => match master.upgrade() {
+                Some(master) => apply_resizer_resize(
+                    PtyResizerTarget::Portable(master),
+                    &self.applied_size,
+                    self.pid,
+                    cols,
+                    rows,
+                ),
+                None => false,
+            },
+            #[cfg(windows)]
+            PtyResizerBackend::HeadlessConpty(process) => match process.upgrade() {
+                Some(process) => apply_resizer_resize(
+                    PtyResizerTarget::HeadlessConpty(process),
+                    &self.applied_size,
+                    self.pid,
+                    cols,
+                    rows,
+                ),
+                None => false,
+            },
+        }
     }
 
     /// The currently applied (cols, rows).
@@ -492,7 +667,30 @@ impl PtyResizer {
 /// Shared resize implementation: clamp + de-dupe, apply `TIOCSWINSZ` via the
 /// master, then signal descendants on Unix.
 fn apply_resize(
-    master: &SharedMaster,
+    backend: &PtyBackend,
+    applied_size: &AppliedSize,
+    pid: Option<u32>,
+    cols: u16,
+    rows: u16,
+) -> bool {
+    let target = match backend {
+        PtyBackend::Portable { master, .. } => PtyResizerTarget::Portable(Arc::clone(master)),
+        #[cfg(windows)]
+        PtyBackend::HeadlessConpty { process } => {
+            PtyResizerTarget::HeadlessConpty(Arc::clone(process))
+        }
+    };
+    apply_resizer_resize(target, applied_size, pid, cols, rows)
+}
+
+enum PtyResizerTarget {
+    Portable(SharedMaster),
+    #[cfg(windows)]
+    HeadlessConpty(crate::headless_conpty::ProcessHandle),
+}
+
+fn apply_resizer_resize(
+    target: PtyResizerTarget,
     applied_size: &AppliedSize,
     pid: Option<u32>,
     cols: u16,
@@ -508,12 +706,20 @@ fn apply_resize(
         (cols, rows)
     };
 
-    let _ = master.lock().unwrap().resize(PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    });
+    match target {
+        PtyResizerTarget::Portable(master) => {
+            let _ = master.lock().unwrap().resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
+        #[cfg(windows)]
+        PtyResizerTarget::HeadlessConpty(process) => {
+            crate::headless_conpty::resize(&process, cols, rows);
+        }
+    }
 
     #[cfg(unix)]
     deliver_sigwinch(pid);
