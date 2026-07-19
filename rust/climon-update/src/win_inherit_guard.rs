@@ -65,7 +65,7 @@ mod imp {
 
     /// Returns `true` when `h` is a usable Win32 handle.
     fn is_valid(h: HANDLE) -> bool {
-        h != 0 && h != INVALID_HANDLE_VALUE
+        !h.is_null() && h != INVALID_HANDLE_VALUE
     }
 
     /// Reads the `HANDLE_FLAG_INHERIT` portion of `h`'s flags.
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn guard_clears_and_restores_inherit_flag() {
         let stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-        if stdout == 0 || stdout == INVALID_HANDLE_VALUE {
+        if stdout.is_null() || stdout == INVALID_HANDLE_VALUE {
             return; // cannot test without a valid stdout
         }
 
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn guard_clears_and_restores_stderr_inherit_flag() {
         let stderr = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
-        if stderr == 0 || stderr == INVALID_HANDLE_VALUE {
+        if stderr.is_null() || stderr == INVALID_HANDLE_VALUE {
             return;
         }
 
@@ -362,7 +362,7 @@ mod tests {
         };
 
         let stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-        if stdout == 0 || stdout == INVALID_HANDLE_VALUE {
+        if stdout.is_null() || stdout == INVALID_HANDLE_VALUE {
             return;
         }
 
