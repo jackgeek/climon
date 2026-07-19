@@ -121,7 +121,10 @@ struct HostState {
     /// console write can never freeze a caller that holds this `state` lock. The
     /// channel is unbounded, so `send` never blocks under the lock. See
     /// `spawn_local_output_thread`.
-    local_out: Sender<Vec<u8>>,
+    ///
+    /// Wrapped in `Option` so teardown can `.take()` the sender, closing the
+    /// channel even while detached threads retain `HostState` clones.
+    local_out: Option<Sender<Vec<u8>>>,
 
     host_cols: u16,
     host_rows: u16,
@@ -199,9 +202,12 @@ impl HostState {
     /// Enqueues bytes for the local-terminal writer thread. Non-blocking (the
     /// channel is unbounded), so this is safe to call while holding the `state`
     /// lock — the actual, potentially-blocking console write happens off-lock on
-    /// the writer thread. See `spawn_local_output_thread`.
+    /// the writer thread. After teardown takes the sender, this is a no-op.
+    /// See `spawn_local_output_thread`.
     fn emit_local(&self, bytes: &[u8]) {
-        let _ = self.local_out.send(bytes.to_vec());
+        if let Some(ref tx) = self.local_out {
+            let _ = tx.send(bytes.to_vec());
+        }
     }
 
     /// Builds the Replay payload: the scrollback snapshot plus the mouse
@@ -810,7 +816,7 @@ pub fn run_session_host(
         id: id.to_string(),
         resizer,
         clients: HashMap::new(),
-        local_out: local_out_tx.clone(),
+        local_out: Some(local_out_tx.clone()),
         host_cols: meta.cols,
         host_rows: meta.rows,
         applied_cols: meta.cols,
@@ -1033,13 +1039,14 @@ pub fn run_session_host(
         let _ = h.join();
     }
 
-    // Flush the local terminal: drop every `local_out` sender (the scope clone
-    // and the one inside `state`) so the writer thread's channel closes, then
-    // join it to guarantee the final restore/reset bytes reach the console
-    // before this daemon exits. `state` is the last surviving `Arc` here — every
-    // worker thread that cloned it has already been joined above.
+    // Flush the local terminal: release the sender in shared state even when
+    // detached stdin/SIGWINCH threads still retain `HostState`, then drop the
+    // scope sender so the writer thread observes channel closure.
+    {
+        let mut s = state.lock().unwrap();
+        s.local_out.take();
+    }
     drop(local_out_tx);
-    drop(state);
     let _ = local_out_handle.join();
 
     cleanup_session_socket(&resolved_ref);
