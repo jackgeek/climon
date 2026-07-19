@@ -91,7 +91,16 @@ export async function buildHostArtifacts(
     ["serverPath", plan.serverPath],
     ["fixturePath", plan.fixturePath],
   ] as const) {
-    const s = await stat(filePath);
+    let s: { isFile(): boolean };
+    try {
+      s = await stat(filePath);
+    } catch (err) {
+      throw new HarnessError(
+        "build",
+        `stat failed for ${label} at ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+        err
+      );
+    }
     if (!s.isFile()) {
       throw new HarnessError(
         "build",

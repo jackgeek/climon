@@ -2,16 +2,19 @@ import { expect, test } from "@playwright/test";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { platformFromNode } from "../src/platform.js";
 import type { BuildArtifacts } from "../src/build.js";
 import type { CommandSpec, CommandResult, CommandRunner } from "../src/command.js";
 import {
   HarnessEnvironment,
+  defaultSpawnServer,
   parseServerState,
   pollServerReady,
   type FetchFn,
   type HarnessEnvironmentInit,
   type OwnedProcess,
+  type SpawnHelper,
 } from "../src/environment.js";
 import { HarnessError } from "../src/types.js";
 
@@ -539,5 +542,42 @@ test("pollServerReady: throws HarnessError server-startup when timeout reached",
 
   expect(err).toBeInstanceOf(HarnessError);
   expect((err as HarnessError).kind).toBe("server-startup");
+});
+
+// ── defaultSpawnServer ────────────────────────────────────────────────────────
+
+test("defaultSpawnServer: throws HarnessError server-startup immediately when spawn returns no pid, never returning an OwnedProcess (no process-tree termination possible)", () => {
+  const fakeChild = {
+    pid: undefined as number | undefined,
+    stdout: null,
+    stderr: null,
+    on: (_event: string, _handler: unknown) => fakeChild as unknown as ChildProcess,
+    once: (_event: string, _handler: unknown) => fakeChild as unknown as ChildProcess,
+    unref: () => {},
+  } as unknown as ChildProcess;
+
+  const fakeSpawn: SpawnHelper = (_file, _args, _opts) => fakeChild;
+
+  let ownedProcess: OwnedProcess | undefined;
+  let thrownError: unknown;
+  try {
+    ownedProcess = defaultSpawnServer({
+      file: "missing-server",
+      args: [],
+      env: {},
+      stdoutPath: join(tmpdir(), `stdout-no-pid-${Date.now()}.log`),
+      stderrPath: join(tmpdir(), `stderr-no-pid-${Date.now()}.log`),
+      platform: "linux",
+      spawnFn: fakeSpawn,
+    });
+  } catch (err) {
+    thrownError = err;
+  }
+
+  // Must throw a HarnessError with kind 'server-startup'
+  expect(thrownError).toBeInstanceOf(HarnessError);
+  expect((thrownError as HarnessError).kind).toBe("server-startup");
+  // No OwnedProcess returned, so kill() (and therefore processTreeTermination) is unreachable
+  expect(ownedProcess).toBeUndefined();
 });
 

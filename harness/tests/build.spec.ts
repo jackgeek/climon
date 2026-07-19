@@ -4,6 +4,7 @@ import { platformFromNode, executableName } from "../src/platform.js";
 import type { CommandSpec, CommandResult, CommandRunner } from "../src/command.js";
 import { planHostBuild, buildHostArtifacts } from "../src/build.js";
 import { compiledServerBuildArgs } from "../../scripts/server-build.js";
+import { HarnessError } from "../src/types.js";
 
 const platform = platformFromNode(process.platform);
 const root = resolve(import.meta.dirname, "../..");
@@ -178,4 +179,20 @@ test("buildHostArtifacts: checks stat for all three expected output paths", asyn
   expect(checkedPaths).toContain(plan.clientPath);
   expect(checkedPaths).toContain(plan.serverPath);
   expect(checkedPaths).toContain(plan.fixturePath);
+});
+
+test("buildHostArtifacts: rejects with HarnessError build wrapping stat ENOENT for clientPath, including path in message and original cause", async () => {
+  const plan = planHostBuild(root, buildDir, platform);
+  const runner = new RecordingRunner();
+  const enoentError = Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+  const fakeStat = async (p: string) => {
+    if (p === plan.clientPath) throw enoentError;
+    return { isFile: () => true };
+  };
+
+  const err = await buildHostArtifacts(plan, runner, fakeStat).catch((e) => e);
+  expect(err).toBeInstanceOf(HarnessError);
+  expect((err as HarnessError).kind).toBe("build");
+  expect((err as HarnessError).message).toContain(plan.clientPath);
+  expect((err as HarnessError).cause).toBe(enoentError);
 });

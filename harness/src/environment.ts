@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import type { HarnessPlatform } from "./types.js";
 import { HarnessError } from "./types.js";
 import type { CommandRunner } from "./command.js";
@@ -28,6 +29,16 @@ export interface OwnedProcess {
 export type FetchFn = (
   url: string
 ) => Promise<{ ok: boolean; json(): Promise<unknown> }>;
+
+/**
+ * Seam for testing: a minimal spawn-compatible function that returns a ChildProcess.
+ * Pass a fake implementation to simulate spawn failures without hitting the OS.
+ */
+export type SpawnHelper = (
+  file: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean; detached?: boolean }
+) => ChildProcess;
 
 export interface HarnessEnvironmentInit {
   root: string;
@@ -107,8 +118,16 @@ export async function pollServerReady(opts: {
           // health check failed — keep polling
         }
       }
-    } catch {
-      // server.json not yet written — keep polling
+    } catch (err) {
+      // ENOENT means server.json not yet written — keep polling
+      // Any other I/O error is a permanent problem and must not be silently retried
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new HarnessError(
+          "assertion",
+          `unexpected error reading server state at ${serverJsonPath}: ${err instanceof Error ? err.message : String(err)}`,
+          err
+        );
+      }
     }
     await sleep(pollIntervalMs);
   }
@@ -480,37 +499,54 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function defaultSpawnServer(opts: {
+export function defaultSpawnServer(opts: {
   file: string;
   args: string[];
   env: NodeJS.ProcessEnv;
   stdoutPath: string;
   stderrPath: string;
   platform: HarnessPlatform;
+  /** @internal seam for testing — provide a fake spawn implementation */
+  spawnFn?: SpawnHelper;
 }): OwnedProcess {
-  const stdoutWs = createWriteStream(opts.stdoutPath);
-  const stderrWs = createWriteStream(opts.stderrPath);
-
   const isUnix = opts.platform !== "windows";
-  const child = spawn(opts.file, opts.args, {
+  const spawnImpl = (opts.spawnFn ?? spawn) as SpawnHelper;
+  const child = spawnImpl(opts.file, opts.args, {
     env: opts.env,
     stdio: ["ignore", "pipe", "pipe"],
     shell: false,
     detached: isUnix,
   });
 
+  // Suppress the unhandled 'error' event that fires asynchronously when spawn
+  // fails (e.g. ENOENT). We forward it to whoever calls wait().
+  let _forwardError: (err: Error) => void = () => {};
+  child.on("error", (err) => _forwardError(err));
+
+  // Fail fast when the OS cannot create the process
+  if (child.pid === undefined) {
+    throw new HarnessError(
+      "server-startup",
+      `failed to spawn server process "${opts.file}": no pid assigned (spawn failed)`
+    );
+  }
+
+  const pid = child.pid; // guaranteed > 0 after the check above
+
+  // Wire up log streams only after pid is confirmed
+  const stdoutWs = createWriteStream(opts.stdoutPath);
+  const stderrWs = createWriteStream(opts.stderrPath);
   child.stdout?.pipe(stdoutWs);
   child.stderr?.pipe(stderrWs);
 
-  if (isUnix && child.pid !== undefined) {
+  if (isUnix) {
     child.unref();
   }
-
-  const pid = child.pid ?? 0;
 
   return {
     pid,
     kill() {
+      if (pid <= 0) return; // defensive guard: pid is always > 0, but protect processTreeTermination
       const term = processTreeTermination(opts.platform, pid, false);
       try {
         if ("signal" in term) {
@@ -523,7 +559,8 @@ function defaultSpawnServer(opts: {
       }
     },
     wait() {
-      return new Promise<number | null>((resolve) => {
+      return new Promise<number | null>((resolve, reject) => {
+        _forwardError = reject; // surface any async spawn/runtime errors immediately
         child.once("close", (code) => resolve(code));
       });
     },
