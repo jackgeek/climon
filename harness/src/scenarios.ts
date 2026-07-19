@@ -4,7 +4,6 @@ import type { ScenarioKey, FailureKind, HarnessCase } from "./types.js";
 import { HarnessError } from "./types.js";
 import type { HarnessEnvironment } from "./environment.js";
 import type { DashboardDriver } from "./dashboard.js";
-import type { Page } from "@playwright/test";
 import { spawnPtySession } from "./pty.js";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -24,11 +23,45 @@ export interface ScenarioContext {
   caseDefinition: HarnessCase;
   environment: HarnessEnvironment;
   dashboard: DashboardDriver;
-  page: Page;
+  page: import("@playwright/test").Page;
   artifactDir: string;
 }
 
 export type Scenario = (ctx: ScenarioContext) => Promise<void>;
+
+// ── Attached-terminal helpers ────────────────────────────────────────────────
+
+/**
+ * Minimal dashboard surface needed to verify an attached PTY session is ready.
+ * Deliberately excludes click, openTerminal and any other take-control paths.
+ */
+export interface AttachedTerminalDashboard {
+  waitForSessionStatus(
+    id: string,
+    status: string,
+    timeoutMs?: number
+  ): Promise<void>;
+  waitForTerminalVisible(timeoutMs?: number): Promise<void>;
+  waitForTerminalText(text: string, timeoutMs?: number): Promise<void>;
+}
+
+/**
+ * Wait for the dashboard to auto-select the running session and display its
+ * terminal, then confirm CIH_READY.
+ *
+ * Never clicks a session item or invokes openTerminal — those paths arm
+ * take-control and would displace the attached local PTY.
+ * Throws HarnessError('browser') if the terminal does not become visible.
+ */
+export async function prepareAttachedTerminal(
+  sessionId: string,
+  dashboard: AttachedTerminalDashboard,
+  timeoutMs = 15_000
+): Promise<void> {
+  await dashboard.waitForSessionStatus(sessionId, "running");
+  await dashboard.waitForTerminalVisible(timeoutMs);
+  await dashboard.waitForTerminalText("CIH_READY", timeoutMs);
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -132,7 +165,7 @@ async function headlessDashboardScenario(ctx: ScenarioContext): Promise<void> {
 }
 
 async function attachedPtyScenario(ctx: ScenarioContext): Promise<void> {
-  const { caseDefinition, environment, dashboard, page, artifactDir } = ctx;
+  const { caseDefinition, environment, dashboard, artifactDir } = ctx;
   const token = randomUUID();
 
   const pty = await spawnPtySession({
@@ -155,20 +188,9 @@ async function attachedPtyScenario(ctx: ScenarioContext): Promise<void> {
     const sessionId = await environment.findSessionIdByName(caseDefinition.id);
     environment.trackSession(sessionId);
 
-    // Dashboard auto-selects the only session; do NOT click session item
+    // Dashboard auto-selects the only session; wait passively — do NOT click.
     await dashboard.open(environment.baseUrl);
-    await dashboard.waitForSessionStatus(sessionId, "running");
-
-    // Wait for terminal surface to appear. If it's not auto-displayed after
-    // session selection, try a read-only click on the session item (selects
-    // without arming take-control). Do NOT click "Open terminal".
-    const terminal = page.locator('[data-testid="session-terminal"]');
-    const terminalVisible = await terminal.isVisible().catch(() => false);
-    if (!terminalVisible) {
-      await dashboard.session(sessionId).click();
-      await terminal.waitFor({ timeout: 15_000 });
-    }
-    await dashboard.waitForTerminalText("CIH_READY", 15_000);
+    await prepareAttachedTerminal(sessionId, dashboard);
 
     pty.writeLine(`PING ${token}`);
     await pty.waitFor(`${EXPECT_ECHO} ${token}`, 15_000);

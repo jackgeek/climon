@@ -147,6 +147,24 @@ export class DashboardDriver {
   }
 
   /**
+   * Wait for the terminal surface to become visible without clicking anything.
+   * Throws HarnessError('browser') if not visible within timeoutMs.
+   */
+  async waitForTerminalVisible(timeoutMs = 15_000): Promise<void> {
+    try {
+      await this._page
+        .locator('[data-testid="session-terminal"]')
+        .waitFor({ state: "visible", timeout: timeoutMs });
+    } catch (err) {
+      throw new HarnessError(
+        "browser",
+        `session terminal did not become visible within ${timeoutMs}ms`,
+        err
+      );
+    }
+  }
+
+  /**
    * Poll the terminal's .xterm-rows textContent until `text` appears.
    * Rejects with HarnessError('browser') on timeout including recent text.
    */

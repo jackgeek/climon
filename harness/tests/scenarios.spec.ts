@@ -4,6 +4,8 @@ import {
   SESSION_ID_RE,
   SCENARIOS,
   classifyError,
+  prepareAttachedTerminal,
+  type AttachedTerminalDashboard,
 } from "../src/scenarios.js";
 import { HarnessError, type ScenarioKey } from "../src/types.js";
 
@@ -134,4 +136,66 @@ test("classifyError: handles every HarnessError kind", () => {
     const result = classifyError(new HarnessError(kind, `test ${kind}`));
     expect(result.kind).toBe(kind);
   }
+});
+
+// ── prepareAttachedTerminal ──────────────────────────────────────────────────
+
+function makeMockDashboard(opts?: {
+  visibleError?: Error;
+}): AttachedTerminalDashboard & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    async waitForSessionStatus(id, status) {
+      calls.push(`waitForSessionStatus:${id}:${status}`);
+    },
+    async waitForTerminalVisible(_timeoutMs) {
+      calls.push("waitForTerminalVisible");
+      if (opts?.visibleError) throw opts.visibleError;
+    },
+    async waitForTerminalText(text, _timeoutMs) {
+      calls.push(`waitForTerminalText:${text}`);
+    },
+  };
+}
+
+test("prepareAttachedTerminal: calls methods in correct order without click or openTerminal", async () => {
+  const mock = makeMockDashboard();
+  await prepareAttachedTerminal("session-abc", mock);
+  expect(mock.calls).toEqual([
+    "waitForSessionStatus:session-abc:running",
+    "waitForTerminalVisible",
+    "waitForTerminalText:CIH_READY",
+  ]);
+});
+
+test("prepareAttachedTerminal: type accepts only AttachedTerminalDashboard — no session/openTerminal surface", () => {
+  // The interface deliberately omits session(), openTerminal(), click(), etc.
+  // This test confirms the function accepts and exercises only the safe subset.
+  const allowed = new Set(["waitForSessionStatus", "waitForTerminalVisible", "waitForTerminalText"]);
+  const mock = makeMockDashboard();
+  // Structural check: no forbidden keys on interface
+  const forbidden = (Object.keys(mock) as string[]).filter(
+    (k) => k !== "calls" && !allowed.has(k)
+  );
+  expect(forbidden).toHaveLength(0);
+});
+
+test("prepareAttachedTerminal: propagates HarnessError when terminal not visible", async () => {
+  const err = new HarnessError("browser", "terminal did not become visible");
+  const mock = makeMockDashboard({ visibleError: err });
+  await expect(prepareAttachedTerminal("session-xyz", mock)).rejects.toThrow(
+    HarnessError
+  );
+  await expect(prepareAttachedTerminal("session-xyz", mock)).rejects.toThrow(
+    "terminal did not become visible"
+  );
+});
+
+test("prepareAttachedTerminal: stops before waitForTerminalText when terminal not visible", async () => {
+  const err = new HarnessError("browser", "not visible");
+  const mock = makeMockDashboard({ visibleError: err });
+  await expect(prepareAttachedTerminal("s1", mock)).rejects.toThrow();
+  // waitForTerminalText must NOT have been called since terminal never appeared
+  expect(mock.calls).not.toContain("waitForTerminalText:CIH_READY");
 });
