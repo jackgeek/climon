@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { platformFromNode, executableName } from "../src/platform.js";
 import type { CommandSpec, CommandResult, CommandRunner } from "../src/command.js";
@@ -195,4 +196,11 @@ test("buildHostArtifacts: rejects with HarnessError build wrapping stat ENOENT f
   expect((err as HarnessError).kind).toBe("build");
   expect((err as HarnessError).message).toContain(plan.clientPath);
   expect((err as HarnessError).cause).toBe(enoentError);
+});
+
+test("headless session host primes ConPTY before sharing the PTY writer", async () => {
+  const source = await readFile(join(root, "rust", "climon-session", "src", "host.rs"), "utf8");
+  expect(source).toMatch(
+    /let mut writer = pty\.take_writer\(\)\?;\s+climon_pty::prime_headless_conpty\(&mut \*writer, headless\)\?;\s+let resizer = pty\.resizer\(\);/,
+  );
 });
