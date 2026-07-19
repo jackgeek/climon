@@ -256,12 +256,12 @@ release.
 5. From `rust/`: `cargo about generate about.hbs > /tmp/x.md` then
    `diff -q THIRD-PARTY-LICENSES.md /tmp/x.md`.
 6. From the repo root: `bun run typecheck`.
-7. From the repo root: `bun test tests`.
+7. From the repo root: `bun run test`.
 
 **Expected:** Steps 1–5 are clean (fmt clean, no clippy warnings, 0 test
 failures, deny ok, `THIRD-PARTY-LICENSES.md` identical to the regenerated file —
 no new third-party deps were added). `bun run typecheck` is clean modulo the
-pre-existing `tests/config-docs.test.ts` generated-doc drift. `bun test tests` has
+pre-existing `tests/config-docs.test.ts` generated-doc drift. `bun run test` has
 no **new** failures versus the recorded baseline (the install/setup/compile/
 remote/update suites stay green).
 

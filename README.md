@@ -512,7 +512,7 @@ Day-to-day work goes through the `dev` branch under a **gitflow** model with
   [docs/cutting-a-release.md](docs/cutting-a-release.md).
 
 Build and test the client with `cargo build` / `cargo test` / `cargo clippy` in
-`rust/`; test the server with `bun test tests`. New features
+`rust/`; test the server with `bun run test`. New features
 ship with manual checks under [docs/manual-tests/](docs/manual-tests/).
 
 ## License

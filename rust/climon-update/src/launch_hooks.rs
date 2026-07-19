@@ -116,6 +116,10 @@ fn spawn_detached(exec_path: &str, args: &[&str]) {
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
     }
 
+    // Prevent the child from inheriting the parent's stdout/stderr pipe
+    // handles. Best-effort: if the guard fails, still attempt spawn.
+    let _guard = crate::win_inherit_guard::StdInheritGuard::new().ok();
+
     // Fire and forget: drop the handle without waiting (mirrors child.unref()).
     let _ = cmd.spawn();
 }

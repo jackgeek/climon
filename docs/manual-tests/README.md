@@ -29,6 +29,26 @@ Each case records: **ID**, feature/phase, preconditions, config-matrix cell
 (where applicable), numbered steps, expected result, platforms, and a
 result-tracking row.
 
+A case may also include an optional fenced **`yaml harness` metadata block**
+directly below the standard case fields:
+
+````markdown
+```yaml harness
+status: automated
+suite: smoke
+scenario: client-server.headless-dashboard
+platforms: [macos, linux, windows]
+timeoutSeconds: 120
+```
+````
+
+This block **selects a reviewed, pre-approved scenario implementation** in the
+harness (`harness/src/`) and supplies bounded parameters for it. Markdown
+controls only `status`, `suite`, `scenario`, `platforms`, and `timeoutSeconds`.
+It **cannot** contain commands, scripts, selectors, or arbitrary code; unknown
+fields are a catalogue validation error. The harness rejects any case whose
+metadata cannot be resolved to a known scenario key.
+
 ## Cases by phase
 
 | Phase | Feature | File |
@@ -88,6 +108,7 @@ result-tracking row.
 | — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |
 | — | Jiggle-repaint on local restore (force wrapped app to redraw when the local terminal regains control) | [jiggle-repaint-on-restore.md](jiggle-repaint-on-restore.md) |
 | — | Terminal fade-in on (re)attach — xterm starts invisible over the theme background and fades in once the replay/reflow settles, masking the jiggle | [terminal-fade-in-on-attach.md](terminal-fade-in-on-attach.md) |
+| — | Cross-platform CI harness — automated smoke suite: headless and attached-PTY lifecycles on macOS, Linux, and Windows (CIH-01, CIH-02) | [cross-platform-ci-harness.md](cross-platform-ci-harness.md) |
 
 ## Recording results
 

@@ -92,6 +92,9 @@ pub fn spawn_daemon(id: &str, store_env: &StoreEnv) -> std::io::Result<()> {
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
     }
 
+    // Prevent the child from inheriting the parent's stdout/stderr pipe
+    // handles, which would keep the pipe open and block EOF on the read end.
+    let _guard = climon_update::win_inherit_guard::StdInheritGuard::new()?;
     cmd.spawn()?;
     Ok(())
 }
