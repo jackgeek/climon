@@ -2041,13 +2041,13 @@ mod local_output_thread_tests {
         use std::sync::{Arc, Mutex};
 
         struct LeakyHostState {
-            local_out: Sender<Vec<u8>>,
+            _local_out: Sender<Vec<u8>>,
         }
 
         let (tx, rx) = channel::<Vec<u8>>();
 
         let shared: Arc<Mutex<LeakyHostState>> =
-            Arc::new(Mutex::new(LeakyHostState { local_out: tx }));
+            Arc::new(Mutex::new(LeakyHostState { _local_out: tx }));
 
         // Simulate detached threads
         let _detached = Arc::clone(&shared);
