@@ -19,9 +19,8 @@ and its [plan](../superpowers/plans/2026-07-18-cross-platform-ci-harness.md).
 Unless a case says otherwise:
 
 - A `climon` client **built from this branch** (`bun run build:rust` or the
-  harness build fixture): the session daemon binary must contain the actor
-  engine. Each session's daemon runs the binary it was launched from —
-  rebuild/reinstall before testing.
+  harness build fixture). Each session's daemon runs the binary it was launched
+  from, so rebuild/reinstall before testing.
 - A running `climon server` instance on loopback (the harness environment
   supervisor starts one automatically on an OS-assigned port and waits for
   `/health`).
