@@ -118,7 +118,12 @@ struct HostState {
     /// console write can never freeze a caller that holds this `state` lock. The
     /// channel is unbounded, so `send` never blocks under the lock. See
     /// `spawn_local_output_thread`.
-    local_out: Sender<Vec<u8>>,
+    ///
+    /// Wrapped in `Option` so teardown can `.take()` the sender, closing the
+    /// channel even while detached threads (stdin reader, SIGWINCH handler)
+    /// still hold `Arc<Mutex<HostState>>` clones. After `.take()`, any later
+    /// `emit_local` call is harmlessly a no-op.
+    local_out: Option<Sender<Vec<u8>>>,
 
     host_cols: u16,
     host_rows: u16,
@@ -196,9 +201,12 @@ impl HostState {
     /// Enqueues bytes for the local-terminal writer thread. Non-blocking (the
     /// channel is unbounded), so this is safe to call while holding the `state`
     /// lock — the actual, potentially-blocking console write happens off-lock on
-    /// the writer thread. See `spawn_local_output_thread`.
+    /// the writer thread. After teardown `.take()`s the sender, this is a no-op.
+    /// See `spawn_local_output_thread`.
     fn emit_local(&self, bytes: &[u8]) {
-        let _ = self.local_out.send(bytes.to_vec());
+        if let Some(ref tx) = self.local_out {
+            let _ = tx.send(bytes.to_vec());
+        }
     }
 
     /// Builds the Replay payload: the scrollback snapshot plus the mouse
@@ -806,7 +814,7 @@ pub fn run_session_host(
         id: id.to_string(),
         resizer,
         clients: HashMap::new(),
-        local_out: local_out_tx.clone(),
+        local_out: Some(local_out_tx.clone()),
         host_cols: meta.cols,
         host_rows: meta.rows,
         applied_cols: meta.cols,
@@ -1029,13 +1037,16 @@ pub fn run_session_host(
         let _ = h.join();
     }
 
-    // Flush the local terminal: drop every `local_out` sender (the scope clone
-    // and the one inside `state`) so the writer thread's channel closes, then
-    // join it to guarantee the final restore/reset bytes reach the console
-    // before this daemon exits. `state` is the last surviving `Arc` here — every
-    // worker thread that cloned it has already been joined above.
+    // Flush the local terminal: take() the sender from shared state (releasing
+    // the channel even while detached stdin/SIGWINCH threads retain Arc clones),
+    // then drop the scope's clone so the writer thread's channel closes. Join
+    // the writer thread to guarantee the final restore/reset bytes reach the
+    // console before this daemon exits.
+    {
+        let mut s = state.lock().unwrap();
+        s.local_out.take();
+    }
     drop(local_out_tx);
-    drop(state);
     let _ = local_out_handle.join();
 
     cleanup_session_socket(&resolved_ref);
@@ -1953,6 +1964,105 @@ mod local_output_thread_tests {
         drop(tx);
         handle.join().unwrap();
         assert_eq!(buf.lock().unwrap().len(), 1000 * 64);
+    }
+
+    /// Reproduces Root Cause A: when extra `Arc<Mutex<HostState>>` clones
+    /// retain the `local_out` Sender, the output writer thread never sees
+    /// channel-closed and `join()` hangs. The fix is to make `local_out` an
+    /// `Option<Sender>` so teardown can `.take()` it from the shared state,
+    /// disconnecting the channel even while detached threads still hold the Arc.
+    ///
+    /// This test creates a HostState-shaped struct inside Arc<Mutex>, clones
+    /// the Arc (simulating stdin/SIGWINCH threads), then verifies that
+    /// take()-ing the sender disconnects the receiver even though Arc clones
+    /// remain alive.
+    #[test]
+    fn take_local_out_disconnects_receiver_despite_extra_arc_clones() {
+        use std::sync::mpsc::{channel, Sender};
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        // Model HostState's local_out field (will be changed to Option<Sender>)
+        struct MockHostState {
+            local_out: Option<Sender<Vec<u8>>>,
+        }
+
+        let (tx, rx) = channel::<Vec<u8>>();
+
+        let shared: Arc<Mutex<MockHostState>> =
+            Arc::new(Mutex::new(MockHostState { local_out: Some(tx) }));
+
+        // Simulate detached stdin/SIGWINCH threads retaining Arc clones
+        let _detached_clone1 = Arc::clone(&shared);
+        let _detached_clone2 = Arc::clone(&shared);
+
+        // Simulate write succeeding before teardown
+        {
+            let s = shared.lock().unwrap();
+            if let Some(ref sender) = s.local_out {
+                sender.send(b"pre-teardown".to_vec()).unwrap();
+            }
+        }
+
+        // Teardown: take() the sender from shared state
+        {
+            let mut guard = shared.lock().unwrap();
+            guard.local_out.take(); // drops the Sender inside
+        }
+        // _detached_clone1/2 still alive, but the Sender is gone
+
+        // Post-take write is harmless (no panic, no hang)
+        {
+            let s = shared.lock().unwrap();
+            if let Some(ref sender) = s.local_out {
+                let _ = sender.send(b"after-take".to_vec());
+            }
+            // None → write is silently skipped
+        }
+
+        // Writer thread's recv must now return Err (disconnected)
+        let handle = spawn_local_output_thread(rx, Box::new(std::io::sink()));
+        let (done_tx, done_rx) = channel::<()>();
+        std::thread::spawn(move || {
+            let _ = handle.join();
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("local_out_handle.join() hung — sender lifetime leak");
+    }
+
+    /// Proves the BUG: with a non-Optional Sender in a struct behind Arc,
+    /// extra Arc clones prevent the channel from closing when the "main"
+    /// Arc is dropped. The receiver never sees disconnect.
+    #[test]
+    fn non_optional_sender_leaks_when_arc_clones_remain() {
+        use std::sync::mpsc::{channel, Sender};
+        use std::sync::{Arc, Mutex};
+
+        struct LeakyHostState {
+            local_out: Sender<Vec<u8>>,
+        }
+
+        let (tx, rx) = channel::<Vec<u8>>();
+
+        let shared: Arc<Mutex<LeakyHostState>> =
+            Arc::new(Mutex::new(LeakyHostState { local_out: tx }));
+
+        // Simulate detached threads
+        let _detached = Arc::clone(&shared);
+
+        // "Teardown": drop the main Arc. But _detached still holds a clone,
+        // so the LeakyHostState (and its Sender) is NOT dropped.
+        drop(shared);
+
+        // The channel is still open because _detached keeps the Sender alive.
+        // try_recv returns Empty (not Disconnected) — this IS the bug.
+        assert_eq!(
+            rx.try_recv().unwrap_err(),
+            std::sync::mpsc::TryRecvError::Empty,
+            "channel should still be open (bug behavior): extra Arc clone retains Sender"
+        );
     }
 }
 

@@ -52,6 +52,38 @@ afterEach(async () => {
 });
 
 describe("server port safety", () => {
+  test("port 0 binds an ephemeral port and writes the actual port to server.json and /health", async () => {
+    const server = Bun.spawn(
+      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", "0"],
+      { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
+    );
+    try {
+      // Wait for server.json to contain a positive actual port
+      const state = await waitFor(async () => {
+        const raw = await readFile(join(home, "server.json"), "utf8").catch(() => undefined);
+        if (raw === undefined) return undefined;
+        const parsed = JSON.parse(raw) as { pid?: number; port?: number };
+        if (parsed.pid !== server.pid) return undefined;
+        // The actual port MUST be positive (not the requested 0)
+        if (typeof parsed.port !== "number" || parsed.port <= 0) return undefined;
+        return parsed;
+      }, 30000);
+      expect(state.port).toBeGreaterThan(0);
+      expect(state.pid).toBe(server.pid);
+
+      // /health must also report the actual bound port
+      const base = `http://127.0.0.1:${state.port}`;
+      const healthRes = await fetch(`${base}/health`);
+      expect(healthRes.ok).toBe(true);
+      const body = (await healthRes.json()) as { ok?: boolean; ports?: { dashboard?: number } };
+      expect(body.ok).toBe(true);
+      expect(body.ports?.dashboard).toBe(state.port);
+    } finally {
+      server.kill();
+      await server.exited;
+    }
+  }, 60000);
+
   test("health reports the bound dashboard port and writes it to the state file", async () => {
     const port = await freePort();
     const server = Bun.spawn(
