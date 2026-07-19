@@ -7,12 +7,13 @@ import {
   ChevronRight24Regular,
   ChevronUp24Regular,
   Compose24Regular,
+  Copy24Regular,
   Dismiss24Regular,
   Keyboard24Regular,
-  SelectAllOn24Regular,
   SelectObject24Regular,
   TextFont24Regular
 } from "@fluentui/react-icons";
+import { copyToClipboard } from "../api.js";
 import { KeyBar } from "./KeyBar.js";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "../fontSize.js";
 import { encodeSpecial, type Mods } from "../keys.js";
@@ -142,6 +143,7 @@ export function TerminalPanel({
   // restore whatever the user had typed before they started browsing.
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const composeDraftRef = useRef<string>("");
+  const [copied, setCopied] = useState(false);
 
   // A freshly opened composer always starts detached from history. The active
   // session's history array is also a dependency so that if it changes underneath
@@ -220,6 +222,14 @@ export function TerminalPanel({
       el.scrollTop = el.scrollHeight;
     });
     return () => cancelAnimationFrame(id);
+  }, [view]);
+
+  // Reset the transient "Copied!" feedback whenever the capture overlay closes
+  // or reopens so the button always starts in its default state.
+  useEffect(() => {
+    if (view !== "selection") {
+      setCopied(false);
+    }
   }, [view]);
 
   if (view === "keyboard") {
@@ -314,16 +324,21 @@ export function TerminalPanel({
           </Button>
           <Button
             appearance="primary"
-            icon={<SelectAllOn24Regular />}
-            onClick={() => {
+            icon={<Copy24Regular />}
+            onClick={async () => {
               const el = selectionTextareaRef.current;
-              if (el) {
-                el.focus();
-                el.select();
+              const start = el?.selectionStart ?? 0;
+              const end = el?.selectionEnd ?? 0;
+              const source = el && end > start ? el.value.slice(start, end) : selectionText;
+              const collapsed = source.replace(/\s+/g, " ").trim();
+              const ok = await copyToClipboard(collapsed);
+              if (ok) {
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1500);
               }
             }}
           >
-            Select all
+            {copied ? "Copied!" : "Copy"}
           </Button>
         </div>
       </div>
