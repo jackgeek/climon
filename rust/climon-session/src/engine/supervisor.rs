@@ -51,6 +51,10 @@ const NEST_LEVEL_ENV_VAR: &str = "CLIMON_NEST_LEVEL";
 const SPAWN_FAILURE_EXIT: i32 = 1;
 /// Exit code used when the coordinator ended without a clean completion.
 const CORE_FAILURE_EXIT: i32 = 1;
+/// Error persisted with the terminal fallback patch when the coordinator could
+/// not run its ordered finalization (a required task died first), so the session
+/// is never left `running` after teardown.
+const CORE_FAILURE_MESSAGE: &str = "session ended before the coordinator could finalize";
 /// Bounded deadline for joining every owned task during teardown.
 pub(crate) const JOIN_DEADLINE: Duration = Duration::from_secs(5);
 
@@ -414,7 +418,10 @@ pub(crate) trait SessionBackend {
     /// adapters are up, recording the child's `daemon_pid`.
     fn mark_running(&mut self, id: &str, meta: &SessionMeta, pid: Option<u32>);
 
-    /// Persists a `failed` session when the child could not be spawned.
+    /// Persists a terminal `failed` session directly (bypassing the coordinator's
+    /// ordered finalization): used when the child could not be spawned, and as the
+    /// abnormal-teardown fallback when the coordinator ended before it could
+    /// finalize, so the session is never left `running`.
     fn mark_failed(&mut self, id: &str, error: &str);
 
     /// Removes the session socket during teardown (no-op for a TCP reference).
@@ -683,6 +690,14 @@ async fn run_with<B: SessionBackend>(
     {
         SuperviseOutcome::Completed(exit_code) => exit_code,
         SuperviseOutcome::CoordinatorEnded | SuperviseOutcome::RequiredTaskFailed => {
+            // The coordinator could not run its ordered finalization, so the
+            // terminal metadata patch it normally emits (via the metadata adapter)
+            // never happened and the session would be stranded `running` after the
+            // host and socket close. Persist a terminal failure patch directly as
+            // a narrow fallback. This runs *only* on the abnormal outcomes — the
+            // `Completed` path already wrote the terminal patch through the
+            // coordinator — so it never duplicates the normal finalization.
+            backend.mark_failed(&id, CORE_FAILURE_MESSAGE);
             CORE_FAILURE_EXIT
         }
     };
@@ -1029,6 +1044,11 @@ mod tests {
         /// `completed_at`) once finalization's status barrier is applied, proving
         /// the ordered finalization actually ran rather than being preempted.
         terminal_patch_exit_code: Mutex<Option<i32>>,
+        /// Ordered log of the terminal backend calls a test needs to sequence —
+        /// `mark_failed` (the abnormal-teardown fallback terminal patch) and
+        /// `cleanup_socket` — so a test can assert the fallback lands before the
+        /// socket is removed.
+        teardown_order: Mutex<Vec<&'static str>>,
     }
 
     /// A [`ChildTerminator`] that records how many times it was asked to kill the
@@ -1272,10 +1292,16 @@ mod tests {
 
         fn mark_failed(&mut self, _id: &str, _error: &str) {
             self.obs.marked_failed.fetch_add(1, Ordering::SeqCst);
+            self.obs.teardown_order.lock().unwrap().push("mark_failed");
         }
 
         fn cleanup_socket(&mut self, _resolved_ref: &str) {
             self.obs.cleaned_socket.fetch_add(1, Ordering::SeqCst);
+            self.obs
+                .teardown_order
+                .lock()
+                .unwrap()
+                .push("cleanup_socket");
         }
 
         fn record_join_report(&mut self, report: &JoinReport) {
@@ -1550,7 +1576,63 @@ mod tests {
         );
     }
 
-    /// The pty command worker is not the authoritative child owner: when it emits
+    /// When a required task dies before the coordinator can complete the session,
+    /// the coordinator's ordered finalization never runs, so the terminal
+    /// metadata patch it normally emits is never produced and the session would be
+    /// stranded `running` after the host and socket close (macOS DAR-08). The
+    /// supervisor must persist exactly one terminal failure patch as a narrow
+    /// fallback, and it must land *before* the socket is cleaned up so metadata is
+    /// never left live once the socket is gone.
+    #[test]
+    fn abnormal_teardown_persists_terminal_metadata_before_socket_cleanup() {
+        let fixture = SupervisorFixture::pty_panics_before_exit();
+        let obs = fixture.obs.clone();
+        let error = run_bounded(Duration::from_secs(10), move || fixture.run_sync()).unwrap_err();
+        assert!(matches!(error, SessionError::ActorTask));
+        // The coordinator never reached its ordered finalization, so no terminal
+        // patch came through the metadata adapter...
+        assert_eq!(
+            *obs.terminal_patch_exit_code.lock().unwrap(),
+            None,
+            "the coordinator must not have run its ordered finalization"
+        );
+        // ...but the fallback persisted exactly one terminal failure patch, so the
+        // session cannot remain `running`.
+        assert_eq!(
+            obs.marked_failed.load(Ordering::SeqCst),
+            1,
+            "abnormal actor teardown must persist exactly one terminal failure patch"
+        );
+        // And that patch landed before the socket was cleaned up.
+        let order = obs.teardown_order.lock().unwrap().clone();
+        let failed_idx = order.iter().position(|event| *event == "mark_failed");
+        let cleanup_idx = order.iter().position(|event| *event == "cleanup_socket");
+        assert!(
+            matches!((failed_idx, cleanup_idx), (Some(failed), Some(cleanup)) if failed < cleanup),
+            "the terminal failure patch must be persisted before socket cleanup, got {order:?}"
+        );
+    }
+
+    /// A normally-completing session finalizes through the coordinator's ordered
+    /// path — one terminal patch via the metadata adapter. The abnormal-teardown
+    /// fallback must not fire, so there is no duplicate terminal failure patch.
+    #[test]
+    fn normal_completion_does_not_persist_fallback_terminal_patch() {
+        let fixture = SupervisorFixture::successful_exit(0);
+        let obs = fixture.obs.clone();
+        let code = fixture.run_sync().unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(
+            *obs.terminal_patch_exit_code.lock().unwrap(),
+            Some(0),
+            "the coordinator's ordered finalization must run on a normal exit"
+        );
+        assert_eq!(
+            obs.marked_failed.load(Ordering::SeqCst),
+            0,
+            "the fallback terminal patch must not fire when the coordinator completed"
+        );
+    }
     /// its one `PtyFailed` and then returns `Err` *after* the lifecycle has
     /// already reported the real child exit, its abnormal end must not preempt the
     /// coordinator's finalization. The supervisor waits for `CompleteSession`, so
