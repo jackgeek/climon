@@ -179,8 +179,6 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
- "tokio",
- "tokio-util",
  "vt100",
  "windows-sys 0.61.2",
 ]
@@ -210,7 +208,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ureq",
- "windows-sys 0.61.2",
  "zip",
 ]
 

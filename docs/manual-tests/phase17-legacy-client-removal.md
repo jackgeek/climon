@@ -22,7 +22,7 @@ No configuration matrix applies beyond platform coverage.
 1. Install Bun dependencies: `bun install`.
 2. Type-check the maintained TypeScript server/web support code:
    `bun run typecheck`.
-3. Run the Bun test suite: `bun run test`.
+3. Run the Bun test suite: `bun test tests`.
 4. Build the dashboard server: `bun run build:server`.
 5. Build the dashboard web bundle: `bun run build:web`.
 6. Build the Rust client:
@@ -35,7 +35,7 @@ No configuration matrix applies beyond platform coverage.
 10. Return to the dashboard and open the new session.
 
 **Expected result:**
-- `bun install`, `bun run typecheck`, `bun run test`, `bun run build:server`,
+- `bun install`, `bun run typecheck`, `bun test tests`, `bun run build:server`,
   `bun run build:web`, and the Rust release build all pass.
 - The dashboard loads from `bun src/server.ts server`.
 - The session started by the Rust `climon` client appears in the dashboard and

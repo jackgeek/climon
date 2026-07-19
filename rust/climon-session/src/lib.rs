@@ -26,22 +26,9 @@
 //! handles. The Rust host blocks on `Pty::wait` and returns cleanly, so there is
 //! no leaked-handle event loop to escape; the safety net is intentionally
 //! omitted.
-//!
-//! ## `engine` is a crate-private implementation detail
-//! The actor engine stub is an internal detail of [`host::run_session_host`]'s
-//! engine selection; it is not part of this crate's public API. The following
-//! snippet must fail to compile from outside the crate, proving `engine` stays
-//! `pub(crate)`:
-//!
-//! ```compile_fail
-//! let _ = climon_session::engine::run_session_host;
-//! ```
 
-pub(crate) mod adapters;
 pub mod attention;
 pub mod control;
-pub(crate) mod domain;
-pub(crate) mod engine;
 pub mod error;
 pub mod fingerprint;
 pub mod host;
@@ -49,8 +36,6 @@ pub mod idle;
 pub mod replay;
 pub mod snippet;
 pub mod socket;
-#[cfg(test)]
-pub(crate) mod test_support;
 pub mod title_capture;
 
 pub use error::{SessionError, SessionResult};

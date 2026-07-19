@@ -23,4 +23,3 @@ pub mod update_cli;
 pub mod update_cmd;
 pub mod verify;
 pub mod version;
-pub mod win_inherit_guard;
