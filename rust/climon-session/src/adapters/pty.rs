@@ -592,9 +592,22 @@ fn read_loop<E: PtyEventSink>(mut reader: Box<dyn Read + Send>, events: &E) -> R
                     return ReadOutcome::LaneClosed;
                 }
             }
+            Err(error) if windows_broken_pipe_is_eof(&error) => return ReadOutcome::Eof,
             Err(error) => return ReadOutcome::ReadError(error.to_string()),
         }
     }
+}
+
+#[cfg(windows)]
+fn windows_broken_pipe_is_eof(error: &std::io::Error) -> bool {
+    // Raw ConPTY has reported both ERROR_BROKEN_PIPE and its HRESULT encoding
+    // when the child closes its output stream.
+    matches!(error.raw_os_error(), Some(109 | -2147024787))
+}
+
+#[cfg(not(windows))]
+fn windows_broken_pipe_is_eof(_error: &std::io::Error) -> bool {
+    false
 }
 
 /// Spawns the single reader thread. It reads output until it finishes, then
