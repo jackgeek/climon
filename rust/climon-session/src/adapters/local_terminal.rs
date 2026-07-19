@@ -626,6 +626,28 @@ pub(crate) fn stuck_local_terminal_for_test(
     (setup, restored)
 }
 
+/// Test-only: builds an attached [`LocalTerminalSetup`] reporting `size` with no
+/// input worker, so a test can model a real console whose visible size differs
+/// from the launcher's `meta.cols`/`meta.rows` (on Windows the launcher's
+/// `terminal_size()` call is Unix-only and always reports the 80x24
+/// placeholder) without touching a real console. Constructing the setup
+/// requires access to the module-private fields, so it lives here beside the
+/// type rather than in a downstream test module.
+#[cfg(test)]
+pub(crate) fn attached_local_terminal_for_test(
+    size: (u16, u16),
+    cancel: CancellationToken,
+) -> LocalTerminalSetup {
+    LocalTerminalSetup {
+        attached: true,
+        size,
+        guard: Box::new(NoopModeGuard),
+        input: None,
+        input_interrupt: None,
+        cancel,
+    }
+}
+
 /// The production [`TerminalPlatform`]. The Unix and Windows implementations own
 /// the platform mode setup that the legacy host performed inline; here they are
 /// isolated behind the trait so the rest of the adapter is platform-agnostic and

@@ -580,6 +580,26 @@ async fn run_with<B: SessionBackend>(
             }
         };
     let local_attached = local.attached;
+    // Windows-only: `meta.cols`/`meta.rows` came from the launcher's
+    // `terminal_size()` call, which is Unix-only and always reports the 80x24
+    // placeholder on Windows (see `PlatformConfiguration::size`'s doc in
+    // `adapters::local_terminal`). The Windows resize poller
+    // (`adapters::signals::spawn_resize_adapter`) only reports *changes* from
+    // its own initial sample, so without seeding the real size here the
+    // pty/grid stay at that bogus 80x24 for the whole session unless the user
+    // later resizes the window — this produced the reported diagonal `~` /
+    // misplaced status line rendering in Vim. Feed the real size in as an
+    // ordinary `LocalResized` event (the same event the poller emits on a real
+    // change) so it is applied through the already-tested resize handling
+    // before any pty output is produced. The lane cannot be closed this early
+    // in startup, so a send failure here is intentionally ignored.
+    #[cfg(windows)]
+    if local_attached {
+        let (cols, rows) = local.size;
+        let _ = control_tx
+            .send(SessionEvent::LocalResized { cols, rows })
+            .await;
+    }
     registry.register(
         TaskName::Console,
         backend.launch_console(console_effects, control_tx.clone()),
@@ -1073,6 +1093,11 @@ mod tests {
         /// `cleanup_socket` — so a test can assert the fallback lands before the
         /// socket is removed.
         teardown_order: Mutex<Vec<&'static str>>,
+        /// Every `(cols, rows)` the fake pty command worker observed on an
+        /// `Effect::ResizePty`, in delivery order. Lets a test prove the pty was
+        /// actually resized (e.g. seeded from the real local console size at
+        /// startup) rather than left at the launch metadata's size.
+        resized_to: Mutex<Vec<(u16, u16)>>,
     }
 
     /// A [`ChildTerminator`] that records how many times it was asked to kill the
@@ -1124,6 +1149,11 @@ mod tests {
         /// When set, the (peripheral) signal adapter task panics right after it
         /// starts, modeling a peripheral adapter dying via a panic.
         panic_signal: bool,
+        /// When set, `setup_local_terminal` reports an attached local terminal at
+        /// this `(cols, rows)` instead of running the real (headless-only in
+        /// tests) platform setup — modeling a real console whose visible size
+        /// differs from the launch metadata.
+        local_size_override: Option<(u16, u16)>,
     }
 
     impl SessionBackend for FakeBackend {
@@ -1145,10 +1175,19 @@ mod tests {
             let terminal_emitted = Arc::new(tokio::sync::Notify::new());
             let terminal_emitted_for_command = terminal_emitted.clone();
             let events_for_command = events.clone();
+            let obs_for_command = self.obs.clone();
             let command = tokio::spawn(async move {
                 match command_behavior {
                     CommandBehavior::DrainUntilClosed => {
-                        while effects.recv().await.is_some() {}
+                        while let Some(effect) = effects.recv().await {
+                            if let Effect::ResizePty { cols, rows, .. } = effect {
+                                obs_for_command
+                                    .resized_to
+                                    .lock()
+                                    .unwrap()
+                                    .push((cols, rows));
+                            }
+                        }
                         Ok::<(), PtyAdapterError>(())
                     }
                     CommandBehavior::FailAfterLifecycleTerminal => {
@@ -1227,6 +1266,11 @@ mod tests {
                 return Err(SessionError::Io(std::io::Error::other(
                     "local terminal setup failed",
                 )));
+            }
+            if let Some(size) = self.local_size_override {
+                return Ok(
+                    crate::adapters::local_terminal::attached_local_terminal_for_test(size, cancel),
+                );
             }
             // Headless real setup mutates no terminal modes and spawns no worker.
             Ok(setup_local_terminal(headless, events, cancel))
@@ -1345,6 +1389,7 @@ mod tests {
         command: CommandBehavior,
         fail_at: FailPoint,
         panic_signal: bool,
+        local_size_override: Option<(u16, u16)>,
     }
 
     impl SupervisorFixture {
@@ -1357,6 +1402,7 @@ mod tests {
                 command,
                 fail_at,
                 panic_signal: false,
+                local_size_override: None,
             }
         }
 
@@ -1370,6 +1416,21 @@ mod tests {
                 FailPoint::None,
             );
             fixture.panic_signal = true;
+            fixture
+        }
+
+        /// A session whose child exits cleanly with `code`, while the local
+        /// terminal reports it is attached at the real console `size` — modeling
+        /// Windows, where the launcher's `meta.cols`/`meta.rows` come from a
+        /// Unix-only `terminal_size()` call and are always the 80x24 placeholder
+        /// (see `PlatformConfiguration::size`'s doc in `adapters::local_terminal`).
+        fn successful_exit_with_local_size(code: i32, size: (u16, u16)) -> Self {
+            let mut fixture = Self::new(
+                PtyBehavior::ExitWith(code),
+                CommandBehavior::DrainUntilClosed,
+                FailPoint::None,
+            );
+            fixture.local_size_override = Some(size);
             fixture
         }
 
@@ -1492,6 +1553,7 @@ mod tests {
                 command: self.command,
                 fail_at: self.fail_at,
                 panic_signal: self.panic_signal,
+                local_size_override: self.local_size_override,
             }
         }
 
@@ -1537,6 +1599,12 @@ mod tests {
         /// How many times the socket was cleaned up.
         fn cleaned_socket(&self) -> usize {
             self.obs.cleaned_socket.load(Ordering::SeqCst)
+        }
+
+        /// Every `(cols, rows)` the fake pty command worker observed on an
+        /// `Effect::ResizePty`, in delivery order.
+        fn resized_to(&self) -> Vec<(u16, u16)> {
+            self.obs.resized_to.lock().unwrap().clone()
         }
 
         /// How many times the resolved socket reference was persisted.
@@ -1971,5 +2039,32 @@ mod tests {
         assert_eq!(on_disk.exit_code, Some(SPAWN_FAILURE_EXIT));
         assert_eq!(on_disk.error.as_deref(), Some("spawn failed"));
         assert!(on_disk.completed_at.is_some());
+    }
+
+    /// DAR-01 regression: on Windows, the launcher's `meta.cols`/`meta.rows`
+    /// come from a Unix-only `terminal_size()` call and are always the 80x24
+    /// placeholder (`base_meta()` models this exactly). The Windows resize
+    /// poller (`adapters::signals::spawn_resize_adapter`) only reports *changes*
+    /// from its own initial sample, so without an explicit initial resize the
+    /// pty/grid stayed at that bogus 80x24 for the whole session unless the user
+    /// happened to resize the window later — this is exactly what produced the
+    /// reported diagonal `~` / misplaced status line in Vim on a real Windows
+    /// Terminal tab whose actual size was not 80x24. When the local terminal
+    /// reports it is attached at a real size that differs from the launch
+    /// metadata, the supervisor must seed the coordinator with that real size
+    /// before the session is considered started, so the pty is resized to match
+    /// the real console right away rather than waiting for a subsequent resize.
+    #[cfg(windows)]
+    #[test]
+    fn windows_attached_local_terminal_seeds_real_console_size_at_startup() {
+        let fixture = SupervisorFixture::successful_exit_with_local_size(0, (137, 51));
+        let code = fixture.run_sync().expect("session completes");
+        assert_eq!(code, 0);
+        assert_eq!(
+            fixture.resized_to(),
+            vec![(137, 51)],
+            "the pty must be resized to the real console size at startup instead of \
+             staying at the launch metadata's 80x24"
+        );
     }
 }
