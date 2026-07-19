@@ -1,11 +1,12 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { HarnessPlatform } from "./types.js";
 import { HarnessError } from "./types.js";
-import type { CommandRunner } from "./command.js";
+import type { CommandRunner, CommandSpec, CommandResult } from "./command.js";
 import type { BuildArtifacts } from "./build.js";
 import { buildHostArtifacts, planHostBuild, type StatFn } from "./build.js";
 import { snapshotHome } from "./artifacts.js";
@@ -197,6 +198,11 @@ export class HarnessEnvironment {
     await mkdir(logsDir, { recursive: true });
     await mkdir(buildDir, { recursive: true });
 
+    // Find a free port before writing config — the product server records the
+    // requested port literally in server.json, so we must supply a real port
+    // (not 0) for pollServerReady to detect it.
+    const serverPort = await findFreePort();
+
     // Write config.jsonc disabling telemetry and update
     await writeFile(
       join(home, "config.jsonc"),
@@ -217,10 +223,13 @@ export class HarnessEnvironment {
       CLIMON_HOME: home,
       CLIMON_COLS: "100",
       CLIMON_ROWS: "30",
+      CLIMON_SESSION_ENGINE: "actor",
       CI: "true",
       NO_COLOR: "1",
     };
     delete runtimeEnv.APPLICATIONINSIGHTS_CONNECTION_STRING;
+    delete runtimeEnv.CLIMON_NEST_LEVEL;
+    delete runtimeEnv.FORCE_COLOR;
 
     // Build artifacts
     const plan = planHostBuild(opts.root, buildDir, platform);
@@ -237,7 +246,7 @@ export class HarnessEnvironment {
     if (opts.spawnServer) {
       serverProcess = opts.spawnServer({
         file: artifacts.serverPath,
-        args: ["server", "--no-takeover", "--port", "0"],
+        args: ["server", "--no-takeover", "--port", String(serverPort)],
         env: runtimeEnv,
         stdoutPath: serverStdoutPath,
         stderrPath: serverStderrPath,
@@ -245,7 +254,7 @@ export class HarnessEnvironment {
     } else {
       serverProcess = defaultSpawnServer({
         file: artifacts.serverPath,
-        args: ["server", "--no-takeover", "--port", "0"],
+        args: ["server", "--no-takeover", "--port", String(serverPort)],
         env: runtimeEnv,
         stdoutPath: serverStdoutPath,
         stderrPath: serverStderrPath,
@@ -407,6 +416,26 @@ export class HarnessEnvironment {
     await snapshotHome(this.home, destination);
   }
 
+  /** Read-only copy of the runtime environment used by spawned processes. */
+  get runtimeEnv(): NodeJS.ProcessEnv {
+    return { ...this._runtimeEnv };
+  }
+
+  /** Path to the runtime logs directory. */
+  get logDir(): string {
+    return join(this.artifactRoot, "runtime", "logs");
+  }
+
+  /** Execute a command through the environment's command runner. */
+  async runCommand(spec: CommandSpec): Promise<CommandResult> {
+    return this._runner.run(spec);
+  }
+
+  /** Read-only set of tracked session IDs. */
+  get trackedSessionIds(): ReadonlySet<string> {
+    return new Set(this._tracked);
+  }
+
   private async _waitForAnyTerminalStatus(id: string, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -497,6 +526,42 @@ export class HarnessEnvironment {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Bind port 0 to get an OS-assigned ephemeral port, record it, and release
+ * immediately. The product server can then bind the same port with minimal
+ * race-condition window.
+ */
+export function findFreePort(host = "127.0.0.1"): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const srv = createServer();
+    srv.listen(0, host, () => {
+      const addr = srv.address();
+      if (addr && typeof addr === "object") {
+        const port = addr.port;
+        srv.close(() => resolve(port));
+      } else {
+        srv.close(() =>
+          reject(
+            new HarnessError(
+              "server-startup",
+              "could not determine free port from net.Server"
+            )
+          )
+        );
+      }
+    });
+    srv.on("error", (err) =>
+      reject(
+        new HarnessError(
+          "server-startup",
+          `findFreePort failed: ${err.message}`,
+          err
+        )
+      )
+    );
+  });
 }
 
 export function defaultSpawnServer(opts: {

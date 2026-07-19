@@ -435,6 +435,7 @@ export function SessionItem({
           appearance="primary"
           size="small"
           icon={<FullScreenMaximize16Regular />}
+          data-testid="open-terminal-button"
           onClick={(e) => {
             e.stopPropagation();
             onMaximize(session.id);
