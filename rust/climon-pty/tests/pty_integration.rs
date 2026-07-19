@@ -4,6 +4,8 @@
 //! Windows ConPTY). They are intentionally part of `cargo test --workspace`.
 
 use std::io::Read;
+#[cfg(windows)]
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -105,6 +107,107 @@ fn conpty_wedged_skip() {
         "skipping: child did not self-terminate within {CHILD_EXIT_TIMEOUT:?} \
          (headless ConPTY pseudoconsole never reached the child's ExitProcess); \
          exit path not exercised here"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn detached_process_captures_conpty_output() {
+    use std::collections::HashMap;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    const ROLE_VAR: &str = "__CLIMON_TEST_DETACHED_CONPTY_ROLE";
+    const RESULT_VAR: &str = "__CLIMON_TEST_DETACHED_CONPTY_RESULT";
+    const TEST_NAME: &str = "detached_process_captures_conpty_output";
+    const MARKER: &str = "CLIMON_DETACHED_CONPTY_READY";
+
+    match std::env::var(ROLE_VAR).as_deref() {
+        Ok("payload") => {
+            print!("{MARKER}\r\n");
+            std::io::stdout().flush().expect("flush payload stdout");
+            return;
+        }
+        Ok("detached") => {
+            let result_path = std::env::var_os(RESULT_VAR).expect("result path");
+            let mut env: HashMap<String, String> = std::env::vars().collect();
+            env.insert(ROLE_VAR.to_string(), "payload".to_string());
+            let opts = PtyOptions {
+                command: std::env::current_exe()
+                    .expect("current test executable")
+                    .to_string_lossy()
+                    .into_owned(),
+                args: vec![
+                    "--exact".to_string(),
+                    TEST_NAME.to_string(),
+                    "--nocapture".to_string(),
+                ],
+                cwd: std::env::current_dir().expect("current directory"),
+                cols: 80,
+                rows: 24,
+                env: Some(env),
+            };
+
+            let mut pty = Pty::spawn(&opts).expect("spawn payload in ConPTY");
+            let reader = pty.try_clone_reader().expect("clone ConPTY reader");
+            let reader_handle = std::thread::spawn(move || read_to_end(reader));
+            if pty
+                .wait_timeout(CHILD_EXIT_TIMEOUT)
+                .expect("wait for payload")
+                .is_none()
+            {
+                pty.kill().ok();
+            }
+            drop(pty);
+            let output = reader_handle.join().expect("join ConPTY reader");
+            std::fs::write(result_path, output).expect("write captured output");
+            return;
+        }
+        _ => {}
+    }
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let result_path = std::env::temp_dir().join(format!(
+        "climon-detached-conpty-{}-{nonce}.log",
+        std::process::id()
+    ));
+
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut child = Command::new(std::env::current_exe().expect("current test executable"))
+        .args(["--exact", TEST_NAME, "--nocapture"])
+        .env(ROLE_VAR, "detached")
+        .env(RESULT_VAR, &result_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+        .spawn()
+        .expect("spawn detached test process");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll detached process") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "detached ConPTY test process did not exit"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(status.success(), "detached test process failed: {status}");
+
+    let output = std::fs::read(&result_path).expect("read captured ConPTY output");
+    std::fs::remove_file(&result_path).ok();
+    assert!(
+        String::from_utf8_lossy(&output).contains(MARKER),
+        "expected {MARKER:?} in detached ConPTY output, got: {:?}",
+        String::from_utf8_lossy(&output)
     );
 }
 
