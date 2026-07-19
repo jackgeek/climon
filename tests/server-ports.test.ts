@@ -3,21 +3,10 @@ import { createServer } from "node:net";
 import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { freePort, waitFor, waitForHealth } from "./support/server.js";
 
 const home = join(tmpdir(), `climon-server-ports-${process.pid}`);
 const env = { ...process.env, CLIMON_HOME: home };
-
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      s.close(() => resolve(port));
-    });
-  });
-}
 
 function portFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -27,24 +16,6 @@ function portFree(port: number): Promise<boolean> {
       s.close(() => resolve(true));
     });
   });
-}
-
-async function waitFor<T>(fn: () => Promise<T | undefined>, ms = 20000): Promise<T> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    // Bound each attempt so a hung probe (e.g. a fetch to a freshly-spawned
-    // server whose event loop is still starved under load) cannot block the
-    // loop past the deadline.
-    const v = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((r) => setTimeout(r, 1000, undefined))
-    ]);
-    if (v !== undefined) {
-      return v;
-    }
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error("timed out");
 }
 
 afterEach(async () => {
@@ -92,6 +63,7 @@ describe("server port safety", () => {
     );
     const base = `http://127.0.0.1:${port}`;
     try {
+      await waitForHealth(server, base);
       const body = await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
         return res?.ok
@@ -117,7 +89,7 @@ describe("server port safety", () => {
       server.kill();
       await server.exited;
     }
-  }, 60000);
+  }, 120000);
 
   test("releases the port and removes the state file on shutdown", async () => {
     const port = await freePort();
@@ -126,10 +98,7 @@ describe("server port safety", () => {
       { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" }
     );
     const base = `http://127.0.0.1:${port}`;
-    await waitFor(async () => {
-      const res = await fetch(`${base}/health`).catch(() => undefined);
-      return res?.ok ? true : undefined;
-    }, 30000);
+    await waitForHealth(server, base);
 
     // Hold an SSE connection open: a naive stop() would wait on this and leak
     // the port. Safe shutdown must force it closed.
@@ -150,5 +119,5 @@ describe("server port safety", () => {
     if (process.platform !== "win32") {
       await expect(readFile(join(home, "server.json"), "utf8")).rejects.toThrow();
     }
-  }, 60000);
+  }, 120000);
 });

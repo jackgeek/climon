@@ -63,8 +63,10 @@ exposed to dependency-install or `curl | bash` steps.
 
 ## Cutting a signed release
 
-Releases are otherwise unchanged from the standard flow in the README. With the
-secret present, the [`Release`](../.github/workflows/release.yml) workflow:
+Releases are tag-driven — see the full runbook in
+[docs/cutting-a-release.md](cutting-a-release.md). With the signing secret present,
+pushing a `vX.Y.Z` tag runs the
+[`Release`](../.github/workflows/release.yml) workflow, which:
 
 1. compiles the release binaries and zips them (`dist/climon-<platform>.zip`),
 2. runs `bun run sign-release` (the **Sign release artifacts + emit manifest**

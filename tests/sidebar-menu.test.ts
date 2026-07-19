@@ -4,16 +4,25 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import * as RealIcons from "@fluentui/react-icons";
 import * as RealComponents from "@fluentui/react-components";
+import * as RealSessionItem from "../src/web/components/SessionItem.js";
+import * as RealUseAnimatedListReorder from "../src/web/hooks/useAnimatedListReorder.js";
 
 // `mock.module` is global and mutates the module in place for the whole test
-// run, so snapshot the real Fluent exports *before* mocking and restore them
-// once this file's tests finish; otherwise suites that render real Fluent
-// components afterward (e.g. terminal-panel, app-layout) get the stubs.
+// run, so snapshot the real exports *before* mocking and restore them once this
+// file's tests finish; otherwise suites that run afterward get the stubs. This
+// covers the Fluent exports AND the SessionItem/useAnimatedListReorder modules
+// this file stubs below — without restoring them, session-item.test.ts (which
+// imports sessionDisplayTitle from the real SessionItem module) fails with
+// "sessionDisplayTitle is not a function" whenever it runs after this file.
 const realComponents = { ...RealComponents };
 const realIcons = { ...RealIcons };
+const realSessionItem = { ...RealSessionItem };
+const realUseAnimatedListReorder = { ...RealUseAnimatedListReorder };
 afterAll(() => {
   mock.module("@fluentui/react-components", () => realComponents);
   mock.module("@fluentui/react-icons", () => realIcons);
+  mock.module("../src/web/components/SessionItem.js", () => realSessionItem);
+  mock.module("../src/web/hooks/useAnimatedListReorder.js", () => realUseAnimatedListReorder);
 });
 import {
   getStableSessionItemRef,
