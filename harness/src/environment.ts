@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -138,6 +138,18 @@ export async function pollServerReady(opts: {
   );
 }
 
+// ── resetRuntime ─────────────────────────────────────────────────────────────
+
+/**
+ * Wipes the `runtime/` subdirectory of `artifactRoot` so that each harness
+ * invocation starts with a clean slate (no stale home/sessions metadata).
+ * Non-runtime evidence such as `cases/` and `playwright/` is left untouched.
+ */
+export async function resetRuntime(artifactRoot: string): Promise<void> {
+  const runtimeDir = join(artifactRoot, "runtime");
+  await rm(runtimeDir, { recursive: true, force: true });
+}
+
 // ── HarnessEnvironment ───────────────────────────────────────────────────────
 
 export class HarnessEnvironment {
@@ -192,6 +204,8 @@ export class HarnessEnvironment {
     const home = join(runtimeDir, "home");
     const logsDir = join(runtimeDir, "logs");
     const buildDir = join(runtimeDir, "build");
+
+    await resetRuntime(opts.artifactRoot);
 
     await mkdir(home, { recursive: true });
     await mkdir(logsDir, { recursive: true });

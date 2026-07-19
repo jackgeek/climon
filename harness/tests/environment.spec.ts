@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -11,6 +12,7 @@ import {
   defaultSpawnServer,
   parseServerState,
   pollServerReady,
+  resetRuntime,
   type FetchFn,
   type HarnessEnvironmentInit,
   type OwnedProcess,
@@ -581,3 +583,48 @@ test("defaultSpawnServer: throws HarnessError server-startup immediately when sp
   expect(ownedProcess).toBeUndefined();
 });
 
+// ── resetRuntime ──────────────────────────────────────────────────────────────
+
+test("resetRuntime: removes stale runtime state before a new run while preserving non-runtime evidence", async () => {
+  const artifactRoot = join(tmpdir(), `climon-art-reset-${Date.now()}`);
+
+  // Seed stale runtime state (simulates a previous harness invocation)
+  const staleSessionsDir = join(artifactRoot, "runtime", "home", "sessions");
+  await mkdir(staleSessionsDir, { recursive: true });
+  const staleSessionFile = join(staleSessionsDir, "stale-session.json");
+  await writeFile(
+    staleSessionFile,
+    JSON.stringify({ id: "stale-session", status: "completed", name: "CIH-02" })
+  );
+
+  // Create non-runtime evidence that must survive (cases, playwright output, etc.)
+  const casesDir = join(artifactRoot, "cases");
+  const casesFile = join(casesDir, "evidence.txt");
+  await mkdir(casesDir, { recursive: true });
+  await writeFile(casesFile, "preserve-me");
+
+  await resetRuntime(artifactRoot);
+
+  // Runtime state must be gone
+  const runtimeGone = await access(join(artifactRoot, "runtime"))
+    .then(() => false)
+    .catch(() => true);
+  expect(runtimeGone).toBe(true);
+
+  // Stale session file must be gone
+  const staleGone = await access(staleSessionFile)
+    .then(() => false)
+    .catch(() => true);
+  expect(staleGone).toBe(true);
+
+  // Non-runtime evidence must be preserved
+  const casesContent = await readFile(casesFile, "utf8");
+  expect(casesContent).toBe("preserve-me");
+});
+
+test("resetRuntime: is a no-op when runtime directory does not exist", async () => {
+  const artifactRoot = join(tmpdir(), `climon-art-noop-${Date.now()}`);
+  await mkdir(artifactRoot, { recursive: true });
+  // No runtime dir — must not throw
+  await expect(resetRuntime(artifactRoot)).resolves.toBeUndefined();
+});
