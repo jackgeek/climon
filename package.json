@@ -39,10 +39,12 @@
     "messages:merge": "bun scripts/extract-messages.ts merge",
     "messages:hints": "bun scripts/extract-messages.ts hints",
     "messages:publish": "bun scripts/extract-messages.ts publish",
-    "test:harness:unit": "playwright test --config harness/playwright.config.ts --grep-invert @smoke",
-    "test:harness": "playwright test --config harness/playwright.config.ts",
-    "test:harness:smoke": "playwright test --config harness/playwright.config.ts --grep @smoke",
-    "harness:install-browser": "playwright install chromium"
+    "test:harness:unit": "bun run harness:prepare-native && playwright test --config harness/playwright.config.ts --grep-invert @smoke",
+    "test:harness": "bun run harness:prepare-native && playwright test --config harness/playwright.config.ts",
+    "test:harness:smoke": "bun run harness:prepare-native && playwright test --config harness/playwright.config.ts --grep @smoke",
+    "harness:install-browser": "playwright install chromium",
+    "harness:prepare-native": "node harness/scripts/prepare-node-pty.mjs",
+    "harness:aggregate": "tsx harness/src/aggregate.ts"
   },
   "trustedDependencies": [
     "node-pty"

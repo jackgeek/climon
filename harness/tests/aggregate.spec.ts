@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { aggregateResults } from "../src/aggregate.js";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { aggregateResults, runAggregateCli } from "../src/aggregate.js";
 import type { CaseResult, HarnessCase } from "../src/types.js";
 
 const automatedCase: HarnessCase = {
@@ -136,4 +138,30 @@ test("aggregateResults: returned results are sorted by id then platform", () => 
   const report = aggregateResults(results, [automatedCase]);
   const platforms = report.results.map((r) => r.platform);
   expect(platforms).toEqual(["linux", "macos", "windows"]);
+});
+
+// ── runAggregateCli: CLI integration ──────────────────────────────────────────
+
+const cliTmp = resolve(
+  import.meta.dirname,
+  "../../.test-tmp/aggregate-cli-test"
+);
+
+test.afterAll(async () => {
+  await rm(cliTmp, { recursive: true, force: true });
+});
+
+test("runAggregateCli: returns 1 with missing cell messages for empty results dir", async () => {
+  await rm(cliTmp, { recursive: true, force: true });
+  await mkdir(cliTmp, { recursive: true });
+
+  const manualTestsDir = resolve(import.meta.dirname, "../../docs/manual-tests");
+
+  const code = await runAggregateCli([cliTmp, manualTestsDir, "smoke"]);
+
+  expect(code).toBe(1);
+
+  const summary = await readFile(join(cliTmp, "summary.md"), "utf8");
+  expect(summary).toContain("FAIL");
+  expect(summary).toContain("missing");
 });
