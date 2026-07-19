@@ -16,6 +16,7 @@
 
 import { chmod, readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Finds every `spawn-helper` regular file under
@@ -80,13 +81,11 @@ export async function prepareNodePty(nodeModulesRoot) {
   }
 }
 
-// CLI entry point
-if (
-  new URL(import.meta.url).pathname ===
-  new URL(
-    `file://${process.argv[1].replace(/\\/g, "/")}`
-  ).pathname
-) {
+// CLI entry point — robust cross-platform detection.
+// path.resolve handles relative argv[1] (e.g. "harness/scripts/prepare-node-pty.mjs")
+// and fileURLToPath handles Windows drive-letter URLs that the old `file://${argv1}`
+// pattern broke (C: was treated as the URL hostname).
+if (resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   prepareNodePty().catch((err) => {
     console.error(String(err));
     process.exit(1);

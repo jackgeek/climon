@@ -446,3 +446,17 @@ test("workflow: aggregate install-dependencies step is named 'Install dependenci
   expect(step).toBeDefined();
   expect(step?.name).toBe("Install dependencies");
 });
+
+test("workflow: 'Publish aggregate summary' run command handles missing summary.md gracefully", async () => {
+  const wf = await loadWorkflow();
+  const steps = aggregateSteps(wf);
+  const step = steps.find((s) => s.name === "Publish aggregate summary");
+  expect(step).toBeDefined();
+  const run = String(step?.run ?? "");
+  // Must use a shell conditional so the step does not fail when summary.md is absent.
+  expect(run).toMatch(/if\s+\[\s+-f\b|test\s+-f\s/);
+  // Must still write something to GITHUB_STEP_SUMMARY even when the file is missing.
+  const elseIdx = run.indexOf("else");
+  expect(elseIdx).toBeGreaterThan(-1);
+  expect(run.slice(elseIdx)).toContain("GITHUB_STEP_SUMMARY");
+});

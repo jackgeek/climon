@@ -96,7 +96,12 @@ jobs:
 
       - name: Publish aggregate summary
         if: always()
-        run: cat .test-tmp/harness-results/summary.md >> $GITHUB_STEP_SUMMARY
+        run: |
+          if [ -f .test-tmp/harness-results/summary.md ]; then
+            cat .test-tmp/harness-results/summary.md >> $GITHUB_STEP_SUMMARY
+          else
+            printf '## Aggregate summary\n\n> Aggregation failed — no summary\.md was produced\.\n' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload aggregate summary
         uses: actions/upload-artifact@v4

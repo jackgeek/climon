@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { execFile } from "node:child_process";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { prepareNodePty } from "../scripts/prepare-node-pty.mjs";
@@ -90,4 +91,56 @@ test("prepareNodePty: is a no-op on Windows (always resolves without error)", as
     return;
   }
   await expect(prepareNodePty(testRoot)).resolves.toBeUndefined();
+});
+
+// ── Direct-entry detection ────────────────────────────────────────────────────
+
+test("native-prep: direct-entry via relative path invokes prepareNodePty", async () => {
+  if (process.platform === "win32") return;
+
+  // Build fixture with a non-executable spawn-helper.
+  const prebuildDir = join(testRoot, "node-pty", "prebuilds", "linux-x64");
+  await mkdir(prebuildDir, { recursive: true });
+  const helperPath = join(prebuildDir, "spawn-helper");
+  await writeFile(helperPath, "#!/bin/sh\necho hello\n", { mode: 0o644 });
+
+  const before = await stat(helperPath);
+  expect(before.mode & 0o111).toBe(0);
+
+  // Write a probe script that simulates `node harness/scripts/prepare-node-pty.mjs`
+  // where process.argv[1] is a *relative* path — the scenario that the buggy
+  // `file://${process.argv[1]}` URL construction cannot handle because it turns
+  // the first path segment into a URL hostname.
+  const projectRoot = resolve(import.meta.dirname, "../..");
+  const scriptAbsPath = resolve(
+    projectRoot,
+    "harness/scripts/prepare-node-pty.mjs"
+  );
+  const probeScript = join(testRoot, "probe.mjs");
+  await writeFile(
+    probeScript,
+    [
+      "// Simulate invocation where argv[1] is a relative path.",
+      `process.argv[1] = "harness/scripts/prepare-node-pty.mjs";`,
+      `await import(${JSON.stringify(scriptAbsPath)});`,
+    ].join("\n")
+  );
+
+  await new Promise<void>((res, rej) => {
+    execFile(
+      process.execPath,
+      [probeScript],
+      {
+        cwd: projectRoot,
+        env: { ...process.env, CLIMON_NODE_PTY_ROOT: testRoot },
+      },
+      (err) => (err ? rej(err) : res())
+    );
+  });
+
+  const after = await stat(helperPath);
+  expect(
+    after.mode & 0o111,
+    "spawn-helper should be executable after direct invocation with a relative path"
+  ).not.toBe(0);
 });
