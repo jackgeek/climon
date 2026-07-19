@@ -130,7 +130,7 @@ by climon rather than settings you normally edit.
 
 ```bash
 bun run typecheck   # tsc --noEmit
-bun test tests      # unit tests
+bun run test        # unit tests
 ```
 
 Then start the server and a session:

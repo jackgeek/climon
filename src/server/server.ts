@@ -1366,7 +1366,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
    * (filesystem reads only) so it never slows or hangs the health probe.
    */
   async function collectServerPorts(): Promise<HealthServerPorts> {
-    const ports: HealthServerPorts = { dashboard: dashboardPort.port };
+    // Use server.port (the actual bound port) when available; falls back to
+    // dashboardPort.port during early startup before Bun.serve() returns.
+    const dashboard = server?.port ?? dashboardPort.port;
+    const ports: HealthServerPorts = { dashboard };
     try {
       if (await isIngestDaemonAlive()) {
         ports.ingest = await resolveIngestPort();
@@ -2141,17 +2144,21 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   }
   stopSseKeepAlive = startSseKeepAlive(sseClients, { encoder });
 
-  startupLog("Bun.serve started; writing server state file");
+  // After Bun.serve(), resolve the actual bound port. When --port 0 is used,
+  // the OS assigns an ephemeral port; `server.port` reflects the real port
+  // while `dashboardPort.port` may still be the requested 0.
+  const actualPort = server.port ?? dashboardPort.port;
+  startupLog(`Bun.serve started on actual port ${actualPort}; writing server state file`);
   const recordedPorts = await collectServerPorts();
   const localStartedAt = Date.now();
-  const serverState: ServerState = { pid: process.pid, port: dashboardPort.port, startedAt: localStartedAt };
+  const serverState: ServerState = { pid: process.pid, port: actualPort, startedAt: localStartedAt };
   if (recordedPorts.ingest !== undefined) serverState.ingest = recordedPorts.ingest;
   const serverStatePath = getServerStatePath();
   logMsg(getLogger(), "debug", "server.server_state_writing", { path: serverStatePath, content: JSON.stringify(serverState) });
   await atomicWrite(serverStatePath, serializeServerState(serverState));
   logMsg(getLogger(), "debug", "server.server_state_written", {});
   startupLog("state file written; advertising URL");
-  printStartup(config, dashboardPort.port);
+  printStartup(config, actualPort);
 
   // Re-establish a previously-enabled Tunnel Link. The dashboard tunnel manager
   // reuses the persisted tunnel identity, so the public URL is stable across
