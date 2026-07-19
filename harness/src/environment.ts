@@ -575,6 +575,17 @@ export function defaultSpawnServer(opts: {
   child.stdout?.pipe(stdoutWs);
   child.stderr?.pipe(stderrWs);
 
+  // Eagerly build one close promise so that wait() called after 'close' has
+  // already fired returns an already-resolved promise rather than hanging.
+  // Multiple wait() calls all receive the same shared promise.
+  let _resolveClose!: (code: number | null) => void;
+  let _rejectClose!: (err: Error) => void;
+  const _closePromise = new Promise<number | null>((res, rej) => {
+    _resolveClose = res;
+    _rejectClose = rej;
+  });
+  child.once("close", (code) => _resolveClose(code));
+
   if (isUnix) {
     child.unref();
   }
@@ -595,10 +606,10 @@ export function defaultSpawnServer(opts: {
       }
     },
     wait() {
-      return new Promise<number | null>((resolve, reject) => {
-        _forwardError = reject; // surface any async spawn/runtime errors immediately
-        child.once("close", (code) => resolve(code));
-      });
+      // Surface any async spawn/runtime error to the caller and return the
+      // pre-built close promise (already resolved if close fired before this call).
+      _forwardError = (err) => _rejectClose(err);
+      return _closePromise;
     },
   };
 }

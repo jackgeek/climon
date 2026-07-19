@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { platformFromNode } from "../src/platform.js";
 import type { BuildArtifacts } from "../src/build.js";
 import type { CommandSpec, CommandResult, CommandRunner } from "../src/command.js";
@@ -627,4 +628,48 @@ test("resetRuntime: is a no-op when runtime directory does not exist", async () 
   await mkdir(artifactRoot, { recursive: true });
   // No runtime dir — must not throw
   await expect(resetRuntime(artifactRoot)).resolves.toBeUndefined();
+});
+
+// ── defaultSpawnServer: wait() after close ────────────────────────────────────
+
+test("defaultSpawnServer: wait() resolves promptly when called after the child process has already emitted close", async () => {
+  // Concrete EventEmitter-backed fake: on/once listeners actually fire
+  class FakeChild extends EventEmitter {
+    pid: number | undefined = 12345;
+    stdout: null = null;
+    stderr: null = null;
+    unref(): void {}
+  }
+
+  const fakeChild = new FakeChild() as unknown as ChildProcess;
+  const fakeSpawn: SpawnHelper = () => fakeChild;
+
+  const logDir = join(root, ".test-tmp", `spawn-wait-${Date.now()}`);
+  await mkdir(logDir, { recursive: true });
+
+  const ownedProcess = defaultSpawnServer({
+    file: "fake-server",
+    args: [],
+    env: {},
+    stdoutPath: join(logDir, "stdout.log"),
+    stderrPath: join(logDir, "stderr.log"),
+    platform: "linux",
+    spawnFn: fakeSpawn,
+  });
+
+  // Simulate the child process exiting before wait() is ever called
+  (fakeChild as unknown as EventEmitter).emit("close", 42);
+
+  // wait() must resolve promptly — not hang waiting for a past event
+  const code = await Promise.race([
+    ownedProcess.wait(),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error("wait() did not resolve within 500ms — missing eager close listener")),
+        500
+      )
+    ),
+  ]);
+
+  expect(code).toBe(42);
 });
