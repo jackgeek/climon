@@ -112,9 +112,9 @@ mod imp {
         /// handle. Null and `INVALID_HANDLE_VALUE` handles are silently
         /// skipped.
         pub fn new() -> std::io::Result<Self> {
-            let lock = INHERIT_LOCK.lock().map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::Other, "StdInheritGuard: mutex poisoned")
-            })?;
+            let lock = INHERIT_LOCK
+                .lock()
+                .map_err(|_| std::io::Error::other("StdInheritGuard: mutex poisoned"))?;
             let stdout = Self::clear_one(STD_OUTPUT_HANDLE)?;
             let stderr = match Self::clear_one(STD_ERROR_HANDLE) {
                 Ok(s) => s,
