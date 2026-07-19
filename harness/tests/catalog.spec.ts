@@ -3,6 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadHarnessCases } from "../src/catalog.js";
+import { HarnessError } from "../src/types.js";
 
 async function catalogue(markdown: string) {
   const dir = await mkdtemp(join(tmpdir(), "climon-catalog-"));
@@ -111,4 +112,50 @@ test("loads real docs/manual-tests directory and finds CIH-01 and CIH-02 as auto
   expect(cih02).toBeDefined();
   expect(cih02?.status).toBe("automated");
   expect(cih02?.suite).toBe("smoke");
+});
+
+test("rejects an unterminated yaml harness block with a contextual message", async () => {
+  const err = await catalogue(`
+## CIH-01 — Incomplete
+- **ID:** CIH-01
+\`\`\`yaml harness
+status: automated
+`).catch((e) => e);
+  expect(err).toBeInstanceOf(HarnessError);
+  expect(err.kind).toBe("catalogue");
+  expect(err.message).toContain("unterminated harness block");
+});
+
+test("catalogue validation throws HarnessError with kind 'catalogue'", async () => {
+  const err = await catalogue(`
+## CIH-01 — Invalid
+- **ID:** CIH-01
+\`\`\`yaml harness
+status: automated
+suite: smoke
+scenario: client-server.headless-dashboard
+platforms: [linux]
+timeoutSeconds: 90
+badField: yes
+\`\`\`
+`).catch((e) => e);
+  expect(err).toBeInstanceOf(HarnessError);
+  expect(err.kind).toBe("catalogue");
+  expect(err.message).toContain("unsupported harness field: badField");
+});
+
+test("loads a case with a CRLF heading line and produces a clean title", async () => {
+  // Only the heading has CRLF; the yaml block uses LF to isolate the title fix.
+  const md =
+    "## CIH-01 \u2014 Headless lifecycle\r\n" +
+    "- **ID:** CIH-01\n" +
+    "```yaml harness\n" +
+    "status: automated\n" +
+    "suite: smoke\n" +
+    "scenario: client-server.headless-dashboard\n" +
+    "platforms: [macos, linux, windows]\n" +
+    "timeoutSeconds: 90\n" +
+    "```\n";
+  const cases = await catalogue(md);
+  expect(cases[0].title).toBe("Headless lifecycle");
 });

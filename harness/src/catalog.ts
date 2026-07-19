@@ -7,6 +7,7 @@ import type {
   HarnessStatus,
   ScenarioKey,
 } from "./types.js";
+import { HarnessError } from "./types.js";
 
 const ALLOWED_FIELDS = new Set([
   "status",
@@ -26,7 +27,7 @@ const ID_RE = /^- \*\*ID:\*\* ([A-Z0-9-]+)$/;
 
 function fail(file: string, id: string | undefined, msg: string): never {
   const loc = id ? `${file} [${id}]` : file;
-  throw new Error(`${loc}: ${msg}`);
+  throw new HarnessError("catalogue", `${loc}: ${msg}`);
 }
 
 export async function loadHarnessCases(
@@ -216,7 +217,7 @@ export async function loadHarnessCases(
       }
 
       // Detect heading — resets current case context
-      const headingMatch = HEADING_RE.exec(line);
+      const headingMatch = HEADING_RE.exec(line.trimEnd());
       if (headingMatch) {
         currentId = headingMatch[1];
         currentTitle = headingMatch[2];
@@ -254,6 +255,10 @@ export async function loadHarnessCases(
         harnessLines = [];
         continue;
       }
+    }
+
+    if (inHarnessBlock) {
+      fail(fileName, currentId, "unterminated harness block");
     }
   }
 
