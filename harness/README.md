@@ -85,7 +85,7 @@ Artifacts land under `.test-tmp/harness/<platform>/` (overridable via
         ├── headless-stdout.log ← Client stdout (CIH-01)
         ├── headless-stderr.log ← Client stderr (CIH-01)
         ├── pty.log             ← PTY output (CIH-02)
-        └── home-snapshot/      ← CLIMON_HOME file tree snapshot on failure
+        └── climon-home/        ← CLIMON_HOME file tree snapshot (success and failure)
 ```
 
 Environment variables containing `token`, `secret`, `password`, `connection`,
@@ -94,6 +94,19 @@ Environment variables containing `token`, `secret`, `password`, `connection`,
 Cross-platform results are merged by `harness/src/aggregate.ts`
 (`bun run harness:aggregate`), which fails the aggregate gate if any platform
 has a failing case.
+
+After downloading the per-platform CI artifacts into `.test-tmp/harness-results/`
+(one sub-directory per platform, matching the `client-server-harness-<platform>`
+artifact names), run the aggregate locally with:
+
+```bash
+bun run harness:aggregate -- .test-tmp/harness-results docs/manual-tests smoke
+```
+
+The three positional arguments are: the results directory containing the
+downloaded per-platform artifact sub-directories, the manual-tests directory
+whose `yaml harness` blocks define the expected cases, and the suite name to
+filter on.
 
 ## Adding a scenario
 
