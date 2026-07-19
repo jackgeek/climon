@@ -192,7 +192,7 @@ fn detached_process_captures_conpty_output() {
         .encode_utf16()
         .chain(Some(0))
         .collect::<Vec<_>>();
-    let mut startup = STARTUPINFOW {
+    let startup = STARTUPINFOW {
         cb: size_of::<STARTUPINFOW>() as u32,
         dwFlags: STARTF_USESHOWWINDOW,
         wShowWindow: 0,
@@ -212,7 +212,7 @@ fn detached_process_captures_conpty_output() {
             CREATE_NEW_CONSOLE,
             ptr::null(),
             ptr::null(),
-            &mut startup,
+            &startup,
             &mut process,
         )
     };
