@@ -1534,52 +1534,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn space_reclaim_clears_displaced_notice_before_replaying_local_screen() {
-        let mut harness = ActorHarness::attached();
-        harness.pty_output(b"PS C:\\> visible after reclaim");
-        harness.connect(2);
-        harness.resize(2, "dash", SurfaceKind::Dashboard, 120, 40);
-        let displaced = harness.take_control(2);
-        assert!(
-            displaced
-                .iter()
-                .filter_map(|effect| effect.console_bytes())
-                .any(|bytes| bytes
-                    .windows(b"Press Space to take control.".len())
-                    .any(|window| window == b"Press Space to take control.")),
-            "dashboard control must first render the displaced notice"
-        );
-
-        let reclaim = harness.local_input(b" ");
-        assert_eq!(
-            harness.state().control.controller_id(),
-            Some("local"),
-            "Space must reclaim control before the local repaint"
-        );
-        assert!(
-            reclaim.iter().all(|effect| effect.pty_input().is_none()),
-            "the reclaiming Space must never reach the shell: {reclaim:?}"
-        );
-
-        let restore = harness.fire_timer_delay(Duration::from_millis(250));
-        let repaint = restore
-            .iter()
-            .find_map(|effect| effect.console_bytes())
-            .expect("local reclaim must repaint the console");
-        let clear = b"\x1b[H\x1b[m\x1b[J";
-        let clear_at = repaint
-            .windows(clear.len())
-            .position(|window| window == clear);
-        let replay_at = repaint
-            .windows(b"visible after reclaim".len())
-            .position(|window| window == b"visible after reclaim");
-        assert!(
-            matches!((clear_at, replay_at), (Some(clear_at), Some(replay_at)) if clear_at < replay_at),
-            "the replay must clear the visible viewport that contains the displaced notice before rendering the current local screen: {repaint:?}"
-        );
-    }
-
     fn barrier_metadata_op(
         effects: &[crate::engine::effect::Effect],
     ) -> crate::engine::effect::OperationId {

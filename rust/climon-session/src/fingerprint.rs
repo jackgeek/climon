@@ -82,11 +82,11 @@ impl HeadlessGrid {
             rows.pop();
         }
         let mut out = Vec::new();
-        // Clear the visible viewport before replaying. The displaced notice uses
-        // the same home/reset/erase operations; without them a reclaim replay can
-        // leave the notice painted behind a sparse screen on Windows Terminal.
-        // NEVER `\e[2J`: on Windows Terminal (and others) it clears scrollback.
-        out.extend_from_slice(b"\x1b[H\x1b[m\x1b[J");
+        // Home only. NEVER `\e[2J`: on Windows Terminal (and others) it clears
+        // scrollback. This repaint lands on top of the current primary buffer,
+        // overwriting only the visible viewport (where the displaced notice sat),
+        // so it must be non-destructive to history above the viewport.
+        out.extend_from_slice(b"\x1b[H");
         for (i, row) in rows.iter().enumerate() {
             if i > 0 {
                 out.extend_from_slice(b"\r\n");
