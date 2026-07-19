@@ -58,6 +58,18 @@ const CORE_FAILURE_MESSAGE: &str = "session ended before the coordinator could f
 /// Bounded deadline for joining every owned task during teardown.
 pub(crate) const JOIN_DEADLINE: Duration = Duration::from_secs(5);
 
+/// Whether a session status is a terminal (finalized) outcome. `mark_failed`
+/// uses this to stay idempotent: once the coordinator has written a terminal
+/// patch (`completed`/`failed`/`disconnected`), the abnormal-teardown fallback
+/// must not clobber it with `failed`/1.
+fn is_terminal_status(status: climon_proto::meta::SessionStatus) -> bool {
+    use climon_proto::meta::SessionStatus;
+    matches!(
+        status,
+        SessionStatus::Completed | SessionStatus::Failed | SessionStatus::Disconnected
+    )
+}
+
 /// Config-derived knobs resolved once before the actor starts.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeConfig {
@@ -421,7 +433,9 @@ pub(crate) trait SessionBackend {
     /// Persists a terminal `failed` session directly (bypassing the coordinator's
     /// ordered finalization): used when the child could not be spawned, and as the
     /// abnormal-teardown fallback when the coordinator ended before it could
-    /// finalize, so the session is never left `running`.
+    /// finalize, so the session is never left `running`. Idempotent: it only
+    /// writes `failed` while the current status is non-terminal, so it never
+    /// clobbers an already-terminal patch the coordinator raced ahead of it.
     fn mark_failed(&mut self, id: &str, error: &str);
 
     /// Removes the session socket during teardown (no-op for a TCP reference).
@@ -883,19 +897,29 @@ impl SessionBackend for RealBackend {
 
     fn mark_failed(&mut self, id: &str, error: &str) {
         let now = climon_store::paths::now_iso();
-        let _ = climon_store::patch::patch_session_meta(
-            &self.env,
-            id,
-            climon_proto::meta::SessionMetaPatch {
-                status: Some(climon_proto::meta::SessionStatus::Failed),
-                priority_reason: Some(climon_proto::meta::PriorityReason::Failed),
-                completed_at: Some(now.clone()),
-                exit_code: Some(SPAWN_FAILURE_EXIT),
-                error: Some(error.to_string()),
-                last_activity_at: Some(now),
-                ..Default::default()
-            },
-        );
+        let error = error.to_string();
+        // Idempotent guard: never clobber an already-terminal session. Normal
+        // finalization persists its terminal patch (e.g. `completed` with the
+        // real exit code) *before* CompleteSession; if that acknowledgement is
+        // lost the supervisor's abnormal fallback would otherwise overwrite the
+        // correct terminal metadata with `failed`/1. Mark failure only while the
+        // session is still non-terminal — spawn failure and genuine abnormal
+        // teardown of a live session both start from a non-terminal status.
+        let _ =
+            climon_store::patch::patch_session_meta_from_current(&self.env, id, move |current| {
+                if is_terminal_status(current.status) {
+                    return None;
+                }
+                Some(climon_proto::meta::SessionMetaPatch {
+                    status: Some(climon_proto::meta::SessionStatus::Failed),
+                    priority_reason: Some(climon_proto::meta::PriorityReason::Failed),
+                    completed_at: Some(now.clone()),
+                    exit_code: Some(SPAWN_FAILURE_EXIT),
+                    error: Some(error),
+                    last_activity_at: Some(now),
+                    ..Default::default()
+                })
+            });
     }
 
     fn cleanup_socket(&mut self, resolved_ref: &str) {
@@ -1845,5 +1869,107 @@ mod tests {
             restored,
             "terminal modes must be restored even when the input worker is abandoned at the deadline"
         );
+    }
+
+    /// A unique `$CLIMON_HOME` scratch dir under `target/` (never the system
+    /// temp dir), with its `sessions/` subdir created, for `RealBackend` store
+    /// integration tests.
+    fn scratch_home(tag: &str) -> (climon_store::Env, String) {
+        use std::sync::atomic::AtomicU64;
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let exe = std::env::current_exe().expect("current_exe");
+        let target = exe
+            .ancestors()
+            .find(|p| p.file_name().map(|n| n == "target").unwrap_or(false))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().expect("cwd"));
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let home = target
+            .join("climon-session-supervisor-test-tmp")
+            .join(format!("{tag}-{}-{nanos}-{n}", std::process::id()));
+        std::fs::create_dir_all(home.join("sessions")).expect("create sessions dir");
+        (
+            climon_store::Env::with_home(&home),
+            format!("supervisor-{tag}"),
+        )
+    }
+
+    /// Normal finalization persists its terminal metadata patch (e.g. `completed`
+    /// with the real exit code) *before* CompleteSession. If that patch is
+    /// persisted but the coordinator completion is lost, supervision yields
+    /// `CoordinatorEnded` and the abnormal fallback calls
+    /// [`RealBackend::mark_failed`]. That fallback must be idempotent: it must
+    /// NOT overwrite the already-terminal `completed`/real-exit-code metadata
+    /// with `failed`/1.
+    #[test]
+    fn mark_failed_preserves_already_terminal_metadata() {
+        use climon_proto::meta::{PriorityReason, SessionStatus};
+
+        let (env, id) = scratch_home("terminal-guard");
+        let mut meta = base_meta();
+        meta.id = id.clone();
+        meta.status = SessionStatus::Completed;
+        meta.priority_reason = PriorityReason::Completed;
+        meta.exit_code = Some(0);
+        meta.completed_at = Some("1970-01-01T00:00:01.000Z".to_string());
+        climon_store::meta::write_session_meta(&env, &meta).expect("write terminal meta");
+
+        let mut backend = RealBackend { env: env.clone() };
+        backend.mark_failed(&id, CORE_FAILURE_MESSAGE);
+
+        let on_disk = climon_store::meta::read_session_meta(&env, &id)
+            .expect("read meta")
+            .expect("meta present");
+        assert_eq!(
+            on_disk.status,
+            SessionStatus::Completed,
+            "the fallback must not clobber an already-terminal status"
+        );
+        assert_eq!(
+            on_disk.exit_code,
+            Some(0),
+            "the fallback must not overwrite the real exit code"
+        );
+        assert_eq!(
+            on_disk.priority_reason,
+            PriorityReason::Completed,
+            "the fallback must not overwrite the terminal priority reason"
+        );
+        assert_eq!(
+            on_disk.error, None,
+            "the fallback must not attach a spurious error to a completed session"
+        );
+    }
+
+    /// The guard must preserve spawn-failure and genuine abnormal-teardown
+    /// behavior: when the session is still non-terminal (`running`),
+    /// [`RealBackend::mark_failed`] must persist the terminal `failed` patch with
+    /// the failure exit code and error.
+    #[test]
+    fn mark_failed_marks_non_terminal_session_failed() {
+        use climon_proto::meta::{PriorityReason, SessionStatus};
+
+        let (env, id) = scratch_home("live-failure");
+        let mut meta = base_meta();
+        meta.id = id.clone();
+        meta.status = SessionStatus::Running;
+        meta.priority_reason = PriorityReason::Running;
+        climon_store::meta::write_session_meta(&env, &meta).expect("write running meta");
+
+        let mut backend = RealBackend { env: env.clone() };
+        backend.mark_failed(&id, "spawn failed");
+
+        let on_disk = climon_store::meta::read_session_meta(&env, &id)
+            .expect("read meta")
+            .expect("meta present");
+        assert_eq!(on_disk.status, SessionStatus::Failed);
+        assert_eq!(on_disk.priority_reason, PriorityReason::Failed);
+        assert_eq!(on_disk.exit_code, Some(SPAWN_FAILURE_EXIT));
+        assert_eq!(on_disk.error.as_deref(), Some("spawn failed"));
+        assert!(on_disk.completed_at.is_some());
     }
 }
