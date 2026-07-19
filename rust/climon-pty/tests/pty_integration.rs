@@ -156,6 +156,10 @@ fn detached_process_captures_conpty_output() {
             };
 
             let mut pty = Pty::spawn(&opts).expect("spawn payload in ConPTY");
+            let mut writer = pty.take_writer().expect("take ConPTY writer");
+            writer
+                .write_all(b"\x1b[1;1R")
+                .expect("answer ConPTY cursor-position query");
             let reader = pty.try_clone_reader().expect("clone ConPTY reader");
             let reader_handle = std::thread::spawn(move || read_to_end(reader));
             if pty
