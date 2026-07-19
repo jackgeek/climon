@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -10,7 +10,7 @@ export interface CommandSpec {
   file: string;
   args: string[];
   cwd: string;
-  env: Record<string, string>;
+  env: NodeJS.ProcessEnv;
   timeoutMs: number;
   stdoutPath: string;
   stderrPath: string;
@@ -19,7 +19,7 @@ export interface CommandSpec {
 
 export interface CommandResult {
   code: number;
-  signal: string | null;
+  signal: NodeJS.Signals | null;
   durationMs: number;
   stdout: string;
   stderr: string;
@@ -67,18 +67,34 @@ function spawnTaskkill(pid: number, force: boolean): Promise<void> {
   });
 }
 
-function terminateOwned(
+function raceClose(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let done = false;
+    const onClose = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      child.off("close", onClose);
+      resolve(false);
+    }, timeoutMs);
+    child.once("close", onClose);
+  });
+}
+
+async function terminateOwned(
+  child: ChildProcess,
   pid: number,
   detached: boolean,
   platform: HarnessPlatform
-): void {
+): Promise<void> {
+  // Initiate graceful termination
   if (platform === "windows") {
-    spawnTaskkill(pid, false)
-      .then(() =>
-        new Promise<void>((res) => setTimeout(res, 2_000))
-      )
-      .then(() => spawnTaskkill(pid, true))
-      .catch(() => {});
+    await spawnTaskkill(pid, false);
   } else {
     const target = detached ? -pid : pid;
     try {
@@ -86,13 +102,25 @@ function terminateOwned(
     } catch {
       // process may have already exited
     }
-    setTimeout(() => {
+  }
+
+  // Wait up to 2s for child to close on its own
+  const closed = await raceClose(child, 2_000);
+
+  if (!closed) {
+    // Force-kill the owned process tree
+    if (platform === "windows") {
+      await spawnTaskkill(pid, true);
+    } else {
+      const target = detached ? -pid : pid;
       try {
         process.kill(target, "SIGKILL");
       } catch {
         // already gone
       }
-    }, 2_000);
+    }
+    // Short bounded wait for close after force-kill
+    await raceClose(child, 500);
   }
 }
 
@@ -144,17 +172,21 @@ export function createCommandRunner(): CommandRunner {
         const timer = setTimeout(() => {
           timedOut = true;
           const pid = child.pid;
-          if (pid !== undefined) {
-            terminateOwned(pid, detached, platform);
-          }
-          settle(() =>
-            reject(
-              new HarnessError(
-                "timeout",
-                `command timed out after ${spec.timeoutMs}ms: ${spec.file}`
+          void (async () => {
+            if (pid !== undefined) {
+              await terminateOwned(child, pid, detached, platform).catch(
+                () => {}
+              );
+            }
+            settle(() =>
+              reject(
+                new HarnessError(
+                  "timeout",
+                  `command timed out after ${spec.timeoutMs}ms: ${spec.file}`
+                )
               )
-            )
-          );
+            );
+          })();
         }, spec.timeoutMs);
 
         child.on("error", (err) => {
