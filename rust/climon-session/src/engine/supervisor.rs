@@ -1633,6 +1633,8 @@ mod tests {
             "the fallback terminal patch must not fire when the coordinator completed"
         );
     }
+
+    /// The pty command worker is not the authoritative child owner: when it emits
     /// its one `PtyFailed` and then returns `Err` *after* the lifecycle has
     /// already reported the real child exit, its abnormal end must not preempt the
     /// coordinator's finalization. The supervisor waits for `CompleteSession`, so
