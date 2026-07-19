@@ -18,13 +18,21 @@ pub struct HeadlessGrid {
     rows: u16,
 }
 
+/// vt100 0.16.2's `Grid::col_wrap` underflows `prev_pos.row -= scrolled` when
+/// the grid is a single row tall (its default scroll region bottom is row 0),
+/// which in release wraps to a bogus index and panics on
+/// `drawing_row_mut(..).unwrap()`. The backing parser is therefore always given
+/// at least this many rows; the logical `rows` still drives fingerprint/line
+/// sampling so external behaviour is unchanged for real terminal sizes.
+const MIN_PARSER_ROWS: u16 = 2;
+
 impl HeadlessGrid {
     /// Creates a grid of `cols` x `rows` (each floored at 1).
     pub fn new(cols: u16, rows: u16) -> Self {
         let cols = cols.max(1);
         let rows = rows.max(1);
         HeadlessGrid {
-            parser: vt100::Parser::new(rows, cols, 0),
+            parser: vt100::Parser::new(rows.max(MIN_PARSER_ROWS), cols, 0),
             cols,
             rows,
         }
@@ -41,7 +49,9 @@ impl HeadlessGrid {
         let rows = rows.max(1);
         self.cols = cols;
         self.rows = rows;
-        self.parser.screen_mut().set_size(rows, cols);
+        self.parser
+            .screen_mut()
+            .set_size(rows.max(MIN_PARSER_ROWS), cols);
     }
 
     /// Renders the current visible screen as self-contained escape codes
@@ -144,7 +154,14 @@ impl HeadlessGrid {
     /// any help/status bar rendered at or below it, since the agent's response
     /// sits above the cursor.
     pub fn cursor_row(&self) -> u16 {
-        self.parser.screen().cursor_position().0
+        // The backing parser may carry more rows than the logical grid (see
+        // `MIN_PARSER_ROWS`); clamp so the cursor row stays within the logical
+        // dimensions. This is a no-op for real (>= 2 row) terminal sizes.
+        self.parser
+            .screen()
+            .cursor_position()
+            .0
+            .min(self.rows.saturating_sub(1))
     }
 }
 
@@ -342,6 +359,37 @@ mod tests {
         assert_eq!(rows[0], "hello world");
         assert_eq!(rows[1], "second line");
         assert_eq!(rows[2], "");
+    }
+
+    #[test]
+    fn single_row_grid_wraps_without_panicking() {
+        // Regression (release-gate DAR-08): vt100 0.16.2's `Grid::col_wrap`
+        // underflows `prev_pos.row -= scrolled` on a height-1 grid (whose
+        // default scroll region bottom is row 0). In release the underflow
+        // wraps to a bogus row index and `drawing_row_mut(..).unwrap()` hits
+        // `None` (grid.rs:689); in debug it panics as "subtract with overflow"
+        // (grid.rs:683). A 1-row `HeadlessGrid` arises whenever a resize floors
+        // rows to 1; sustained wide output then wraps at the right edge and
+        // crashes the daemon's fingerprint-sampling task.
+        let mut grid = HeadlessGrid::new(10, 1);
+        grid.write(b"aaaaaaaaaaaaaaaaaaaa");
+        assert!(grid.fingerprint().starts_with("10x1\n"));
+    }
+
+    #[test]
+    fn resize_to_single_row_then_wrapping_output_does_not_panic() {
+        // The production trigger: a viewer/host resize collapses the grid to a
+        // single row (rows floored at 1), and continued high-volume wide output
+        // wraps past the right edge, driving the vt100 col_wrap underflow.
+        let mut grid = HeadlessGrid::new(80, 24);
+        grid.write(b"hello");
+        grid.resize(80, 0); // degenerate resize -> clamped to 1 row
+        grid.write(
+            b"this is a long line of output that comfortably exceeds eighty \
+              columns and therefore has to wrap around the right edge more \
+              than once to exercise the col_wrap scroll path",
+        );
+        assert!(grid.fingerprint().starts_with("80x1\n"));
     }
 
     #[test]
