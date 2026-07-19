@@ -9,8 +9,16 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::{Mutex, MutexGuard};
 
 use climon_pty::{Pty, PtyOptions, PtyParts};
+
+#[cfg(windows)]
+fn windows_pty_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[cfg(unix)]
 fn sh(script: &str) -> PtyOptions {
@@ -113,6 +121,8 @@ fn conpty_wedged_skip() {
 #[cfg(windows)]
 #[test]
 fn detached_process_captures_conpty_output() {
+    let _serial = windows_pty_test_lock();
+
     use std::collections::HashMap;
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -241,6 +251,9 @@ fn no_controlling_terminal(out: &[u8]) -> bool {
 /// on macOS, and these tests exercise the real PTY path.
 #[test]
 fn spawns_and_reads_output() {
+    #[cfg(windows)]
+    let _serial = windows_pty_test_lock();
+
     let (code, out) = match spawn_wait_capture(&sh("printf hi")) {
         Some(captured) => captured,
         None => {
@@ -261,6 +274,9 @@ fn spawns_and_reads_output() {
 
 #[test]
 fn propagates_nonzero_exit_code() {
+    #[cfg(windows)]
+    let _serial = windows_pty_test_lock();
+
     let (code, out) = match spawn_wait_capture(&sh("exit 7")) {
         Some(captured) => captured,
         None => {
@@ -276,6 +292,9 @@ fn propagates_nonzero_exit_code() {
 
 #[test]
 fn resize_dedupes_and_does_not_panic() {
+    #[cfg(windows)]
+    let _serial = windows_pty_test_lock();
+
     // A short-lived sleeper keeps the PTY open across the resizes.
     #[cfg(unix)]
     let opts = sh("sleep 1");
@@ -321,6 +340,9 @@ fn resize_dedupes_and_does_not_panic() {
 
 #[test]
 fn dropping_pty_releases_master_and_makes_resizer_inert() {
+    #[cfg(windows)]
+    let _serial = windows_pty_test_lock();
+
     // A long-lived child keeps the PTY open until we explicitly tear it down.
     #[cfg(unix)]
     let opts = sh("sleep 5");
@@ -409,6 +431,9 @@ fn into_parts_wait_capture(opts: &PtyOptions) -> Option<(i32, Vec<u8>)> {
 /// assumptions.
 #[test]
 fn into_parts_streams_output_and_reports_exit() {
+    #[cfg(windows)]
+    let _serial = windows_pty_test_lock();
+
     let (code, out) = match into_parts_wait_capture(&sh("printf hi")) {
         Some(captured) => captured,
         None => {
@@ -441,6 +466,9 @@ fn into_parts_streams_output_and_reports_exit() {
 /// rather than failing, mirroring the other integration tests.
 #[test]
 fn waiter_try_wait_polls_and_kill_terminates_a_live_child() {
+    #[cfg(windows)]
+    let _serial = windows_pty_test_lock();
+
     #[cfg(unix)]
     let opts = sh("sleep 5");
     #[cfg(windows)]
