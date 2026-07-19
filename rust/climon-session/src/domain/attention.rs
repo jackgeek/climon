@@ -151,6 +151,12 @@ impl AttentionState {
         self.detector.absorb_resize(fingerprint, now_ms);
     }
 
+    /// Marks forwarded controller input so output produced by it is not absorbed
+    /// as post-resize redraw during the detector's settle window.
+    pub(crate) fn note_program_input(&mut self) {
+        self.detector.note_program_input();
+    }
+
     /// Whether the idle detector currently has the screen flagged. Diagnostic
     /// accessor for host status logging.
     pub(crate) fn is_flagged(&self) -> bool {

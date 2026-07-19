@@ -483,7 +483,10 @@ impl HostState {
                 Vec::new()
             }
             LocalStdinAction::Swallow => Vec::new(),
-            LocalStdinAction::Forward => buf.to_vec(),
+            LocalStdinAction::Forward => {
+                self.idle_detector.note_program_input();
+                buf.to_vec()
+            }
         }
     }
 
@@ -1216,6 +1219,7 @@ fn spawn_connection_reader(
                             ) {
                                 false
                             } else {
+                                s.idle_detector.note_program_input();
                                 let fp = s.fingerprint();
                                 s.apply_attention(
                                     AttentionPayload {

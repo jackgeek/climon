@@ -319,6 +319,7 @@ impl SessionState {
         if !is_controller {
             return;
         }
+        self.attention.note_program_input();
         self.clear_attention_from_input(ctx, effects);
         let op = self.next_op();
         effects.push(Effect::WritePty {
@@ -711,6 +712,7 @@ impl SessionState {
                     self.perform_take_control(LOCAL_ID, ctx, effects);
                 }
                 LocalViewAction::ForwardInput(bytes) => {
+                    self.attention.note_program_input();
                     let op = self.next_op();
                     effects.push(Effect::WritePty {
                         operation_id: op,
@@ -1305,6 +1307,77 @@ mod tests {
         assert!(!barrier, "acknowledgement patch is not a barrier");
         assert_eq!(patch.status, Some(SessionStatus::Acknowledged));
         assert_eq!(patch.attention_matched_at, Some(None));
+    }
+
+    #[test]
+    fn controller_input_during_resize_settle_allows_changed_screen_to_reflag() {
+        use climon_proto::frame::AttentionPayload;
+        use climon_proto::meta::SessionStatus;
+
+        let mut harness = ActorHarness::headless();
+        harness.connect_initialized_dashboard(1, "dash", 80, 24);
+
+        harness.set_clock(0, "2026-07-19T15:00:00.000Z");
+        harness.fire_timer_delay(Duration::from_secs(1));
+        harness.set_clock(10_000, "2026-07-19T15:00:10.000Z");
+        let flagged = harness.fire_timer_delay(Duration::from_secs(1));
+        assert_eq!(
+            flagged
+                .iter()
+                .find_map(|effect| effect.metadata())
+                .expect("idle flag patch")
+                .0
+                .status,
+            Some(SessionStatus::NeedsAttention)
+        );
+
+        let acknowledged = harness.attention(
+            1,
+            &AttentionPayload {
+                needs_attention: false,
+                reason: None,
+                attention_matched_at: Some("2026-07-19T15:00:10.000Z".to_string()),
+            },
+        );
+        assert_eq!(
+            acknowledged
+                .iter()
+                .find_map(|effect| effect.metadata())
+                .expect("acknowledgement patch")
+                .0
+                .status,
+            Some(SessionStatus::Acknowledged)
+        );
+
+        harness.set_clock(11_000, "2026-07-19T15:00:11.000Z");
+        harness.resize(1, "dash", SurfaceKind::Dashboard, 100, 30);
+        harness.set_clock(11_100, "2026-07-19T15:00:11.100Z");
+        harness.client_input(1, b"printf changed-body\\n");
+        harness.pty_output(b"printf changed-body\r\nchanged-body\r\n$ ");
+
+        harness.set_clock(12_000, "2026-07-19T15:00:12.000Z");
+        let changed = harness.fire_timer_delay(Duration::from_secs(1));
+        assert_eq!(
+            changed
+                .iter()
+                .find_map(|effect| effect.metadata())
+                .expect("changed screen must clear acknowledgement")
+                .0
+                .status,
+            Some(SessionStatus::Running)
+        );
+
+        harness.set_clock(22_000, "2026-07-19T15:00:22.000Z");
+        let reflagged = harness.fire_timer_delay(Duration::from_secs(1));
+        assert_eq!(
+            reflagged
+                .iter()
+                .find_map(|effect| effect.metadata())
+                .expect("fresh idle window must reflag")
+                .0
+                .status,
+            Some(SessionStatus::NeedsAttention)
+        );
     }
 
     #[test]

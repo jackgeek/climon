@@ -145,6 +145,14 @@ impl ScreenIdleDetector {
         self.last_change_at = now;
     }
 
+    /// Ends any resize-settle window when controller input is forwarded to the
+    /// program. Output that follows explicit input is genuine activity, not an
+    /// asynchronous resize redraw, so its fingerprint change must resume normal
+    /// detection even when it arrives immediately after a viewer resize.
+    pub fn note_program_input(&mut self) {
+        self.settle_until = 0;
+    }
+
     /// Re-baselines the tracked fingerprint after a viewer resize reflows the
     /// screen. A resize is not program activity, so `flagged`, `acknowledged`
     /// and the idle countdown are preserved. It also opens a [`RESIZE_SETTLE_MS`]
@@ -355,6 +363,22 @@ mod tests {
 
         // Once the reflow settles, the session stays acknowledged.
         assert_eq!(detector.update("269x68\n$ prompt redrawn", 20_000), None);
+    }
+
+    #[test]
+    fn controller_input_ends_resize_settle_before_program_output() {
+        let mut detector = ScreenIdleDetector::new(10);
+        detector.update("80x24\n$ prompt", 0);
+        detector.update("80x24\n$ prompt", 10_000);
+        detector.acknowledge("80x24\n$ prompt", 11_000);
+        detector.absorb_resize("100x30\n$ prompt", 12_000);
+
+        detector.note_program_input();
+        assert_eq!(
+            detector.update("100x30\n$ prompt\nchanged-body", 12_100),
+            running()
+        );
+        assert!(!detector.is_acknowledged());
     }
 
     #[test]
