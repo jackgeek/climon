@@ -5,7 +5,7 @@ import {
   readdir,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type {
   CaseResult,
   FailureKind,
@@ -111,7 +111,15 @@ export function caseArtifactDir(artifactRoot: string, caseId: string): string {
       `invalid case id: "${caseId}" — only [A-Za-z0-9._-] are allowed`
     );
   }
-  return join(artifactRoot, "cases", caseId);
+  const casesRoot = resolve(artifactRoot, "cases");
+  const candidate = resolve(casesRoot, caseId);
+  if (!candidate.startsWith(casesRoot + sep)) {
+    throw new HarnessError(
+      "catalogue",
+      `invalid case id: "${caseId}" — must be a direct child of cases/`
+    );
+  }
+  return candidate;
 }
 
 export function failureResult(

@@ -173,6 +173,30 @@ test("caseArtifactDir: throws HarnessError with kind catalogue on invalid id", (
   expect((err as HarnessError).kind).toBe("catalogue");
 });
 
+test("caseArtifactDir: rejects bare . as caseId with HarnessError catalogue", () => {
+  const err = (() => {
+    try {
+      caseArtifactDir("/artifacts", ".");
+    } catch (e) {
+      return e;
+    }
+  })();
+  expect(err).toBeInstanceOf(HarnessError);
+  expect((err as HarnessError).kind).toBe("catalogue");
+});
+
+test("caseArtifactDir: rejects bare .. as caseId with HarnessError catalogue", () => {
+  const err = (() => {
+    try {
+      caseArtifactDir("/artifacts", "..");
+    } catch (e) {
+      return e;
+    }
+  })();
+  expect(err).toBeInstanceOf(HarnessError);
+  expect((err as HarnessError).kind).toBe("catalogue");
+});
+
 // ── failureResult ────────────────────────────────────────────────────────────
 
 const definition: HarnessCase = {
