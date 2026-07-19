@@ -2,11 +2,13 @@
 
 Manual checks for the terminal keybar **Select** button: a touch-only action that
 captures the terminal's full scrollback buffer into a read-only, monospaced
-textarea so the text can be copied with the platform's native tools. A "Strip
+textarea so the text can be copied. A "Strip
 scrollbars & decorations" toggle replaces block/box-drawing glyphs (scrollbars,
-borders) with spaces to keep column alignment while cleaning up the copy. Copy
-itself uses native selection (long-press / Select all → OS Copy) — no in-app
-clipboard button.
+borders) with spaces to keep column alignment while cleaning up the copy. An
+in-app **Copy** button writes the currently selected text (or the whole capture
+when nothing is selected) to the clipboard with all whitespace runs (newlines,
+carriage returns, tabs, repeated spaces) collapsed to a single space and trimmed,
+so a multi-line selection pastes as one clean line.
 
 ## TSM-1 — Select button is touch-only
 
@@ -46,18 +48,24 @@ clipboard button.
 - **Platforms:** iOS Safari, Android Chrome.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
-## TSM-3 — Copying text with native tools
+## TSM-3 — Copying selected text with the in-app Copy button
 
 - **Feature:** Terminal selection / copy
-- **Preconditions:** As TSM-2, overlay open.
+- **Preconditions:** As TSM-2, overlay open, with multi-line output captured
+  (several lines including blank lines / indentation).
 - **Config-matrix cell:** Browser = mobile Safari/Chrome; touch-primary.
 - **Steps:**
-  1. Tap **Select all** (or long-press in the textarea and choose Select All).
-  2. Tap **Copy** in the OS selection toolbar.
-  3. Paste into another field/app to verify.
-- **Expected result:** Select all highlights the whole capture without opening
-  the soft keyboard (the textarea is read-only). The OS **Copy** action places
-  the text on the clipboard. Long-press selection of a sub-range also works.
+  1. Long-press / drag in the textarea to select a range spanning several lines.
+  2. Tap the primary **Copy** button in the overlay's action row.
+  3. Observe the button label.
+  4. Paste into another field/app to verify the clipboard contents.
+- **Expected result:** Tapping **Copy** writes **only the selected text** to the
+  clipboard (when nothing is selected it falls back to the whole capture), and
+  the label briefly changes to **"Copied!"** before reverting to **"Copy"**. The
+  pasted text is a single line: every run of whitespace (newlines, carriage
+  returns, tabs, repeated spaces) is collapsed to one space, and leading/trailing
+  whitespace is trimmed — so a multi-line selection pastes cleanly without manual
+  cleanup.
 - **Platforms:** iOS Safari, Android Chrome.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
