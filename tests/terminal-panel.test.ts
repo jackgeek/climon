@@ -94,7 +94,7 @@ describe("TerminalPanel", () => {
     expect(markup).toContain('aria-label="Captured terminal text"');
     expect(markup).toContain("readOnly");
     expect(markup).toContain("Strip scrollbars &amp; decorations");
-    expect(markup).toContain("Select all");
+    expect(markup).toContain("Copy");
     expect(markup).toContain("Close");
   });
 
