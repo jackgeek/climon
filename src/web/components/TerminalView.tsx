@@ -1258,8 +1258,6 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         }}
         onClick={focusActiveTerminal}
         onFocusCapture={repaintActiveTerminal}
-        data-testid="session-terminal"
-        aria-label="Session terminal"
       />
       {displayState === "displaced" && (
         <div className={styles.overlay}>

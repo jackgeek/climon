@@ -1,9 +1,0 @@
-{
-  "extends": "../tsconfig.json",
-  "compilerOptions": {
-    "lib": ["ESNext", "DOM"],
-    "types": ["node", "@playwright/test"],
-    "noEmit": true
-  },
-  "include": ["./**/*.ts"]
-}

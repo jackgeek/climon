@@ -35,6 +35,6 @@ pub mod term;
 
 pub use command::resolve_command;
 pub use error::{PtyError, PtyResult};
-pub use pty::{prime_headless_conpty, Pty, PtyKiller, PtyOptions, PtyParts, PtyResizer, PtyWaiter};
+pub use pty::{Pty, PtyOptions};
 pub use scrollback::Scrollback;
 pub use term::{terminal_size, RawMode};

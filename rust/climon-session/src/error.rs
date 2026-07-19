@@ -15,12 +15,6 @@ pub enum SessionError {
     Io(std::io::Error),
     /// The requested session metadata was missing.
     MissingMeta(String),
-    /// The `CLIMON_SESSION_ENGINE` environment variable held an unrecognized value.
-    InvalidEngine(String),
-    /// The actor session engine was selected but is not yet available.
-    ActorUnavailable,
-    /// A supervised actor task panicked.
-    ActorTask,
 }
 
 /// Convenience result alias for the session host.
@@ -34,16 +28,6 @@ impl fmt::Display for SessionError {
             SessionError::Config(e) => write!(f, "config error: {e}"),
             SessionError::Io(e) => write!(f, "io error: {e}"),
             SessionError::MissingMeta(id) => write!(f, "session metadata for '{id}' not found"),
-            SessionError::InvalidEngine(value) => write!(
-                f,
-                "invalid CLIMON_SESSION_ENGINE '{value}'; expected 'legacy' or 'actor'"
-            ),
-            SessionError::ActorUnavailable => {
-                write!(f, "actor session engine is not available")
-            }
-            SessionError::ActorTask => {
-                write!(f, "a supervised actor task panicked")
-            }
         }
     }
 }

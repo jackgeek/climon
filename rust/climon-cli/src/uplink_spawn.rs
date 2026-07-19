@@ -41,8 +41,5 @@ pub fn spawn_uplink_detached() {
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
     }
 
-    // Prevent the child from inheriting the parent's stdout/stderr pipe
-    // handles. Best-effort: if the guard fails, still attempt spawn.
-    let _guard = climon_update::win_inherit_guard::StdInheritGuard::new().ok();
     let _ = cmd.spawn();
 }

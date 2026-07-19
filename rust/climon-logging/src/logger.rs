@@ -260,14 +260,6 @@ pub fn get_logger() -> Logger {
     init_logger(LogRole::Client, LoggerInitOptions::default())
 }
 
-/// Whether the process-wide root logger has been initialized. Lets a caller in a
-/// hot path avoid the lazy [`get_logger`] init (which would create a log file):
-/// it logs only when a logger is already installed, so uninstrumented runs (and
-/// tests that never init a logger) incur no logging side effects.
-pub fn is_initialized() -> bool {
-    ROOT.lock().unwrap_or_else(|p| p.into_inner()).is_some()
-}
-
 /// Returns a child logger tagged with a `component` name. Mirrors `child`.
 pub fn child(component: &str) -> Logger {
     get_logger().child(component)
