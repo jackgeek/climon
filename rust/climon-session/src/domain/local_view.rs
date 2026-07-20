@@ -43,6 +43,7 @@ pub(crate) const LOCAL_RESTORE_DELAY: Duration = Duration::from_millis(250);
 /// once the local terminal controls the grid, Space is ordinary input and is
 /// forwarded to the PTY (see [`local_stdin_action`]).
 pub(crate) const LOCAL_TAKE_CONTROL_KEY: u8 = 0x20;
+const MAX_WIN32_INPUT_SEQUENCE: usize = 80;
 
 /// The bytes to write to the in-process local terminal to restore its screen
 /// when the session exits, or `None` when no restore is needed.
@@ -146,6 +147,96 @@ pub(crate) fn local_stdin_action(has_take_control: bool, suppressed: bool) -> Lo
     } else {
         LocalStdinAction::Forward
     }
+}
+
+/// Recognizes either a literal Space byte or the Win32 input-mode key-down
+/// record Windows Terminal emits after ConPTY requests `DECSET ?9001`.
+fn contains_take_control_key(pending: &mut Vec<u8>, bytes: &[u8]) -> bool {
+    let mut input = std::mem::take(pending);
+    input.extend_from_slice(bytes);
+    if input.contains(&LOCAL_TAKE_CONTROL_KEY) {
+        return true;
+    }
+
+    let mut offset = 0;
+    while offset < input.len() {
+        if input[offset] == b'\x1b' {
+            if offset + 1 == input.len() {
+                pending.extend_from_slice(&input[offset..]);
+                break;
+            }
+            if input[offset + 1] != b'[' {
+                offset += 1;
+                continue;
+            }
+            let params_start = offset + 2;
+            let Some(relative_end) = input[params_start..].iter().position(|byte| *byte == b'_')
+            else {
+                let suffix = &input[offset..];
+                if suffix.len() <= MAX_WIN32_INPUT_SEQUENCE
+                    && suffix[2..]
+                        .iter()
+                        .all(|byte| byte.is_ascii_digit() || *byte == b';')
+                {
+                    pending.extend_from_slice(suffix);
+                    break;
+                }
+                offset = params_start;
+                continue;
+            };
+            let end = params_start + relative_end;
+            let params = &input[params_start..end];
+            if !params
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || *byte == b';')
+            {
+                offset = params_start;
+                continue;
+            }
+            if is_win32_space_key_down(params) {
+                pending.clear();
+                return true;
+            }
+            offset = end + 1;
+        } else {
+            offset += 1;
+        }
+    }
+    false
+}
+
+fn is_win32_space_key_down(params: &[u8]) -> bool {
+    let mut values = [0u32; 6];
+    values[5] = 1;
+    let mut count = 0;
+    for (index, param) in params.split(|byte| *byte == b';').enumerate() {
+        if index >= values.len() {
+            return false;
+        }
+        count += 1;
+        if param.is_empty() {
+            continue;
+        }
+        let mut value = 0u32;
+        for byte in param {
+            if !byte.is_ascii_digit() {
+                return false;
+            }
+            value = match value
+                .checked_mul(10)
+                .and_then(|current| current.checked_add(u32::from(byte - b'0')))
+            {
+                Some(value) => value,
+                None => return false,
+            };
+        }
+        values[index] = value;
+    }
+
+    count >= 4
+        && values[0] == u32::from(LOCAL_TAKE_CONTROL_KEY)
+        && values[2] == u32::from(LOCAL_TAKE_CONTROL_KEY)
+        && values[3] == 1
 }
 
 /// Pure decision: is the in-process local terminal displaced? Identity-based,
@@ -262,6 +353,7 @@ pub(crate) struct LocalViewState {
     restore_pending: bool,
     pending_console_write: Option<OperationId>,
     pending_jiggle: Option<JiggleLeg>,
+    pending_win32_input: Vec<u8>,
     degraded: bool,
 }
 
@@ -291,6 +383,7 @@ impl LocalViewState {
             restore_pending: false,
             pending_console_write: None,
             pending_jiggle: None,
+            pending_win32_input: Vec::new(),
             degraded: false,
         }
     }
@@ -454,6 +547,7 @@ impl LocalViewState {
         self.output_suppressed = false;
         self.notice_size = None;
         self.pending_jiggle = Some(JiggleLeg::Away);
+        self.pending_win32_input.clear();
         true
     }
 
@@ -477,8 +571,12 @@ impl LocalViewState {
     /// Decides what to do with a chunk of in-process local-terminal stdin: see
     /// [`local_stdin_action`]. `TakeControl`/`SwallowInput` cover the displaced
     /// case; a controlling local terminal gets its bytes forwarded unchanged.
-    pub(crate) fn local_input(&self, bytes: &[u8]) -> LocalViewAction {
-        let has_take_control = bytes.contains(&LOCAL_TAKE_CONTROL_KEY);
+    pub(crate) fn local_input(&mut self, bytes: &[u8]) -> LocalViewAction {
+        if !self.output_suppressed {
+            self.pending_win32_input.clear();
+            return LocalViewAction::ForwardInput(bytes.to_vec());
+        }
+        let has_take_control = contains_take_control_key(&mut self.pending_win32_input, bytes);
         match local_stdin_action(has_take_control, self.output_suppressed) {
             LocalStdinAction::TakeControl => LocalViewAction::TakeControl,
             LocalStdinAction::Swallow => LocalViewAction::SwallowInput,
@@ -923,7 +1021,7 @@ mod restore_decision_tests {
 
 #[cfg(test)]
 mod local_stdin_tests {
-    use super::{local_stdin_action, LocalStdinAction};
+    use super::{local_stdin_action, LocalStdinAction, LocalViewAction, LocalViewState};
 
     #[test]
     fn space_is_forwarded_as_normal_input_when_controlling() {
@@ -944,6 +1042,68 @@ mod local_stdin_tests {
     #[test]
     fn displaced_input_is_swallowed() {
         assert_eq!(local_stdin_action(false, true), LocalStdinAction::Swallow);
+    }
+
+    #[test]
+    fn windows_win32_input_mode_space_takes_control_when_displaced() {
+        let mut state = LocalViewState::attached(103, 51);
+        state.controller_changed("dashboard", 81, 30);
+
+        assert_eq!(
+            state.local_input(b"\x1b[32;57;32;1;32;1_"),
+            LocalViewAction::TakeControl
+        );
+        assert_eq!(
+            state.local_input(b"\x1b[I\x1b[32;57;32;1;32;1_"),
+            LocalViewAction::TakeControl
+        );
+    }
+
+    #[test]
+    fn windows_win32_input_mode_nonspace_and_keyup_are_swallowed() {
+        let mut state = LocalViewState::attached(103, 51);
+        state.controller_changed("dashboard", 81, 30);
+
+        assert_eq!(
+            state.local_input(b"\x1b[65;30;97;1;32;1_"),
+            LocalViewAction::SwallowInput
+        );
+        assert_eq!(
+            state.local_input(b"\x1b[32;57;32;0;32;1_"),
+            LocalViewAction::SwallowInput
+        );
+    }
+
+    #[test]
+    fn windows_win32_input_mode_is_forwarded_unchanged_while_controlling() {
+        const SPACE: &[u8] = b"\x1b[32;57;32;1;32;1_";
+        let mut state = LocalViewState::attached(103, 51);
+
+        assert_eq!(
+            state.local_input(SPACE),
+            LocalViewAction::ForwardInput(SPACE.to_vec())
+        );
+    }
+
+    #[test]
+    fn windows_win32_input_mode_space_survives_every_chunk_split() {
+        const SPACE: &[u8] = b"\x1b[32;57;32;1;32;1_";
+
+        for split in 1..SPACE.len() {
+            let mut state = LocalViewState::attached(103, 51);
+            state.controller_changed("dashboard", 81, 30);
+
+            assert_eq!(
+                state.local_input(&SPACE[..split]),
+                LocalViewAction::SwallowInput,
+                "first chunk unexpectedly reclaimed at split {split}"
+            );
+            assert_eq!(
+                state.local_input(&SPACE[split..]),
+                LocalViewAction::TakeControl,
+                "split Win32 Space was not recognized at split {split}"
+            );
+        }
     }
 
     #[test]
