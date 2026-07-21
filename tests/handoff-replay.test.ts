@@ -15,12 +15,9 @@ function writeTerminal(term: InstanceType<typeof Terminal>, data: string): Promi
 }
 
 function terminalText(term: InstanceType<typeof Terminal>): string {
-  const lines = Array.from({ length: term.buffer.active.length }, (_, index) =>
-    term.buffer.active.getLine(index)?.translateToString(true) ?? ""
+  const lines = Array.from({ length: term.rows }, (_, index) =>
+    term.buffer.active.getLine(term.buffer.active.baseY + index)?.translateToString(true) ?? ""
   );
-  while (lines.length > 0 && lines.at(-1) === "") {
-    lines.pop();
-  }
   return lines.join("\n");
 }
 
@@ -41,12 +38,13 @@ describe("browser handoff replay checkpoint", () => {
     term.resize(30, 6);
     const targetSize = { cols: term.cols, rows: term.rows };
     await writeTerminal(term, WINDOWS_RESIZE_ERASE_ONLY);
+    expect(terminalText(term).trim()).toBe("");
     expect(
       shouldRestoreHandoffReplayCheckpoint({
         checkpoint,
         currentAttachmentGeneration: 7,
         replayRequested: true,
-        currentText: ""
+        currentText: terminalText(term)
       })
     ).toBe(true);
 
