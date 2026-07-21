@@ -299,7 +299,7 @@ describe("shouldMarkDisconnected", () => {
 
 describe("reconcileLiveLocalDaemonDisconnect", () => {
   test("marks an unreachable live local session disconnected", async () => {
-    const initial = meta({ id: "local-live", socketPath: "tcp://127.0.0.1:4001" });
+    const initial = meta({ id: "local-live", origin: "local", socketPath: "tcp://127.0.0.1:4001" });
     let patchResult: Partial<SessionMeta> | undefined;
 
     await reconcileLiveLocalDaemonDisconnect(initial.id, {
