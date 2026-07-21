@@ -10,7 +10,12 @@ import { browserResizePayload, computeRemotesActive } from "../src/server/server
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
-const { reconcileLiveLocalDaemonDisconnect, shouldMarkDisconnected, shouldStopIngestForShutdown } = serverModule;
+const {
+  createAttachBridgeLifecycle,
+  reconcileLiveLocalDaemonDisconnect,
+  shouldMarkDisconnected,
+  shouldStopIngestForShutdown
+} = serverModule;
 
 test("remotes are active when wslBridge or remotes flag is enabled", () => {
   expect(computeRemotesActive({} as never)).toBe(false);
@@ -375,6 +380,75 @@ describe("reconcileLiveLocalDaemonDisconnect", () => {
 
     expect(probed).toBe(false);
     expect(patched).toBe(false);
+  });
+});
+
+describe("createAttachBridgeLifecycle", () => {
+  test("deduplicates daemon error and close while closing the browser", async () => {
+    let browserCloses = 0;
+    let reconciles = 0;
+    const lifecycle = createAttachBridgeLifecycle({
+      sessionId: "local-live",
+      closeBrowser: () => browserCloses++,
+      destroyDaemon: () => {},
+      reconcile: async () => {
+        reconciles++;
+      },
+      reportFailure: () => {}
+    });
+
+    lifecycle.daemonFailed();
+    lifecycle.daemonFailed();
+    await Promise.resolve();
+
+    expect(browserCloses).toBe(1);
+    expect(reconciles).toBe(1);
+  });
+
+  test("browser close only destroys its daemon bridge", async () => {
+    let browserCloses = 0;
+    let daemonDestroys = 0;
+    let reconciles = 0;
+    let lifecycle: ReturnType<typeof createAttachBridgeLifecycle>;
+    lifecycle = createAttachBridgeLifecycle({
+      sessionId: "local-live",
+      closeBrowser: () => browserCloses++,
+      destroyDaemon: () => {
+        daemonDestroys++;
+        lifecycle.daemonFailed();
+      },
+      reconcile: async () => {
+        reconciles++;
+      },
+      reportFailure: () => {}
+    });
+
+    lifecycle.browserClosed();
+    await Promise.resolve();
+
+    expect(daemonDestroys).toBe(1);
+    expect(browserCloses).toBe(0);
+    expect(reconciles).toBe(0);
+  });
+
+  test("reports reconciliation rejection once", async () => {
+    const failure = new Error("metadata write failed");
+    const reported: unknown[] = [];
+    const lifecycle = createAttachBridgeLifecycle({
+      sessionId: "local-live",
+      closeBrowser: () => {},
+      destroyDaemon: () => {},
+      reconcile: async () => {
+        throw failure;
+      },
+      reportFailure: (error) => reported.push(error)
+    });
+
+    lifecycle.daemonFailed();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(reported).toEqual([failure]);
   });
 });
 

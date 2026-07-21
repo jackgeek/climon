@@ -82,9 +82,44 @@ interface StartServerOptions {
   noTakeover?: boolean;
 }
 
+interface AttachBridgeLifecycle {
+  daemonFailed(): void;
+  browserClosed(): void;
+}
+
+interface AttachBridgeLifecycleOptions {
+  sessionId: string;
+  closeBrowser: () => void;
+  destroyDaemon: () => void;
+  reconcile: (sessionId: string) => Promise<void>;
+  reportFailure: (error: unknown) => void;
+}
+
+export function createAttachBridgeLifecycle(
+  options: AttachBridgeLifecycleOptions
+): AttachBridgeLifecycle {
+  let daemonFailureHandled = false;
+  return {
+    daemonFailed() {
+      if (daemonFailureHandled) {
+        return;
+      }
+      daemonFailureHandled = true;
+      options.closeBrowser();
+      void options.reconcile(options.sessionId).catch(options.reportFailure);
+    },
+    browserClosed() {
+      daemonFailureHandled = true;
+      options.destroyDaemon();
+    }
+  };
+}
+
 interface WsData {
   sessionId: string;
   socketPath: string;
+  daemon?: Socket;
+  bridgeLifecycle?: AttachBridgeLifecycle;
 }
 
 interface ServerShutdownOptions {
@@ -2191,7 +2226,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       open(ws: ServerWebSocket<WsData>) {
         const daemon: Socket = connectSessionSocket(ws.data.socketPath);
         const decoder = new FrameDecoder();
-        (ws.data as WsData & { daemon?: Socket }).daemon = daemon;
+        const bridgeLifecycle = createAttachBridgeLifecycle({
+          sessionId: ws.data.sessionId,
+          closeBrowser: () => ws.close(),
+          destroyDaemon: () => daemon.destroy(),
+          reconcile: reconcileLiveLocalDaemonDisconnect,
+          reportFailure: (error) => {
+            logMsg(getLogger(), "warn", "server.live_daemon_disconnect_reconcile_failed", {
+              sessionId: ws.data.sessionId,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
+        });
+        ws.data.daemon = daemon;
+        ws.data.bridgeLifecycle = bridgeLifecycle;
 
         daemon.on("data", (chunk: Buffer) => {
           for (const frame of decoder.push(chunk)) {
@@ -2213,11 +2261,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
             }
           }
         });
-        daemon.on("error", () => ws.close());
-        daemon.on("close", () => ws.close());
+        daemon.on("error", bridgeLifecycle.daemonFailed);
+        daemon.on("close", bridgeLifecycle.daemonFailed);
       },
       message(ws: ServerWebSocket<WsData>, raw) {
-        const daemon = (ws.data as WsData & { daemon?: Socket }).daemon;
+        const daemon = ws.data.daemon;
         if (!daemon) {
           return;
         }
@@ -2257,8 +2305,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
         }
       },
       close(ws: ServerWebSocket<WsData>) {
-        const daemon = (ws.data as WsData & { daemon?: Socket }).daemon;
-        daemon?.destroy();
+        ws.data.bridgeLifecycle?.browserClosed();
       }
     }
     });

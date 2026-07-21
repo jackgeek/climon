@@ -617,6 +617,21 @@
     "hint": "Debug log during shutdown while the HTTP listener, SSE streams, and dashboard tunnel are being closed.",
     "params": {}
   },
+  "server.live_daemon_disconnect_reconcile_failed": {
+    "id": "7ad3cf10",
+    "t": "failed to reconcile disconnected local session {sessionId}: {error}",
+    "hint": "Warning when a failed dashboard-to-daemon socket cannot be reconciled into disconnected metadata; {sessionId} identifies the local session and {error} is the read, probe, or patch failure.",
+    "params": {
+      "sessionId": {
+        "redact": false,
+        "category": "generic"
+      },
+      "error": {
+        "redact": true,
+        "category": "diagnostic"
+      }
+    }
+  },
   "server.find_existing_dashboard_probe": {
     "id": "ccb43663",
     "t": "findExistingDashboardServer: probing {url}health",
