@@ -434,3 +434,30 @@ Source: `rust/climon-session/src/control.rs`, `rust/climon-session/src/fingerpri
 - **Platforms:** macOS, Linux (verify local-terminal sizing here per the Windows
   caveat above); spot-check Windows Terminal.
 - **Result:** _(version / date / tester / pass|fail / notes)_
+
+## TCH-14 — Windows browser handoff survives erase-only ConPTY resize repaint
+
+- **Feature:** a displaced dashboard/PWA serializes its full xterm state before
+  taking control. If Windows ConPTY's resize response leaves the browser blank,
+  the matching attachment-generation checkpoint restores the visible screen,
+  scrollback, styling, cursor, and modes at the existing replay boundary.
+- **Preconditions:** Windows actor candidate built from this branch; dashboard
+  server restarted from the same source; one live PowerShell session; desktop
+  dashboard and installed PWA both open on that session.
+- **Config-matrix cell:** Windows Terminal + actor + desktop dashboard + PWA.
+- **Steps:**
+  1. In the managed PowerShell, produce more than one screen of colored output,
+     then leave a recognizable prompt/marker visible.
+  2. Take control in the desktop dashboard and scroll upward to confirm history.
+  3. Take control in the PWA without typing any command after the transfer.
+  4. Confirm the PWA immediately shows the prior screen; scroll upward.
+  5. Take control back in the dashboard, again without producing fresh child
+     output; confirm its screen and history immediately return.
+  6. Type in the newest controller and confirm the displaced surface cannot type.
+  7. Press Space in the local terminal to reclaim control.
+- **Expected result:** every dashboard↔PWA transfer shows the prior terminal
+  immediately, including full scrollback and colors, without waiting for fresh
+  PowerShell output. Only the newest controller accepts input. Local Space
+  reclaim restores local-size authority.
+- **Platforms:** Windows Terminal + ConPTY (authoritative).
+- **Result:** _(version / date / tester / pass|fail / notes)_
