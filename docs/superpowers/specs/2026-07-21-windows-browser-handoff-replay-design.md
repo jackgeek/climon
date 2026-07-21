@@ -50,6 +50,7 @@ The checkpoint records:
 
 - the current attachment generation;
 - the serialized terminal bytes;
+- the source terminal columns and rows;
 - whether the captured visible screen contains non-whitespace content.
 
 Only this transition creates a checkpoint. Initial attachment, stable-controller
@@ -79,9 +80,12 @@ when all of these conditions hold:
 - the post-resize terminal is blank.
 
 If every condition holds, the component discards the raw handoff replay,
-resets the xterm buffer, and writes the serialized checkpoint at the newly
-fitted dimensions. This restores the browser-owned terminal state without
-replaying the ConPTY erase-only suffix.
+resizes xterm back to the checkpoint's source grid, resets the buffer, writes
+the serialized checkpoint, then resizes xterm to the newly fitted controller
+dimensions. Restoring at the source grid follows the serialize addon's contract
+for cursor-positioned content; the final xterm resize performs the supported
+reflow. This restores the browser-owned terminal state without replaying the
+ConPTY erase-only suffix.
 
 Otherwise the existing replay path remains authoritative: clear the live
 terminal without resetting private modes and write the server-sanitized daemon
