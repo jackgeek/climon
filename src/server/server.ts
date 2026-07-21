@@ -29,8 +29,8 @@ import {
   type SurfaceKind
 } from "../ipc/frame.js";
 import { sortSessionsByPriority } from "../priority.js";
-import { atomicWrite, listSessions, patchSessionMeta, patchSessionMetaWithCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
-import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionStatus } from "../types.js";
+import { atomicWrite, listSessions, patchSessionMeta, patchSessionMetaWithCurrent, patchSessionMetaFromCurrent, readScrollback, readSessionMeta, removeSessionMeta } from "../store.js";
+import type { AnsiColor, ClimonConfig, SessionColorMode, SessionMeta, SessionMetaPatch, SessionStatus } from "../types.js";
 import { getIngestPidPath, ingestNeedsRecycle, namespacedId, readRemoteHostState, resolveIngestBindAddress } from "../remote/ingest.js";
 import type { SpawnControlRequest, SpawnControlResponse } from "../remote/ingest.js";
 import { readIngestState, resolveIngestPort } from "../remote/ingest-state.js";
@@ -94,6 +94,12 @@ interface ServerShutdownOptions {
 
 export const DASHBOARD_IDLE_TIMEOUT_SECONDS = 255;
 const INGEST_DEMOTION_SHUTDOWN_SOURCE = "ingest-demotion";
+const LIVE_SESSION_STATUSES = new Set<SessionStatus>([
+  "running",
+  "acknowledged",
+  "needs-attention",
+  "paused"
+]);
 
 /** Whether the shared ingest daemon should run: either remote scenario enabled. */
 export function computeRemotesActive(config: ClimonConfig): boolean {
@@ -887,12 +893,7 @@ export async function shouldMarkDisconnected(
   session: SessionMeta,
   probe: (socketPath: string) => Promise<boolean>
 ): Promise<boolean> {
-  if (
-    session.status !== "running" &&
-    session.status !== "acknowledged" &&
-    session.status !== "needs-attention" &&
-    session.status !== "paused"
-  ) {
+  if (!LIVE_SESSION_STATUSES.has(session.status)) {
     return false;
   }
   if (session.origin === "remote") {
@@ -901,6 +902,48 @@ export async function shouldMarkDisconnected(
   const pidAlive = session.daemonPid ? isProcessAlive(session.daemonPid) : false;
   const socketOk = pidAlive ? await probe(session.socketPath) : false;
   return !socketOk;
+}
+
+function isLiveLocalSession(session: SessionMeta): boolean {
+  // Older local metadata may omit origin; only the explicit remote marker is excluded.
+  return session.origin !== "remote" && LIVE_SESSION_STATUSES.has(session.status);
+}
+
+interface LiveLocalDisconnectDeps {
+  readSession: (id: string) => Promise<SessionMeta | undefined>;
+  probe: (socketPath: string) => Promise<boolean>;
+  patchFromCurrent: (
+    id: string,
+    updateCurrent: (current: SessionMeta) => SessionMetaPatch | undefined
+  ) => Promise<SessionMeta | undefined>;
+}
+
+const liveLocalDisconnectDeps: LiveLocalDisconnectDeps = {
+  readSession: readSessionMeta,
+  probe: probeSocket,
+  patchFromCurrent: patchSessionMetaFromCurrent
+};
+
+export async function reconcileLiveLocalDaemonDisconnect(
+  sessionId: string,
+  deps: LiveLocalDisconnectDeps = liveLocalDisconnectDeps
+): Promise<void> {
+  const observed = await deps.readSession(sessionId);
+  if (!observed || !isLiveLocalSession(observed)) {
+    return;
+  }
+  if (await deps.probe(observed.socketPath)) {
+    return;
+  }
+  await deps.patchFromCurrent(sessionId, (current) => {
+    if (!isLiveLocalSession(current) || current.socketPath !== observed.socketPath) {
+      return undefined;
+    }
+    return {
+      status: "disconnected",
+      priorityReason: "disconnected"
+    };
+  });
 }
 
 async function cleanupStaleSessions(): Promise<void> {

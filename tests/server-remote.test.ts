@@ -10,7 +10,7 @@ import { browserResizePayload, computeRemotesActive } from "../src/server/server
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
 
-const { shouldMarkDisconnected, shouldStopIngestForShutdown } = serverModule;
+const { reconcileLiveLocalDaemonDisconnect, shouldMarkDisconnected, shouldStopIngestForShutdown } = serverModule;
 
 test("remotes are active when wslBridge or remotes flag is enabled", () => {
   expect(computeRemotesActive({} as never)).toBe(false);
@@ -294,6 +294,87 @@ describe("shouldMarkDisconnected", () => {
   test("terminated sessions are never touched", async () => {
     const probe = async () => false;
     expect(await shouldMarkDisconnected(meta({ status: "completed" }), probe)).toBe(false);
+  });
+});
+
+describe("reconcileLiveLocalDaemonDisconnect", () => {
+  test("marks an unreachable live local session disconnected", async () => {
+    const initial = meta({ id: "local-live", socketPath: "tcp://127.0.0.1:4001" });
+    let patchResult: Partial<SessionMeta> | undefined;
+
+    await reconcileLiveLocalDaemonDisconnect(initial.id, {
+      readSession: async () => initial,
+      probe: async () => false,
+      patchFromCurrent: async (_id, updateCurrent) => {
+        patchResult = updateCurrent(initial);
+        return patchResult ? { ...initial, ...patchResult } : initial;
+      }
+    });
+
+    expect(patchResult).toEqual({
+      status: "disconnected",
+      priorityReason: "disconnected"
+    });
+  });
+
+  test("leaves a live local session unchanged when its current socket responds", async () => {
+    const initial = meta({ origin: "local" });
+    let patchCalls = 0;
+
+    await reconcileLiveLocalDaemonDisconnect(initial.id, {
+      readSession: async () => initial,
+      probe: async () => true,
+      patchFromCurrent: async () => {
+        patchCalls++;
+        return initial;
+      }
+    });
+
+    expect(patchCalls).toBe(0);
+  });
+
+  test("preserves a concurrent terminal transition and replacement socket", async () => {
+    const initial = meta({ origin: "local", socketPath: "tcp://127.0.0.1:4001" });
+    const currentStates = [
+      meta({ status: "completed", priorityReason: "completed", socketPath: initial.socketPath }),
+      meta({ status: "failed", priorityReason: "failed", socketPath: initial.socketPath }),
+      meta({ status: "running", priorityReason: "running", socketPath: "tcp://127.0.0.1:4002" })
+    ];
+    const patches: Array<Partial<SessionMeta> | undefined> = [];
+
+    for (const current of currentStates) {
+      await reconcileLiveLocalDaemonDisconnect(initial.id, {
+        readSession: async () => initial,
+        probe: async () => false,
+        patchFromCurrent: async (_id, updateCurrent) => {
+          patches.push(updateCurrent(current));
+          return current;
+        }
+      });
+    }
+
+    expect(patches).toEqual([undefined, undefined, undefined]);
+  });
+
+  test("does not probe or patch remote sessions", async () => {
+    const remote = meta({ origin: "remote" });
+    let probed = false;
+    let patched = false;
+
+    await reconcileLiveLocalDaemonDisconnect(remote.id, {
+      readSession: async () => remote,
+      probe: async () => {
+        probed = true;
+        return false;
+      },
+      patchFromCurrent: async () => {
+        patched = true;
+        return remote;
+      }
+    });
+
+    expect(probed).toBe(false);
+    expect(patched).toBe(false);
   });
 });
 
