@@ -876,10 +876,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         return;
       }
       disconnected = true;
-      clearHandoffReplayCheckpoint();
       if (attachmentGeneration !== attachmentGenerationRef.current) {
         return;
       }
+      clearHandoffReplayCheckpoint();
       if (wsRef.current === ws) {
         wsRef.current = null;
         attachedSessionIdRef.current = null;

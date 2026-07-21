@@ -157,7 +157,17 @@ describe("TerminalView", () => {
 
     expect(source.match(/clearHandoffReplayCheckpoint\(\);/g)?.length).toBeGreaterThanOrEqual(4);
     expect(source).toContain("terminalExitReceived = true;\n            clearHandoffReplayCheckpoint();");
-    expect(source).toContain("disconnected = true;\n      clearHandoffReplayCheckpoint();");
+    const handleDisconnectStart = source.indexOf("function handleDisconnect(): void {");
+    const generationGuardIndex = source.indexOf(
+      "if (attachmentGeneration !== attachmentGenerationRef.current) {",
+      handleDisconnectStart
+    );
+    const clearIndex = source.indexOf("clearHandoffReplayCheckpoint();", handleDisconnectStart);
+
+    expect(handleDisconnectStart).toBeGreaterThanOrEqual(0);
+    expect(generationGuardIndex).toBeGreaterThanOrEqual(0);
+    expect(clearIndex).toBeGreaterThanOrEqual(0);
+    expect(generationGuardIndex).toBeLessThan(clearIndex);
     expect(source).toContain("function closeWs(): void {\n    clearHandoffReplayCheckpoint();");
   });
 

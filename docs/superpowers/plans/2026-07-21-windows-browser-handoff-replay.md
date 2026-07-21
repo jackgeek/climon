@@ -508,10 +508,14 @@ function closeWs(): void {
 }
 ```
 
-Insert it immediately after `disconnected = true;` in `handleDisconnect()`:
+Insert it immediately after the stale-socket guard in `handleDisconnect()` so a
+current attachment clears the checkpoint but a stale one returns first:
 
 ```ts
 disconnected = true;
+if (attachmentGeneration !== attachmentGenerationRef.current) {
+  return;
+}
 clearHandoffReplayCheckpoint();
 ```
 
