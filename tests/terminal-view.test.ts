@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import xterm from "@xterm/headless";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -114,7 +115,7 @@ describe("TerminalView", () => {
     expect(source).toContain("awaitingReplayRef.current = false;");
     expect(source).toContain("if (initialReplayCompleteRef.current && !replayRequested) {");
     expect(source).toContain(
-      "} else if (replayRequested) {\n            // A mid-session replay (e.g. after a clamp/fill toggle) rebuilds\n            // scrollback without a full reset so mouse-tracking modes survive.\n            refreshTerminalForReplay(term);\n          }"
+      "} else {\n              // Ordinary mid-session replay remains daemon-authoritative.\n              refreshTerminalForReplay(term);\n            }"
     );
   });
 
@@ -124,6 +125,50 @@ describe("TerminalView", () => {
     expect(source).toContain("replayAfterNextResizeRef.current = true;");
     expect(source).toContain('ws.send(JSON.stringify({ type: "replay" }));');
     expect(source).toContain('} else if (msg.type === "replay") {\n            awaitingReplayRef.current = true;\n          }');
+  });
+
+  test("captures a serialized checkpoint before a displaced controller refits", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("const serializeRef = useRef<SerializeAddon | null>(null);");
+    expect(source).toContain("const handoffReplayCheckpointRef = useRef<HandoffReplayCheckpoint | null>(null);");
+    expect(source).toContain(
+      "createHandoffReplayCheckpoint(\n                  attachmentGeneration,\n                  serializer.serialize(),\n                  captureTerminalText(term),\n                  term.cols,\n                  term.rows\n                )"
+    );
+    expect(source.indexOf("serializer.serialize()")).toBeLessThan(
+      source.indexOf("replayAfterNextResizeRef.current = true;")
+    );
+  });
+
+  test("restores only a valid blank handoff replay and consumes the checkpoint", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("shouldRestoreHandoffReplayCheckpoint({");
+    expect(source).toContain("currentAttachmentGeneration: attachmentGenerationRef.current");
+    expect(source).toContain("currentText: captureTerminalText(term)");
+    expect(source).toContain("handoffReplayCheckpointRef.current = null;");
+    expect(source).toContain("applyAuthoritativeTerminalSize(term, handoffCheckpoint.cols, handoffCheckpoint.rows);");
+    expect(source).toContain("term.reset();\n              replayData = handoffCheckpoint.serialized;");
+    expect(source).toContain("applyAuthoritativeTerminalSize(term, restoreTargetSize.cols, restoreTargetSize.rows);");
+  });
+
+  test("clears handoff replay state at every attachment lifecycle boundary", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source.match(/clearHandoffReplayCheckpoint\(\);/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(source).toContain("terminalExitReceived = true;\n            clearHandoffReplayCheckpoint();");
+    expect(source).toContain("disconnected = true;\n      clearHandoffReplayCheckpoint();");
+    expect(source).toContain("function closeWs(): void {\n    clearHandoffReplayCheckpoint();");
+  });
+
+  test("constructs and retains the live serialize addon", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("const serialize = new SerializeAddon();");
+    expect(source).toContain("loadTerminalAddons(term, fit, webLinks, serialize);");
+    expect(source).toContain("serializeRef.current = serialize;");
+    expect(source).toContain("serializeRef.current = null;");
+    expect(new SerializeAddon()).toBeDefined();
   });
 
   test("refreshes the renderer when a hidden terminal becomes visible", () => {
@@ -160,18 +205,22 @@ describe("TerminalView", () => {
     expect(terminalOptions.scrollback).toBe(10_000);
   });
 
-  test("loads fit and web link addons", () => {
+  test("loads fit, web link, and serialize addons", () => {
     const loaded: string[] = [];
     const fitAddon = { activate: () => {}, dispose: () => {} };
     const webLinksAddon = { activate: () => {}, dispose: () => {} };
+    const serializeAddon = { activate: () => {}, dispose: () => {} };
 
     loadTerminalAddons(
-      { loadAddon: (addon) => loaded.push(addon === fitAddon ? "fit" : "web-links") },
+      { loadAddon: (addon) => loaded.push(
+        addon === fitAddon ? "fit" : addon === webLinksAddon ? "web-links" : "serialize"
+      ) },
       fitAddon,
-      webLinksAddon
+      webLinksAddon,
+      serializeAddon
     );
 
-    expect(loaded).toEqual(["fit", "web-links"]);
+    expect(loaded).toEqual(["fit", "web-links", "serialize"]);
   });
 
   async function cursorAdvance(grapheme: string): Promise<number> {

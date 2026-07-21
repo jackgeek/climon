@@ -4,6 +4,12 @@ import { Terminal, type ITerminalAddon, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { SerializeAddon } from "@xterm/addon-serialize";
+import {
+  createHandoffReplayCheckpoint,
+  shouldRestoreHandoffReplayCheckpoint,
+  type HandoffReplayCheckpoint
+} from "../handoff-replay.js";
 import type { SessionMeta } from "../../types.js";
 import {
   attachKey,
@@ -271,10 +277,12 @@ export function applyTerminalFontSize(term: FontResizableTerminal, fontSize: num
 export function loadTerminalAddons(
   term: Pick<Terminal, "loadAddon">,
   fit: ITerminalAddon,
-  webLinks: ITerminalAddon
+  webLinks: ITerminalAddon,
+  serialize: ITerminalAddon
 ): void {
   term.loadAddon(fit);
   term.loadAddon(webLinks);
+  term.loadAddon(serialize);
 }
 
 export function configureTerminalUnicode(
@@ -464,6 +472,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const serializeRef = useRef<SerializeAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const attachedSessionIdRef = useRef<string | null>(null);
   const viewerIdRef = useRef<string>(generateViewerId());
@@ -498,6 +507,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const awaitingReplayRef = useRef(false);
   const replayWriteInProgressRef = useRef(false);
   const replayAfterNextResizeRef = useRef(false);
+  const handoffReplayCheckpointRef = useRef<HandoffReplayCheckpoint | null>(null);
   const lastServerReconnectTokenRef = useRef(serverReconnectToken);
   const onLiveInteractionRef = useRef(onLiveInteraction);
 
@@ -761,6 +771,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     focusTerminalPane(termRef.current, repaintActiveTerminal);
   }
 
+  function clearHandoffReplayCheckpoint(): void {
+    handoffReplayCheckpointRef.current = null;
+  }
+
   function clearReconnectTimer(): void {
     if (reconnectTimerRef.current === null) {
       return;
@@ -770,6 +784,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }
 
   function closeWs(): void {
+    clearHandoffReplayCheckpoint();
     clearReconnectTimer();
     reconnectAttemptRef.current = 0;
     attachmentGenerationRef.current++;
@@ -839,6 +854,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
   function attachLiveSession(liveSession: SessionMeta, resetBeforeReplay: boolean): void {
     clearReconnectTimer();
+    clearHandoffReplayCheckpoint();
     attachmentGenerationRef.current++;
     const attachmentGeneration = attachmentGenerationRef.current;
     const ws = new WebSocket(attachSocketUrl(liveSession.id));
@@ -860,6 +876,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         return;
       }
       disconnected = true;
+      clearHandoffReplayCheckpoint();
       if (attachmentGeneration !== attachmentGenerationRef.current) {
         return;
       }
@@ -906,6 +923,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
           };
           if (msg.type === "exit") {
             terminalExitReceived = true;
+            clearHandoffReplayCheckpoint();
             term.write(`\r\n\x1b[90m[session exited with code ${msg.exitCode}]\x1b[0m\r\n`);
           } else if (msg.type === "size" && msg.cols && msg.rows) {
             // Authoritative PTY size from the daemon: match it so both the host
@@ -939,6 +957,16 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
               // resize -> control -> refit -> resize feedback loop that never
               // settles when the fit is unstable (mobile PWA), corrupting the
               // screen with endless resizes and replays.
+              const serializer = serializeRef.current;
+              handoffReplayCheckpointRef.current = serializer
+                ? createHandoffReplayCheckpoint(
+                  attachmentGeneration,
+                  serializer.serialize(),
+                  captureTerminalText(term),
+                  term.cols,
+                  term.rows
+                )
+                : null;
               replayAfterNextResizeRef.current = true;
               refit();
             }
@@ -955,18 +983,37 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         if (initialReplayCompleteRef.current && !replayRequested) {
           term.write(data);
         } else {
+          let replayData: string | Uint8Array = data;
+          let restoreTargetSize: { cols: number; rows: number } | null = null;
           if (firstBinaryFrame) {
             firstBinaryFrame = false;
             if (resetBeforeReplay) {
               term.reset();
             }
           } else if (replayRequested) {
-            // A mid-session replay (e.g. after a clamp/fill toggle) rebuilds
-            // scrollback without a full reset so mouse-tracking modes survive.
-            refreshTerminalForReplay(term);
+            const handoffCheckpoint = handoffReplayCheckpointRef.current;
+            const restoreCheckpoint = shouldRestoreHandoffReplayCheckpoint({
+              checkpoint: handoffCheckpoint,
+              currentAttachmentGeneration: attachmentGenerationRef.current,
+              replayRequested,
+              currentText: captureTerminalText(term)
+            });
+            handoffReplayCheckpointRef.current = null;
+            if (restoreCheckpoint && handoffCheckpoint) {
+              restoreTargetSize = { cols: term.cols, rows: term.rows };
+              applyAuthoritativeTerminalSize(term, handoffCheckpoint.cols, handoffCheckpoint.rows);
+              term.reset();
+              replayData = handoffCheckpoint.serialized;
+            } else {
+              // Ordinary mid-session replay remains daemon-authoritative.
+              refreshTerminalForReplay(term);
+            }
           }
           replayWriteInProgressRef.current = true;
-          term.write(data, () => {
+          term.write(replayData, () => {
+            if (restoreTargetSize) {
+              applyAuthoritativeTerminalSize(term, restoreTargetSize.cols, restoreTargetSize.rows);
+            }
             replayWriteInProgressRef.current = false;
             completeInitialReplay(
               attachmentGeneration,
@@ -1053,11 +1100,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     });
     const fit = new FitAddon();
     const webLinks = new WebLinksAddon();
-    loadTerminalAddons(term, fit, webLinks);
+    const serialize = new SerializeAddon();
+    loadTerminalAddons(term, fit, webLinks, serialize);
     configureTerminalUnicode(term, new Unicode11Addon());
     term.open(container);
     termRef.current = term;
     fitRef.current = fit;
+    serializeRef.current = serialize;
     fitNow();
 
     const onWindowResize = (): void => fitNow();
@@ -1135,6 +1184,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      serializeRef.current = null;
     };
   }, []);
 
