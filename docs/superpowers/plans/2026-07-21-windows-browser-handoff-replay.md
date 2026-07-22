@@ -269,6 +269,7 @@ git commit -m "fix(web): add handoff replay checkpoints" -m "Co-authored-by: Cop
   - `createHandoffReplayCheckpoint(...)`
   - `shouldRestoreHandoffReplayCheckpoint(...)`
   - `SerializeAddon.serialize(): string`
+  - `captureTerminalViewportText(term)` — visible viewport only (reads `buffer.active.baseY + rows`); used for the restore decision so retained scrollback does not mask a blank viewport
 - Produces: generation-scoped handoff recovery integrated into the existing resize/replay flow.
 
 - [ ] **Step 1: Write failing component-wiring tests**
@@ -322,7 +323,7 @@ test("restores only a valid blank handoff replay and consumes the checkpoint", (
 
   expect(source).toContain("shouldRestoreHandoffReplayCheckpoint({");
   expect(source).toContain("currentAttachmentGeneration: attachmentGenerationRef.current");
-  expect(source).toContain("currentText: captureTerminalText(term)");
+  expect(source).toContain("currentText: captureTerminalViewportText(term)");
   expect(source).toContain("handoffReplayCheckpointRef.current = null;");
   expect(source).toContain("applyAuthoritativeTerminalSize(term, handoffCheckpoint.cols, handoffCheckpoint.rows);");
   expect(source).toContain("term.reset();\n              replayData = handoffCheckpoint.serialized;");
@@ -461,7 +462,7 @@ if (firstBinaryFrame) {
     checkpoint: handoffCheckpoint,
     currentAttachmentGeneration: attachmentGenerationRef.current,
     replayRequested,
-    currentText: captureTerminalText(term)
+   currentText: captureTerminalViewportText(term)
   });
   handoffReplayCheckpointRef.current = null;
   if (restoreCheckpoint && handoffCheckpoint) {

@@ -13,6 +13,7 @@ import {
   canRefitTerminalForSession,
   completeInitialReplay,
   captureTerminalText,
+  captureTerminalViewportText,
   stripTerminalDecorations,
   focusTerminalPane,
   mapWheelToScrollLines,
@@ -35,6 +36,9 @@ const { Terminal } = xterm;
 function writeTerminal(term: InstanceType<typeof Terminal>, data: string): Promise<void> {
   return new Promise((resolve) => term.write(data, resolve));
 }
+
+const WINDOWS_RESIZE_ERASE_ONLY =
+  `\x1b[?25l${"\x1b[K\r\n".repeat(55)}\x1b[K\x1b[H\x1b[?25h`;
 
 describe("TerminalView", () => {
   test("renders the session color accent around the terminal pane", () => {
@@ -145,7 +149,7 @@ describe("TerminalView", () => {
 
     expect(source).toContain("shouldRestoreHandoffReplayCheckpoint({");
     expect(source).toContain("currentAttachmentGeneration: attachmentGenerationRef.current");
-    expect(source).toContain("currentText: captureTerminalText(term)");
+    expect(source).toContain("currentText: captureTerminalViewportText(term)");
     expect(source).toContain("handoffReplayCheckpointRef.current = null;");
     expect(source).toContain("applyAuthoritativeTerminalSize(term, handoffCheckpoint.cols, handoffCheckpoint.rows);");
     expect(source).toContain("term.reset();\n              replayData = handoffCheckpoint.serialized;");
@@ -435,6 +439,27 @@ describe("TerminalView", () => {
 
   test("captureTerminalText tolerates a missing terminal", () => {
     expect(captureTerminalText(null)).toBe("");
+  });
+
+  test("distinguishes a blank visible viewport from retained scrollback", async () => {
+    const term = new Terminal({ cols: 20, rows: 4, scrollback: 100, allowProposedApi: true });
+    await writeTerminal(term, "old1\r\nold2\r\nold3\r\nold4\r\nold5");
+    expect(captureTerminalViewportText(term)).toContain("old5");
+    await writeTerminal(term, WINDOWS_RESIZE_ERASE_ONLY);
+
+    expect(captureTerminalText(term)).toContain("old1");
+    expect(captureTerminalViewportText(term).trim()).toBe("");
+    term.dispose();
+  });
+
+  test("uses full-buffer capture for the checkpoint and viewport capture for restore decisions", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+    const checkpointStart = source.indexOf("createHandoffReplayCheckpoint(");
+    const decisionStart = source.indexOf("shouldRestoreHandoffReplayCheckpoint({");
+
+    expect(source.slice(checkpointStart, decisionStart)).toContain("captureTerminalText(term)");
+    expect(source.slice(decisionStart)).toContain("currentText: captureTerminalViewportText(term)");
+    expect(source).not.toContain("[handoff-debug:");
   });
 
   test("stripTerminalDecorations replaces box/block glyphs with spaces to keep alignment", () => {

@@ -124,6 +124,15 @@ interface CapturableTerminal {
   };
 }
 
+interface ViewportCapturableTerminal extends CapturableTerminal {
+  rows: number;
+  buffer: {
+    active: CapturableTerminal["buffer"]["active"] & {
+      baseY: number;
+    };
+  };
+}
+
 /** Matches box-drawing, block-element, and geometric-shape glyphs (U+2500–U+25FF) */
 const DECORATION_GLYPH_RE = /[\u2500-\u25FF]/g;
 
@@ -139,6 +148,13 @@ export function stripTerminalDecorations(text: string): string {
     .join("\n");
 }
 
+function joinCapturedTerminalLines(lines: string[]): string {
+  while (lines.length > 0 && lines[lines.length - 1].length === 0) {
+    lines.pop();
+  }
+  return lines.join("\n");
+}
+
 /**
  * Read the terminal's full scrollback buffer as plain text. Each row is
  * right-trimmed by xterm; trailing blank rows are dropped so the capture ends at
@@ -149,14 +165,28 @@ export function captureTerminalText(term: CapturableTerminal | null): string {
     return "";
   }
   const buffer = term.buffer.active;
-  const lines: string[] = [];
-  for (let i = 0; i < buffer.length; i++) {
-    lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+  const lines = Array.from(
+    { length: buffer.length },
+    (_, index) => buffer.getLine(index)?.translateToString(true) ?? ""
+  );
+  return joinCapturedTerminalLines(lines);
+}
+
+/**
+ * Read only the visible viewport rows as plain text. Unlike captureTerminalText,
+ * this ignores scrollback above baseY, so a ConPTY erase-only resize that blanks
+ * the viewport reads as empty even when old scrollback rows are retained.
+ */
+export function captureTerminalViewportText(term: ViewportCapturableTerminal | null): string {
+  if (!term) {
+    return "";
   }
-  while (lines.length > 0 && lines[lines.length - 1].length === 0) {
-    lines.pop();
-  }
-  return lines.join("\n");
+  const buffer = term.buffer.active;
+  const lines = Array.from(
+    { length: term.rows },
+    (_, row) => buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? ""
+  );
+  return joinCapturedTerminalLines(lines);
 }
 
 export function mapWheelToScrollLines(event: Pick<WheelEvent, "deltaY" | "deltaMode">, rows: number): number {
@@ -996,7 +1026,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
               checkpoint: handoffCheckpoint,
               currentAttachmentGeneration: attachmentGenerationRef.current,
               replayRequested,
-              currentText: captureTerminalText(term)
+              currentText: captureTerminalViewportText(term)
             });
             handoffReplayCheckpointRef.current = null;
             if (restoreCheckpoint && handoffCheckpoint) {
