@@ -77,7 +77,14 @@ when all of these conditions hold:
 - the checkpoint belongs to the current attachment generation;
 - the checkpoint was created for a displaced-to-controlling transition;
 - the checkpoint had visible non-whitespace content;
-- the post-resize terminal is blank.
+- the post-resize **visible viewport** is blank.
+
+Visible-viewport blankness is intentionally independent from scrollback. A
+ConPTY erase-only resize can blank every visible row while xterm still retains
+thousands of characters above `buffer.active.baseY`; retained history must not
+block recovery. The existing full-buffer capture remains responsible for
+checkpoint content, while a dedicated viewport capture reads exactly
+`term.rows` lines starting at `buffer.active.baseY` for this decision.
 
 If every condition holds, the component discards the raw handoff replay,
 resizes xterm back to the checkpoint's source grid, resets the buffer, writes
@@ -126,10 +133,12 @@ Focused tests will cover:
 2. Styles, cursor state, and terminal modes represented by the serialized
    checkpoint are restored.
 3. A nonblank post-resize terminal uses normal daemon replay.
-4. A blank checkpoint never resurrects old content.
-5. A checkpoint from an old attachment generation is ignored.
-6. Disconnect, reconnect, session change, and exit clear pending recovery state.
-7. Existing replay, control-state, resize deduplication, and alternate-screen
+4. A blank visible viewport with nonblank retained scrollback still restores
+   the checkpoint.
+5. A blank checkpoint never resurrects old content.
+6. A checkpoint from an old attachment generation is ignored.
+7. Disconnect, reconnect, session change, and exit clear pending recovery state.
+8. Existing replay, control-state, resize deduplication, and alternate-screen
    tests remain green.
 
 Physical DAR-03 validation will repeat:
