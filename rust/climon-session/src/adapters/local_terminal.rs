@@ -779,7 +779,7 @@ mod platform {
         InputInterrupt, InputPoll, LocalInputSource, ModeGuard, PlatformConfiguration,
         RealTerminalPlatform, TerminalPlatform, INPUT_CHUNK,
     };
-    use std::io;
+    use std::io::{self, Read};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -789,9 +789,9 @@ mod platform {
         WAIT_FAILED, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Console::{
-        GetConsoleMode, GetStdHandle, ReadConsoleW, SetConsoleMode, ENABLE_ECHO_INPUT,
-        ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT,
-        ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
+        ENABLE_PROCESSED_INPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+        STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
     };
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentThread, WaitForSingleObject,
@@ -938,12 +938,11 @@ mod platform {
 
     /// Reads the native VT byte stream from the Windows console. The paired
     /// [`WindowsInputInterrupt`] owns a duplicate of this worker thread's handle,
-    /// allowing teardown to cancel a synchronous `ReadConsoleW` even when a
+    /// allowing teardown to cancel a synchronous blocking stdin read even when a
     /// non-character console record caused the handle to become signalled.
     struct WindowsStdinSource {
         handle: isize,
-        wide_buf: Vec<u16>,
-        utf8: super::Utf16InputBuffer,
+        buf: Vec<u8>,
         control: Arc<WindowsReadControl>,
     }
 
@@ -951,8 +950,7 @@ mod platform {
         fn new(handle: HANDLE, control: Arc<WindowsReadControl>) -> WindowsStdinSource {
             WindowsStdinSource {
                 handle: handle as isize,
-                wide_buf: vec![0u16; INPUT_CHUNK],
-                utf8: super::Utf16InputBuffer::default(),
+                buf: vec![0u8; INPUT_CHUNK],
                 control,
             }
         }
@@ -964,11 +962,20 @@ mod platform {
         }
     }
 
+    pub(crate) fn read_windows_input_chunk<R: Read>(
+        reader: &mut R,
+        buf: &mut [u8],
+    ) -> Result<InputPoll, String> {
+        match reader.read(buf) {
+            Ok(0) => Ok(InputPoll::Eof),
+            Ok(read) => Ok(InputPoll::Chunk(buf[..read].to_vec())),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => Ok(InputPoll::Idle),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
     impl LocalInputSource for WindowsStdinSource {
         fn poll(&mut self, timeout: Duration) -> Result<InputPoll, String> {
-            if self.utf8.has_pending() {
-                return Ok(InputPoll::Chunk(self.utf8.take_chunk(INPUT_CHUNK)));
-            }
             if !self.control.prepare_poll()? {
                 return Ok(InputPoll::Idle);
             }
@@ -985,31 +992,10 @@ mod platform {
             if !self.control.begin_read()? {
                 return Ok(InputPoll::Idle);
             }
-            let mut read = 0;
-            let read_result = unsafe {
-                ReadConsoleW(
-                    self.handle as HANDLE,
-                    self.wide_buf.as_mut_ptr().cast(),
-                    self.wide_buf.len() as u32,
-                    &mut read,
-                    std::ptr::null_mut(),
-                )
-            };
-            let read_error = (read_result == 0).then(io::Error::last_os_error);
+            let mut lock = io::stdin().lock();
+            let read_result = read_windows_input_chunk(&mut lock, &mut self.buf);
             self.control.finish_read();
-            if let Some(error) = read_error {
-                return if error.kind() == io::ErrorKind::Interrupted {
-                    Ok(InputPoll::Idle)
-                } else {
-                    Err(error.to_string())
-                };
-            }
-            if read == 0 {
-                Ok(InputPoll::Eof)
-            } else {
-                self.utf8.push(&self.wide_buf[..read as usize]);
-                Ok(InputPoll::Chunk(self.utf8.take_chunk(INPUT_CHUNK)))
-            }
+            read_result
         }
     }
 
@@ -2134,30 +2120,40 @@ mod tests {
         assert!(interrupted.load(Ordering::SeqCst));
     }
 
+    #[cfg(windows)]
     #[test]
-    fn windows_utf16_input_preserves_non_ascii_and_split_surrogates() {
-        use super::Utf16InputBuffer;
+    fn windows_input_chunks_preserve_supplementary_unicode_bytes() {
+        use std::io::Cursor;
 
-        let mut input = Utf16InputBuffer::default();
-        input.push(&['é' as u16, 0xD83D]);
-        assert_eq!(input.take_chunk(4096), "é".as_bytes());
+        let mut reader = Cursor::new("DAR01 café 日本語 🚀".as_bytes());
+        let mut buf = [0u8; 4096];
+        let poll = super::platform::read_windows_input_chunk(&mut reader, &mut buf).unwrap();
 
-        input.push(&[0xDE00]);
-        assert_eq!(input.take_chunk(4096), "😀".as_bytes());
+        match poll {
+            InputPoll::Chunk(bytes) => {
+                assert_eq!(bytes, "DAR01 café 日本語 🚀".as_bytes());
+            }
+            _ => panic!("expected chunk"),
+        }
     }
 
+    #[cfg(windows)]
     #[test]
-    fn windows_utf16_input_caps_forwarded_chunks_without_losing_bytes() {
-        use super::Utf16InputBuffer;
+    fn windows_input_chunks_forward_full_buffers_without_loss() {
+        use std::io::Cursor;
 
-        let mut input = Utf16InputBuffer::default();
-        input.push(&vec!['é' as u16; 3_000]);
+        let bytes = "é".repeat(3_000).into_bytes();
+        let mut reader = Cursor::new(bytes.clone());
+        let mut buf = [0u8; 4096];
+        let poll = super::platform::read_windows_input_chunk(&mut reader, &mut buf).unwrap();
 
-        let first = input.take_chunk(4096);
-        let second = input.take_chunk(4096);
-        assert_eq!(first.len(), 4096);
-        assert_eq!(second.len(), 1904);
-        assert_eq!([first, second].concat(), "é".repeat(3_000).as_bytes());
+        match poll {
+            InputPoll::Chunk(chunk) => {
+                assert_eq!(chunk.len(), 4096);
+                assert_eq!(chunk, bytes[..4096]);
+            }
+            _ => panic!("expected chunk"),
+        }
     }
 
     // Step 9 (platform smoke): the real platform is unattached under `cargo test`
