@@ -895,6 +895,136 @@ pub fn assert_acknowledged_sticky(trace: &ScenarioTrace) {
     );
 }
 
+/// Flags attention, acknowledges it, then leaves a real body change visible so
+/// the session returns to `running` and re-flags after a fresh idle interval.
+pub fn run_acknowledged_rearm_scenario(engine: TestEngine) -> ScenarioTrace {
+    let _guard = serial().lock().unwrap_or_else(|e| e.into_inner());
+    let home = scratch_home("ack-rearm");
+    std::env::set_var("CLIMON_HOME", &home);
+    std::fs::write(
+        home.join("config.jsonc"),
+        "{ \"attention\": { \"idleSeconds\": 1 } }\n",
+    )
+    .unwrap();
+
+    let id = "quebec-romeo-sierra";
+    let meta = base_meta(
+        id,
+        &home,
+        vec![
+            "sh".into(),
+            "-c".into(),
+            "sleep 4; printf 'DAR-05 changed body\\n'; sleep 4".into(),
+        ],
+    );
+    let socket_ref = meta.socket_path.clone();
+
+    let host = spawn_host(engine, id, meta, &home);
+    let mut stream = connect_client(&socket_ref);
+    let env = Env::with_home(&home);
+    let mut decoder = FrameDecoder::new();
+    let mut frames = Vec::new();
+    read_frames_until(
+        &mut stream,
+        &mut decoder,
+        &mut frames,
+        Instant::now() + Duration::from_secs(3),
+        |f| f.frame_type == FrameType::Replay,
+    );
+
+    let mut statuses = Vec::new();
+    let flagged = wait_for_meta(&env, id, Instant::now() + Duration::from_secs(8), |m| {
+        m.status == SessionStatus::NeedsAttention
+    });
+    let token = flagged.and_then(|m| {
+        statuses.push(SessionStatus::NeedsAttention);
+        assert_eq!(
+            m.attention_reason.as_deref(),
+            Some("Screen idle for 1s"),
+            "flagged attention metadata carries the idle reason"
+        );
+        m.attention_matched_at
+    });
+
+    if let Some(token) = token {
+        let ack = encode_json_frame(
+            FrameType::Attention,
+            &AttentionPayload {
+                needs_attention: false,
+                reason: None,
+                attention_matched_at: Some(token),
+            },
+        );
+        send_frame(&mut stream, &ack);
+    }
+
+    let acknowledged = wait_for_meta(&env, id, Instant::now() + Duration::from_secs(5), |m| {
+        m.status == SessionStatus::Acknowledged
+    });
+    if acknowledged.is_some() {
+        statuses.push(SessionStatus::Acknowledged);
+    }
+
+    assert!(
+        read_until_output_contains(
+            &mut stream,
+            &mut decoder,
+            &mut frames,
+            Instant::now() + Duration::from_secs(6),
+            b"DAR-05 changed body",
+        ),
+        "body change became visible in the PTY stream"
+    );
+
+    let running = wait_for_meta(&env, id, Instant::now() + Duration::from_secs(5), |m| {
+        m.status == SessionStatus::Running
+    });
+    if running.is_some() {
+        statuses.push(SessionStatus::Running);
+    }
+
+    let reflagged = wait_for_meta(&env, id, Instant::now() + Duration::from_secs(8), |m| {
+        m.status == SessionStatus::NeedsAttention
+    });
+    if reflagged.is_some() {
+        statuses.push(SessionStatus::NeedsAttention);
+    }
+
+    drop(stream);
+    let host_exit_code = host.join().ok();
+    let final_meta = reflagged.or(running).or(acknowledged);
+    let _ = std::fs::remove_dir_all(&home);
+    ScenarioTrace {
+        frames,
+        final_meta,
+        host_exit_code,
+        statuses,
+    }
+}
+
+/// Concrete per-engine expectations for the acknowledged-rearm scenario.
+pub fn assert_acknowledged_rearm(trace: &ScenarioTrace) {
+    assert_eq!(
+        trace.statuses(),
+        &[
+            SessionStatus::NeedsAttention,
+            SessionStatus::Acknowledged,
+            SessionStatus::Running,
+            SessionStatus::NeedsAttention,
+        ],
+        "acknowledged session returns to running on body change, then re-flags"
+    );
+    let meta = trace.final_meta().expect("final meta persisted");
+    assert_eq!(meta.status, SessionStatus::NeedsAttention);
+    assert!(
+        trace
+            .terminal_output()
+            .windows(b"DAR-05 changed body".len())
+            .any(|w| w == b"DAR-05 changed body"),
+        "real output was observed while re-arming attention"
+    );
+}
+
 /// Reads frames into `out` until the accumulated `Replay`/`Output` bytes
 /// contain `needle`, `deadline` passes, or the socket closes. Returns whether
 /// `needle` was found.

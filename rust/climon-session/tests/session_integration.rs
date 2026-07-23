@@ -38,9 +38,11 @@
 mod common;
 
 use common::{
-    assert_acknowledged_sticky, assert_attention_clear, assert_failed_exit, assert_initial_frames,
-    assert_viewer_resize, run_acknowledged_sticky_scenario, run_attention_clear_scenario,
-    run_failed_exit_scenario, run_initial_frames_scenario, run_viewer_resize_scenario, TestEngine,
+    assert_acknowledged_rearm, assert_acknowledged_sticky, assert_attention_clear,
+    assert_failed_exit, assert_initial_frames, assert_viewer_resize,
+    run_acknowledged_rearm_scenario, run_acknowledged_sticky_scenario,
+    run_attention_clear_scenario, run_failed_exit_scenario, run_initial_frames_scenario,
+    run_viewer_resize_scenario, TestEngine,
 };
 
 #[test]
@@ -91,4 +93,14 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle_legacy() {
 #[test]
 fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle_actor() {
     assert_acknowledged_sticky(&run_acknowledged_sticky_scenario(TestEngine::Actor));
+}
+
+#[test]
+fn acknowledged_session_returns_to_running_then_reflags_on_a_real_body_change_legacy() {
+    assert_acknowledged_rearm(&run_acknowledged_rearm_scenario(TestEngine::Legacy));
+}
+
+#[test]
+fn acknowledged_session_returns_to_running_then_reflags_on_a_real_body_change_actor() {
+    assert_acknowledged_rearm(&run_acknowledged_rearm_scenario(TestEngine::Actor));
 }
