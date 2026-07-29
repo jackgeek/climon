@@ -10,9 +10,11 @@ import {
   attachSocketUrl,
   attentionAckMessage,
   canSendAttentionAck,
+  copyToClipboard,
   fetchScrollback,
   isLiveStatus
 } from "../api.js";
+import { decideTerminalClipboardAction, isMacPlatform } from "../terminalClipboard.js";
 import { deriveControlState, generateViewerId, surfaceKind, shouldRefitOnControlFrame, shouldReclaimOnFocus, shouldSendResize, type ControlState } from "../control-state.js";
 import { readIsStandalone } from "../pwa/pwaContext.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
@@ -1064,7 +1066,33 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     window.addEventListener("resize", onWindowResize);
 
     term.attachCustomKeyEventHandler((event) => {
-      if (event.type !== "keydown" || !event.ctrlKey) {
+      if (event.type !== "keydown") {
+        return true;
+      }
+      // xterm has no keyboard copy, and on Windows/Linux Ctrl+V is otherwise sent
+      // to the PTY as a literal ^V. Route the clipboard chords before any other
+      // shortcut handling. Returning false swallows the key without calling
+      // preventDefault, so a paste still lets the browser's native paste event
+      // fire (xterm forwards it to the PTY).
+      const clipboardAction = decideTerminalClipboardAction({
+        key: event.key,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        isMac: isMacPlatform(),
+        hasSelection: term.hasSelection()
+      });
+      if (clipboardAction === "copy") {
+        void copyToClipboard(term.getSelection());
+        return false;
+      }
+      if (clipboardAction === "paste") {
+        return false;
+      }
+      if (clipboardAction === "passthrough") {
+        return true;
+      }
+      if (!event.ctrlKey) {
         return true;
       }
       const delta =
