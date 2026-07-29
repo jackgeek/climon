@@ -13,7 +13,6 @@ use climon_config::config::{get_climon_home, resolve_config_setting, Env as Conf
 use climon_store::server_state::read_server_state_from_dir;
 use serde_json::Value;
 
-use crate::devtunnel::{DevtunnelFailure, DevtunnelGateway};
 use crate::ingest_state::{read_ingest_state_from_dir, resolve_ingest_port};
 use crate::peer::{peer_host_candidates, Env as PeerEnv};
 use crate::process::is_process_alive;
@@ -66,12 +65,6 @@ pub fn parse_devtunnel_list(json: &str) -> Vec<DiscoveredHost> {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    parse_devtunnel_list_value(&root)
-}
-
-/// Parses an already-decoded `devtunnel list --json` value into live hosts.
-/// The gateway returns parsed JSON, so this avoids a re-serialize round trip.
-fn parse_devtunnel_list_value(root: &Value) -> Vec<DiscoveredHost> {
     let tunnels = match root.get("tunnels").and_then(|t| t.as_array()) {
         Some(t) => t,
         None => return Vec::new(),
@@ -113,26 +106,23 @@ fn parse_devtunnel_list_value(root: &Value) -> Vec<DiscoveredHost> {
     out
 }
 
-/// Runs `devtunnel list --labels climon-ingest --json` through the shared
-/// [`DevtunnelGateway`] and returns the live hosts.
-///
-/// A successful list — including an empty one — resolves to `Ok(hosts)`; an
-/// empty vector means "authenticated, but no live hosts". When devtunnel is
-/// disabled via `CLIMON_DISABLE_DEVTUNNEL` the result is `Ok(vec![])` because a
-/// disabled tunnel is a deliberate opt-out, not a failure. Every other error
-/// (missing CLI, not authenticated, network, …) surfaces as the gateway's typed
-/// [`DevtunnelFailure`] so callers can record it instead of collapsing it into
-/// "no hosts".
-pub async fn list_climon_ingest_tunnels(
-    gateway: &DevtunnelGateway,
-) -> Result<Vec<DiscoveredHost>, DevtunnelFailure> {
+/// Runs `devtunnel list --labels climon-ingest --json` and returns the live hosts.
+/// Returns an empty vec when devtunnel is disabled, missing, unauthenticated, or errors.
+pub async fn list_climon_ingest_tunnels() -> Vec<DiscoveredHost> {
     if devtunnel_disabled() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    let value = gateway
-        .list_tunnels(&[crate::ingest_tunnel_id::INGEST_TUNNEL_LABEL.to_string()])
-        .await?;
-    Ok(parse_devtunnel_list_value(&value))
+    let mut cmd = crate::uplink::devtunnel_command(&[
+        "list",
+        "--labels",
+        crate::ingest_tunnel_id::INGEST_TUNNEL_LABEL,
+        "--json",
+    ]);
+    let output = match cmd.output().await {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    parse_devtunnel_list(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Probe function for [`DiscoveryDeps`].
@@ -278,58 +268,6 @@ mod tests {
         assert!(parse_devtunnel_list("").is_empty());
         assert!(parse_devtunnel_list("{}").is_empty());
         assert!(parse_devtunnel_list(r#"{"tunnels":[]}"#).is_empty());
-    }
-
-    fn gateway_with_result(result: crate::devtunnel::RunResult) -> DevtunnelGateway {
-        use crate::devtunnel::gateway::{DevtunnelGatewayDeps, Runner};
-        use std::sync::Arc;
-        let runner: Runner = Arc::new(move |_cmd, _args| {
-            let result = result.clone();
-            Box::pin(async move { result })
-        });
-        DevtunnelGateway::with_deps(DevtunnelGatewayDeps {
-            runner: Some(runner),
-            env: Some(std::collections::HashMap::new()),
-            now: Some(Arc::new(|| "2026-07-11T13:00:00.000Z".to_string())),
-            ..Default::default()
-        })
-    }
-
-    #[tokio::test]
-    async fn list_ingest_tunnels_returns_ok_empty_for_authenticated_empty_list() {
-        let gateway = gateway_with_result(crate::devtunnel::RunResult {
-            status: 0,
-            stdout: r#"{"tunnels":[]}"#.to_string(),
-            stderr: String::new(),
-            spawn_error: None,
-        });
-        let hosts = list_climon_ingest_tunnels(&gateway).await.unwrap();
-        assert!(hosts.is_empty());
-    }
-
-    #[tokio::test]
-    async fn list_ingest_tunnels_returns_parsed_hosts() {
-        let gateway = gateway_with_result(crate::devtunnel::RunResult {
-            status: 0,
-            stdout: LIST_JSON.to_string(),
-            stderr: String::new(),
-            spawn_error: None,
-        });
-        let hosts = list_climon_ingest_tunnels(&gateway).await.unwrap();
-        assert_eq!(hosts.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn list_ingest_tunnels_surfaces_not_authenticated() {
-        use crate::devtunnel::DevtunnelErrorCode;
-        let gateway = gateway_with_result(crate::devtunnel::RunResult {
-            status: 1,
-            stdout: String::new(),
-            stderr: "Not logged in".to_string(),
-            spawn_error: None,
-        });
-        let err = list_climon_ingest_tunnels(&gateway).await.unwrap_err();
-        assert_eq!(err.code, DevtunnelErrorCode::NotAuthenticated);
     }
 
     fn tmp(tag: &str) -> std::path::PathBuf {

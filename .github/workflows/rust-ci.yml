@@ -4,7 +4,10 @@ on:
   pull_request:
     paths: ["rust/**", "fixtures/proto/**", "fixtures/cli/**", ".github/workflows/rust-ci.yml"]
   push:
-    branches: [main]
+    # Validate every long-lived gitflow branch on push, not just main: dev is the
+    # integration branch and release/* + hotfix/* are the branches a release is
+    # cut from, so they must be green before a tag ships.
+    branches: [main, dev, "release/**", "hotfix/**"]
     paths: ["rust/**", "fixtures/proto/**", "fixtures/cli/**", ".github/workflows/rust-ci.yml"]
 
 defaults:

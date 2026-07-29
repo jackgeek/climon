@@ -403,13 +403,10 @@ fn run_ingest_entry() -> i32 {
             stop_signal.notify_one();
         });
 
-        let host_gateway = climon_remote::devtunnel::DevtunnelGateway::new();
         let deps = IngestDaemonDeps {
             spawn_uplink: Box::new(spawn_uplink_detached),
             stop_local_server: Box::new(|| {}),
-            spawn_host: Box::new(move |id: &str| {
-                climon_remote::ingest::spawn_devtunnel_host(&host_gateway, id)
-            }),
+            spawn_host: Box::new(|id: &str| climon_remote::ingest::spawn_devtunnel_host(id)),
         };
         match run_ingest_daemon(config_env, store_env, stop, deps).await {
             Ok(IngestExit::AlreadyRunning) => 0,

@@ -129,8 +129,8 @@ const useStyles = makeStyles({
 export const tunnelLinkMenuLabel = "Tunnel Link";
 export const closeTunnelLinkMenuLabel = "Close Tunnel Link";
 
-export function shouldShowTunnelLink(_status: Pick<DashboardTunnelStatus, "devtunnelAvailable"> | null): boolean {
-  return true;
+export function shouldShowTunnelLink(status: Pick<DashboardTunnelStatus, "devtunnelAvailable"> | null): boolean {
+  return status?.devtunnelAvailable === true;
 }
 
 export function shouldShowCloseTunnelLink(

@@ -12,8 +12,6 @@ import {
   tokens
 } from "@fluentui/react-components";
 import { copyToClipboard, type DashboardTunnelStatus } from "../api.js";
-import type { DevtunnelFailure as DevtunnelFailureModel } from "../../devtunnel/types.js";
-import { DevtunnelFailure } from "./DevtunnelFailure.js";
 
 const useStyles = makeStyles({
   row: {
@@ -23,6 +21,13 @@ const useStyles = makeStyles({
   },
   input: {
     flex: "1 1 auto"
+  },
+  error: {
+    color: tokens.colorPaletteRedForeground1,
+    fontSize: "12px",
+    minHeight: "16px",
+    display: "block",
+    marginTop: "8px"
   },
   hint: {
     color: tokens.colorNeutralForeground3,
@@ -41,72 +46,55 @@ const useStyles = makeStyles({
 interface Props {
   open: boolean;
   status: DashboardTunnelStatus | null;
-  failure?: DevtunnelFailureModel;
-  retrying: boolean;
-  onRetry: () => void;
+  error: string;
   copied: boolean;
   onCopy: (copied: boolean) => void;
   onClose: () => void;
 }
 
-type BodyProps = Omit<Props, "open" | "onClose">;
-
-/** State-driven dialog body. Exported so it can be unit tested without the portalled Dialog surface. */
-export function TunnelLinkBody({ status, failure, retrying, onRetry, copied, onCopy }: BodyProps) {
+export function TunnelLinkDialog({ open, status, error, copied, onCopy, onClose }: Props) {
   const styles = useStyles();
   const url = status?.url ?? "";
   const tunnelId = status?.tunnelId ?? "";
-  if (url) {
-    return (
-      <>
-        <Text>
-          Use this authenticated dev tunnel link to open the climon dashboard
-          from another device signed in with access to the tunnel.
-        </Text>
-        <div className={styles.row}>
-          <Input className={styles.input} value={url} readOnly />
-          <Button appearance="primary" onClick={async () => onCopy(await copyToClipboard(url))}>
-            {copied ? "Copied!" : "Copy link"}
-          </Button>
-          <Button appearance="secondary" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
-            Open link
-          </Button>
-        </div>
-        <Text className={styles.hint}>
-          The tunnel is not anonymous. It stays running until you choose Close
-          Tunnel Link from the menu.
-        </Text>
-        {tunnelId && (
-          <Text className={styles.tunnelName}>
-            Dev tunnel: <strong>{tunnelId}</strong>
-          </Text>
-        )}
-      </>
-    );
-  }
-  if (failure) {
-    return <DevtunnelFailure failure={failure} retry={status?.retry} onRetry={onRetry} retrying={retrying} />;
-  }
-  return <Text>{retrying ? "Retrying Tunnel Link…" : "Starting Tunnel Link…"}</Text>;
-}
-
-export function TunnelLinkDialog({ open, status, failure, retrying, onRetry, copied, onCopy, onClose }: Props) {
   return (
     <Dialog open={open} onOpenChange={(_, data) => !data.open && onClose()}>
       <DialogSurface>
         <DialogBody>
           <DialogTitle>Tunnel Link</DialogTitle>
           <DialogContent>
-            <TunnelLinkBody
-              status={status}
-              failure={failure}
-              retrying={retrying}
-              onRetry={onRetry}
-              copied={copied}
-              onCopy={onCopy}
-            />
+            {url ? (
+              <>
+                <Text>
+                  Use this authenticated dev tunnel link to open the climon dashboard
+                  from another device signed in with access to the tunnel.
+                </Text>
+                <div className={styles.row}>
+                  <Input className={styles.input} value={url} readOnly />
+                  <Button appearance="primary" onClick={async () => onCopy(await copyToClipboard(url))}>
+                    {copied ? "Copied!" : "Copy link"}
+                  </Button>
+                </div>
+                <Text className={styles.hint}>
+                  The tunnel is not anonymous. It stays running until you choose Close
+                  Tunnel Link from the menu.
+                </Text>
+                {tunnelId && (
+                  <Text className={styles.tunnelName}>
+                    Dev tunnel: <strong>{tunnelId}</strong>
+                  </Text>
+                )}
+              </>
+            ) : (
+              <Text>Starting Tunnel Link…</Text>
+            )}
+            {error && <Text className={styles.error}>{error}</Text>}
           </DialogContent>
           <DialogActions>
+            {url && (
+              <Button appearance="secondary" onClick={() => window.open(url, "_blank", "noopener,noreferrer")}>
+                Open link
+              </Button>
+            )}
             <Button appearance="secondary" onClick={onClose}>Close</Button>
           </DialogActions>
         </DialogBody>

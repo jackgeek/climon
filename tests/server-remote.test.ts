@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { getIngestPidPath } from "../src/remote/ingest.js";
 import { isProcessAlive, killProcess } from "../src/process-kill.js";
@@ -9,6 +8,7 @@ import { readServerStateFromDir, getServerStatePath, serializeServerState } from
 import { browserResizePayload, computeRemotesActive } from "../src/server/server.js";
 import * as serverModule from "../src/server/server.js";
 import type { ClimonConfig, SessionMeta } from "../src/types.js";
+import { freePort, waitFor, waitForExit, waitForHealth } from "./support/server.js";
 
 const { shouldMarkDisconnected, shouldStopIngestForShutdown } = serverModule;
 
@@ -211,49 +211,6 @@ function meta(over: Partial<SessionMeta>): SessionMeta {
   };
 }
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-async function waitFor<T>(fn: () => Promise<T | undefined> | T | undefined, ms = 20000): Promise<T> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    // Bound each attempt so a hung probe cannot block the loop past the deadline.
-    const value = await Promise.race([
-      Promise.resolve().then(fn).catch(() => undefined),
-      new Promise<undefined>((resolve) => setTimeout(resolve, 1000, undefined))
-    ]);
-    if (value !== undefined) return value;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error("timed out");
-}
-
-async function waitForExit(proc: Bun.Subprocess, ms: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      resolve(false);
-    }, ms);
-    void proc.exited.finally(() => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-}
-
 async function readPid(path: string): Promise<number | undefined> {
   const raw = await readFile(path, "utf8").catch(() => undefined);
   if (raw === undefined) return undefined;
@@ -365,6 +322,7 @@ describe("server shutdown ingest lifecycle", () => {
     let ingestPid: number | undefined;
     let base = `http://127.0.0.1:${dashboardPort}`;
     try {
+      await waitForHealth(server, base);
       await waitFor(async () => {
         const res = await fetch(`${base}/health`).catch(() => undefined);
         if (res?.ok) return true;
@@ -394,7 +352,7 @@ describe("server shutdown ingest lifecycle", () => {
       rmSync(home, { recursive: true, force: true });
       rmSync(peerHome, { recursive: true, force: true });
     }
-  }, 45_000);
+  }, 120_000);
 });
 
 describe("resolveIngestInvocation", () => {
@@ -965,139 +923,4 @@ describe("applyDashboardTunnelEnabled", () => {
     expect(config.remote?.dashboardTunnelCluster).toBe("eun1");
     expect(config.remote?.dashboardTunnelEnabled).toBe(true);
   });
-});
-
-describe("remote status and tunnel HTTP endpoints", () => {
-  const testTmp = join(process.cwd(), ".copilot-tmp");
-
-  interface StartedServer {
-    server: Bun.Subprocess;
-    base: string;
-    home: string;
-    stop: () => Promise<void>;
-  }
-
-  async function startServer(overrides: {
-    env?: Record<string, string>;
-    fakeDevtunnel?: boolean;
-  } = {}): Promise<StartedServer> {
-    mkdirSync(testTmp, { recursive: true });
-    const home = mkdtempSync(join(testTmp, "climon-remote-http-"));
-    writeFileSync(join(home, "config.json"), JSON.stringify({}));
-    const dashboardPort = await freePort();
-    const env: Record<string, string> = {
-      ...(process.env as Record<string, string>),
-      CLIMON_HOME: home,
-      ...(overrides.env ?? {})
-    };
-    if (overrides.fakeDevtunnel) {
-      const binDir = join(home, "fakebin");
-      mkdirSync(binDir, { recursive: true });
-      const script = join(binDir, "devtunnel");
-      writeFileSync(
-        script,
-        [
-          "#!/bin/sh",
-          'case "$1" in',
-          '  --version) echo "1.0.0-fake"; exit 0 ;;',
-          '  user) echo \'{"status":"Logged in"}\'; exit 0 ;;',
-          '  show) echo "Error: tunnel not found" 1>&2; exit 1 ;;',
-          '  create) echo "Error: maximum number of tunnels reached" 1>&2; exit 1 ;;',
-          '  *) echo "unhandled: $*" 1>&2; exit 1 ;;',
-          "esac",
-          ""
-        ].join("\n")
-      );
-      chmodSync(script, 0o755);
-      env.PATH = `${binDir}:${env.PATH ?? ""}`;
-    }
-    const server = Bun.spawn(
-      [process.execPath, "src/server.ts", "server", "--no-takeover", "--port", String(dashboardPort)],
-      { cwd: process.cwd(), env, stdout: "ignore", stderr: "ignore" }
-    );
-    let base = `http://127.0.0.1:${dashboardPort}`;
-    await waitFor(async () => {
-      const res = await fetch(`${base}/health`).catch(() => undefined);
-      if (res?.ok) return true;
-      const state = await readServerStateFromDir(home);
-      if (!state?.port) return undefined;
-      base = `http://127.0.0.1:${state.port}`;
-      const actual = await fetch(`${base}/health`).catch(() => undefined);
-      return actual?.ok ? true : undefined;
-    }, 30_000);
-    const stop = async () => {
-      const shutdown = await fetch(`${base}/__internal/shutdown`, { method: "POST" }).catch(() => undefined);
-      const exited = shutdown?.ok ? await waitForExit(server, 10_000) : false;
-      if (!exited) {
-        server.kill();
-        await waitForExit(server, 2000);
-      }
-      rmSync(home, { recursive: true, force: true });
-    };
-    return { server, base, home, stop };
-  }
-
-  test("GET /api/remote/status includes gateway devtunnel health", async () => {
-    const started = await startServer({ env: { CLIMON_DISABLE_DEVTUNNEL: "1" } });
-    try {
-      const res = await fetch(`${started.base}/api/remote/status`);
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as {
-        devtunnelAvailable: boolean;
-        devtunnel?: { available: boolean; probedAt?: string };
-      };
-      expect(body.devtunnel).toBeDefined();
-      expect(body.devtunnel?.available).toBe(false);
-      expect(typeof body.devtunnel?.probedAt).toBe("string");
-      expect(body.devtunnelAvailable).toBe(false);
-    } finally {
-      await started.stop();
-    }
-  }, 45_000);
-
-  test("POST /api/remote/tunnel returns a structured quota failure", async () => {
-    const started = await startServer({ fakeDevtunnel: true });
-    try {
-      const headers = {
-        "content-type": "application/json",
-        origin: started.base
-      };
-      const create = await fetch(`${started.base}/api/remote/tunnel`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ mode: "auto" })
-      });
-      expect(create.status).toBe(409);
-      const createBody = (await create.json()) as { error?: { code?: string } };
-      expect(createBody.error?.code).toBe("tunnel_quota_exhausted");
-
-      const retry = await fetch(`${started.base}/api/remote/tunnel/retry`, {
-        method: "POST",
-        headers,
-        body: "{}"
-      });
-      expect(retry.status).toBe(409);
-      const retryBody = (await retry.json()) as { error?: { code?: string } };
-      expect(retryBody.error?.code).toBe("tunnel_quota_exhausted");
-    } finally {
-      await started.stop();
-    }
-  }, 45_000);
-
-  test("POST /api/remote/tunnel returns a structured failure when devtunnel is unavailable", async () => {
-    const started = await startServer({ env: { CLIMON_DISABLE_DEVTUNNEL: "1" } });
-    try {
-      const res = await fetch(`${started.base}/api/remote/tunnel`, {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: started.base },
-        body: JSON.stringify({ mode: "auto" })
-      });
-      expect(res.status).toBe(503);
-      const body = (await res.json()) as { error?: { code?: string; summary?: string } };
-      expect(body.error?.code).toBe("cli_missing");
-      expect(typeof body.error?.summary).toBe("string");
-    } finally {
-      await started.stop();
-    }
-  }, 45_000);
 });

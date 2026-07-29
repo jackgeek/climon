@@ -14,8 +14,6 @@ import {
   RECONNECT_VISIBILITY_GRACE_MS,
 } from "../src/web/App.js";
 import { shouldDeleteSessionWithoutDialog } from "../src/web/App.js";
-import { toTunnelLinkFailure } from "../src/web/App.js";
-import { DevtunnelApiError } from "../src/web/api.js";
 
 function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -34,37 +32,6 @@ function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
     ...overrides
   };
 }
-
-describe("toTunnelLinkFailure", () => {
-  test("passes through the structured failure from a DevtunnelApiError", () => {
-    const failure = {
-      code: "not_authenticated" as const,
-      operation: "host-tunnel" as const,
-      summary: "Sign in to Microsoft Dev Tunnels.",
-      remediation: "Run devtunnel user login.",
-      technicalDetail: "login required",
-      occurredAt: "2026-07-11T12:00:00.000Z",
-      retryClass: "actionable" as const,
-      retryable: false
-    };
-    expect(toTunnelLinkFailure(new DevtunnelApiError(failure))).toBe(failure);
-  });
-
-  test("synthesizes a retryable failure for a network-level error", () => {
-    const result = toTunnelLinkFailure(new TypeError("Failed to fetch"));
-    expect(result.code).toBe("unknown");
-    expect(result.retryable).toBe(true);
-    expect(result.retryClass).toBe("transient");
-    expect(result.summary).toContain("Failed to fetch");
-  });
-
-  test("falls back to a generic message for a non-Error rejection", () => {
-    const result = toTunnelLinkFailure("boom");
-    expect(result.code).toBe("unknown");
-    expect(result.summary.length).toBeGreaterThan(0);
-    expect(result.retryable).toBe(true);
-  });
-});
 
 describe("scheduleTerminalRefit", () => {
   test("sizes the mobile app shell from visual viewport CSS variables", () => {
