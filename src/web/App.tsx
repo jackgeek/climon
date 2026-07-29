@@ -1541,7 +1541,7 @@ export function App() {
                 selectionText={stripDecorations ? stripTerminalDecorations(selectionCaptureText) : selectionCaptureText}
                 stripDecorations={stripDecorations}
                 showLabels={!isMobile}
-                showSelect={isTouchPrimary}
+                showSelect={true}
                 onSelect={(next) => {
                   if (next === "selection") {
                     setSelectionCaptureText(terminalRef.current?.captureText() ?? "");
