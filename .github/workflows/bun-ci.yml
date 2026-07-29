@@ -29,6 +29,9 @@ on:
       - "tsconfig.json"
       - ".github/workflows/bun-ci.yml"
 
+permissions:
+  contents: read
+
 jobs:
   test:
     # ubuntu only: several socket/PTY-adjacent tests need a real Linux filesystem

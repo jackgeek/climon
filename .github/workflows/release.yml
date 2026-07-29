@@ -362,8 +362,27 @@ jobs:
             "Automated back-merge of the \`${RELEASE_TAG}\` release from \`main\` into \`dev\`, carrying the version + CLI-fixture bump back to the integration branch." \
             "Merge this with a **real merge commit** (\`gh pr merge --merge\`), never a squash or rebase, so \`main\` and \`dev\` keep a shared ancestor. See docs/cutting-a-release.md.")"
 
-          gh pr create \
+          # If the repository disallows GitHub Actions from creating PRs and no
+          # RELEASE_TOKEN override is configured, don't fail the shipped release:
+          # emit a warning and leave back-merge creation to a human.
+          set +e
+          create_output="$(gh pr create \
             --base dev \
             --head main \
             --title "chore: back-merge ${RELEASE_TAG} (main -> dev)" \
-            --body "$body"
+            --body "$body" 2>&1)"
+          create_status=$?
+          set -e
+
+          if [ "$create_status" -eq 0 ]; then
+            echo "$create_output"
+            exit 0
+          fi
+
+          echo "$create_output" >&2
+          if echo "$create_output" | grep -q "GitHub Actions is not permitted to create or approve pull requests"; then
+            echo "::warning::Automatic main -> dev back-merge PR creation is blocked by repository policy. Configure RELEASE_TOKEN (repo-scoped PAT) or create the back-merge PR manually."
+            exit 0
+          fi
+
+          exit "$create_status"

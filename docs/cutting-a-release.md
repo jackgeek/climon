@@ -125,7 +125,9 @@ git tag -a vX.Y.Z origin/main -m "vX.Y.Z" && git push origin vX.Y.Z
 - **Branch protection:** if `main` forbids direct pushes, the release workflow no
   longer needs push access to `main` (it only publishes the release and opens a
   PR). The `backmerge` job needs a token that can open PRs — the default
-  `GITHUB_TOKEN` suffices, or set `RELEASE_TOKEN` for org policies that require it.
+  `GITHUB_TOKEN` suffices when the repository allows GitHub Actions to create
+  pull requests; otherwise set `RELEASE_TOKEN` (a repo-scoped PAT) for
+  org/repo policies that block PR creation from `GITHUB_TOKEN`.
 - **Version/tag mismatch:** the `version` job aborts the release if the tag does
   not match `package.json` and the CLI fixtures. If it fails, you almost certainly
   forgot `bun run release` on the branch, or tagged the wrong commit. Fix the tree,
@@ -137,4 +139,5 @@ git tag -a vX.Y.Z origin/main -m "vX.Y.Z" && git push origin vX.Y.Z
 | --- | --- |
 | Release job fails at `version` with a mismatch error | Tag ≠ `package.json`/fixtures. Run `bun run release`, re-tag the merged `main` commit. |
 | No back-merge PR appeared | `dev` already contains `main` (nothing to merge), or an open `main → dev` PR already exists. |
+| Release log warns that GitHub Actions is not permitted to create PRs | Repository policy blocks `GITHUB_TOKEN` PR creation. Set `RELEASE_TOKEN` or open the `main → dev` PR manually. |
 | Want to re-run a failed release | Re-push the same tag (`git push -f origin vX.Y.Z` after re-pointing it) — the workflow re-runs and `gh release upload --clobber` replaces assets. |
