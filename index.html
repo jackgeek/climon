@@ -39,6 +39,28 @@
       -webkit-user-drag: none;
     }
 
+    .logo-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .download-btn {
+      display: inline-block;
+      font: 600 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #4ac726;
+      border: 1.5px solid #4ac726;
+      border-radius: 20px;
+      padding: 7px 22px;
+      text-decoration: none;
+      letter-spacing: 0.5px;
+    }
+
+    .download-btn:hover {
+      background-color: rgba(74, 199, 38, 0.1);
+    }
+
     /* GitHub "Fork me" ribbon, top right */
     .ribbon {
       position: fixed;
@@ -92,6 +114,9 @@
     <a href="https://github.com/jackgeek/climon" target="_blank" rel="noopener noreferrer">Fork me on GitHub</a>
   </div>
 
-  <img class="logo" src="logo.jpg" alt="climon — CLI Monitoring Tool" />
+  <div class="logo-wrap">
+    <img class="logo" src="logo.jpg" alt="climon — CLI Monitoring Tool" />
+    <a class="download-btn" href="https://github.com/jackgeek/climon/releases" target="_blank" rel="noopener noreferrer">↓ Download latest release</a>
+  </div>
 </body>
 </html>
