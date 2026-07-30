@@ -1096,7 +1096,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         hasSelection: term.hasSelection()
       });
       if (clipboardAction === "copy") {
-        void copyToClipboard(term.getSelection());
+        const text = term.getSelection();
+        if (text) {
+          void copyToClipboard(text);
+        }
         return false;
       }
       if (clipboardAction === "paste") {
