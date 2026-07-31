@@ -86,6 +86,7 @@ export class ProcessLedger {
 
   public async terminateAll(): Promise<void> {
     const failures: Error[] = [];
+    const stillRunning = Symbol("still-running");
 
     for (const entry of this.entries.values()) {
       if (!entry.live) {
@@ -93,6 +94,15 @@ export class ProcessLedger {
       }
 
       const { process: owned } = entry;
+      const existingExit = await Promise.race([
+        owned.wait(),
+        Promise.resolve(stillRunning),
+      ]);
+      if (existingExit !== stillRunning) {
+        await this.markExited(owned.pid, existingExit);
+        continue;
+      }
+
       const targetPid =
         owned.platform === "windows"
           ? owned.pid
