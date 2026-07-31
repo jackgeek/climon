@@ -9,6 +9,15 @@ import { BunCommandRunner, type CommandRunner } from "./command.js";
 import { BrowserDriver } from "./drivers/browser.js";
 import { compareOutcome } from "./expectations.js";
 import {
+  createResultsReport,
+  parseResultsReport,
+  type ReportCaseResult,
+  type ResultsReport,
+  writeJsonReport,
+} from "./reporters/json.js";
+import { renderJUnitReport } from "./reporters/junit.js";
+import { renderMarkdownReport } from "./reporters/markdown.js";
+import {
   RuntimeSupervisor,
   type RuntimeContext,
   type RuntimeSupervisorOptions,
@@ -46,32 +55,14 @@ const USAGE = [
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._~-]+$/;
 const RESULT_JSON_NAME = "results.json";
-const RESULT_MARKDOWN_NAME = "results.md";
-const RESULT_JUNIT_NAME = "results.junit.xml";
+const RESULT_MARKDOWN_NAME = "summary.md";
+const RESULT_JUNIT_NAME = "junit.xml";
 const SUPPORTED_HOST_PLATFORMS = new Map<NodeJS.Platform | string, HarnessPlatform>([
   ["linux", "linux"],
   ["darwin", "macos"],
   ["win32", "windows"],
 ]);
-const CASE_STATUSES = new Set<CaseStatus>([
-  "passed",
-  "expected-failure",
-  "expected-partial",
-  "unsupported",
-  "unexpected-failure",
-  "unexpected-pass",
-  "expired-expectation",
-  "setup-failure",
-  "cleanup-failure",
-]);
 const REPORT_PLATFORMS: readonly HarnessPlatform[] = ["linux", "macos", "windows"];
-const BLOCKING_STATUSES = new Set<CaseStatus>([
-  "unexpected-failure",
-  "unexpected-pass",
-  "expired-expectation",
-  "setup-failure",
-  "cleanup-failure",
-]);
 
 interface CliFs {
   access: typeof access;
@@ -90,12 +81,6 @@ interface DoctorVersions {
   rustc: string;
   cargo: string;
   playwright: string;
-}
-
-interface ResultsReport {
-  revision: string;
-  generatedAt: string;
-  results: CaseResult[];
 }
 
 interface BrowserSnapshotDriver extends Dar02BrowserDriver {
@@ -159,35 +144,6 @@ function defaultFs(): CliFs {
     stat,
     writeFile,
   };
-}
-
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => stableValue(entry));
-  }
-
-  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, stableValue(entry)])
-    );
-  }
-
-  return value;
-}
-
-function xmlEscape(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
-
-function durationSeconds(durationMs: number): string {
-  return (Math.max(0, durationMs) / 1_000).toFixed(3);
 }
 
 function formatError(error: unknown): string {
@@ -293,10 +249,6 @@ function resolvePlatform(platform: NodeJS.Platform | string): HarnessPlatform {
   return resolved;
 }
 
-function resultsSorter(left: CaseResult, right: CaseResult): number {
-  return left.platform.localeCompare(right.platform) || left.darId.localeCompare(right.darId);
-}
-
 function slugifyHeading(heading: string): string {
   return heading
     .replace(/^#+\s*/, "")
@@ -369,18 +321,6 @@ async function writeAtomicText(
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
     throw error;
   }
-}
-
-async function writeAtomicJson(
-  filePath: string,
-  value: unknown,
-  fs: CliFs
-): Promise<void> {
-  await writeAtomicText(
-    filePath,
-    `${JSON.stringify(stableValue(value), null, 2)}\n`,
-    fs
-  );
 }
 
 async function readOptionalText(filePath: string, fs: CliFs): Promise<string | undefined> {
@@ -516,218 +456,51 @@ async function defaultResolveRevision(
   return result.stdout.trim();
 }
 
-function createReport(
-  revision: string,
-  generatedAt: string,
-  results: readonly CaseResult[]
-): ResultsReport {
+function reportCaseResult(
+  result: CaseResult,
+  expectation: PlatformExpectation
+): ReportCaseResult {
   return {
-    revision,
-    generatedAt,
-    results: [...results].sort(resultsSorter),
+    ...result,
+    expectation,
   };
 }
 
-function expectedLabel(expectation: PlatformExpectation): string {
-  return expectation.expected;
-}
-
-function renderMarkdown(report: ResultsReport, definitions: Map<string, ScenarioDefinition>): string {
-  const lines = [
-    "# DAR harness results",
-    "",
-    `- revision: ${report.revision}`,
-    `- generatedAt: ${report.generatedAt}`,
-    `- blocking: ${report.results.some((result) => result.blocking) ? "yes" : "no"}`,
-    "",
-    "| Platform | DAR | Title | Status | Blocking | Expected | Failed subchecks |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-  ];
-
-  for (const result of report.results) {
-    const definition = definitions.get(result.darId)!;
-    lines.push(
-      `| ${result.platform} | ${result.darId} | ${result.title} | ${result.status} | ${
-        result.blocking ? "yes" : "no"
-      } | ${expectedLabel(definition.expectations[result.platform])} | ${
-        result.failedSubchecks.join(",") || "-"
-      } |`
-    );
+function expectationsEqual(
+  expected: PlatformExpectation,
+  actual: PlatformExpectation
+): boolean {
+  if (expected.expected !== actual.expected) {
+    return false;
   }
 
-  for (const result of report.results) {
-    const definition = definitions.get(result.darId)!;
-    const expectation = definition.expectations[result.platform];
-    lines.push(
-      "",
-      `## ${result.platform} / ${result.darId} — ${result.title}`,
-      `- manual: ${definition.manualPath}#${slugifyHeading(definition.manualHeading)}`,
-      `- artifactDir: ${result.artifactDir}`,
-      `- expected: ${expectation.expected}`,
-      `- actual status: ${result.status}`,
-      `- actual failed subchecks: ${result.failedSubchecks.join(",") || "-"}`,
-      `- message: ${result.message ?? "-"}`,
-      `- subchecks: ${result.subchecks.map((subcheck) => `${subcheck.name}:${subcheck.status}`).join(",") || "-"}`
-    );
-
-    if (expectation.expected === "unsupported") {
-      lines.push(`- governance: reason=${expectation.reason}`);
-      continue;
-    }
-
-    if (expectation.expected !== "pass") {
-      lines.push(
-        `- governance: reason=${expectation.reason} | tracking=${expectation.tracking} | reviewAfter=${expectation.reviewAfter} | allowedFailedSubchecks=${
-          expectation.allowedFailedSubchecks.join(",") || "-"
-        }`
-      );
-    }
+  if (expected.expected === "pass") {
+    return true;
   }
 
-  return `${lines.join("\n")}\n`;
-}
-
-function junitElementForCase(result: CaseResult): string {
-  const commonBody = [
-    `<system-out>${xmlEscape(
-      JSON.stringify(
-        stableValue({
-          artifactDir: result.artifactDir,
-          failedSubchecks: result.failedSubchecks,
-          message: result.message,
-          subchecks: result.subchecks,
-        })
-      )
-    )}</system-out>`,
-  ];
-
-  if (result.status === "unsupported" || result.status === "expected-failure" || result.status === "expected-partial") {
-    return [
-      `<testcase classname="${xmlEscape(`${result.platform}.${result.darId}`)}" name="${xmlEscape(
-        `${result.darId} ${result.title}`
-      )}" time="${durationSeconds(result.durationMs)}">`,
-      `<skipped message="${xmlEscape(result.status)}">${xmlEscape(result.message ?? result.status)}</skipped>`,
-      ...commonBody,
-      "</testcase>",
-    ].join("");
+  if (expected.expected === "unsupported") {
+    return actual.expected === "unsupported" && expected.reason === actual.reason;
   }
 
-  if (BLOCKING_STATUSES.has(result.status)) {
-    return [
-      `<testcase classname="${xmlEscape(`${result.platform}.${result.darId}`)}" name="${xmlEscape(
-        `${result.darId} ${result.title}`
-      )}" time="${durationSeconds(result.durationMs)}">`,
-      `<failure message="${xmlEscape(result.status)}">${xmlEscape(result.message ?? result.status)}</failure>`,
-      ...commonBody,
-      "</testcase>",
-    ].join("");
-  }
-
-  return [
-    `<testcase classname="${xmlEscape(`${result.platform}.${result.darId}`)}" name="${xmlEscape(
-      `${result.darId} ${result.title}`
-    )}" time="${durationSeconds(result.durationMs)}">`,
-    ...commonBody,
-    "</testcase>",
-  ].join("");
-}
-
-function renderJUnit(report: ResultsReport): string {
-  const failures = report.results.filter((result) => BLOCKING_STATUSES.has(result.status)).length;
-  const skipped = report.results.filter(
-    (result) =>
-      result.status === "unsupported" ||
-      result.status === "expected-failure" ||
-      result.status === "expected-partial"
-  ).length;
-  const testcases = report.results.map((result) => junitElementForCase(result)).join("");
-
-  return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    `<testsuite name="dar-harness" tests="${report.results.length}" failures="${failures}" skipped="${skipped}" time="${durationSeconds(
-      report.results.reduce((sum, result) => sum + result.durationMs, 0)
-    )}">`,
-    `<properties><property name="revision" value="${xmlEscape(report.revision)}"/><property name="generatedAt" value="${xmlEscape(
-      report.generatedAt
-    )}"/></properties>`,
-    testcases,
-    "</testsuite>",
-    "",
-  ].join("");
+  return (
+    actual.expected !== "pass" &&
+    actual.expected !== "unsupported" &&
+    expected.reason === actual.reason &&
+    expected.tracking === actual.tracking &&
+    expected.reviewAfter === actual.reviewAfter &&
+    expected.allowedFailedSubchecks.length === actual.allowedFailedSubchecks.length &&
+    expected.allowedFailedSubchecks.every((entry, index) => entry === actual.allowedFailedSubchecks[index])
+  );
 }
 
 async function writeReportSet(
   resultsRoot: string,
   report: ResultsReport,
-  definitions: Map<string, ScenarioDefinition>,
   fs: CliFs
 ): Promise<void> {
-  await writeAtomicJson(join(resultsRoot, RESULT_JSON_NAME), report, fs);
-  await writeAtomicText(join(resultsRoot, RESULT_MARKDOWN_NAME), renderMarkdown(report, definitions), fs);
-  await writeAtomicText(join(resultsRoot, RESULT_JUNIT_NAME), renderJUnit(report), fs);
-}
-
-function isCaseResult(value: unknown): value is CaseResult {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  if (
-    typeof candidate.darId !== "string" ||
-    typeof candidate.title !== "string" ||
-    typeof candidate.platform !== "string" ||
-    typeof candidate.durationMs !== "number" ||
-    typeof candidate.artifactDir !== "string" ||
-    typeof candidate.blocking !== "boolean" ||
-    typeof candidate.status !== "string" ||
-    !CASE_STATUSES.has(candidate.status as CaseStatus) ||
-    !Array.isArray(candidate.failedSubchecks) ||
-    !Array.isArray(candidate.subchecks)
-  ) {
-    return false;
-  }
-
-  return candidate.failedSubchecks.every((entry) => typeof entry === "string") && candidate.subchecks.every((entry) => {
-    if (typeof entry !== "object" || entry === null) {
-      return false;
-    }
-    const subcheck = entry as Record<string, unknown>;
-    return (
-      typeof subcheck.name === "string" &&
-      (subcheck.status === "passed" || subcheck.status === "failed") &&
-      typeof subcheck.durationMs === "number" &&
-      (subcheck.message === undefined || typeof subcheck.message === "string")
-    );
-  });
-}
-
-function parseResultsReport(raw: string, sourcePath: string): ResultsReport {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`Malformed report JSON in ${sourcePath}: ${formatError(error)}`);
-  }
-
-  if (typeof parsed !== "object" || parsed === null) {
-    throw new Error(`Malformed report JSON in ${sourcePath}: expected object`);
-  }
-
-  const candidate = parsed as Record<string, unknown>;
-  if (
-    typeof candidate.revision !== "string" ||
-    typeof candidate.generatedAt !== "string" ||
-    !Array.isArray(candidate.results) ||
-    !candidate.results.every((entry) => isCaseResult(entry))
-  ) {
-    throw new Error(`Malformed report JSON in ${sourcePath}: invalid report shape`);
-  }
-
-  return {
-    revision: candidate.revision,
-    generatedAt: candidate.generatedAt,
-    results: candidate.results as CaseResult[],
-  };
+  await writeJsonReport(join(resultsRoot, RESULT_JSON_NAME), report, fs);
+  await writeAtomicText(join(resultsRoot, RESULT_MARKDOWN_NAME), renderMarkdownReport(report), fs);
+  await writeAtomicText(join(resultsRoot, RESULT_JUNIT_NAME), renderJUnitReport(report), fs);
 }
 
 async function collectResultReportPaths(
@@ -757,10 +530,6 @@ async function collectResultReportPaths(
   return matches.sort();
 }
 
-function definitionsMap(definitions: readonly ScenarioDefinition[]): Map<string, ScenarioDefinition> {
-  return new Map(definitions.map((definition) => [definition.darId, definition]));
-}
-
 function validateAggregateReports(
   reports: Array<{ path: string; report: ResultsReport }>,
   definitions: readonly ScenarioDefinition[]
@@ -772,7 +541,10 @@ function validateAggregateReports(
   const expectedDarIds = new Set<string>(definitions.map((definition) => definition.darId));
   const revision = reports[0]!.report.revision;
   const platformReports = new Map<HarnessPlatform, ResultsReport>();
-  const combinedResults: CaseResult[] = [];
+  const definitionsById = new Map<string, ScenarioDefinition>(
+    definitions.map((definition) => [definition.darId, definition])
+  );
+  const combinedResults: ReportCaseResult[] = [];
 
   for (const { path: sourcePath, report } of reports) {
     if (report.revision !== revision) {
@@ -805,7 +577,18 @@ function validateAggregateReports(
     }
 
     platformReports.set(platform, report);
-    combinedResults.push(...report.results);
+    for (const result of report.results) {
+      const definition = definitionsById.get(result.darId);
+      if (definition === undefined) {
+        throw new Error(`Malformed aggregate input: unexpected DAR id ${result.darId}`);
+      }
+      if (!expectationsEqual(definition.expectations[result.platform], result.expectation)) {
+        throw new Error(
+          `Malformed report ${sourcePath}: expectation mismatch for ${result.platform} ${result.darId}`
+        );
+      }
+      combinedResults.push(result);
+    }
   }
 
   for (const platform of REPORT_PLATFORMS) {
@@ -820,7 +603,7 @@ function validateAggregateReports(
     }
   }
 
-  return createReport(
+  return createResultsReport(
     revision,
     reports.map(({ report }) => report.generatedAt).sort().at(-1) ?? new Date().toISOString(),
     combinedResults
@@ -869,8 +652,7 @@ async function executeRun(
   const createBrowserDriver = options.createBrowserDriver ?? ((runtime: RuntimeContext) => new BrowserDriver(runtime));
   const runDar01 = options.runDar01 ?? runDar01Impl;
   const runDar02 = options.runDar02 ?? runDar02Impl;
-  const lookup = definitionsMap(definitions);
-  const results: CaseResult[] = [];
+  const results: ReportCaseResult[] = [];
 
   for (const definition of selectedDefinitions) {
     const expectation = definition.expectations[platform];
@@ -1008,12 +790,12 @@ async function executeRun(
       await runtime.context.artifacts.writeJson("result.json", result);
     }
 
-    results.push(result);
-    await writeReportSet(artifactRoot, createReport(revision, generatedAt, results), lookup, fs);
+    results.push(reportCaseResult(result, expectation));
+    await writeReportSet(artifactRoot, createResultsReport(revision, generatedAt, results), fs);
   }
 
-  const finalReport = createReport(revision, generatedAt, results);
-  await writeReportSet(artifactRoot, finalReport, lookup, fs);
+  const finalReport = createResultsReport(revision, generatedAt, results);
+  await writeReportSet(artifactRoot, finalReport, fs);
 
   for (const result of finalReport.results) {
     writeLine(
@@ -1121,7 +903,6 @@ async function executeAggregate(
     parsed.resultsRoot !== undefined
       ? resolve(options.root, parsed.resultsRoot)
       : join(options.root, ".test-tmp", "dar-harness");
-  const lookup = definitionsMap(definitions);
 
   try {
     const reportPaths = await collectResultReportPaths(resultsRoot, fs);
@@ -1132,7 +913,7 @@ async function executeAggregate(
       }))
     );
     const aggregate = validateAggregateReports(reports, definitions);
-    await writeReportSet(resultsRoot, aggregate, lookup, fs);
+    await writeReportSet(resultsRoot, aggregate, fs);
 
     for (const result of aggregate.results) {
       writeLine(

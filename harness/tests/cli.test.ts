@@ -4,6 +4,7 @@ import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "n
 import { join, resolve } from "node:path";
 import type { BuildArtifacts } from "../src/build-cache.js";
 import { CaseArtifacts, caseArtifactDir } from "../src/artifacts.js";
+import type { ReportCaseResult } from "../src/reporters/json.js";
 import type { RuntimeContext, RuntimeSupervisorOptions } from "../src/runtime-supervisor.js";
 import type { ScenarioDefinition } from "../src/scenario-registry.js";
 import type { Dar02BrowserDriver } from "../src/scenarios/dar-02.js";
@@ -255,6 +256,16 @@ function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
 }
 
+function expectationFor(
+  definitions: readonly ScenarioDefinition[],
+  darId: ScenarioDefinition["darId"],
+  platform: HarnessPlatform
+): PlatformExpectation {
+  const definition = definitions.find((candidate) => candidate.darId === darId);
+  expect(definition).toBeDefined();
+  return definition!.expectations[platform];
+}
+
 describe("runCli", () => {
   test("loads the harness CLI module", () => {
     expect(runCli).toBeDefined();
@@ -358,6 +369,13 @@ describe("runCli", () => {
             blocking: false,
             darId: "DAR-02",
             durationMs: 0,
+            expectation: {
+              allowedFailedSubchecks: ["replay-visible"],
+              expected: "partial",
+              reason: "Replay is still flaky on Linux in this unit test.",
+              reviewAfter: "2026-08-31",
+              tracking: "docs/manual-tests/results/linux.md",
+            },
             failedSubchecks: ["replay-visible"],
             message:
               "Expected partial result: Replay is still flaky on Linux in this unit test. (tracking: docs/manual-tests/results/linux.md; review after: 2026-08-31)",
@@ -376,10 +394,10 @@ describe("runCli", () => {
         ],
       });
 
-      expect(readFileSync(join(workspace, "artifacts", "results.md"), "utf8")).toContain(
+      expect(readFileSync(join(workspace, "artifacts", "summary.md"), "utf8")).toContain(
         "| linux | DAR-02 | Headless session dashboard replay and live output | expected-partial | no | partial | replay-visible |"
       );
-      expect(readFileSync(join(workspace, "artifacts", "results.junit.xml"), "utf8")).toContain(
+      expect(readFileSync(join(workspace, "artifacts", "junit.xml"), "utf8")).toContain(
         '<skipped message="expected-partial"'
       );
     } finally {
@@ -422,8 +440,10 @@ describe("runCli", () => {
             blocking: true,
             darId: "DAR-01",
             durationMs: 0,
+            expectation: {
+              expected: "pass",
+            },
             failedSubchecks: ["attached-startup"],
-            message: undefined,
             platform: "linux",
             status: "unexpected-failure",
             subchecks: [
@@ -523,13 +543,14 @@ describe("runCli", () => {
         },
       });
 
-      const platformResults: Record<HarnessPlatform, CaseResult[]> = {
+      const platformResults: Record<HarnessPlatform, ReportCaseResult[]> = {
         linux: [
           {
             artifactDir: join(root, "linux", "cases", "DAR-01"),
             blocking: false,
             darId: "DAR-01",
             durationMs: 1,
+            expectation: expectationFor(definitions, "DAR-01", "linux"),
             failedSubchecks: [],
             platform: "linux",
             status: "passed",
@@ -541,6 +562,7 @@ describe("runCli", () => {
             blocking: true,
             darId: "DAR-02",
             durationMs: 1,
+            expectation: expectationFor(definitions, "DAR-02", "linux"),
             failedSubchecks: ["replay-visible"],
             message: "Replay broke",
             platform: "linux",
@@ -555,6 +577,7 @@ describe("runCli", () => {
             blocking: false,
             darId: "DAR-01",
             durationMs: 1,
+            expectation: expectationFor(definitions, "DAR-01", "macos"),
             failedSubchecks: [],
             platform: "macos",
             status: "passed",
@@ -566,6 +589,7 @@ describe("runCli", () => {
             blocking: false,
             darId: "DAR-02",
             durationMs: 1,
+            expectation: expectationFor(definitions, "DAR-02", "macos"),
             failedSubchecks: [],
             platform: "macos",
             status: "passed",
@@ -579,6 +603,7 @@ describe("runCli", () => {
             blocking: false,
             darId: "DAR-01",
             durationMs: 1,
+            expectation: expectationFor(definitions, "DAR-01", "windows"),
             failedSubchecks: [],
             platform: "windows",
             status: "passed",
@@ -590,6 +615,7 @@ describe("runCli", () => {
             blocking: false,
             darId: "DAR-02",
             durationMs: 1,
+            expectation: expectationFor(definitions, "DAR-02", "windows"),
             failedSubchecks: [],
             platform: "windows",
             status: "passed",
@@ -640,10 +666,92 @@ describe("runCli", () => {
         "windows:DAR-01",
         "windows:DAR-02",
       ]);
-      expect(readFileSync(join(root, "results.md"), "utf8")).toContain("Replay broke");
-      expect(readFileSync(join(root, "results.junit.xml"), "utf8")).toContain(
+      expect(readFileSync(join(root, "summary.md"), "utf8")).toContain("Replay broke");
+      expect(readFileSync(join(root, "junit.xml"), "utf8")).toContain(
         '<failure message="unexpected-failure"'
       );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("aggregates three platform passing reports and exits 0", async () => {
+    const workspace = makeWorkspace("cli-aggregate-success");
+
+    try {
+      const root = join(workspace, "artifacts");
+      const cli = requireRunCli();
+      const definitions = createDefinitions({
+        "DAR-01": {
+          linux: { expected: "pass" },
+          macos: { expected: "pass" },
+          windows: { expected: "pass" },
+        },
+        "DAR-02": {
+          linux: { expected: "pass" },
+          macos: { expected: "pass" },
+          windows: { expected: "pass" },
+        },
+      });
+
+      for (const platform of ["linux", "macos", "windows"] as const) {
+        const reportRoot = join(root, platform, "run-1");
+        mkdirSync(reportRoot, { recursive: true });
+        writeFileSync(
+          join(reportRoot, "results.json"),
+          `${JSON.stringify(
+            {
+              revision: DEFAULT_REVISION,
+              generatedAt: FIXED_NOW.toISOString(),
+              results: [
+                {
+                  artifactDir: join(root, platform, "cases", "DAR-02"),
+                  blocking: false,
+                  darId: "DAR-02",
+                  durationMs: 1,
+                  expectation: expectationFor(definitions, "DAR-02", platform),
+                  failedSubchecks: [],
+                  platform,
+                  status: "passed",
+                  subchecks: [passedSubcheck("replay-visible")],
+                  title: definitions[1]!.title,
+                },
+                {
+                  artifactDir: join(root, platform, "cases", "DAR-01"),
+                  blocking: false,
+                  darId: "DAR-01",
+                  durationMs: 1,
+                  expectation: expectationFor(definitions, "DAR-01", platform),
+                  failedSubchecks: [],
+                  platform,
+                  status: "passed",
+                  subchecks: [passedSubcheck("attached-startup")],
+                  title: definitions[0]!.title,
+                },
+              ],
+            },
+            null,
+            2
+          )}\n`
+        );
+      }
+
+      const options = createRunOptions(workspace, { definitions });
+
+      await expect(cli(["aggregate", "--results-root", root], options)).resolves.toBe(0);
+
+      expect((options.stdout as CapturedStream).text).toBe(
+        [
+          "linux DAR-01 passed",
+          "linux DAR-02 passed",
+          "macos DAR-01 passed",
+          "macos DAR-02 passed",
+          "windows DAR-01 passed",
+          "windows DAR-02 passed",
+        ].join("\n") + "\n"
+      );
+      expect(readFileSync(join(root, "summary.md"), "utf8")).toContain("| windows | DAR-02 |");
+      expect(readFileSync(join(root, "junit.xml"), "utf8")).toContain('failures="0" skipped="0"');
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
@@ -654,6 +762,18 @@ describe("runCli", () => {
 
     try {
       const root = join(workspace, "artifacts");
+      const definitions = createDefinitions({
+        "DAR-01": {
+          linux: { expected: "pass" },
+          macos: { expected: "pass" },
+          windows: { expected: "pass" },
+        },
+        "DAR-02": {
+          linux: { expected: "pass" },
+          macos: { expected: "pass" },
+          windows: { expected: "pass" },
+        },
+      });
       mkdirSync(join(root, "linux"), { recursive: true });
       mkdirSync(join(root, "linux-duplicate"), { recursive: true });
       writeFileSync(
@@ -667,6 +787,7 @@ describe("runCli", () => {
               blocking: false,
               darId: "DAR-01",
               durationMs: 1,
+              expectation: { expected: "pass" },
               failedSubchecks: [],
               platform: "linux",
               status: "passed",
@@ -678,6 +799,7 @@ describe("runCli", () => {
               blocking: false,
               darId: "DAR-02",
               durationMs: 1,
+              expectation: { expected: "pass" },
               failedSubchecks: [],
               platform: "linux",
               status: "passed",
@@ -698,6 +820,7 @@ describe("runCli", () => {
               blocking: false,
               darId: "DAR-01",
               durationMs: 1,
+              expectation: { expected: "pass" },
               failedSubchecks: [],
               platform: "linux",
               status: "passed",
@@ -709,6 +832,7 @@ describe("runCli", () => {
               blocking: false,
               darId: "DAR-02",
               durationMs: 1,
+              expectation: { expected: "pass" },
               failedSubchecks: [],
               platform: "linux",
               status: "passed",
@@ -719,13 +843,216 @@ describe("runCli", () => {
         })}\n`
       );
 
-      const options = createRunOptions(workspace);
+      const options = createRunOptions(workspace, { definitions });
       const cli = requireRunCli();
 
       await expect(cli(["aggregate", "--results-root", root], options)).resolves.toBe(2);
       expect((options.stdout as CapturedStream).text).toContain(
         "Duplicate platform results for linux"
       );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects aggregate inputs with a missing platform report", async () => {
+    const workspace = makeWorkspace("cli-aggregate-missing-platform");
+
+    try {
+      const root = join(workspace, "artifacts");
+      const definitions = createDefinitions({
+        "DAR-01": {
+          linux: { expected: "pass" },
+          macos: { expected: "pass" },
+          windows: { expected: "pass" },
+        },
+        "DAR-02": {
+          linux: { expected: "pass" },
+          macos: { expected: "pass" },
+          windows: { expected: "pass" },
+        },
+      });
+
+      for (const platform of ["linux", "macos"] as const) {
+        const reportRoot = join(root, platform, "run-1");
+        mkdirSync(reportRoot, { recursive: true });
+        writeFileSync(
+          join(reportRoot, "results.json"),
+          `${JSON.stringify(
+            {
+              revision: DEFAULT_REVISION,
+              generatedAt: FIXED_NOW.toISOString(),
+              results: [
+                {
+                  artifactDir: join(root, platform, "cases", "DAR-01"),
+                  blocking: false,
+                  darId: "DAR-01",
+                  durationMs: 1,
+                  expectation: expectationFor(definitions, "DAR-01", platform),
+                  failedSubchecks: [],
+                  platform,
+                  status: "passed",
+                  subchecks: [],
+                  title: definitions[0]!.title,
+                },
+                {
+                  artifactDir: join(root, platform, "cases", "DAR-02"),
+                  blocking: false,
+                  darId: "DAR-02",
+                  durationMs: 1,
+                  expectation: expectationFor(definitions, "DAR-02", platform),
+                  failedSubchecks: [],
+                  platform,
+                  status: "passed",
+                  subchecks: [],
+                  title: definitions[1]!.title,
+                },
+              ],
+            },
+            null,
+            2
+          )}\n`
+        );
+      }
+
+      const options = createRunOptions(workspace, { definitions });
+      const cli = requireRunCli();
+
+      await expect(cli(["aggregate", "--results-root", root], options)).resolves.toBe(2);
+      expect((options.stdout as CapturedStream).text).toContain("Missing platform results for windows");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects aggregate inputs with inconsistent revisions", async () => {
+    const workspace = makeWorkspace("cli-aggregate-revision");
+
+    try {
+      const root = join(workspace, "artifacts");
+      const definitions = createDefinitions({
+        "DAR-01": {
+          linux: { expected: "pass" },
+          macos: { expected: "pass" },
+          windows: { expected: "pass" },
+        },
+        "DAR-02": {
+          linux: { expected: "pass" },
+          macos: { expected: "pass" },
+          windows: { expected: "pass" },
+        },
+      });
+
+      for (const [platform, revision] of [
+        ["linux", DEFAULT_REVISION],
+        ["macos", `${DEFAULT_REVISION}-other`],
+        ["windows", DEFAULT_REVISION],
+      ] as const) {
+        const reportRoot = join(root, platform, "run-1");
+        mkdirSync(reportRoot, { recursive: true });
+        writeFileSync(
+          join(reportRoot, "results.json"),
+          `${JSON.stringify(
+            {
+              revision,
+              generatedAt: FIXED_NOW.toISOString(),
+              results: [
+                {
+                  artifactDir: join(root, platform, "cases", "DAR-01"),
+                  blocking: false,
+                  darId: "DAR-01",
+                  durationMs: 1,
+                  expectation: expectationFor(definitions, "DAR-01", platform),
+                  failedSubchecks: [],
+                  platform,
+                  status: "passed",
+                  subchecks: [],
+                  title: definitions[0]!.title,
+                },
+                {
+                  artifactDir: join(root, platform, "cases", "DAR-02"),
+                  blocking: false,
+                  darId: "DAR-02",
+                  durationMs: 1,
+                  expectation: expectationFor(definitions, "DAR-02", platform),
+                  failedSubchecks: [],
+                  platform,
+                  status: "passed",
+                  subchecks: [],
+                  title: definitions[1]!.title,
+                },
+              ],
+            },
+            null,
+            2
+          )}\n`
+        );
+      }
+
+      const options = createRunOptions(workspace, { definitions });
+      const cli = requireRunCli();
+
+      await expect(cli(["aggregate", "--results-root", root], options)).resolves.toBe(2);
+      expect((options.stdout as CapturedStream).text).toContain("Inconsistent revision across reports");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects malformed aggregate inputs with invalid report shapes", async () => {
+    const workspace = makeWorkspace("cli-aggregate-malformed");
+
+    try {
+      const root = join(workspace, "artifacts");
+      for (const platform of ["linux", "macos", "windows"] as const) {
+        const reportRoot = join(root, platform, "run-1");
+        mkdirSync(reportRoot, { recursive: true });
+        writeFileSync(
+          join(reportRoot, "results.json"),
+          platform === "linux"
+            ? '{"revision":"bad","generatedAt":"2026-07-31T21:27:33.660Z","results":[{"darId":"DAR-01"}]}\n'
+            : `${JSON.stringify(
+                {
+                  revision: DEFAULT_REVISION,
+                  generatedAt: FIXED_NOW.toISOString(),
+                  results: [
+                    {
+                      artifactDir: join(root, platform, "cases", "DAR-01"),
+                      blocking: false,
+                      darId: "DAR-01",
+                      durationMs: 1,
+                      expectation: { expected: "pass" },
+                      failedSubchecks: [],
+                      platform,
+                      status: "passed",
+                      subchecks: [],
+                      title: "Attached shell input, output, and terminal restoration",
+                    },
+                    {
+                      artifactDir: join(root, platform, "cases", "DAR-02"),
+                      blocking: false,
+                      darId: "DAR-02",
+                      durationMs: 1,
+                      expectation: { expected: "pass" },
+                      failedSubchecks: [],
+                      platform,
+                      status: "passed",
+                      subchecks: [],
+                      title: "Headless session dashboard replay and live output",
+                    },
+                  ],
+                },
+                null,
+                2
+              )}\n`
+        );
+      }
+
+      const options = createRunOptions(workspace);
+      const cli = requireRunCli();
+
+      await expect(cli(["aggregate", "--results-root", root], options)).resolves.toBe(2);
+      expect((options.stdout as CapturedStream).text).toContain("invalid report shape");
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
