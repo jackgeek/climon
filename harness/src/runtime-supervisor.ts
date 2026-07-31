@@ -92,6 +92,22 @@ interface ServerState {
   port: number;
 }
 
+type ObservedServerExit =
+  | { type: "exit"; code: number | null }
+  | { type: "error"; cause: unknown };
+
+interface CleanupProgress {
+  pageClosed: boolean;
+  contextClosed: boolean;
+  trackedSessionsSettled: boolean;
+  clientProcessesTerminated: boolean;
+  serverProcessesTerminated: boolean;
+  clientProcessesVerified: boolean;
+  serverProcessesVerified: boolean;
+  homeSnapshotted: boolean;
+  browserClosed: boolean;
+}
+
 class RuntimeSessionLedger extends SessionLedger {
   private readonly runtimeTrackedIds = new Set<string>();
 
@@ -216,6 +232,52 @@ function cleanupError(errors: unknown[]): HarnessError {
   );
 }
 
+function observeServerExit(wait: () => Promise<number | null>): Promise<ObservedServerExit> {
+  return Promise.resolve().then(() => wait()).then(
+    (code) => ({ type: "exit", code }),
+    (cause) => ({ type: "error", cause })
+  );
+}
+
+function serverExitedBeforeReadyError(
+  exit: ObservedServerExit,
+  pid: number,
+  stdoutPath: string,
+  stderrPath: string
+): HarnessError {
+  if (exit.type === "error") {
+    return new HarnessError(
+      "server-startup",
+      `Dashboard pid ${pid} exited before becoming ready; stdout log: ${stdoutPath}; stderr log: ${stderrPath}`,
+      { cause: exit.cause }
+    );
+  }
+
+  return new HarnessError(
+    "server-startup",
+    `Dashboard pid ${pid} exited with code ${String(exit.code)} before becoming ready; stdout log: ${stdoutPath}; stderr log: ${stderrPath}`
+  );
+}
+
+async function raceServerReadyOperation<T>(
+  operation: Promise<T>,
+  serverExit: Promise<ObservedServerExit>,
+  pid: number,
+  stdoutPath: string,
+  stderrPath: string
+): Promise<T> {
+  const outcome = await Promise.race([
+    operation.then((value) => ({ type: "value" as const, value })),
+    serverExit.then((exit) => ({ type: "exit" as const, exit })),
+  ]);
+
+  if (outcome.type === "exit") {
+    throw serverExitedBeforeReadyError(outcome.exit, pid, stdoutPath, stderrPath);
+  }
+
+  return outcome.value;
+}
+
 function isConnectionNotReadyError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -315,9 +377,12 @@ async function waitForServerReady(
   home: string,
   pid: number,
   deadline: number,
+  stdoutPath: string,
+  stderrPath: string,
   dependencies: { fetch: FetchLike; now: () => number; sleep: (ms: number) => Promise<void> } &
     Required<Pick<NonNullable<RuntimeSupervisorDependencies["fs"]>, "readFile">> & {
       pollIntervalMs: number;
+      serverExit: Promise<ObservedServerExit>;
     }
 ): Promise<string> {
   while (true) {
@@ -330,10 +395,22 @@ async function waitForServerReady(
 
     let raw: string;
     try {
-      raw = await dependencies.readFile(join(home, "server.json"), "utf8");
+      raw = await raceServerReadyOperation(
+        dependencies.readFile(join(home, "server.json"), "utf8"),
+        dependencies.serverExit,
+        pid,
+        stdoutPath,
+        stderrPath
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        await dependencies.sleep(dependencies.pollIntervalMs);
+        await raceServerReadyOperation(
+          dependencies.sleep(dependencies.pollIntervalMs),
+          dependencies.serverExit,
+          pid,
+          stdoutPath,
+          stderrPath
+        );
         continue;
       }
       throw error;
@@ -353,9 +430,15 @@ async function waitForServerReady(
     const baseUrl = baseUrlForPort(state.port);
 
     try {
-      const response = await dependencies.fetch(new URL("health", baseUrl), {
-        signal: AbortSignal.timeout(Math.max(1, deadline - dependencies.now())),
-      });
+      const response = await raceServerReadyOperation(
+        dependencies.fetch(new URL("health", baseUrl), {
+          signal: AbortSignal.timeout(Math.max(1, deadline - dependencies.now())),
+        }),
+        dependencies.serverExit,
+        pid,
+        stdoutPath,
+        stderrPath
+      );
       if (!response.ok) {
         throw new HarnessError(
           "server-startup",
@@ -363,7 +446,13 @@ async function waitForServerReady(
         );
       }
 
-      const body = await response.json();
+      const body = await raceServerReadyOperation(
+        response.json(),
+        dependencies.serverExit,
+        pid,
+        stdoutPath,
+        stderrPath
+      );
       if (
         typeof body !== "object" ||
         body === null ||
@@ -381,7 +470,13 @@ async function waitForServerReady(
         throw error;
       }
       if (isConnectionNotReadyError(error)) {
-        await dependencies.sleep(dependencies.pollIntervalMs);
+        await raceServerReadyOperation(
+          dependencies.sleep(dependencies.pollIntervalMs),
+          dependencies.serverExit,
+          pid,
+          stdoutPath,
+          stderrPath
+        );
         continue;
       }
       throw new HarnessError("server-startup", `Dashboard health probe failed: ${cleanupMessage(error)}`, {
@@ -394,6 +489,17 @@ async function waitForServerReady(
 export class RuntimeSupervisor {
   public readonly context: RuntimeContext;
   private disposed = false;
+  private readonly cleanupProgress: CleanupProgress = {
+    pageClosed: false,
+    contextClosed: false,
+    trackedSessionsSettled: false,
+    clientProcessesTerminated: false,
+    serverProcessesTerminated: false,
+    clientProcessesVerified: false,
+    serverProcessesVerified: false,
+    homeSnapshotted: false,
+    browserClosed: false,
+  };
 
   private constructor(
     private readonly options: Required<RuntimeSupervisorOptions>,
@@ -470,14 +576,23 @@ export class RuntimeSupervisor {
         platform: resolvedOptions.platform,
       });
       await serverProcesses.register(server);
+      const serverExit = observeServerExit(() => server.wait());
 
-      const baseUrl = await waitForServerReady(home, server.pid, now() + resolvedOptions.startupTimeoutMs, {
-        fetch: fetchFn,
-        now,
-        sleep,
-        readFile: fsReadFile,
-        pollIntervalMs,
-      });
+      const baseUrl = await waitForServerReady(
+        home,
+        server.pid,
+        now() + resolvedOptions.startupTimeoutMs,
+        join(logsDir, "server.stdout.log"),
+        join(logsDir, "server.stderr.log"),
+        {
+          fetch: fetchFn,
+          now,
+          sleep,
+          readFile: fsReadFile,
+          pollIntervalMs,
+          serverExit,
+        }
+      );
 
       const browser = await launchBrowser();
       state.browser = browser;
@@ -518,87 +633,130 @@ export class RuntimeSupervisor {
 
     const errors: unknown[] = [];
     const deadline = this.now() + this.options.cleanupTimeoutMs;
-    const liveTrackedIds: string[] = [];
-
-    try {
-      await this.context.page.close();
-    } catch (error) {
-      errors.push(error);
+    if (this.cleanupProgress.browserClosed) {
+      this.cleanupProgress.contextClosed = true;
+      this.cleanupProgress.pageClosed = true;
+    } else if (this.cleanupProgress.contextClosed) {
+      this.cleanupProgress.pageClosed = true;
     }
 
-    try {
-      await this.context.context.close();
-    } catch (error) {
-      errors.push(error);
-    }
-
-    for (const id of this.sessions.trackedSessionIds()) {
+    if (!this.cleanupProgress.pageClosed) {
       try {
-        const meta = await this.context.sessions.read(id);
-        if (!TERMINAL_STATUSES.has(meta.status)) {
-          liveTrackedIds.push(id);
-          const result = await this.options.runner.run(this.killCommand(id));
-          if (result.code !== 0) {
-            throw new HarnessError(
-              "cleanup",
-              `climon kill ${id} exited with code ${result.code}`
-            );
+        await this.context.page.close();
+        this.cleanupProgress.pageClosed = true;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    if (!this.cleanupProgress.contextClosed) {
+      try {
+        await this.context.context.close();
+        this.cleanupProgress.pageClosed = true;
+        this.cleanupProgress.contextClosed = true;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    if (!this.cleanupProgress.trackedSessionsSettled) {
+      let phaseFailed = false;
+      const liveTrackedIds: string[] = [];
+
+      for (const id of this.sessions.trackedSessionIds()) {
+        try {
+          const meta = await this.context.sessions.read(id);
+          if (!TERMINAL_STATUSES.has(meta.status)) {
+            liveTrackedIds.push(id);
+            const result = await this.options.runner.run(this.killCommand(id));
+            if (result.code !== 0) {
+              throw new HarnessError(
+                "cleanup",
+                `climon kill ${id} exited with code ${result.code}`
+              );
+            }
           }
+        } catch (error) {
+          phaseFailed = true;
+          errors.push(error);
         }
-      } catch (error) {
-        errors.push(error);
+      }
+
+      for (const id of liveTrackedIds) {
+        try {
+          await this.context.sessions.waitForTerminalStatus(id, deadline);
+        } catch (error) {
+          phaseFailed = true;
+          errors.push(error);
+        }
+      }
+
+      if (!phaseFailed) {
+        this.cleanupProgress.trackedSessionsSettled = true;
       }
     }
 
-    for (const id of liveTrackedIds) {
+    if (!this.cleanupProgress.clientProcessesTerminated) {
       try {
-        await this.context.sessions.waitForTerminalStatus(id, deadline);
+        await this.context.processes.terminateAll();
+        this.cleanupProgress.clientProcessesTerminated = true;
       } catch (error) {
         errors.push(error);
       }
     }
 
-    try {
-      await this.context.processes.terminateAll();
-    } catch (error) {
-      errors.push(error);
+    if (!this.cleanupProgress.serverProcessesTerminated) {
+      try {
+        await this.serverProcesses.terminateAll();
+        this.cleanupProgress.serverProcessesTerminated = true;
+      } catch (error) {
+        errors.push(error);
+      }
     }
 
-    try {
-      await this.serverProcesses.terminateAll();
-    } catch (error) {
-      errors.push(error);
+    if (!this.cleanupProgress.clientProcessesVerified) {
+      try {
+        await this.context.processes.assertNoSurvivors();
+        this.cleanupProgress.clientProcessesVerified = true;
+      } catch (error) {
+        errors.push(error);
+      }
     }
 
-    try {
-      await this.context.processes.assertNoSurvivors();
-    } catch (error) {
-      errors.push(error);
+    if (!this.cleanupProgress.serverProcessesVerified) {
+      try {
+        await this.serverProcesses.assertNoSurvivors();
+        this.cleanupProgress.serverProcessesVerified = true;
+      } catch (error) {
+        errors.push(error);
+      }
     }
 
-    try {
-      await this.serverProcesses.assertNoSurvivors();
-    } catch (error) {
-      errors.push(error);
+    if (!this.cleanupProgress.homeSnapshotted) {
+      try {
+        await this.context.artifacts.snapshotTree(this.context.home, "home");
+        this.cleanupProgress.homeSnapshotted = true;
+      } catch (error) {
+        errors.push(error);
+      }
     }
 
-    try {
-      await this.context.artifacts.snapshotTree(this.context.home, "home");
-    } catch (error) {
-      errors.push(error);
+    if (!this.cleanupProgress.browserClosed) {
+      try {
+        await this.context.browser.close();
+        this.cleanupProgress.pageClosed = true;
+        this.cleanupProgress.contextClosed = true;
+        this.cleanupProgress.browserClosed = true;
+      } catch (error) {
+        errors.push(error);
+      }
     }
-
-    try {
-      await this.context.browser.close();
-    } catch (error) {
-      errors.push(error);
-    }
-
-    this.disposed = true;
 
     if (errors.length > 0) {
       throw cleanupError(errors);
     }
+
+    this.disposed = true;
   }
 
   private killCommand(id: string): CommandSpec {

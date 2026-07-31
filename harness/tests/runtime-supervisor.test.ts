@@ -368,6 +368,144 @@ describe("RuntimeSupervisor.create", () => {
     }
   });
 
+  test("fails immediately when the server exits before server.json becomes ready", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-early-exit");
+    const options = runtimeOptions(workspace, {
+      startupTimeoutMs: 30_000,
+    });
+    const sleepCalls: number[] = [];
+    let fetchCalled = false;
+    let browserLaunched = false;
+    let serverKillAttempts = 0;
+    const server: OwnedProcess = {
+      pid: 5003,
+      label: "dashboard-server",
+      platform: "linux",
+      processGroup: 5003,
+      wait: async () => 23,
+    };
+
+    try {
+      const error = await RuntimeSupervisor.create(options, {
+        now: () => 1_000,
+        sleep: async (ms) => {
+          sleepCalls.push(ms);
+          throw new Error(`sleep should not be called: ${ms}`);
+        },
+        spawnProcess: async (spec) => {
+          mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+          return server;
+        },
+        fetch: async () => {
+          fetchCalled = true;
+          return {
+            ok: true,
+            json: async () => ({ ok: true }),
+          } as Response;
+        },
+        launchBrowser: async () => {
+          browserLaunched = true;
+          return readyBrowser().browser;
+        },
+        processLedgerDependencies: {
+          server: {
+            kill() {
+              serverKillAttempts += 1;
+            },
+          },
+        },
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "server-startup",
+        })
+      );
+      expect((error as Error).message).toContain("exited with code 23");
+      expect((error as Error).message).toContain(
+        join(options.artifactRoot, "cases", "DAR-01", "logs", "server.stdout.log")
+      );
+      expect((error as Error).message).toContain(
+        join(options.artifactRoot, "cases", "DAR-01", "logs", "server.stderr.log")
+      );
+      expect(sleepCalls).toEqual([]);
+      expect(fetchCalled).toBe(false);
+      expect(browserLaunched).toBe(false);
+      expect(serverKillAttempts).toBe(0);
+
+      expect(
+        readFileSync(
+          join(options.artifactRoot, "cases", "DAR-01", "server", "process-ledger.jsonl"),
+          "utf8"
+        )
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line).action)
+      ).toEqual(["register", "exit"]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the owned process wait receiver intact while observing startup", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-wait-binding");
+    const options = runtimeOptions(workspace);
+    let resolveExit!: (code: number | null) => void;
+    const exitPromise = new Promise<number | null>((resolve) => {
+      resolveExit = resolve;
+    });
+    const { browser } = readyBrowser();
+
+    try {
+      let owned:
+        | (OwnedProcess & {
+            exitPromise: Promise<number | null>;
+          })
+        | undefined;
+      const supervisor = await RuntimeSupervisor.create(options, {
+        spawnProcess: async (spec) => {
+          mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+          writeFileSync(
+            join(spec.env.CLIMON_HOME!, "server.json"),
+            `${JSON.stringify({ pid: 5004, port: 43123 })}\n`
+          );
+          owned = {
+            pid: 5004,
+            label: "dashboard-server",
+            platform: "linux",
+            processGroup: 5004,
+            exitPromise,
+            wait() {
+              if (this !== owned) {
+                throw new Error("wait receiver lost");
+              }
+              return this.exitPromise;
+            },
+          } as OwnedProcess & { exitPromise: Promise<number | null> };
+          return owned;
+        },
+        fetch: async () =>
+          ({
+            ok: true,
+            json: async () => ({ ok: true }),
+          }) as Response,
+        launchBrowser: async () => browser,
+        processLedgerDependencies: {
+          server: {
+            kill() {
+              resolveExit(0);
+            },
+          },
+        },
+      });
+
+      await supervisor.dispose();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("closes the browser and context when page creation fails", async () => {
     const workspace = makeWorkspace("runtime-supervisor-page-failure");
     const options = runtimeOptions(workspace);
@@ -551,6 +689,218 @@ describe("RuntimeSupervisor.dispose", () => {
       expect((error as Error).message).toContain("client stuck");
       expect((error as Error).message).toContain("Owned processes still running");
       expect((error as Error).message).toContain("browser close failed");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("retries unfinished cleanup on a later dispose without rerunning completed phases", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-dispose-retry");
+    const log: string[] = [];
+    let sessionPath = "";
+    let clientTerminateAttempts = 0;
+    let serverTerminateAttempts = 0;
+    const runner = new FakeCommandRunner((spec) => {
+      log.push(`kill:${spec.args.at(-1)}`);
+      writeFileSync(
+        sessionPath,
+        `${JSON.stringify({ id: "session-1", status: "completed", exitCode: 0 })}\n`
+      );
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        durationMs: 1,
+      };
+    });
+    const options = runtimeOptions(workspace, {
+      runner,
+      cleanupTimeoutMs: 0,
+    });
+    const server = controlledProcess({
+      pid: 6124,
+      label: "dashboard-server",
+      platform: "linux",
+      processGroup: 6124,
+    });
+    const client = controlledProcess({
+      pid: 7124,
+      label: "fixture-client",
+      platform: "linux",
+      processGroup: 7124,
+    });
+    const browser = {
+      async newContext() {
+        return {
+          async newPage() {
+            return {
+              async close() {
+                log.push("page-close");
+              },
+            };
+          },
+          async close() {
+            log.push("context-close");
+          },
+        };
+      },
+      async close() {
+        log.push("browser-close");
+      },
+    } as unknown as Browser;
+
+    try {
+      const supervisor = await RuntimeSupervisor.create(options, {
+        now: () => 1_000,
+        sleep: async () => {
+          throw new Error("sleep should not be called");
+        },
+        spawnProcess: async (spec) => {
+          mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+          writeFileSync(
+            join(spec.env.CLIMON_HOME!, "server.json"),
+            `${JSON.stringify({ pid: server.process.pid, port: 43123 })}\n`
+          );
+          return server.process;
+        },
+        fetch: async () =>
+          ({
+            ok: true,
+            json: async () => ({ ok: true }),
+          }) as Response,
+        launchBrowser: async () => browser,
+        processLedgerDependencies: {
+          client: {
+            kill() {
+              clientTerminateAttempts += 1;
+              log.push(`client-terminate-${clientTerminateAttempts}`);
+              if (clientTerminateAttempts === 1) {
+                throw new Error("client stuck");
+              }
+              client.exit(0);
+            },
+          },
+          server: {
+            kill() {
+              serverTerminateAttempts += 1;
+              log.push(`server-terminate-${serverTerminateAttempts}`);
+              server.exit(0);
+            },
+          },
+        },
+      });
+
+      supervisor.context.sessions.track("session-1");
+      mkdirSync(join(supervisor.context.home, "sessions"), { recursive: true });
+      sessionPath = join(supervisor.context.home, "sessions", "session-1.json");
+      writeFileSync(sessionPath, `${JSON.stringify({ id: "session-1", status: "running" })}\n`);
+      await supervisor.context.processes.register(client.process);
+
+      const firstError = await supervisor.dispose().catch((caught: unknown) => caught);
+
+      expect(firstError).toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "cleanup",
+          cause: expect.any(AggregateError),
+        })
+      );
+      expect((firstError as Error).message).toContain("client stuck");
+      expect((firstError as Error).message).toContain("Owned processes still running");
+
+      await expect(supervisor.dispose()).resolves.toBeUndefined();
+      await expect(supervisor.context.processes.assertNoSurvivors()).resolves.toBeUndefined();
+
+      expect(log).toEqual([
+        "page-close",
+        "context-close",
+        "kill:session-1",
+        "client-terminate-1",
+        "server-terminate-1",
+        "browser-close",
+        "client-terminate-2",
+      ]);
+      expect(runner.calls).toHaveLength(1);
+      expect(clientTerminateAttempts).toBe(2);
+      expect(serverTerminateAttempts).toBe(1);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("does not retry page close after context close already finished that phase", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-dispose-page-retry");
+    const log: string[] = [];
+    let pageCloseAttempts = 0;
+    const options = runtimeOptions(workspace);
+    const server = controlledProcess({
+      pid: 6125,
+      label: "dashboard-server",
+      platform: "linux",
+      processGroup: 6125,
+    });
+    const browser = {
+      async newContext() {
+        return {
+          async newPage() {
+            return {
+              async close() {
+                pageCloseAttempts += 1;
+                log.push(`page-close-${pageCloseAttempts}`);
+                throw new Error("page close failed");
+              },
+            };
+          },
+          async close() {
+            log.push("context-close");
+          },
+        };
+      },
+      async close() {
+        log.push("browser-close");
+      },
+    } as unknown as Browser;
+
+    try {
+      const supervisor = await RuntimeSupervisor.create(options, {
+        now: () => 1_000,
+        sleep: async () => {
+          throw new Error("sleep should not be called");
+        },
+        spawnProcess: async (spec) => {
+          mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+          writeFileSync(
+            join(spec.env.CLIMON_HOME!, "server.json"),
+            `${JSON.stringify({ pid: server.process.pid, port: 43123 })}\n`
+          );
+          return server.process;
+        },
+        fetch: async () =>
+          ({
+            ok: true,
+            json: async () => ({ ok: true }),
+          }) as Response,
+        launchBrowser: async () => browser,
+        processLedgerDependencies: {
+          server: {
+            kill() {
+              server.exit(0);
+            },
+          },
+        },
+      });
+
+      const firstError = await supervisor.dispose().catch((caught: unknown) => caught);
+      expect(firstError).toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "cleanup",
+        })
+      );
+
+      await expect(supervisor.dispose()).resolves.toBeUndefined();
+      expect(log).toEqual(["page-close-1", "context-close", "browser-close"]);
+      expect(pageCloseAttempts).toBe(1);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
