@@ -12,10 +12,17 @@ export interface BuildArtifacts {
   clientPath: string;
   serverPath: string;
   fixturePath: string;
+  revision: string;
+  manifestPath: string;
 }
 
-export interface BuildPlan extends BuildArtifacts {
-  commands: CommandSpec[];
+export interface BuildPlan {
+  clientPath: string;
+  serverPath: string;
+  fixturePath: string;
+  client: CommandSpec;
+  server: CommandSpec;
+  fixture: CommandSpec;
 }
 
 interface ToolVersions {
@@ -30,20 +37,27 @@ interface BuildManifest {
   revision: string;
   platform: HarnessPlatform;
   architecture: string;
-  versions: ToolVersions;
+  bun: string;
+  node: string;
+  rust: string;
+  playwright: string;
+  chromium: string;
   checksums: Record<"client" | "server" | "fixture", string>;
 }
 
-interface BuildArtifactsMap extends BuildArtifacts {
+interface BuildArtifactsMap {
+  clientPath: string;
+  serverPath: string;
+  fixturePath: string;
   client: string;
   server: string;
   fixture: string;
 }
 
 interface BuildCacheDependencies {
+  architecture: string;
   readRevision(root: string): Promise<string>;
   readToolVersions(): Promise<ToolVersions>;
-  isWorktreeClean(root: string): Promise<boolean>;
 }
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -132,35 +146,33 @@ export function planBuild(
     clientPath: artifacts.clientPath,
     serverPath: artifacts.serverPath,
     fixturePath: artifacts.fixturePath,
-    commands: [
-      {
-        file: "cargo",
-        args: ["build", "--release", "-p", "climon-cli"],
-        cwd: pathApi.join(root, "rust"),
-        env: { ...process.env },
-        timeoutMs: DEFAULT_TIMEOUT_MS,
-        stdoutPath: logPath(pathApi, cacheDir, "01-cargo-client", "stdout"),
-        stderrPath: logPath(pathApi, cacheDir, "01-cargo-client", "stderr"),
-      },
-      {
-        file: "bun",
-        args: [...compiledServerBuildArgs(artifacts.serverPath)],
-        cwd: root,
-        env: { ...process.env },
-        timeoutMs: DEFAULT_TIMEOUT_MS,
-        stdoutPath: logPath(pathApi, cacheDir, "02-bun-server", "stdout"),
-        stderrPath: logPath(pathApi, cacheDir, "02-bun-server", "stderr"),
-      },
-      {
-        file: "cargo",
-        args: ["build", "--release", "--manifest-path", "harness/fixtures/Cargo.toml"],
-        cwd: root,
-        env: { ...process.env },
-        timeoutMs: DEFAULT_TIMEOUT_MS,
-        stdoutPath: logPath(pathApi, cacheDir, "03-cargo-fixture", "stdout"),
-        stderrPath: logPath(pathApi, cacheDir, "03-cargo-fixture", "stderr"),
-      },
-    ],
+    client: {
+      file: "cargo",
+      args: ["build", "--release", "-p", "climon-cli"],
+      cwd: pathApi.join(root, "rust"),
+      env: { ...process.env },
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      stdoutPath: logPath(pathApi, cacheDir, "01-cargo-client", "stdout"),
+      stderrPath: logPath(pathApi, cacheDir, "01-cargo-client", "stderr"),
+    },
+    server: {
+      file: "bun",
+      args: [...compiledServerBuildArgs(artifacts.serverPath)],
+      cwd: root,
+      env: { ...process.env },
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      stdoutPath: logPath(pathApi, cacheDir, "02-bun-server", "stdout"),
+      stderrPath: logPath(pathApi, cacheDir, "02-bun-server", "stderr"),
+    },
+    fixture: {
+      file: "cargo",
+      args: ["build", "--release", "--manifest-path", "harness/fixtures/Cargo.toml"],
+      cwd: root,
+      env: { ...process.env },
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      stdoutPath: logPath(pathApi, cacheDir, "03-cargo-fixture", "stdout"),
+      stderrPath: logPath(pathApi, cacheDir, "03-cargo-fixture", "stderr"),
+    },
   };
 }
 
@@ -326,40 +338,6 @@ async function readInstalledToolVersions(): Promise<ToolVersions> {
   };
 }
 
-async function defaultIsWorktreeClean(root: string): Promise<boolean> {
-  const subprocess = Bun.spawn(
-    ["git", "-C", root, "status", "--porcelain", "--untracked-files=no"],
-    {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    }
-  );
-  const stdout = await readStreamText(subprocess.stdout);
-  const stderr = await readStreamText(subprocess.stderr);
-  const code = await subprocess.exited;
-
-  if (code !== 0) {
-    throw new HarnessError(
-      "prerequisite",
-      `Failed to determine worktree state: ${stderr.trim() || stdout.trim()}`
-    );
-  }
-
-  return stdout.trim().length === 0;
-}
-
-function isToolVersions(value: unknown): value is ToolVersions {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return ["bun", "node", "rust", "playwright", "chromium"].every(
-    (key) => typeof candidate[key] === "string"
-  );
-}
-
 function isBuildManifest(value: unknown): value is BuildManifest {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -370,7 +348,11 @@ function isBuildManifest(value: unknown): value is BuildManifest {
     typeof candidate.revision !== "string" ||
     typeof candidate.platform !== "string" ||
     typeof candidate.architecture !== "string" ||
-    !isToolVersions(candidate.versions) ||
+    typeof candidate.bun !== "string" ||
+    typeof candidate.node !== "string" ||
+    typeof candidate.rust !== "string" ||
+    typeof candidate.playwright !== "string" ||
+    typeof candidate.chromium !== "string" ||
     typeof candidate.checksums !== "object" ||
     candidate.checksums === null
   ) {
@@ -407,11 +389,11 @@ function sameIdentity(
     manifest.revision === expected.revision &&
     manifest.platform === expected.platform &&
     manifest.architecture === expected.architecture &&
-    manifest.versions.bun === expected.versions.bun &&
-    manifest.versions.node === expected.versions.node &&
-    manifest.versions.rust === expected.versions.rust &&
-    manifest.versions.playwright === expected.versions.playwright &&
-    manifest.versions.chromium === expected.versions.chromium
+    manifest.bun === expected.bun &&
+    manifest.node === expected.node &&
+    manifest.rust === expected.rust &&
+    manifest.playwright === expected.playwright &&
+    manifest.chromium === expected.chromium
   );
 }
 
@@ -463,7 +445,7 @@ async function runPlan(
   plan: BuildPlan,
   runner: CommandRunner
 ): Promise<void> {
-  for (const command of plan.commands) {
+  for (const command of [plan.client, plan.server, plan.fixture]) {
     const result = await runner.run(command);
     if (result.code !== 0) {
       throw new HarnessError(
@@ -491,21 +473,21 @@ async function checksumsForArtifacts(
 }
 
 export async function buildArtifacts(
-  root: string,
-  cacheRoot: string,
-  platform: HarnessPlatform,
-  architecture: string,
-  runner: CommandRunner,
+  options: {
+    root: string;
+    cacheRoot: string;
+    platform: HarnessPlatform;
+    runner: CommandRunner;
+  },
   dependencies: Partial<BuildCacheDependencies> = {}
 ): Promise<BuildArtifacts> {
+  const { root, cacheRoot, platform, runner } = options;
+  const architecture = dependencies.architecture ?? process.arch;
   const readRevision = dependencies.readRevision ?? readGitRevision;
   const readToolVersions = dependencies.readToolVersions ?? readInstalledToolVersions;
-  const isWorktreeClean =
-    dependencies.isWorktreeClean ?? defaultIsWorktreeClean;
   const revision = await readRevision(root);
   const versions = await readToolVersions();
-  const cleanWorktree = await isWorktreeClean(root);
-  const pathApi = pathApiFor(cacheRoot);
+  const pathApi = pathApiFor(root, cacheRoot);
   const cacheDir = pathApi.join(cacheRoot, revision, platform, architecture);
   const manifestPath = buildManifestPath(pathApi, cacheDir);
   const artifacts = buildArtifactsMap(root, cacheDir, platform);
@@ -513,14 +495,17 @@ export async function buildArtifacts(
     revision,
     platform,
     architecture,
-    versions,
+    bun: versions.bun,
+    node: versions.node,
+    rust: versions.rust,
+    playwright: versions.playwright,
+    chromium: versions.chromium,
   };
 
   await mkdir(cacheDir, { recursive: true });
 
   const existingManifest = await readManifest(manifestPath);
   if (
-    cleanWorktree &&
     existingManifest !== null &&
     sameIdentity(existingManifest, manifestIdentity) &&
     (await manifestChecksumsMatch(existingManifest, artifacts))
@@ -529,6 +514,8 @@ export async function buildArtifacts(
       clientPath: artifacts.clientPath,
       serverPath: artifacts.serverPath,
       fixturePath: artifacts.fixturePath,
+      revision,
+      manifestPath,
     };
   }
 
@@ -540,13 +527,13 @@ export async function buildArtifacts(
     checksums: await checksumsForArtifacts(artifacts),
   };
 
-  if (cleanWorktree) {
-    await writeManifestAtomic(manifestPath, manifest);
-  }
+  await writeManifestAtomic(manifestPath, manifest);
 
   return {
     clientPath: artifacts.clientPath,
     serverPath: artifacts.serverPath,
     fixturePath: artifacts.fixturePath,
+    revision,
+    manifestPath,
   };
 }
