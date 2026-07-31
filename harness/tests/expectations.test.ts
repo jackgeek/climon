@@ -22,6 +22,21 @@ function passedSubcheck(name: string): SubcheckResult {
 }
 
 describe("compareExpectation", () => {
+  test("returns passed when pass is expected and every subcheck passes", () => {
+    const expectation: PlatformExpectation = { expected: "pass" };
+
+    expect(
+      compareExpectation(expectation, [
+        passedSubcheck("setup"),
+        passedSubcheck("assertions"),
+      ])
+    ).toEqual({
+      status: "passed",
+      blocking: false,
+      failedSubchecks: [],
+    });
+  });
+
   test("marks a failed subcheck as an unexpected failure when pass was expected", () => {
     const expectation: PlatformExpectation = { expected: "pass" };
 
@@ -69,6 +84,30 @@ describe("compareExpectation", () => {
       failedSubchecks: [],
       message:
         "Unexpected pass for known failure: Windows attach is not implemented yet (tracking: https://tracker.example/windows-attach; review after: 2026-08-15)",
+    });
+  });
+
+  test("marks a non-expired known failure with only declared failed subchecks as expected-failure", () => {
+    const expectation: PlatformExpectation = {
+      expected: "known-failure",
+      reason: "Windows attach is not implemented yet",
+      tracking: "https://tracker.example/windows-attach",
+      reviewAfter: "2026-08-15",
+      allowedFailedSubchecks: ["attach", "cleanup"],
+    };
+
+    expect(
+      compareExpectation(
+        expectation,
+        [passedSubcheck("setup"), failedSubcheck("attach"), failedSubcheck("cleanup")],
+        new Date("2026-08-14T12:00:00.000Z")
+      )
+    ).toEqual({
+      status: "expected-failure",
+      blocking: false,
+      failedSubchecks: ["attach", "cleanup"],
+      message:
+        "Expected known failure: Windows attach is not implemented yet (tracking: https://tracker.example/windows-attach; review after: 2026-08-15)",
     });
   });
 
