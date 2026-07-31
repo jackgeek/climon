@@ -577,6 +577,19 @@ describe("BrowserDriver", () => {
     await expect(driver.waitForTerminalText("row one\nrow two", 50)).resolves.toBeUndefined();
   });
 
+  test("returns a terminal text snapshot using the same accessibility-first strategy", async () => {
+    const page = new FakePage([]);
+    const terminal = page.registerLocator('[data-testid="session-terminal"]');
+    terminal.locator(".xterm-accessibility-tree > div").allInnerTextsValue = ["boot", "ready"];
+    const { driver } = createDriver({ pages: [page] });
+
+    await expect(driver.terminalText()).resolves.toBe("boot\nready");
+
+    terminal.locator(".xterm-accessibility-tree > div").allInnerTextsValue = [];
+    terminal.locator(".xterm-rows > div").allInnerTextsValue = ["fallback"];
+    await expect(driver.terminalText()).resolves.toBe("fallback");
+  });
+
   test("sends literal terminal text with insertText plus Enter and rejects newlines", async () => {
     const page = new FakePage([]);
     page.registerLocator('[data-testid="session-terminal"]');

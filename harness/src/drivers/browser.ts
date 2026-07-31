@@ -347,6 +347,19 @@ export class BrowserDriver {
     }
   }
 
+  public async terminalText(): Promise<string> {
+    const page = this.requirePage();
+    const terminal = page.locator(SESSION_TERMINAL_SELECTOR);
+
+    try {
+      return await this.readTerminalText(terminal);
+    } catch (error) {
+      this.throwTranslatedError("terminal snapshot", error, {
+        selector: SESSION_TERMINAL_SELECTOR,
+      });
+    }
+  }
+
   public async closeViewer(): Promise<void> {
     if (!this.page) {
       return;
