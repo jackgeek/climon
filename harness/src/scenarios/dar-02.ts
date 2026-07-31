@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -10,7 +10,7 @@ import type { HarnessPlatform, SubcheckResult } from "../types.js";
 
 const HEADLESS_STDOUT_ARTIFACT = "headless/stdout.log";
 const HEADLESS_STDERR_ARTIFACT = "headless/stderr.log";
-const READY_MARKER = "001 DAR_STREAM_READY";
+const READY_MARKER = "DAR_STREAM_READY";
 const FINAL_EXIT_MARKER = "DAR_STREAM_EXIT 0";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._~-]+$/;
 const SUBCHECK_TIMEOUTS_MS = {
@@ -37,12 +37,12 @@ export const DAR_02_SUBCHECK_NAMES = [
 
 export const DAR_02_REPLAY_MARKERS = Array.from({ length: 20 }, (_, index) => {
   const phase = String(index + 1).padStart(3, "0");
-  return index === 0 ? `${phase} DAR_STREAM_READY` : `${phase} DAR_STREAM_REPLAY ${phase}`;
+  return `DAR_STREAM_REPLAY ${phase}`;
 });
 
 export const DAR_02_LIVE_MARKERS = Array.from({ length: 20 }, (_, index) => {
   const phase = String(index + 21).padStart(3, "0");
-  return `${phase} DAR_STREAM_LIVE ${phase}`;
+  return `DAR_STREAM_LIVE ${phase}`;
 });
 
 export type Dar02SubcheckName = (typeof DAR_02_SUBCHECK_NAMES)[number];
@@ -85,7 +85,6 @@ export interface HeadlessProcess {
   pid: number;
   stdoutText(): string;
   stderrText(): string;
-  writeLine(text: string): Promise<void>;
   waitForExit(deadline: number): Promise<number | null>;
   kill(): void | Promise<void>;
 }
@@ -131,10 +130,6 @@ interface ChildProcessLike {
   stderr: {
     on(event: "data", listener: (chunk: Uint8Array | string) => void): void;
   };
-  stdin: {
-    writable: boolean;
-    write(text: string, callback: (error?: Error | null) => void): void;
-  };
   once(event: "error", listener: (error: unknown) => void): void;
   once(event: "exit", listener: (code: number | null) => void): void;
 }
@@ -147,7 +142,7 @@ export interface DefaultHeadlessSpawnDependencies {
       cwd: string;
       env: Record<string, string | undefined>;
       shell: false;
-      stdio: ["pipe", "pipe", "pipe"];
+      stdio: ["ignore", "pipe", "pipe"];
     }
   ) => ChildProcessLike;
   createWriteStream?: (path: string) => Pick<WriteStream, "write" | "end">;
@@ -237,9 +232,18 @@ function parseHeadlessSessionId(rawOutput: string): ParsedSessionId | undefined 
     return undefined;
   }
 
-  const safeLines = lines.filter((line) => SESSION_ID_PATTERN.test(line));
+  const protocolLines = lines.filter(
+    (line) =>
+      /^DAR_STREAM_REPLAY \d{3}$/.test(line) ||
+      line === READY_MARKER ||
+      /^DAR_STREAM_LIVE \d{3}$/.test(line) ||
+      /^DAR_STREAM_EXIT \d+$/.test(line)
+  );
+  const safeLines = lines.filter(
+    (line) => SESSION_ID_PATTERN.test(line) && !protocolLines.includes(line)
+  );
   const unsafeCandidates = lines.filter(
-    (line) => !SESSION_ID_PATTERN.test(line) && !/^\d{3}\s/.test(line)
+    (line) => !SESSION_ID_PATTERN.test(line) && !protocolLines.includes(line)
   );
   if (unsafeCandidates.length > 0) {
     throw new Error(`Unsafe session id from headless launch stdout: ${unsafeCandidates[0]!}`);
@@ -425,7 +429,7 @@ export async function spawnHeadlessProcessWithChildProcess(
   const spawnChild =
     dependencies.spawn ??
     ((file: string, args: string[], options: Parameters<typeof spawn>[2]) =>
-      spawn(file, args, options) as unknown as ChildProcessWithoutNullStreams);
+      spawn(file, args, options) as unknown as ChildProcessByStdio<null, NodeJS.ReadableStream, NodeJS.ReadableStream>);
 
   await makeDir(dirname(spec.stdoutPath), { recursive: true });
   await makeDir(dirname(spec.stderrPath), { recursive: true });
@@ -434,7 +438,7 @@ export async function spawnHeadlessProcessWithChildProcess(
     cwd: spec.cwd,
     env: spec.env,
     shell: false,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
   }) as ChildProcessLike;
 
   const pid = child.pid;
@@ -502,21 +506,6 @@ export async function spawnHeadlessProcessWithChildProcess(
     },
     stderrText() {
       return stderr;
-    },
-    async writeLine(text: string) {
-      if (!child.stdin.writable) {
-        throw new Error(`stdin closed for pid ${pid}`);
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        child.stdin.write(`${text}\n`, (error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
     },
     async waitForExit(deadline: number) {
       while (true) {
@@ -588,24 +577,44 @@ export async function runDar02(
       }
 
       const deadline = remainingDeadline("headless-launch", overallDeadline, now);
-      const stdout = await waitForValue(
-        deadline,
-        now,
-        sleep,
-        pollIntervalMs,
-        async () => {
-          const text = launchedProcess!.stdoutText();
-          return parseHeadlessSessionId(text);
-        },
-        "Timed out waiting for headless launch stdout"
-      );
+      let launcherExited = false;
+      let parsedSafeSessionId = false;
+      let awaitingLauncherExit = false;
 
-      context.runtime.sessions.track(stdout.id);
-      parsedSessionId = stdout;
-      return {
-        message: `Parsed headless session id ${parsedSessionId.id}`,
-        evidence: [parsedSessionId.line],
-      };
+      try {
+        const stdout = await waitForValue(
+          deadline,
+          now,
+          sleep,
+          pollIntervalMs,
+          async () => {
+            const text = launchedProcess!.stdoutText();
+            return parseHeadlessSessionId(text);
+          },
+          "Timed out waiting for headless launch stdout"
+        );
+
+        parsedSafeSessionId = true;
+        context.runtime.sessions.track(stdout.id);
+        parsedSessionId = stdout;
+
+        awaitingLauncherExit = true;
+        const exitCode = await launchedProcess.waitForExit(deadline);
+        launcherExited = true;
+        if (exitCode !== 0) {
+          throw new Error(`Expected headless launcher to exit 0, received ${String(exitCode)}`);
+        }
+
+        return {
+          message: `Parsed headless session id ${parsedSessionId.id}`,
+          evidence: [parsedSessionId.line],
+        };
+      } catch (error) {
+        if (!launcherExited && (!parsedSafeSessionId || awaitingLauncherExit)) {
+          await Promise.resolve(launchedProcess.kill());
+        }
+        throw error;
+      }
     })
   );
 
@@ -675,11 +684,12 @@ export async function runDar02(
       for (const marker of DAR_02_REPLAY_MARKERS) {
         await context.browser.waitForTerminalText(marker, deadline);
       }
+      await context.browser.waitForTerminalText(READY_MARKER, deadline);
       const snapshot = await dependencies.snapshotTerminalText();
-      assertExactlyOnce(snapshot, DAR_02_REPLAY_MARKERS, "replay snapshot");
+      assertExactlyOnce(snapshot, [...DAR_02_REPLAY_MARKERS, READY_MARKER], "replay snapshot");
       return {
         message: `Verified replay markers ${DAR_02_REPLAY_MARKERS[0]}..${DAR_02_REPLAY_MARKERS.at(-1)!}`,
-        evidence: [DAR_02_REPLAY_MARKERS.at(-1)!],
+        evidence: [READY_MARKER],
       };
     })
   );
@@ -690,18 +700,8 @@ export async function runDar02(
         throw new Error(impossibleMessage("browser terminal unavailable for CONTINUE input"));
       }
 
-      const deadline = remainingDeadline("browser-input", overallDeadline, now);
       await context.browser.sendTerminalLine(continueLine);
       continueSent = true;
-      await waitForText(
-        deadline,
-        now,
-        sleep,
-        pollIntervalMs,
-        async () => dependencies.readLiveScrollback(parsedSessionId!.id, context.runtime.home),
-        continueLine,
-        "CONTINUE protocol evidence"
-      );
       return {
         message: `Sent ${continueLine}`,
         evidence: [continueLine],
@@ -721,6 +721,9 @@ export async function runDar02(
       }
       const snapshot = await dependencies.snapshotTerminalText();
       assertExactlyOnce(snapshot, DAR_02_LIVE_MARKERS, "live snapshot");
+      if (snapshot.includes(continueLine)) {
+        throw new Error(`Unexpected echoed browser input in live snapshot: ${continueLine}`);
+      }
       return {
         message: `Verified live markers ${DAR_02_LIVE_MARKERS[0]}..${DAR_02_LIVE_MARKERS.at(-1)!}`,
         evidence: [DAR_02_LIVE_MARKERS.at(-1)!],
@@ -754,25 +757,16 @@ export async function runDar02(
     await runSubcheck("successful-finalization", now, evidence, async () => {
       const deadline = remainingDeadline("successful-finalization", overallDeadline, now);
       const cleanupNotes: string[] = [];
-      let exitSent = false;
 
       try {
         if (parsedSessionId && browserAttached) {
           try {
             await context.browser.sendTerminalLine("EXIT 0");
-            exitSent = true;
           } catch (error) {
             cleanupNotes.push(`browser EXIT 0 failed: ${stringifyError(error)}`);
           }
-        }
-
-        if (!exitSent && launchedProcess) {
-          try {
-            await launchedProcess.writeLine("EXIT 0");
-            exitSent = true;
-          } catch (error) {
-            cleanupNotes.push(`process EXIT 0 failed: ${stringifyError(error)}`);
-          }
+        } else {
+          cleanupNotes.push("browser terminal unavailable for EXIT 0 session control");
         }
 
         if (!parsedSessionId) {
@@ -798,23 +792,11 @@ export async function runDar02(
           "final scrollback exit marker"
         );
 
-        if (launchedProcess) {
-          await launchedProcess.waitForExit(deadline);
-        }
-
         return {
           message: `Session ${parsedSessionId.id} completed with exitCode=0 at ${meta.completedAt}`,
           evidence: cleanupNotes,
         };
       } catch (error) {
-        if (launchedProcess) {
-          try {
-            await Promise.resolve(launchedProcess.kill());
-          } catch (killError) {
-            cleanupNotes.push(`kill failed: ${stringifyError(killError)}`);
-          }
-        }
-
         const messageParts = [...cleanupNotes];
         messageParts.push(stringifyError(error));
         throw new Error(messageParts.join("; "));

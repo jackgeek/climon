@@ -14,15 +14,14 @@ import {
 
 const SESSION_ID = "steady-otters-jam";
 const RUN_ID = "abc123";
+const READY_MARKER = "DAR_STREAM_READY";
 const REPLAY_MARKERS = Array.from({ length: 20 }, (_, index) => {
   const phase = String(index + 1).padStart(3, "0");
-  return index === 0
-    ? `${phase} DAR_STREAM_READY`
-    : `${phase} DAR_STREAM_REPLAY ${phase}`;
+  return `DAR_STREAM_REPLAY ${phase}`;
 });
 const LIVE_MARKERS = Array.from({ length: 20 }, (_, index) => {
   const phase = String(index + 21).padStart(3, "0");
-  return `${phase} DAR_STREAM_LIVE ${phase}`;
+  return `DAR_STREAM_LIVE ${phase}`;
 });
 const LAST_LIVE_MARKER = LIVE_MARKERS.at(-1)!;
 const FINAL_EXIT_MARKER = "DAR_STREAM_EXIT 0";
@@ -56,7 +55,6 @@ class FakeClock {
 }
 
 class FakeHeadlessProcess implements HeadlessProcess {
-  public readonly writeLineCalls: string[] = [];
   public waitForExitCalls: number[] = [];
   public killCalls = 0;
 
@@ -69,7 +67,6 @@ class FakeHeadlessProcess implements HeadlessProcess {
       stderrText?: string;
       waitForExitResult?: number | null;
       waitForExitError?: Error;
-      onWriteLine?: (line: string, state: ScenarioState) => void;
     } = {}
   ) {}
 
@@ -86,12 +83,6 @@ class FakeHeadlessProcess implements HeadlessProcess {
   public stderrText(): string {
     this.events.push("process.stderr");
     return this.options.stderrText ?? "";
-  }
-
-  public async writeLine(text: string): Promise<void> {
-    this.events.push(`process.write:${text}`);
-    this.writeLineCalls.push(text);
-    this.options.onWriteLine?.(text, this.state);
   }
 
   public async waitForExit(deadline: number): Promise<number | null> {
@@ -212,7 +203,7 @@ class FakeBrowser implements Dar02BrowserDriver {
     this.events.push(`browser.send:${text}`);
     this.sendTerminalLineCalls.push(text);
     if (text === `CONTINUE ${this.runId}`) {
-      this.state.liveScrollback = `${this.state.liveScrollback}\nCONTINUE ${this.runId}\n${LIVE_MARKERS.join("\n")}`;
+      this.state.liveScrollback = `${this.state.liveScrollback}\n${LIVE_MARKERS.join("\n")}`;
       this.state.terminalText = `${this.state.terminalText}\n${LIVE_MARKERS.join("\n")}`;
       return;
     }
@@ -220,7 +211,7 @@ class FakeBrowser implements Dar02BrowserDriver {
       if (this.options.exitInputError) {
         throw this.options.exitInputError;
       }
-      this.state.finalScrollback = `${this.state.liveScrollback}\nEXIT 0\n${FINAL_EXIT_MARKER}`;
+      this.state.finalScrollback = `${this.state.liveScrollback}\n${FINAL_EXIT_MARKER}`;
       if (this.options.onExit) {
         this.options.onExit(this.state);
       } else {
@@ -245,7 +236,7 @@ class FakeBrowser implements Dar02BrowserDriver {
 }
 
 function baseReplayText(): string {
-  return REPLAY_MARKERS.join("\n");
+  return [...REPLAY_MARKERS, READY_MARKER].join("\n");
 }
 
 function createState(overrides: Partial<ScenarioState> = {}): ScenarioState {
@@ -346,7 +337,7 @@ function createHarness(
 }
 
 describe("runDar02", () => {
-  test("runs all DAR-02 subchecks in order, tracks immediately, and waits for READY before opening the browser", async () => {
+  test("runs all DAR-02 subchecks in order, tracks immediately, waits for launcher exit 0, and waits for READY before opening the browser", async () => {
     const { browser, context, dependencies, events, process, sessions, spawnCalls } =
       createHarness(createState());
 
@@ -386,13 +377,16 @@ describe("runDar02", () => {
     ]);
     expect(sessions.trackCalls).toEqual([SESSION_ID]);
     expect(events.indexOf(`sessions.track:${SESSION_ID}`)).toBeLessThan(
+      events.indexOf("process.wait")
+    );
+    expect(events.indexOf("process.wait")).toBeLessThan(
       events.indexOf(`sessions.wait:${SESSION_ID}:running`)
     );
     expect(events.indexOf("scrollback.live")).toBeLessThan(
       events.indexOf(`browser.open:${context.runtime.baseUrl}`)
     );
     expect(browser.sendTerminalLineCalls).toEqual([`CONTINUE ${RUN_ID}`, "EXIT 0"]);
-    expect(process.writeLineCalls).toEqual([]);
+    expect(process.waitForExitCalls).toHaveLength(1);
   });
 
   test("uses exact replay/live markers and exact browser protocol lines", async () => {
@@ -402,10 +396,11 @@ describe("runDar02", () => {
 
     expect(results.every((result) => result.status === "passed")).toBe(true);
     expect(browser.waitForTerminalTextCalls.slice(0, REPLAY_MARKERS.length)).toEqual(REPLAY_MARKERS);
+    expect(browser.waitForTerminalTextCalls[REPLAY_MARKERS.length]).toBe(READY_MARKER);
     expect(
       browser.waitForTerminalTextCalls.slice(
-        REPLAY_MARKERS.length,
-        REPLAY_MARKERS.length + LIVE_MARKERS.length
+        REPLAY_MARKERS.length + 1,
+        REPLAY_MARKERS.length + 1 + LIVE_MARKERS.length
       )
     ).toEqual(LIVE_MARKERS);
     expect(browser.waitForTerminalTextCalls.at(-1)).toBe(LAST_LIVE_MARKER);
@@ -446,7 +441,7 @@ describe("runDar02", () => {
       process: {
         stdoutTexts: [
           "steady-otters-",
-          `${SESSION_ID}\n001 DAR_STREAM_READY\n`,
+          `${SESSION_ID}\nDAR_STREAM_REPLAY 001\n`,
         ],
       },
     });
@@ -460,8 +455,25 @@ describe("runDar02", () => {
     expect(process.killCalls).toBe(0);
   });
 
+  test("fails headless-launch when the short-lived launcher exits non-zero after printing the session id", async () => {
+    const { context, dependencies, process, sessions } = createHarness(createState(), {
+      process: {
+        waitForExitResult: 7,
+      },
+    });
+
+    const results = await runDar02(context, dependencies);
+
+    expect(sessions.trackCalls).toEqual([SESSION_ID]);
+    expect(results.find((result) => result.name === "headless-launch")).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("Expected headless launcher to exit 0, received 7"),
+    });
+    expect(process.killCalls).toBe(0);
+  });
+
   test("blocks later subchecks when tracking the parsed session id fails", async () => {
-    const { context, dependencies } = createHarness(createState(), {
+    const { context, dependencies, process } = createHarness(createState(), {
       sessions: {
         trackError: new Error("Session steady-otters-jam is already tracked"),
       },
@@ -477,6 +489,7 @@ describe("runDar02", () => {
       status: "failed",
       message: expect.stringContaining("headless-launch did not yield a safe session id"),
     });
+    expect(process.killCalls).toBe(0);
   });
 
   test("closes and reopens the viewer while metadata stays running", async () => {
@@ -497,20 +510,10 @@ describe("runDar02", () => {
     expect(sessions.readCalls).toContain(SESSION_ID);
   });
 
-  test("still verifies dashboard completion when the page opens but terminal attach fails", async () => {
+  test("records browser-only finalization inability when the page opens but terminal attach fails", async () => {
     const { browser, context, dependencies, process } = createHarness(createState(), {
       browser: {
         openTerminalError: new Error("terminal attach failed"),
-      },
-      process: {
-        onWriteLine(line, state) {
-          if (line === "EXIT 0") {
-            state.meta.status = "completed";
-            state.meta.exitCode = 0;
-            state.meta.completedAt = "2026-07-31T20:00:00.000Z";
-            state.finalScrollback = `${state.liveScrollback}\nEXIT 0\n${FINAL_EXIT_MARKER}`;
-          }
-        },
       },
     });
 
@@ -521,22 +524,20 @@ describe("runDar02", () => {
       message: expect.stringContaining("terminal attach failed"),
     });
     expect(results.find((result) => result.name === "successful-finalization")).toMatchObject({
-      status: "passed",
+      status: "failed",
+      message: expect.stringContaining("browser terminal unavailable for EXIT 0 session control"),
     });
     expect(browser.waitForSessionStatusCalls).toEqual([
       { id: SESSION_ID, status: "running" },
       { id: SESSION_ID, status: "completed" },
     ]);
-    expect(process.writeLineCalls).toEqual(["EXIT 0"]);
+    expect(process.killCalls).toBe(0);
   });
 
-  test("still attempts EXIT finalization and kill when the browser attach fails early", async () => {
+  test("does not use the launcher as session control when the browser attach fails early", async () => {
     const { browser, context, dependencies, process } = createHarness(createState(), {
       browser: {
         openError: new Error("dashboard unavailable"),
-      },
-      process: {
-        waitForExitError: new Error("still running"),
       },
     });
 
@@ -548,24 +549,23 @@ describe("runDar02", () => {
     });
     expect(results.find((result) => result.name === "successful-finalization")).toMatchObject({
       status: "failed",
+      message: expect.stringContaining("browser terminal unavailable for EXIT 0 session control"),
     });
     expect(browser.sendTerminalLineCalls).toEqual([]);
-    expect(process.writeLineCalls).toEqual(["EXIT 0"]);
-    expect(process.killCalls).toBe(1);
+    expect(process.killCalls).toBe(0);
   });
 
-  test("awaits asynchronous kill cleanup before returning finalization failure", async () => {
+  test("kills a launcher that hangs after emitting the session id", async () => {
     let resolveKill!: () => void;
     let killResolved = false;
-    const state = createState();
     const events: string[] = [];
-    const process: HeadlessProcess = {
+    const { context, dependencies, sessions } = createHarness(createState());
+    dependencies.spawnHeadlessProcess = async () => ({
       pid: 777,
       stdoutText: () => `${SESSION_ID}\n`,
       stderrText: () => "",
-      async writeLine() {},
       async waitForExit() {
-        throw new Error("still running");
+        throw new Error("Timed out waiting for headless process 777 to exit");
       },
       kill() {
         events.push("kill:start");
@@ -577,13 +577,7 @@ describe("runDar02", () => {
           };
         });
       },
-    };
-    const { context, dependencies } = createHarness(state, {
-      browser: {
-        openError: new Error("dashboard unavailable"),
-      },
     });
-    dependencies.spawnHeadlessProcess = async () => process;
 
     let settled = false;
     const pending = runDar02(context, dependencies).then((value) => {
@@ -595,6 +589,7 @@ describe("runDar02", () => {
       await Promise.resolve();
     }
     expect(resolveKill).toBeDefined();
+    expect(sessions.trackCalls).toEqual([SESSION_ID]);
     expect(settled).toBe(false);
     expect(killResolved).toBe(false);
 
@@ -604,8 +599,9 @@ describe("runDar02", () => {
     expect(killResolved).toBe(true);
     expect(settled).toBe(true);
     expect(events).toEqual(["kill:start", "kill:done"]);
-    expect(results.find((result) => result.name === "successful-finalization")).toMatchObject({
+    expect(results.find((result) => result.name === "headless-launch")).toMatchObject({
       status: "failed",
+      message: expect.stringContaining("Timed out waiting for headless process 777 to exit"),
     });
   });
 
@@ -688,6 +684,49 @@ describe("spawnHeadlessProcessWithChildProcess", () => {
     expect(events).toContain("kill:4242:SIGKILL");
   });
 
+  test("spawns the short-lived launcher with ignored stdin and no public writeLine seam", async () => {
+    const events: string[] = [];
+    const stdoutChunks: Array<string | Buffer> = [];
+    const stderrChunks: Array<string | Buffer> = [];
+    const child = createSpawnedChild(stdoutChunks, stderrChunks);
+    const dependencies = createSpawnDependencies(child, events);
+
+    const process = await spawnHeadlessProcessWithChildProcess(
+      {
+        file: "/repo/bin/climon",
+        args: ["run", "--headless", "fixture", "streaming"],
+        cwd: "/repo",
+        env: {},
+        stdoutPath: "/repo/artifacts/cases/DAR-02/headless/stdout.log",
+        stderrPath: "/repo/artifacts/cases/DAR-02/headless/stderr.log",
+        shell: false,
+        label: "climon-headless-launch",
+        platform: "linux",
+      },
+      {
+        runtime: {
+          processes: {
+            register: dependencies.register,
+          },
+        },
+      } as unknown as Dar02Context,
+      {
+        now: () => 1_000,
+        sleep: async () => {},
+        pollIntervalMs: 5,
+      },
+      dependencies
+    );
+
+    expect(dependencies.spawnOptions).toEqual({
+      cwd: "/repo",
+      env: {},
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect("writeLine" in process).toBe(false);
+  });
+
   test("rejects invalid completedAt timestamps", async () => {
     const { context, dependencies } = createHarness(createState(), {
       browser: {
@@ -715,10 +754,6 @@ interface SpawnedChildLike {
   };
   stderr: {
     on(event: "data", listener: (chunk: string | Buffer) => void): void;
-  };
-  stdin: {
-    writable: boolean;
-    write(text: string, callback: (error?: Error | null) => void): void;
   };
   once(event: "error" | "exit", listener: (value: unknown) => void): void;
 }
@@ -774,7 +809,22 @@ function createSpawnDependencies(
   } = {}
 ): DefaultHeadlessSpawnDependencies & {
   register: (owned: { pid: number }) => Promise<void>;
+  spawnOptions?: {
+    cwd: string;
+    env: Record<string, string | undefined>;
+    shell: false;
+    stdio: ["ignore", "pipe", "pipe"];
+  };
 } {
+  let spawnOptions:
+    | {
+        cwd: string;
+        env: Record<string, string | undefined>;
+        shell: false;
+        stdio: ["ignore", "pipe", "pipe"];
+      }
+    | undefined;
+
   return {
     async mkdir() {},
     createWriteStream() {
@@ -786,8 +836,12 @@ function createSpawnDependencies(
     kill(pid, signal) {
       events.push(`kill:${pid}:${signal}`);
     },
-    spawn() {
+    spawn(_file, _args, nextSpawnOptions) {
+      spawnOptions = nextSpawnOptions;
       return child as never;
+    },
+    get spawnOptions() {
+      return spawnOptions;
     },
     async register(owned) {
       events.push(`register:${owned.pid}`);

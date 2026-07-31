@@ -637,86 +637,94 @@ describe("fixture build memoization", () => {
 });
 
 describe("climon-harness-fixture stream protocol", () => {
-  test("streams exact 001..020 markers in order and exits after the exit handshake", async () => {
+  test("streams the approved replay/ready/live/exit handshake in exact order with no echoed control lines", async () => {
     await buildFixture();
     const child = spawnFixture(["streaming"]);
     const exitPromise = once(child, "exit");
     const text = collectProcessText(child);
 
-    await waitForLine(text.stdoutLines, "001 DAR_STREAM_READY");
+    const replayMarkers = Array.from({ length: 20 }, (_, index) => {
+      const phase = String(index + 1).padStart(3, "0");
+      return `DAR_STREAM_REPLAY ${phase}`;
+    });
+    const readyMarker = "DAR_STREAM_READY";
+    const liveMarkers = Array.from({ length: 20 }, (_, index) => {
+      const phase = String(index + 21).padStart(3, "0");
+      return `DAR_STREAM_LIVE ${phase}`;
+    });
+    const continueLine = "CONTINUE continue-token";
+    const exitLine = "EXIT 7";
+    const exitMarker = "DAR_STREAM_EXIT 7";
 
-    const commands: Array<[string[], string]> = [
-      [["HE", "LLO handshake\n"], "002 DAR_STREAM_HELLO handshake"],
-      [["TEXT ", "alpha\n"], "003 DAR_STREAM_TEXT alpha"],
-      [["TEXT two", " words\n"], "004 DAR_STREAM_TEXT two words"],
-      [["TEXT utf8", " ✓\n"], "005 DAR_STREAM_TEXT utf8 ✓"],
-      [["KEY Arrow", "Up\n"], "006 DAR_STREAM_KEY ArrowUp"],
-      [["KEY Arrow", "Left\n"], "007 DAR_STREAM_KEY ArrowLeft"],
-      [["KEY En", "ter\n"], "008 DAR_STREAM_KEY Enter"],
-      [["KEY Esc", "ape\n"], "009 DAR_STREAM_KEY Escape"],
-      [["CTRL C", "\n"], "010 DAR_STREAM_CONTROL Ctrl+C"],
-      [["CTRL Q", "\n"], "011 DAR_STREAM_CONTROL Ctrl+Q"],
-      [["MOUSE PRESS left 1", " 1\n"], "012 DAR_STREAM_MOUSE_PRESS left 1 1"],
-      [["MOUSE RELEASE left ", "1 1\n"], "013 DAR_STREAM_MOUSE_RELEASE left 1 1"],
-      [["MOUSE WHEEL up 2 ", "3\n"], "014 DAR_STREAM_MOUSE_WHEEL_UP 2 3"],
-      [["MOUSE WHEEL down ", "2 3\n"], "015 DAR_STREAM_MOUSE_WHEEL_DOWN 2 3"],
-      [["MOUSE MOVE left 4", " 5\n"], "016 DAR_STREAM_MOUSE_MOVE left 4 5"],
-      [["RESIZE 100", " 30\n"], "017 DAR_STREAM_RESIZE 100 30"],
-      [["STATUS\n"], "018 DAR_STREAM_STATUS ok"],
-      [["TEXT final marker\n"], "019 DAR_STREAM_TEXT final marker"],
-      [["EXIT 0", "\n"], "020 DAR_STREAM_EXIT 0"],
-    ];
-
-    for (const [chunks, expected] of commands) {
-      await writeChunks(child.stdin, chunks);
-      if (expected === "020 DAR_STREAM_EXIT 0") {
-        child.stdin.end();
-      }
-      await waitForLine(text.stdoutLines, expected);
+    for (const marker of replayMarkers) {
+      await waitForLine(text.stdoutLines, marker);
     }
+    await waitForLine(text.stdoutLines, readyMarker);
+    expect(text.stdoutLines).toEqual([...replayMarkers, readyMarker]);
+
+    await writeChunks(child.stdin, [`${continueLine}\n`]);
+    for (const marker of liveMarkers) {
+      await waitForLine(text.stdoutLines, marker);
+    }
+    expect(text.stdoutLines).toEqual([...replayMarkers, readyMarker, ...liveMarkers]);
+
+    await writeChunks(child.stdin, [`${exitLine}\n`]);
+    await waitForLine(text.stdoutLines, exitMarker);
 
     const [code, signal] = await exitPromise;
-    expect(code).toBe(0);
+    expect(code).toBe(7);
     expect(signal).toBeNull();
     expect(text.stderr).toBe("");
     expect(text.stdoutLines).toEqual([
-      "001 DAR_STREAM_READY",
-      "002 DAR_STREAM_HELLO handshake",
-      "003 DAR_STREAM_TEXT alpha",
-      "004 DAR_STREAM_TEXT two words",
-      "005 DAR_STREAM_TEXT utf8 ✓",
-      "006 DAR_STREAM_KEY ArrowUp",
-      "007 DAR_STREAM_KEY ArrowLeft",
-      "008 DAR_STREAM_KEY Enter",
-      "009 DAR_STREAM_KEY Escape",
-      "010 DAR_STREAM_CONTROL Ctrl+C",
-      "011 DAR_STREAM_CONTROL Ctrl+Q",
-      "012 DAR_STREAM_MOUSE_PRESS left 1 1",
-      "013 DAR_STREAM_MOUSE_RELEASE left 1 1",
-      "014 DAR_STREAM_MOUSE_WHEEL_UP 2 3",
-      "015 DAR_STREAM_MOUSE_WHEEL_DOWN 2 3",
-      "016 DAR_STREAM_MOUSE_MOVE left 4 5",
-      "017 DAR_STREAM_RESIZE 100 30",
-      "018 DAR_STREAM_STATUS ok",
-      "019 DAR_STREAM_TEXT final marker",
-      "020 DAR_STREAM_EXIT 0",
+      ...replayMarkers,
+      readyMarker,
+      ...liveMarkers,
+      exitMarker,
     ]);
+    expect(text.stdoutLines).not.toContain(continueLine);
+    expect(text.stdoutLines).not.toContain(exitLine);
   }, FIXTURE_TEST_TIMEOUT_MS);
 
-  test("rejects malformed stream input with stable stderr and exit 2", async () => {
+  test("rejects malformed CONTINUE handshake with stable stderr and exit 2", async () => {
     await buildFixture();
     const child = spawnFixture(["streaming"]);
     const exitPromise = once(child, "exit");
     const text = collectProcessText(child);
+    const replayMarkers = Array.from({ length: 20 }, (_, index) => {
+      const phase = String(index + 1).padStart(3, "0");
+      return `DAR_STREAM_REPLAY ${phase}`;
+    });
+    const readyMarker = "DAR_STREAM_READY";
 
-    await waitForLine(text.stdoutLines, "001 DAR_STREAM_READY");
-    await writeChunks(child.stdin, ["MOUSE PRESS left nope 1\n"]);
+    await waitForLine(text.stdoutLines, readyMarker);
+    await writeChunks(child.stdin, ["CONTINUE\n"]);
 
     const [code, signal] = await exitPromise;
     expect(code).toBe(2);
     expect(signal).toBeNull();
-    expect(text.stdoutLines).toEqual(["001 DAR_STREAM_READY"]);
-    expect(text.stderr).toBe("Malformed stream input: MOUSE PRESS left nope 1\n");
+    expect(text.stdoutLines).toEqual([...replayMarkers, readyMarker]);
+    expect(text.stderr).toBe("Malformed stream input: CONTINUE\n");
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test("rejects EOF before the CONTINUE handshake with stable stderr and exit 2", async () => {
+    await buildFixture();
+    const child = spawnFixture(["streaming"]);
+    const exitPromise = once(child, "exit");
+    const text = collectProcessText(child);
+    const replayMarkers = Array.from({ length: 20 }, (_, index) => {
+      const phase = String(index + 1).padStart(3, "0");
+      return `DAR_STREAM_REPLAY ${phase}`;
+    });
+    const readyMarker = "DAR_STREAM_READY";
+
+    await waitForLine(text.stdoutLines, readyMarker);
+    child.stdin.end();
+
+    const [code, signal] = await exitPromise;
+    expect(code).toBe(2);
+    expect(signal).toBeNull();
+    expect(text.stdoutLines).toEqual([...replayMarkers, readyMarker]);
+    expect(text.stderr).toBe("Malformed stream input: expected CONTINUE <token>\n");
   }, FIXTURE_TEST_TIMEOUT_MS);
 });
 

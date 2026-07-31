@@ -2,226 +2,168 @@ use std::io::{BufRead, Write};
 
 use crate::cli::CliError;
 
-#[derive(Debug, PartialEq, Eq)]
-enum StreamCommand {
-    Hello(String),
-    Text(String),
-    Key(String),
-    Control(String),
-    MousePress { button: String, col: u16, row: u16 },
-    MouseRelease { button: String, col: u16, row: u16 },
-    MouseWheelUp { col: u16, row: u16 },
-    MouseWheelDown { col: u16, row: u16 },
-    MouseMove { button: String, col: u16, row: u16 },
-    Resize { cols: u16, rows: u16 },
-    Status,
-    Exit(i32),
-}
+const READY_MARKER: &str = "DAR_STREAM_READY";
+const CONTINUE_EXPECTATION: &str = "CONTINUE <token>";
+const EXIT_EXPECTATION: &str = "EXIT <0..125>";
+const REPLAY_START: u16 = 1;
+const REPLAY_END: u16 = 20;
+const LIVE_START: u16 = 21;
+const LIVE_END: u16 = 40;
 
 pub fn run(
     stdin: &mut impl BufRead,
     stdout: &mut impl Write,
     _stderr: &mut impl Write,
 ) -> Result<i32, CliError> {
-    emit(stdout, 1, "DAR_STREAM_READY")?;
-    let mut phase = 2;
-    let mut line = String::new();
-
-    loop {
-        line.clear();
-        let bytes = stdin
-            .read_line(&mut line)
-            .map_err(|error| CliError::Io(error.to_string()))?;
-        if bytes == 0 {
-            return Ok(0);
-        }
-        let raw = line.trim_end_matches(['\r', '\n']);
-        let command = parse_line(raw)
-            .map_err(|_| CliError::Usage(format!("Malformed stream input: {raw}")))?;
-        let message = render_command(&command);
-        emit(stdout, phase, &message)?;
-        if let StreamCommand::Exit(code) = command {
-            return Ok(code);
-        }
-        phase += 1;
+    for phase in REPLAY_START..=REPLAY_END {
+        emit(stdout, &format!("DAR_STREAM_REPLAY {phase:03}"))?;
     }
+    emit(stdout, READY_MARKER)?;
+
+    let _token = parse_continue_line(read_required_line(stdin, CONTINUE_EXPECTATION)?)
+        .map_err(|raw| CliError::Usage(format!("Malformed stream input: {raw}")))?;
+
+    for phase in LIVE_START..=LIVE_END {
+        emit(stdout, &format!("DAR_STREAM_LIVE {phase:03}"))?;
+    }
+
+    let exit_code = parse_exit_line(read_required_line(stdin, EXIT_EXPECTATION)?)
+        .map_err(|raw| CliError::Usage(format!("Malformed stream input: {raw}")))?;
+    emit(stdout, &format!("DAR_STREAM_EXIT {exit_code}"))?;
+    Ok(exit_code)
 }
 
-fn emit(stdout: &mut impl Write, phase: u16, message: &str) -> Result<(), CliError> {
-    writeln!(stdout, "{phase:03} {message}")
+fn emit(stdout: &mut impl Write, message: &str) -> Result<(), CliError> {
+    writeln!(stdout, "{message}")
         .and_then(|_| stdout.flush())
         .map_err(|error| CliError::Io(error.to_string()))
 }
 
-fn parse_line(line: &str) -> Result<StreamCommand, ()> {
-    if let Some(rest) = line.strip_prefix("HELLO ") {
-        return (!rest.is_empty())
-            .then(|| StreamCommand::Hello(rest.to_string()))
-            .ok_or(());
+fn read_required_line(stdin: &mut impl BufRead, expectation: &str) -> Result<String, CliError> {
+    let mut line = String::new();
+    let bytes = stdin
+        .read_line(&mut line)
+        .map_err(|error| CliError::Io(error.to_string()))?;
+    if bytes == 0 {
+        return Err(CliError::Usage(format!(
+            "Malformed stream input: expected {expectation}"
+        )));
     }
-    if let Some(rest) = line.strip_prefix("TEXT ") {
-        return (!rest.is_empty())
-            .then(|| StreamCommand::Text(rest.to_string()))
-            .ok_or(());
-    }
-    if let Some(rest) = line.strip_prefix("KEY ") {
-        return parse_key(rest);
-    }
-    if let Some(rest) = line.strip_prefix("CTRL ") {
-        return parse_control(rest);
-    }
-    if let Some(rest) = line.strip_prefix("MOUSE ") {
-        return parse_mouse(rest);
-    }
-    if let Some(rest) = line.strip_prefix("RESIZE ") {
-        return parse_resize(rest);
-    }
-    if line == "STATUS" {
-        return Ok(StreamCommand::Status);
-    }
-    if let Some(rest) = line.strip_prefix("EXIT ") {
-        return rest.parse::<i32>().map(StreamCommand::Exit).map_err(|_| ());
-    }
-    Err(())
+    Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
-fn parse_key(value: &str) -> Result<StreamCommand, ()> {
-    const ALLOWED: &[&str] = &[
-        "ArrowUp",
-        "ArrowDown",
-        "ArrowLeft",
-        "ArrowRight",
-        "Enter",
-        "Escape",
-        "Backspace",
-        "Delete",
-    ];
-    ALLOWED
-        .contains(&value)
-        .then(|| StreamCommand::Key(value.to_string()))
-        .ok_or(())
-}
-
-fn parse_control(value: &str) -> Result<StreamCommand, ()> {
-    const ALLOWED: &[(&str, &str)] = &[("C", "Ctrl+C"), ("Q", "Ctrl+Q")];
-    ALLOWED
-        .iter()
-        .find_map(|(key, label)| {
-            (*key == value).then(|| StreamCommand::Control((*label).to_string()))
-        })
-        .ok_or(())
-}
-
-fn parse_mouse(value: &str) -> Result<StreamCommand, ()> {
-    let parts: Vec<&str> = value.split_whitespace().collect();
-    match parts.as_slice() {
-        ["PRESS", button, col, row] => Ok(StreamCommand::MousePress {
-            button: button.to_string(),
-            col: parse_positive_u16(col)?,
-            row: parse_positive_u16(row)?,
-        }),
-        ["RELEASE", button, col, row] => Ok(StreamCommand::MouseRelease {
-            button: button.to_string(),
-            col: parse_positive_u16(col)?,
-            row: parse_positive_u16(row)?,
-        }),
-        ["WHEEL", "up", col, row] => Ok(StreamCommand::MouseWheelUp {
-            col: parse_positive_u16(col)?,
-            row: parse_positive_u16(row)?,
-        }),
-        ["WHEEL", "down", col, row] => Ok(StreamCommand::MouseWheelDown {
-            col: parse_positive_u16(col)?,
-            row: parse_positive_u16(row)?,
-        }),
-        ["MOVE", button, col, row] => Ok(StreamCommand::MouseMove {
-            button: button.to_string(),
-            col: parse_positive_u16(col)?,
-            row: parse_positive_u16(row)?,
-        }),
-        _ => Err(()),
+fn parse_continue_line(line: String) -> Result<String, String> {
+    let Some(token) = line.strip_prefix("CONTINUE ") else {
+        return Err(line);
+    };
+    if token.is_empty() {
+        return Err(line);
     }
+    Ok(token.to_string())
 }
 
-fn parse_resize(value: &str) -> Result<StreamCommand, ()> {
-    let parts: Vec<&str> = value.split_whitespace().collect();
-    match parts.as_slice() {
-        [cols, rows] => Ok(StreamCommand::Resize {
-            cols: parse_positive_u16(cols)?,
-            rows: parse_positive_u16(rows)?,
-        }),
-        _ => Err(()),
+fn parse_exit_line(line: String) -> Result<i32, String> {
+    let Some(code) = line.strip_prefix("EXIT ") else {
+        return Err(line);
+    };
+    let parsed = code.parse::<i32>().map_err(|_| line.clone())?;
+    if !(0..=125).contains(&parsed) {
+        return Err(line);
     }
-}
-
-fn parse_positive_u16(value: &str) -> Result<u16, ()> {
-    let parsed = value.parse::<u16>().map_err(|_| ())?;
-    (parsed > 0).then_some(parsed).ok_or(())
-}
-
-fn render_command(command: &StreamCommand) -> String {
-    match command {
-        StreamCommand::Hello(value) => format!("DAR_STREAM_HELLO {value}"),
-        StreamCommand::Text(value) => format!("DAR_STREAM_TEXT {value}"),
-        StreamCommand::Key(value) => format!("DAR_STREAM_KEY {value}"),
-        StreamCommand::Control(value) => format!("DAR_STREAM_CONTROL {value}"),
-        StreamCommand::MousePress { button, col, row } => {
-            format!("DAR_STREAM_MOUSE_PRESS {button} {col} {row}")
-        }
-        StreamCommand::MouseRelease { button, col, row } => {
-            format!("DAR_STREAM_MOUSE_RELEASE {button} {col} {row}")
-        }
-        StreamCommand::MouseWheelUp { col, row } => {
-            format!("DAR_STREAM_MOUSE_WHEEL_UP {col} {row}")
-        }
-        StreamCommand::MouseWheelDown { col, row } => {
-            format!("DAR_STREAM_MOUSE_WHEEL_DOWN {col} {row}")
-        }
-        StreamCommand::MouseMove { button, col, row } => {
-            format!("DAR_STREAM_MOUSE_MOVE {button} {col} {row}")
-        }
-        StreamCommand::Resize { cols, rows } => format!("DAR_STREAM_RESIZE {cols} {rows}"),
-        StreamCommand::Status => "DAR_STREAM_STATUS ok".to_string(),
-        StreamCommand::Exit(code) => format!("DAR_STREAM_EXIT {code}"),
-    }
+    Ok(parsed)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_line, render_command, StreamCommand};
+    use std::io::Cursor;
+
+    use crate::cli::CliError;
+
+    use super::{parse_continue_line, parse_exit_line, run};
 
     #[test]
-    fn parses_and_formats_supported_stream_commands() {
+    fn emits_the_approved_streaming_handshake_without_echoing_control_lines() {
+        let mut stdin = Cursor::new("CONTINUE continue-token\nEXIT 7\n");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit_code =
+            run(&mut stdin, &mut stdout, &mut stderr).expect("streaming fixture should run");
+
+        let expected = (1..=20)
+            .map(|index| format!("DAR_STREAM_REPLAY {index:03}"))
+            .chain(std::iter::once("DAR_STREAM_READY".to_string()))
+            .chain((21..=40).map(|index| format!("DAR_STREAM_LIVE {index:03}")))
+            .chain(std::iter::once("DAR_STREAM_EXIT 7".to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(exit_code, 7);
+        assert_eq!(String::from_utf8(stdout).unwrap(), format!("{expected}\n"));
+        assert_eq!(String::from_utf8(stderr).unwrap(), "");
+    }
+
+    #[test]
+    fn rejects_malformed_continue_handshakes_and_eof_before_continue() {
+        let mut malformed_stdin = Cursor::new("CONTINUE\n");
+        let mut malformed_stdout = Vec::new();
+        let mut malformed_stderr = Vec::new();
+        let malformed_error = run(
+            &mut malformed_stdin,
+            &mut malformed_stdout,
+            &mut malformed_stderr,
+        )
+        .expect_err("missing continue token should fail");
+
         assert_eq!(
-            parse_line("HELLO handshake"),
-            Ok(StreamCommand::Hello("handshake".to_string()))
+            malformed_error,
+            CliError::Usage("Malformed stream input: CONTINUE".to_string())
         );
+
+        let mut eof_stdin = Cursor::new(Vec::<u8>::new());
+        let mut eof_stdout = Vec::new();
+        let mut eof_stderr = Vec::new();
+        let eof_error = run(&mut eof_stdin, &mut eof_stdout, &mut eof_stderr)
+            .expect_err("EOF before continue should fail");
+
         assert_eq!(
-            parse_line("CTRL C"),
-            Ok(StreamCommand::Control("Ctrl+C".to_string()))
-        );
-        assert_eq!(
-            parse_line("MOUSE MOVE left 4 5"),
-            Ok(StreamCommand::MouseMove {
-                button: "left".to_string(),
-                col: 4,
-                row: 5,
-            })
-        );
-        assert_eq!(
-            render_command(&StreamCommand::Resize {
-                cols: 100,
-                rows: 30
-            }),
-            "DAR_STREAM_RESIZE 100 30"
+            eof_error,
+            CliError::Usage("Malformed stream input: expected CONTINUE <token>".to_string())
         );
     }
 
     #[test]
-    fn rejects_malformed_stream_commands() {
-        assert!(parse_line("HELLO").is_err());
-        assert!(parse_line("KEY F1").is_err());
-        assert!(parse_line("CTRL X").is_err());
-        assert!(parse_line("MOUSE PRESS left 0 1").is_err());
-        assert!(parse_line("RESIZE 100 nope").is_err());
+    fn parses_continue_and_exit_lines_exactly() {
+        assert_eq!(
+            parse_continue_line("CONTINUE continue-token".to_string()),
+            Ok("continue-token".to_string())
+        );
+        assert_eq!(
+            parse_continue_line("CONTINUE".to_string()),
+            Err("CONTINUE".to_string())
+        );
+        assert_eq!(
+            parse_continue_line("CONTINUE ".to_string()),
+            Err("CONTINUE ".to_string())
+        );
+        assert_eq!(
+            parse_continue_line("EXIT 0".to_string()),
+            Err("EXIT 0".to_string())
+        );
+
+        assert_eq!(parse_exit_line("EXIT 0".to_string()), Ok(0));
+        assert_eq!(parse_exit_line("EXIT 125".to_string()), Ok(125));
+        assert_eq!(
+            parse_exit_line("EXIT 126".to_string()),
+            Err("EXIT 126".to_string())
+        );
+        assert_eq!(
+            parse_exit_line("EXIT -1".to_string()),
+            Err("EXIT -1".to_string())
+        );
+        assert_eq!(
+            parse_exit_line("EXIT not-a-number".to_string()),
+            Err("EXIT not-a-number".to_string())
+        );
     }
 }
