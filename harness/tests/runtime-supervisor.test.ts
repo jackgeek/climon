@@ -367,6 +367,66 @@ describe("RuntimeSupervisor.create", () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+
+  test("closes the browser and context when page creation fails", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-page-failure");
+    const options = runtimeOptions(workspace);
+    const server = controlledProcess({
+      pid: 5002,
+      label: "dashboard-server",
+      platform: "linux",
+      processGroup: 5002,
+    });
+    const closed: string[] = [];
+    const context = {
+      async newPage() {
+        throw new Error("page failed");
+      },
+      async close() {
+        closed.push("context");
+      },
+    } as unknown as BrowserContext;
+    const browser = {
+      async newContext() {
+        return context;
+      },
+      async close() {
+        closed.push("browser");
+      },
+    } as unknown as Browser;
+
+    try {
+      await expect(
+        RuntimeSupervisor.create(options, {
+          spawnProcess: async (spec) => {
+            mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+            writeFileSync(
+              join(spec.env.CLIMON_HOME!, "server.json"),
+              `${JSON.stringify({ pid: server.process.pid, port: 43123 })}\n`
+            );
+            return server.process;
+          },
+          fetch: async () =>
+            ({
+              ok: true,
+              json: async () => ({ ok: true }),
+            }) as Response,
+          launchBrowser: async () => browser,
+          processLedgerDependencies: {
+            server: {
+              kill() {
+                server.exit(0);
+              },
+            },
+          },
+        })
+      ).rejects.toThrow("page failed");
+
+      expect(closed).toEqual(["context", "browser"]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("RuntimeSupervisor.dispose", () => {

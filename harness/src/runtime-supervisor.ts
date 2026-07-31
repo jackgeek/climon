@@ -480,11 +480,10 @@ export class RuntimeSupervisor {
       });
 
       const browser = await launchBrowser();
-      const context = await browser.newContext();
-      const page = await context.newPage();
-
       state.browser = browser;
+      const context = await browser.newContext();
       state.context = context;
+      const page = await context.newPage();
       state.page = page;
 
       return new RuntimeSupervisor(
