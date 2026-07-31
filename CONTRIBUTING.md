@@ -65,10 +65,10 @@ reports a missing linker.
 Run a single test file with `bun test tests/config.test.ts`, or one test by name
 with `bun test tests/config.test.ts -t "name"`.
 
-### DAR harness
+### E2E harness
 
-Run the DAR harness from an isolated `.worktrees/` checkout so its branch-local
-client/server/fixture builds and `.test-tmp/dar-harness/` outputs do not pollute the
+Run the E2E harness from an isolated `.worktrees/` checkout so its branch-local
+client/server/fixture builds and `.test-tmp/e2e-harness/` outputs do not pollute the
 main checkout:
 
 ```bash
@@ -76,8 +76,8 @@ bun install --frozen-lockfile
 bun run harness:install-browser             # macOS / Windows
 bunx playwright install --with-deps chromium # Linux CI-style hosts
 bun run harness -- doctor
-bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/<platform>
-bun run harness -- aggregate --results-root .test-tmp/dar-harness-results
+bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/e2e-harness/<platform>
+bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results
 ```
 
 `bun run harness -- doctor` checks the toolchain, Chromium install, fixture

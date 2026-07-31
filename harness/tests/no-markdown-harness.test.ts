@@ -27,10 +27,54 @@ const TEXT_FILE_EXTENSIONS = new Set([
   ".yml",
 ]);
 const ALLOWED_REFERENCE_PATHS = new Set([
-  "docs/superpowers/plans/2026-07-31-cross-platform-dar-e2e-harness.md",
-  "docs/superpowers/specs/2026-07-31-cross-platform-dar-e2e-harness-design.md",
+  "docs/superpowers/plans/2026-07-31-e2e-harness-naming.md",
+  "docs/superpowers/specs/2026-07-31-e2e-harness-naming-design.md",
   "harness/tests/no-markdown-harness.test.ts",
 ]);
+const DOCUMENTATION_RENAME_CHECKS = [
+  {
+    path: "harness/README.md",
+    required: [
+      "# E2E harness",
+      ".test-tmp/e2e-harness/<platform>/",
+      ".test-tmp/e2e-harness-results/",
+      "first DAR scenarios",
+    ],
+  },
+  {
+    path: "CONTRIBUTING.md",
+    required: [
+      "### E2E harness",
+      ".test-tmp/e2e-harness/<platform>",
+      ".test-tmp/e2e-harness-results",
+    ],
+  },
+  {
+    path: "docs/features.md",
+    required: [
+      "| cli-26 | Cross-platform E2E harness |",
+      ".github/workflows/e2e-harness.yml",
+      "first DAR scenarios",
+    ],
+  },
+  {
+    path: "docs/manual-tests/README.md",
+    required: [
+      "repo-local E2E harness",
+      "../../.github/workflows/e2e-harness.yml",
+      "first DAR scenarios",
+    ],
+  },
+  {
+    path: "docs/manual-tests/daemon-actor-rewrite.md",
+    required: [
+      "repo-local E2E harness",
+      "../../.github/workflows/e2e-harness.yml",
+      "first DAR scenarios",
+      ".test-tmp/e2e-harness-results",
+    ],
+  },
+] as const;
 const FORBIDDEN_REPOSITORY_PATTERNS = [
   {
     label: "yaml harness metadata",
@@ -47,6 +91,18 @@ const FORBIDDEN_REPOSITORY_PATTERNS = [
   {
     label: "old markdown catalogue module path",
     pattern: /\bharness\/src\/catalog\b/g,
+  },
+  {
+    label: "obsolete DAR harness display name",
+    pattern: /\bDAR Harness\b|\bDAR harness\b/g,
+  },
+  {
+    label: "obsolete DAR harness slug",
+    pattern: /\bdar-e2e-harness\b/g,
+  },
+  {
+    label: "obsolete DAR harness artifact root",
+    pattern: /\.test-tmp\/dar-harness/g,
   },
 ];
 const OBSOLETE_PATHS = [
@@ -139,14 +195,28 @@ test("harness README documents the exact workflow commands and keeps Markdown no
   expect(readme).toContain("bun run harness -- doctor");
   expect(readme).toContain("bun run harness -- run DAR-01 DAR-02");
   expect(readme).toContain(
-    "bun run harness -- aggregate --results-root .test-tmp/dar-harness-results"
+    "bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results"
   );
-  expect(readme).toContain(".test-tmp/dar-harness/<platform>/");
-  expect(readme).toContain(".test-tmp/dar-harness-results/");
+  expect(readme).toContain(".test-tmp/e2e-harness/<platform>/");
+  expect(readme).toContain(".test-tmp/e2e-harness-results/");
+  expect(readme).toContain("# E2E harness");
   expect(readme).toContain("Markdown docs never configure executable tests");
   expect(readme).not.toContain("bun run harness doctor");
-  expect(readme).not.toContain("bun run harness aggregate --results-root harness-artifacts/results");
+  expect(readme).not.toContain(
+    "bun run harness aggregate --results-root harness-artifacts/results"
+  );
   expect(readme).not.toContain("harness-artifacts/<platform>/run-1");
+  expect(readme).not.toContain("DAR harness");
+  expect(readme).not.toContain(".test-tmp/dar-harness");
+});
+
+test("documentation names the reusable infrastructure the E2E harness while preserving DAR scenarios", async () => {
+  for (const check of DOCUMENTATION_RENAME_CHECKS) {
+    const text = await readFile(join(REPOSITORY_ROOT, check.path), "utf8");
+    for (const required of check.required) {
+      expect(text).toContain(required);
+    }
+  }
 });
 
 test("repository source tree no longer carries markdown-driven CI harness remnants", async () => {

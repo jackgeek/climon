@@ -13,10 +13,10 @@ phase authors its manual cases here as part of its definition of done.
 done** — not only rewrite phases. Add or update a feature file (see
 [Test-case shape](#test-case-shape)) and link it from [Cases by phase](#cases-by-phase).
 
-Automation companion: the repo-local DAR harness in
+Automation companion: the repo-local E2E harness in
 [`../../harness/README.md`](../../harness/README.md) automates `DAR-01` and
-`DAR-02`, and the GitHub Actions workflow
-[`../../.github/workflows/dar-e2e-harness.yml`](../../.github/workflows/dar-e2e-harness.yml)
+`DAR-02` as its first DAR scenarios, and the GitHub Actions workflow
+[`../../.github/workflows/e2e-harness.yml`](../../.github/workflows/e2e-harness.yml)
 aggregates those results. The manual cases below remain the release-gate source
 of truth; automation coverage is additive, not a claim that the full
 cross-platform matrix has passed.
@@ -97,7 +97,7 @@ result-tracking row.
 | — | Terminal emoji / wide-character width fidelity — xterm.js Unicode 11 widths so wide emoji occupy two cells instead of eating spaces | [terminal-emoji-width.md](terminal-emoji-width.md) |
 | — | Jiggle-repaint on local restore (force wrapped app to redraw when the local terminal regains control) | [jiggle-repaint-on-restore.md](jiggle-repaint-on-restore.md) |
 | — | Terminal fade-in on (re)attach — xterm starts invisible over the theme background and fades in once the replay/reflow settles, masking the jiggle | [terminal-fade-in-on-attach.md](terminal-fade-in-on-attach.md) |
-| — | Daemon actor rewrite — cross-platform release-gate matrix for the opt-in actor session engine (`CLIMON_SESSION_ENGINE=actor`; default stays the legacy engine): attached/headless I/O, take-control, jiggle, attention, title/progress, exit finalization, viewer isolation, signals, engine rollback, plus DAR harness automation for `DAR-01`/`DAR-02` | [daemon-actor-rewrite.md](daemon-actor-rewrite.md) |
+| — | Daemon actor rewrite — cross-platform release-gate matrix for the opt-in actor session engine (`CLIMON_SESSION_ENGINE=actor`; default stays the legacy engine): attached/headless I/O, take-control, jiggle, attention, title/progress, exit finalization, viewer isolation, signals, engine rollback, plus the E2E harness's first DAR scenarios (`DAR-01`/`DAR-02`) | [daemon-actor-rewrite.md](daemon-actor-rewrite.md) |
 
 ## Recording results
 

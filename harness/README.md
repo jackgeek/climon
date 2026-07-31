@@ -1,7 +1,6 @@
-# DAR harness
+# E2E harness
 
-Repo-local automation for the daemon-actor release gate. It currently exercises
-`DAR-01` and `DAR-02` from
+Repo-local automation for the reusable cross-platform E2E harness. Its first DAR scenarios exercise `DAR-01` and `DAR-02` from
 [`docs/manual-tests/daemon-actor-rewrite.md`](../docs/manual-tests/daemon-actor-rewrite.md)
 and writes machine-readable results for local debugging and CI aggregation.
 
@@ -20,16 +19,16 @@ and writes machine-readable results for local debugging and CI aggregation.
 ```bash
 bun run harness -- doctor
 bun run harness list
-bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/<platform>
-bun run harness -- aggregate --results-root .test-tmp/dar-harness-results
+bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/e2e-harness/<platform>
+bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results
 ```
 
 ## Artifact layout
 
 - Per run: `<artifact-root>/results.json`, `summary.md`, `junit.xml`
 - Per case: `<artifact-root>/cases/DAR-0X/`
-- CI matrix convention: `.test-tmp/dar-harness/<platform>/`
-- CI aggregate convention: `.test-tmp/dar-harness-results/`
+- CI matrix convention: `.test-tmp/e2e-harness/<platform>/`
+- CI aggregate convention: `.test-tmp/e2e-harness-results/`
 
 Case folders carry `result.json`, logs, browser traces, server state snapshots,
 and any scenario-specific evidence.
@@ -63,11 +62,11 @@ failed-subcheck allowlist, and `unsupported` stays non-blocking.
 
 - Start with `bun run harness -- doctor`; it checks toolchain, Chromium, fixture
   manifest, and scenario/manual wiring.
-- Run one or more DAR ids locally: `bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/<platform>`
+- Run one or more DAR ids locally: `bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/e2e-harness/<platform>`
 - Inspect `summary.md`, `junit.xml`, and per-case `logs/`, `home/`, and
   `browser-trace.zip` artifacts before re-running.
 - Re-aggregate downloaded CI artifacts locally with
-  `bun run harness -- aggregate --results-root .test-tmp/dar-harness-results`.
+  `bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results`.
 
 ## Native `node-pty` notes
 
