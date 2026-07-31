@@ -400,7 +400,7 @@ async function defaultReadToolVersions(
   root: string,
   runner: CommandRunner
 ): Promise<DoctorVersions> {
-  const logsRoot = join(root, ".test-tmp", "dar-harness", "doctor", "logs");
+  const logsRoot = join(root, ".test-tmp", "e2e-harness", "doctor", "logs");
 
   async function commandVersion(
     label: string,
@@ -446,8 +446,8 @@ async function defaultResolveRevision(
     cwd: root,
     env: { ...process.env },
     timeoutMs: 30_000,
-    stdoutPath: join(root, ".test-tmp", "dar-harness", "run", "git.stdout.log"),
-    stderrPath: join(root, ".test-tmp", "dar-harness", "run", "git.stderr.log"),
+    stdoutPath: join(root, ".test-tmp", "e2e-harness", "run", "git.stdout.log"),
+    stderrPath: join(root, ".test-tmp", "e2e-harness", "run", "git.stderr.log"),
   });
 
   if (result.code !== 0) {
@@ -636,7 +636,7 @@ async function executeRun(
   const artifactRoot =
     parsed.artifactRoot !== undefined
       ? resolve(options.root, parsed.artifactRoot)
-      : join(options.root, ".test-tmp", "dar-harness", platform);
+      : join(options.root, ".test-tmp", "e2e-harness", platform);
   const selectedDefinitions = parsed.darIds
     ? definitions.filter((definition) => parsed.darIds!.includes(definition.darId))
     : [...definitions];
@@ -654,7 +654,7 @@ async function executeRun(
   if (supportedDefinitions.length > 0) {
     build = await (options.buildArtifacts ?? buildArtifactsImpl)({
       root: options.root,
-      cacheRoot: join(options.root, ".test-tmp", "dar-harness", "build"),
+      cacheRoot: join(options.root, ".test-tmp", "e2e-harness", "build"),
       platform,
       runner,
     });
@@ -920,7 +920,7 @@ async function executeAggregate(
   const resultsRoot =
     parsed.resultsRoot !== undefined
       ? resolve(options.root, parsed.resultsRoot)
-      : join(options.root, ".test-tmp", "dar-harness");
+      : join(options.root, ".test-tmp", "e2e-harness");
 
   try {
     const reportPaths = await collectResultReportPaths(resultsRoot, fs);

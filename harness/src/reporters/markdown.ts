@@ -23,7 +23,7 @@ function writeGovernanceLines(lines: string[], expectation: PlatformExpectation)
 
 export function renderMarkdownReport(report: ResultsReport): string {
   const lines = [
-    "# DAR harness summary",
+    "# E2E harness summary",
     "",
     `- revision: ${report.revision}`,
     `- generatedAt: ${report.generatedAt}`,

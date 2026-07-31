@@ -208,7 +208,7 @@ function createRunOptions(
         serverPath: join(workspace, "dist", "climon-server"),
         fixturePath: join(workspace, "dist", "climon-harness-fixture"),
         revision: DEFAULT_REVISION,
-        manifestPath: join(workspace, ".test-tmp", "dar-harness", "build", "manifest.json"),
+        manifestPath: join(workspace, ".test-tmp", "e2e-harness", "build", "manifest.json"),
       }) satisfies BuildArtifacts,
     createRuntimeSupervisor: createRuntimeFactory(runtimeRecord),
     createBrowserDriver: () => new FakeBrowserDriver(),
@@ -460,13 +460,23 @@ describe("runCli", () => {
             windows: { expected: "pass" },
           },
         }),
+        buildArtifacts: async ({ cacheRoot }: { cacheRoot: string }) => {
+          expect(cacheRoot).toBe(join(workspace, ".test-tmp", "e2e-harness", "build"));
+          return {
+            clientPath: join(workspace, "dist", "climon"),
+            serverPath: join(workspace, "dist", "climon-server"),
+            fixturePath: join(workspace, "dist", "climon-harness-fixture"),
+            revision: DEFAULT_REVISION,
+            manifestPath: join(workspace, ".test-tmp", "e2e-harness", "build", "manifest.json"),
+          } satisfies BuildArtifacts;
+        },
         runDar01: async () => [failedSubcheck("attached-startup")],
       });
       const cli = requireRunCli();
 
       await expect(cli(["run", "DAR-01"], options)).resolves.toBe(1);
 
-      expect(readJson(join(workspace, ".test-tmp", "dar-harness", "linux", "results.json"))).toEqual({
+      expect(readJson(join(workspace, ".test-tmp", "e2e-harness", "linux", "results.json"))).toEqual({
         revision: DEFAULT_REVISION,
         generatedAt: FIXED_NOW.toISOString(),
         results: [
@@ -474,7 +484,7 @@ describe("runCli", () => {
             artifactDir: join(
               workspace,
               ".test-tmp",
-              "dar-harness",
+              "e2e-harness",
               "linux",
               "cases",
               "DAR-01"
@@ -554,7 +564,7 @@ describe("runCli", () => {
       await expect(cli(["run", "DAR-01"], options)).resolves.toBe(1);
 
       const result = readJson(
-        join(workspace, ".test-tmp", "dar-harness", "linux", "cases", "DAR-01", "result.json")
+        join(workspace, ".test-tmp", "e2e-harness", "linux", "cases", "DAR-01", "result.json")
       ) as CaseResult;
       expect(result.status).toBe("cleanup-failure");
       expect(result.blocking).toBe(true);
@@ -586,7 +596,7 @@ describe("runCli", () => {
       const caseDir = join(
         workspace,
         ".test-tmp",
-        "dar-harness",
+        "e2e-harness",
         "linux",
         "cases",
         "DAR-01"
@@ -611,7 +621,7 @@ describe("runCli", () => {
       const caseDir = join(
         workspace,
         ".test-tmp",
-        "dar-harness",
+        "e2e-harness",
         "linux",
         "cases",
         "DAR-01"
@@ -639,7 +649,7 @@ describe("runCli", () => {
     const workspace = makeWorkspace("cli-aggregate");
 
     try {
-      const root = join(workspace, "artifacts");
+      const root = join(workspace, ".test-tmp", "e2e-harness");
       const cli = requireRunCli();
       const definitions = createDefinitions({
         "DAR-01": {
@@ -790,7 +800,7 @@ describe("runCli", () => {
     const workspace = makeWorkspace("cli-aggregate-success");
 
     try {
-      const root = join(workspace, "artifacts");
+      const root = join(workspace, ".test-tmp", "e2e-harness");
       const cli = requireRunCli();
       const definitions = createDefinitions({
         "DAR-01": {
@@ -849,7 +859,7 @@ describe("runCli", () => {
 
       const options = createRunOptions(workspace, { definitions });
 
-      await expect(cli(["aggregate", "--results-root", root], options)).resolves.toBe(0);
+      await expect(cli(["aggregate"], options)).resolves.toBe(0);
 
       expect((options.stdout as CapturedStream).text).toBe(
         [

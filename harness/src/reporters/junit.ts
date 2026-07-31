@@ -84,7 +84,7 @@ export function renderJUnitReport(report: ResultsReport): string {
   const totalDurationMs = report.results.reduce((sum, result) => sum + result.durationMs, 0);
   const lines = [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    `<testsuite name="dar-harness" tests="${report.results.length}" failures="${failures}" skipped="${skipped}" time="${durationSeconds(
+    `<testsuite name="e2e-harness" tests="${report.results.length}" failures="${failures}" skipped="${skipped}" time="${durationSeconds(
       totalDurationMs
     )}">`,
     "  <properties>",

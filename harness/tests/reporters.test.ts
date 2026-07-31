@@ -308,7 +308,7 @@ describe("reporters", () => {
   });
 
   test("renders markdown summaries with expectation governance details", () => {
-    expect(renderMarkdownReport(sampleReport())).toBe(`# DAR harness summary
+    expect(renderMarkdownReport(sampleReport())).toBe(`# E2E harness summary
 
 - revision: rev-123
 - generatedAt: 2026-07-31T21:27:33.660Z
@@ -374,7 +374,7 @@ describe("reporters", () => {
 
   test("renders valid JUnit XML with pass skip and failure semantics", () => {
     expect(renderJUnitReport(sampleReport())).toBe(`<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="dar-harness" tests="5" failures="1" skipped="3" time="0.027">
+<testsuite name="e2e-harness" tests="5" failures="1" skipped="3" time="0.027">
   <properties>
     <property name="revision" value="rev-123"/>
     <property name="generatedAt" value="2026-07-31T21:27:33.660Z"/>
