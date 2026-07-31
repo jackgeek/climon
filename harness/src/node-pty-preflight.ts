@@ -1,9 +1,22 @@
 import { chmod, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
+type NodePtyFileSystem = {
+  chmod: typeof chmod;
+  readdir: typeof readdir;
+  stat: typeof stat;
+};
+
+const nodePtyFileSystem: NodePtyFileSystem = {
+  chmod,
+  readdir,
+  stat,
+};
+
 export async function prepareNodePty(
   rootDir = process.cwd(),
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  fileSystem: NodePtyFileSystem = nodePtyFileSystem
 ): Promise<void> {
   if (platform === "win32") {
     return;
@@ -13,7 +26,7 @@ export async function prepareNodePty(
   let prebuilds;
 
   try {
-    prebuilds = await readdir(prebuildsDir, {
+    prebuilds = await fileSystem.readdir(prebuildsDir, {
       encoding: "utf8",
       withFileTypes: true,
     });
@@ -32,8 +45,8 @@ export async function prepareNodePty(
     const helperPath = join(prebuildsDir, prebuild.name, "spawn-helper");
 
     try {
-      if ((await stat(helperPath)).isFile()) {
-        await chmod(helperPath, 0o755);
+      if ((await fileSystem.stat(helperPath)).isFile()) {
+        await fileSystem.chmod(helperPath, 0o755);
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {

@@ -33,6 +33,57 @@ function spawnHelperPath(workspace: string): string {
 }
 
 describe("prepareNodePty", () => {
+  test("returns successfully when node-pty prebuilds are absent", async () => {
+    let readdirCalls = 0;
+    let statCalls = 0;
+    let chmodCalls = 0;
+    const missing = Object.assign(new Error("missing prebuilds"), {
+      code: "ENOENT",
+    });
+
+    await prepareNodePty("/virtual/workspace", "darwin", {
+      async readdir() {
+        readdirCalls += 1;
+        throw missing;
+      },
+      async stat() {
+        statCalls += 1;
+        throw new Error("stat should not run when prebuilds are absent");
+      },
+      async chmod() {
+        chmodCalls += 1;
+      },
+    });
+
+    expect(readdirCalls).toBe(1);
+    expect(statCalls).toBe(0);
+    expect(chmodCalls).toBe(0);
+  });
+
+  test("propagates non-ENOENT filesystem failures", async () => {
+    let readdirCalls = 0;
+    const failure = Object.assign(new Error("permission denied"), {
+      code: "EACCES",
+    });
+
+    await expect(
+      prepareNodePty("/virtual/workspace", "darwin", {
+        async readdir() {
+          readdirCalls += 1;
+          throw failure;
+        },
+        async stat() {
+          throw new Error("stat should not run when prebuilds scan fails");
+        },
+        async chmod() {
+          throw new Error("chmod should not run when prebuilds scan fails");
+        },
+      })
+    ).rejects.toBe(failure);
+
+    expect(readdirCalls).toBe(1);
+  });
+
   test.skipIf(process.platform === "win32")(
     "chmods node-pty spawn-helper files to 0755 outside Windows",
     async () => {
