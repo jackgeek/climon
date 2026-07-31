@@ -191,15 +191,15 @@ function headlessStderrPath(context: Dar02Context): string {
 }
 
 function sessionMetaEvidencePath(id: string): string {
-  return `sessions/${id}.json`;
+  return `home/sessions/${id}.json`;
 }
 
 function finalScrollbackEvidencePath(id: string): string {
-  return `sessions/${id}.scrollback`;
+  return `home/sessions/${id}.scrollback`;
 }
 
 function daemonLogEvidencePath(id: string): string {
-  return `logs/daemon/${id}.log`;
+  return `home/logs/daemon/${id}.log`;
 }
 
 function defaultSleep(ms: number): Promise<void> {

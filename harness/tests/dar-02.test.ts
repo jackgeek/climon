@@ -336,6 +336,16 @@ function createHarness(
   return { browser, clock, context, dependencies, events, process, sessions, spawnCalls };
 }
 
+function expectedBaseEvidencePaths(sessionId = SESSION_ID): string[] {
+  return [
+    "headless/stdout.log",
+    "headless/stderr.log",
+    `home/sessions/${sessionId}.json`,
+    `home/logs/daemon/${sessionId}.log`,
+    `home/sessions/${sessionId}.scrollback`,
+  ];
+}
+
 describe("runDar02", () => {
   test("runs all DAR-02 subchecks in order, tracks immediately, waits for launcher exit 0, and waits for READY before opening the browser", async () => {
     const { browser, context, dependencies, events, process, sessions, spawnCalls } =
@@ -387,6 +397,42 @@ describe("runDar02", () => {
     );
     expect(browser.sendTerminalLineCalls).toEqual([`CONTINUE ${RUN_ID}`, "EXIT 0"]);
     expect(process.waitForExitCalls).toHaveLength(1);
+  });
+
+  test("records persisted artifact evidence paths relative to the case artifact directory", async () => {
+    const { context, dependencies } = createHarness(createState());
+
+    const results = await runDar02(context, dependencies);
+    const baseEvidence = expectedBaseEvidencePaths();
+
+    expect(results.find((result) => result.name === "headless-launch")?.evidence).toEqual([
+      ...baseEvidence,
+      SESSION_ID,
+    ]);
+    expect(results.find((result) => result.name === "daemon-running")?.evidence).toEqual(
+      baseEvidence
+    );
+    expect(results.find((result) => result.name === "midstream-attach")?.evidence).toEqual(
+      baseEvidence
+    );
+    expect(results.find((result) => result.name === "replay-visible")?.evidence).toEqual([
+      ...baseEvidence,
+      READY_MARKER,
+    ]);
+    expect(results.find((result) => result.name === "browser-input")?.evidence).toEqual([
+      ...baseEvidence,
+      `CONTINUE ${RUN_ID}`,
+    ]);
+    expect(results.find((result) => result.name === "live-output")?.evidence).toEqual([
+      ...baseEvidence,
+      LAST_LIVE_MARKER,
+    ]);
+    expect(results.find((result) => result.name === "viewer-independence")?.evidence).toEqual(
+      baseEvidence
+    );
+    expect(results.find((result) => result.name === "successful-finalization")?.evidence).toEqual(
+      baseEvidence
+    );
   });
 
   test("uses exact replay/live markers and exact browser protocol lines", async () => {
