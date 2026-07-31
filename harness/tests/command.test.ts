@@ -201,4 +201,67 @@ describe("BunCommandRunner", () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+
+  test("surfaces log file errors without waiting for the command timeout", async () => {
+    const workspace = makeWorkspace("command-log-error");
+    const runner = new BunCommandRunner();
+    const stdoutPath = join(workspace, "stdout-directory");
+    const stderrPath = join(workspace, "stderr.log");
+    mkdirSync(stdoutPath);
+    const startedAt = performance.now();
+
+    try {
+      const error = await runner
+        .run({
+          file: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1_000)"],
+          cwd: workspace,
+          env: {},
+          timeoutMs: 2_000,
+          stdoutPath,
+          stderrPath,
+        })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          code: "EISDIR",
+        })
+      );
+      expect(error).not.toBeInstanceOf(HarnessError);
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("classifies a missing executable as a prerequisite failure", async () => {
+    const workspace = makeWorkspace("command-missing-executable");
+    const runner = new BunCommandRunner();
+
+    try {
+      const error = await runner
+        .run({
+          file: join(workspace, "does-not-exist"),
+          args: ["--version"],
+          cwd: workspace,
+          env: {},
+          timeoutMs: 1_000,
+          stdoutPath: join(workspace, "stdout.log"),
+          stderrPath: join(workspace, "stderr.log"),
+        })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "prerequisite",
+          message: expect.stringContaining("does-not-exist"),
+        })
+      );
+      expect((error as HarnessError).cause).toBeInstanceOf(Error);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
 });

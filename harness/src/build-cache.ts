@@ -269,10 +269,19 @@ async function readRustVersion(): Promise<string> {
     stderr: "pipe",
     shell: false,
   };
-  const subprocess = Bun.spawn(
-    ["rustc", "--version"],
-    spawnOptions as Parameters<typeof Bun.spawn>[1]
-  );
+  let subprocess: ReturnType<typeof Bun.spawn>;
+  try {
+    subprocess = Bun.spawn(
+      ["rustc", "--version"],
+      spawnOptions as Parameters<typeof Bun.spawn>[1]
+    );
+  } catch (error) {
+    throw new HarnessError(
+      "prerequisite",
+      "Failed to start rustc --version",
+      { cause: error }
+    );
+  }
   const stdout = await readStreamText(subprocess.stdout);
   const stderr = await readStreamText(subprocess.stderr);
   const code = await subprocess.exited;

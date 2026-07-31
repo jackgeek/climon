@@ -101,10 +101,19 @@ export class BunCommandRunner implements CommandRunner {
       stdout: "pipe",
       stderr: "pipe",
     };
-    const subprocess = Bun.spawn(
-      [spec.file, ...spec.args],
-      spawnOptions as Parameters<typeof Bun.spawn>[1]
-    );
+    let subprocess: ReturnType<typeof Bun.spawn>;
+    try {
+      subprocess = Bun.spawn(
+        [spec.file, ...spec.args],
+        spawnOptions as Parameters<typeof Bun.spawn>[1]
+      );
+    } catch (error) {
+      throw new HarnessError(
+        "prerequisite",
+        `Failed to start command: ${spec.file} ${spec.args.join(" ")}`,
+        { cause: error }
+      );
+    }
 
     const stdoutCollector = collectStream(
       subprocess.stdout as unknown as WebReadableStream<Uint8Array>,
@@ -114,15 +123,15 @@ export class BunCommandRunner implements CommandRunner {
       subprocess.stderr as unknown as WebReadableStream<Uint8Array>,
       spec.stderrPath
     );
-    const completionPromise = (async () => {
-      const code = await subprocess.exited;
-      const [stdout, stderr] = await Promise.all([
+    const completionPromise = Promise.all([
+      subprocess.exited,
+      Promise.all([
         stdoutCollector.promise,
         stderrCollector.promise,
-      ]);
-
+      ]),
+    ]).then(([code, [stdout, stderr]]) => {
       return { code, stdout, stderr };
-    })();
+    });
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
@@ -168,6 +177,18 @@ export class BunCommandRunner implements CommandRunner {
         stderr: exit.stderr,
         durationMs: Math.round(performance.now() - startedAt),
       };
+    } catch (error) {
+      try {
+        subprocess.kill("SIGKILL");
+      } catch {
+        // The process may already have exited.
+      }
+      await Promise.allSettled([
+        stdoutCollector.abort(),
+        stderrCollector.abort(),
+        subprocess.exited,
+      ]);
+      throw error;
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);
