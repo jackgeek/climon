@@ -5,6 +5,7 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import type { BuildArtifacts } from "../src/build-cache.js";
 import type { CommandResult, CommandRunner, CommandSpec } from "../src/command.js";
 import type { OwnedProcess } from "../src/process-ledger.js";
+import { HarnessError } from "../src/types.js";
 import {
   RuntimeSupervisor,
   type RuntimeSupervisorDependencies,
@@ -516,9 +517,10 @@ describe("RuntimeSupervisor.create", () => {
       processGroup: 5002,
     });
     const closed: string[] = [];
+    const pageFailure = new Error("page failed");
     const context = {
       async newPage() {
-        throw new Error("page failed");
+        throw pageFailure;
       },
       async close() {
         closed.push("context");
@@ -534,33 +536,130 @@ describe("RuntimeSupervisor.create", () => {
     } as unknown as Browser;
 
     try {
-      await expect(
-        RuntimeSupervisor.create(options, {
-          spawnProcess: async (spec) => {
-            mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
-            writeFileSync(
-              join(spec.env.CLIMON_HOME!, "server.json"),
-              `${JSON.stringify({ pid: server.process.pid, port: 43123 })}\n`
-            );
-            return server.process;
-          },
-          fetch: async () =>
-            ({
-              ok: true,
-              json: async () => ({ ok: true }),
-            }) as Response,
-          launchBrowser: async () => browser,
-          processLedgerDependencies: {
-            server: {
-              kill() {
-                server.exit(0);
-              },
+      const error = await RuntimeSupervisor.create(options, {
+        spawnProcess: async (spec) => {
+          mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+          writeFileSync(
+            join(spec.env.CLIMON_HOME!, "server.json"),
+            `${JSON.stringify({ pid: server.process.pid, port: 43123 })}\n`
+          );
+          return server.process;
+        },
+        fetch: async () =>
+          ({
+            ok: true,
+            json: async () => ({ ok: true }),
+          }) as Response,
+        launchBrowser: async () => browser,
+        processLedgerDependencies: {
+          server: {
+            kill() {
+              server.exit(0);
             },
           },
-        })
-      ).rejects.toThrow("page failed");
+        },
+      }).catch((caught: unknown) => caught);
 
+      expect(error).toBe(pageFailure);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("page failed");
       expect(closed).toEqual(["context", "browser"]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("surfaces startup cleanup failures when page creation and server termination both fail", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-startup-cleanup-failure");
+    const options = runtimeOptions(workspace);
+    const server = controlledProcess({
+      pid: 5005,
+      label: "dashboard-server",
+      platform: "linux",
+      processGroup: 5005,
+    });
+    const log: string[] = [];
+    const pageFailure = new Error("page failed");
+    const contextCloseFailure = new Error("context close failed");
+    const browserCloseFailure = new Error("browser close failed");
+    const terminationFailure = new Error("server stuck");
+    const context = {
+      async newPage() {
+        throw pageFailure;
+      },
+      async close() {
+        log.push("context-close");
+        throw contextCloseFailure;
+      },
+    } as unknown as BrowserContext;
+    const browser = {
+      async newContext() {
+        return context;
+      },
+      async close() {
+        log.push("browser-close");
+        throw browserCloseFailure;
+      },
+    } as unknown as Browser;
+
+    try {
+      const error = await RuntimeSupervisor.create(options, {
+        spawnProcess: async (spec) => {
+          mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+          writeFileSync(
+            join(spec.env.CLIMON_HOME!, "server.json"),
+            `${JSON.stringify({ pid: server.process.pid, port: 43123 })}\n`
+          );
+          return server.process;
+        },
+        fetch: async () =>
+          ({
+            ok: true,
+            json: async () => ({ ok: true }),
+          }) as Response,
+        launchBrowser: async () => browser,
+        processLedgerDependencies: {
+          server: {
+            kill() {
+              log.push("server-terminate");
+              throw terminationFailure;
+            },
+          },
+        },
+      }).catch((caught: unknown) => caught);
+
+      expect(log).toHaveLength(3);
+      expect(log).toContain("context-close");
+      expect(log).toContain("server-terminate");
+      expect(log).toContain("browser-close");
+      expect(error).toBeInstanceOf(HarnessError);
+      expect(error).toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "cleanup",
+          cause: expect.any(AggregateError),
+        })
+      );
+      expect(error).not.toBe(pageFailure);
+      expect((error as Error).message).toContain("page failed");
+      expect((error as Error).message).toContain("server stuck");
+      expect((error as Error).message).toContain("Owned processes still running");
+      expect((error as Error).message).toContain("context close failed");
+      expect((error as Error).message).toContain("browser close failed");
+
+      const aggregateCause = (error as HarnessError).cause as AggregateError;
+      const aggregateMessages = Array.from(aggregateCause.errors, (entry) =>
+        entry instanceof Error ? entry.message : String(entry)
+      );
+      expect(aggregateMessages).toContain("page failed");
+      expect(aggregateMessages).toContain("context close failed");
+      expect(aggregateMessages).toContain("browser close failed");
+      expect(
+        aggregateMessages.some((message) => message.includes("server stuck"))
+      ).toBe(true);
+      expect(
+        aggregateMessages.some((message) => message.includes("Owned processes still running"))
+      ).toBe(true);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

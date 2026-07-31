@@ -232,6 +232,31 @@ function cleanupError(errors: unknown[]): HarnessError {
   );
 }
 
+function cleanupCauseErrors(error: unknown): unknown[] {
+  if (error instanceof HarnessError && error.cause instanceof AggregateError) {
+    return Array.from(error.cause.errors);
+  }
+  if (error instanceof AggregateError) {
+    return Array.from(error.errors);
+  }
+  return [error];
+}
+
+function startupCleanupError(startupError: unknown, cleanupFailure: unknown): HarnessError {
+  const cleanupErrors = cleanupCauseErrors(cleanupFailure);
+
+  return new HarnessError(
+    "cleanup",
+    `Runtime startup failed: ${cleanupMessage(startupError)}; startup cleanup also failed: ${cleanupMessage(cleanupFailure)}`,
+    {
+      cause: new AggregateError(
+        [startupError, ...(cleanupErrors.length > 0 ? cleanupErrors : [cleanupFailure])],
+        "runtime startup cleanup failed"
+      ),
+    }
+  );
+}
+
 function observeServerExit(wait: () => Promise<number | null>): Promise<ObservedServerExit> {
   return Promise.resolve().then(() => wait()).then(
     (code) => ({ type: "exit", code }),
@@ -621,7 +646,11 @@ export class RuntimeSupervisor {
         now
       );
     } catch (error) {
-      await RuntimeSupervisor.cleanupStartupFailure(state).catch(() => undefined);
+      try {
+        await RuntimeSupervisor.cleanupStartupFailure(state);
+      } catch (cleanupFailure) {
+        throw startupCleanupError(error, cleanupFailure);
+      }
       throw error;
     }
   }
@@ -772,21 +801,58 @@ export class RuntimeSupervisor {
   }
 
   private static async cleanupStartupFailure(state: StartupState): Promise<void> {
-    const cleanupAttempts: Promise<unknown>[] = [];
+    const errors: unknown[] = [];
 
     if (state.page) {
-      cleanupAttempts.push(state.page.close().catch(() => undefined));
+      try {
+        await state.page.close();
+      } catch (error) {
+        errors.push(error);
+      }
     }
+
     if (state.context) {
-      cleanupAttempts.push(state.context.close().catch(() => undefined));
+      try {
+        await state.context.close();
+      } catch (error) {
+        errors.push(error);
+      }
     }
+
+    try {
+      await state.processes.terminateAll();
+    } catch (error) {
+      errors.push(error);
+    }
+
+    try {
+      await state.serverProcesses.terminateAll();
+    } catch (error) {
+      errors.push(error);
+    }
+
+    try {
+      await state.processes.assertNoSurvivors();
+    } catch (error) {
+      errors.push(error);
+    }
+
+    try {
+      await state.serverProcesses.assertNoSurvivors();
+    } catch (error) {
+      errors.push(error);
+    }
+
     if (state.browser) {
-      cleanupAttempts.push(state.browser.close().catch(() => undefined));
+      try {
+        await state.browser.close();
+      } catch (error) {
+        errors.push(error);
+      }
     }
 
-    cleanupAttempts.push(state.processes.terminateAll().catch(() => undefined));
-    cleanupAttempts.push(state.serverProcesses.terminateAll().catch(() => undefined));
-
-    await Promise.allSettled(cleanupAttempts);
+    if (errors.length > 0) {
+      throw cleanupError(errors);
+    }
   }
 }
