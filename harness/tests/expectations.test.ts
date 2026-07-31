@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { compareExpectation } from "../src/expectations.js";
+import { compareOutcome } from "../src/expectations.js";
 import type {
   PlatformExpectation,
   SubcheckResult,
@@ -21,12 +21,12 @@ function passedSubcheck(name: string): SubcheckResult {
   };
 }
 
-describe("compareExpectation", () => {
+describe("compareOutcome", () => {
   test("returns passed when pass is expected and every subcheck passes", () => {
     const expectation: PlatformExpectation = { expected: "pass" };
 
     expect(
-      compareExpectation(expectation, [
+      compareOutcome(expectation, [
         passedSubcheck("setup"),
         passedSubcheck("assertions"),
       ])
@@ -41,7 +41,7 @@ describe("compareExpectation", () => {
     const expectation: PlatformExpectation = { expected: "pass" };
 
     expect(
-      compareExpectation(expectation, [passedSubcheck("setup"), failedSubcheck("assertions")])
+      compareOutcome(expectation, [passedSubcheck("setup"), failedSubcheck("assertions")])
     ).toEqual({
       status: "unexpected-failure",
       blocking: true,
@@ -59,7 +59,7 @@ describe("compareExpectation", () => {
     };
 
     expect(
-      compareExpectation(expectation, [passedSubcheck("setup"), failedSubcheck("resize")], new Date("2026-08-15T12:00:00.000Z"))
+      compareOutcome(expectation, [passedSubcheck("setup"), failedSubcheck("resize")], new Date("2026-08-15T12:00:00.000Z"))
     ).toEqual({
       status: "expected-partial",
       blocking: false,
@@ -78,7 +78,7 @@ describe("compareExpectation", () => {
       allowedFailedSubchecks: ["attach"],
     };
 
-    expect(compareExpectation(expectation, [passedSubcheck("attach")])).toEqual({
+    expect(compareOutcome(expectation, [passedSubcheck("attach")])).toEqual({
       status: "unexpected-pass",
       blocking: true,
       failedSubchecks: [],
@@ -97,7 +97,7 @@ describe("compareExpectation", () => {
     };
 
     expect(
-      compareExpectation(
+      compareOutcome(
         expectation,
         [passedSubcheck("setup"), failedSubcheck("attach"), failedSubcheck("cleanup")],
         new Date("2026-08-14T12:00:00.000Z")
@@ -121,7 +121,7 @@ describe("compareExpectation", () => {
     };
 
     expect(
-      compareExpectation(expectation, [failedSubcheck("reconnect")], new Date("2026-08-16T00:00:00.000Z"))
+      compareOutcome(expectation, [failedSubcheck("reconnect")], new Date("2026-08-16T00:00:00.000Z"))
     ).toEqual({
       status: "expired-expectation",
       blocking: true,
@@ -141,7 +141,7 @@ describe("compareExpectation", () => {
     };
 
     expect(
-      compareExpectation(expectation, [failedSubcheck("attach"), failedSubcheck("cleanup")])
+      compareOutcome(expectation, [failedSubcheck("attach"), failedSubcheck("cleanup")])
     ).toEqual({
       status: "unexpected-failure",
       blocking: true,
@@ -157,7 +157,7 @@ describe("compareExpectation", () => {
       reason: "Not available on this OS",
     };
 
-    expect(compareExpectation(expectation, [failedSubcheck("ignored")])).toEqual({
+    expect(compareOutcome(expectation, [failedSubcheck("ignored")])).toEqual({
       status: "unsupported",
       blocking: false,
       failedSubchecks: [],
@@ -174,7 +174,7 @@ describe("compareExpectation", () => {
       allowedFailedSubchecks: ["assertions"],
     };
 
-    expect(() => compareExpectation(expectation, [failedSubcheck("assertions")])).toThrow(
+    expect(() => compareOutcome(expectation, [failedSubcheck("assertions")])).toThrow(
       "Invalid reviewAfter date: 2026-02-31"
     );
   });

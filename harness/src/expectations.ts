@@ -51,7 +51,7 @@ function expectationDetails(expectation: NonPassingExpectation): string {
   return `${expectation.reason} (tracking: ${expectation.tracking}; review after: ${expectation.reviewAfter})`;
 }
 
-export function compareExpectation(
+export function compareOutcome(
   expectation: PlatformExpectation,
   subchecks: readonly SubcheckResult[],
   now = new Date()
