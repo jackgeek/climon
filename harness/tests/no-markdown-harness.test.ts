@@ -54,7 +54,6 @@ const OBSOLETE_PATHS = [
   "docs/superpowers/handoffs/2026-07-19-cross-platform-ci-harness.md",
   "docs/superpowers/plans/2026-07-18-cross-platform-ci-harness.md",
   "docs/superpowers/specs/2026-07-18-cross-platform-ci-harness-design.md",
-  "harness/README.md",
   "harness/fixtures/echo-session.mjs",
   "harness/playwright.config.ts",
   "harness/scripts/prepare-node-pty.d.mts",

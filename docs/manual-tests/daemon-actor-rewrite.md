@@ -21,6 +21,25 @@ result rows below are intentionally **blank/pending**: no case here has been run
 against a release candidate yet, so none is "passed". Record real runs in
 `results/<version>.md` (see [Recording results](README.md#recording-results)).
 
+## Automation companion
+
+The repo-local DAR harness in [`../../harness/README.md`](../../harness/README.md)
+and the CI workflow
+[`../../.github/workflows/dar-e2e-harness.yml`](../../.github/workflows/dar-e2e-harness.yml)
+exercise a narrower automated slice of this matrix:
+
+- `bun run harness doctor` validates toolchain, Playwright Chromium, fixture,
+  and manual-heading wiring.
+- `bun run harness run` currently automates **`DAR-01` and `DAR-02` only** with
+  typed per-platform expectations from `harness/src/scenario-registry.ts`.
+- `bun run harness aggregate` merges per-platform `results.json` files into
+  combined `results.json`, `summary.md`, and `junit.xml` outputs for CI.
+
+**Automation status:** useful regression coverage, **not** proof that the full
+Windows/macOS/Linux release gate has passed. `DAR-03` through `DAR-10`, real PWA
+coverage, and any scenario that needs a human-operated interactive console
+remain manual until explicitly automated and recorded here.
+
 Background: the [idiomatic-Rust daemon-rewrite
 plan](../superpowers/plans/2026-07-17-idiomatic-rust-daemon-rewrite.md) and its
 [design](../superpowers/specs/2026-07-17-idiomatic-rust-daemon-rewrite-design.md).
