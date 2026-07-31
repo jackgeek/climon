@@ -1,4 +1,5 @@
 use std::io::{self, BufReader, Read, Write};
+use std::time::Duration;
 
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{
@@ -15,6 +16,25 @@ use crossterm::terminal::{
 struct TerminalGuard {
     stdout: io::Stdout,
     raw_enabled: bool,
+}
+
+const LIVE_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(75);
+
+struct LiveRunOutcome {
+    code: i32,
+    stdin_disconnected: bool,
+}
+
+enum LiveInputState {
+    Idle,
+    Event(RenderEvent),
+    Disconnect,
+}
+
+enum LiveReadiness {
+    Idle,
+    Ready,
+    Disconnect,
 }
 
 impl TerminalGuard {
@@ -55,22 +75,42 @@ pub fn run(mut stdin: impl Read, stdout: &mut impl Write) -> io::Result<i32> {
     match TerminalGuard::enter() {
         Ok(mut terminal) => {
             let (mut cols, mut rows) = size().unwrap_or((80, 24));
-            let code = run_live(&mut terminal, &mut cols, &mut rows)?;
-            writeln!(stdout, "040 DAR_TUI_EXIT")?;
-            stdout.flush()?;
-            Ok(code)
+            let outcome = run_live(&mut terminal, &mut cols, &mut rows)?;
+            if let Err(error) = writeln!(stdout, "040 DAR_TUI_EXIT").and_then(|_| stdout.flush()) {
+                if !outcome.stdin_disconnected {
+                    return Err(error);
+                }
+            }
+            Ok(outcome.code)
         }
         Err(_) => run_scripted(BufReader::new(&mut stdin), stdout),
     }
 }
 
-fn run_live(terminal: &mut TerminalGuard, cols: &mut u16, rows: &mut u16) -> io::Result<i32> {
+fn run_live(
+    terminal: &mut TerminalGuard,
+    cols: &mut u16,
+    rows: &mut u16,
+) -> io::Result<LiveRunOutcome> {
     let mut phase = 21_u16;
+    let mut maybe_buffered_events = false;
     terminal.render("021 DAR_TUI_READY", "ready", *cols, *rows)?;
 
     loop {
-        let Some(event) = classify_live_event(read()?) else {
-            continue;
+        let event = match next_live_input(&mut maybe_buffered_events)? {
+            LiveInputState::Idle => {
+                let Some(event) = pending_live_resize(*cols, *rows) else {
+                    continue;
+                };
+                event
+            }
+            LiveInputState::Event(event) => event,
+            LiveInputState::Disconnect => {
+                return Ok(LiveRunOutcome {
+                    code: 0,
+                    stdin_disconnected: true,
+                })
+            }
         };
         if event.exit {
             break;
@@ -88,7 +128,10 @@ fn run_live(terminal: &mut TerminalGuard, cols: &mut u16, rows: &mut u16) -> io:
         )?;
     }
 
-    Ok(0)
+    Ok(LiveRunOutcome {
+        code: 0,
+        stdin_disconnected: false,
+    })
 }
 
 fn run_scripted(mut stdin: BufReader<&mut impl Read>, stdout: &mut impl Write) -> io::Result<i32> {
@@ -136,6 +179,137 @@ fn render_frame(
         ))
     )?;
     writer.flush()
+}
+
+fn pending_live_resize(cols: u16, rows: u16) -> Option<RenderEvent> {
+    let (next_cols, next_rows) = size().ok()?;
+    if next_cols == cols && next_rows == rows {
+        return None;
+    }
+    Some(RenderEvent {
+        marker: format!("DAR_TUI_RESIZE {next_cols} {next_rows}"),
+        event_line: format!("resize:{next_cols}x{next_rows}"),
+        resize: Some((next_cols, next_rows)),
+        exit: false,
+    })
+}
+
+fn next_live_input(maybe_buffered_events: &mut bool) -> io::Result<LiveInputState> {
+    if *maybe_buffered_events {
+        if let Some(event) = take_buffered_live_event()? {
+            return Ok(event);
+        }
+        *maybe_buffered_events = false;
+    }
+    match wait_for_live_input()? {
+        LiveReadiness::Idle => Ok(LiveInputState::Idle),
+        LiveReadiness::Disconnect => Ok(LiveInputState::Disconnect),
+        LiveReadiness::Ready => {
+            *maybe_buffered_events = true;
+            match read() {
+                Ok(event) => Ok(classify_live_event(event)
+                    .map(LiveInputState::Event)
+                    .unwrap_or(LiveInputState::Idle)),
+                Err(error) if is_live_disconnect_error(&error) => Ok(LiveInputState::Disconnect),
+                Err(error) => Err(error),
+            }
+        }
+    }
+}
+
+fn take_buffered_live_event() -> io::Result<Option<LiveInputState>> {
+    match crossterm::event::poll(Duration::ZERO) {
+        Ok(false) => Ok(None),
+        Ok(true) => match read() {
+            Ok(event) => Ok(Some(
+                classify_live_event(event)
+                    .map(LiveInputState::Event)
+                    .unwrap_or(LiveInputState::Idle),
+            )),
+            Err(error) if is_live_disconnect_error(&error) => Ok(Some(LiveInputState::Disconnect)),
+            Err(error) => Err(error),
+        },
+        Err(error) if is_live_disconnect_error(&error) => Ok(Some(LiveInputState::Disconnect)),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_live_input() -> io::Result<LiveReadiness> {
+    loop {
+        let mut pfd = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout_ms = LIVE_EVENT_POLL_INTERVAL.as_millis().min(i32::MAX as u128) as i32;
+        let rc = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if rc < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if rc == 0 {
+            return Ok(LiveReadiness::Idle);
+        }
+        let disconnect_flags = libc::POLLHUP | libc::POLLERR | libc::POLLNVAL;
+        if (pfd.revents & disconnect_flags) != 0 {
+            return Ok(LiveReadiness::Disconnect);
+        }
+        if (pfd.revents & libc::POLLIN) != 0 {
+            return Ok(LiveReadiness::Ready);
+        }
+        return Ok(LiveReadiness::Idle);
+    }
+}
+
+#[cfg(not(unix))]
+fn wait_for_live_input() -> io::Result<LiveReadiness> {
+    match crossterm::event::poll(LIVE_EVENT_POLL_INTERVAL) {
+        Ok(false) => Ok(LiveReadiness::Idle),
+        Ok(true) => Ok(LiveReadiness::Ready),
+        Err(error) if is_live_disconnect_error(&error) => Ok(LiveReadiness::Disconnect),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_live_disconnect_error(error: &io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+    ) {
+        return true;
+    }
+
+    #[cfg(unix)]
+    {
+        return matches!(error.raw_os_error(), Some(code) if code == libc::EIO);
+    }
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{
+            ERROR_BROKEN_PIPE, ERROR_INVALID_HANDLE, ERROR_OPERATION_ABORTED,
+        };
+
+        return matches!(
+            error.raw_os_error(),
+            Some(code)
+                if code == ERROR_BROKEN_PIPE as i32
+                    || code == ERROR_INVALID_HANDLE as i32
+                    || code == ERROR_OPERATION_ABORTED as i32
+        );
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
 }
 
 fn classify_live_event(event: Event) -> Option<RenderEvent> {

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type { Readable } from "node:stream";
 import { ScreenModel } from "../src/drivers/screen-model.js";
 import {
   controlChord,
@@ -21,6 +22,219 @@ const FIXTURE_PATH = join(
   process.platform === "win32" ? "climon-harness-fixture.exe" : "climon-harness-fixture"
 );
 const FIXTURE_TEST_TIMEOUT_MS = 120_000;
+const LIVE_TUI_DISCONNECT_TIMEOUT_MS = 1_500;
+const PYTHON3_PATH = Bun.which("python3");
+const PYTHON_LIVE_TUI_DISCONNECT_SCRIPT = String.raw`
+import json
+import os
+import pty
+import select
+import subprocess
+import sys
+import time
+
+fixture_path = sys.argv[1]
+disconnect_timeout = float(sys.argv[2]) / 1000.0
+master_fd, slave_fd = pty.openpty()
+child = subprocess.Popen(
+    [fixture_path, "tui"],
+    stdin=slave_fd,
+    stdout=slave_fd,
+    stderr=subprocess.PIPE,
+    close_fds=True,
+)
+os.close(slave_fd)
+os.set_blocking(master_fd, False)
+output = bytearray()
+ready = False
+timed_out = False
+exit_code = None
+start = time.monotonic()
+try:
+    ready_deadline = start + 5.0
+    while time.monotonic() < ready_deadline:
+        readable, _, _ = select.select([master_fd], [], [], 0.1)
+        if master_fd not in readable:
+            continue
+        try:
+            chunk = os.read(master_fd, 4096)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        output.extend(chunk)
+        if b"021 DAR_TUI_READY" in output:
+            ready = True
+            break
+    if ready:
+        os.close(master_fd)
+        master_fd = None
+        try:
+            exit_code = child.wait(timeout=disconnect_timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            child.kill()
+            exit_code = child.wait(timeout=disconnect_timeout)
+finally:
+    if master_fd is not None:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+stderr_text = child.stderr.read().decode("utf-8", "replace")
+duration_ms = int((time.monotonic() - start) * 1000)
+print(json.dumps({
+    "durationMs": duration_ms,
+    "exitCode": exit_code,
+    "ready": ready,
+    "stderr": stderr_text,
+    "stdoutTail": output[-200:].decode("utf-8", "replace"),
+    "timedOut": timed_out,
+}))
+sys.exit(0 if ready and not timed_out else 1)
+`;
+const PYTHON_LIVE_TUI_RESIZE_SCRIPT = String.raw`
+import fcntl
+import json
+import os
+import pty
+import select
+import struct
+import subprocess
+import sys
+import termios
+import time
+
+fixture_path = sys.argv[1]
+master_fd, slave_fd = pty.openpty()
+child = subprocess.Popen(
+    [fixture_path, "tui"],
+    stdin=slave_fd,
+    stdout=slave_fd,
+    stderr=subprocess.PIPE,
+    close_fds=True,
+)
+os.close(slave_fd)
+os.set_blocking(master_fd, False)
+output = bytearray()
+ready = False
+resized = False
+try:
+    ready_deadline = time.monotonic() + 5.0
+    while time.monotonic() < ready_deadline:
+        readable, _, _ = select.select([master_fd], [], [], 0.1)
+        if master_fd not in readable:
+            continue
+        try:
+            chunk = os.read(master_fd, 4096)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        output.extend(chunk)
+        if b"021 DAR_TUI_READY" in output:
+            ready = True
+            break
+    if ready:
+        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        resize_deadline = time.monotonic() + 1.5
+        while time.monotonic() < resize_deadline:
+            readable, _, _ = select.select([master_fd], [], [], 0.1)
+            if master_fd not in readable:
+                continue
+            try:
+                chunk = os.read(master_fd, 4096)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                break
+            output.extend(chunk)
+            if b"DAR_TUI_RESIZE 100 30" in output:
+                resized = True
+                break
+finally:
+    child.kill()
+    child.wait(timeout=1.5)
+    os.close(master_fd)
+stderr_text = child.stderr.read().decode("utf-8", "replace")
+print(json.dumps({
+    "ready": ready,
+    "resized": resized,
+    "stderr": stderr_text,
+    "stdoutTail": output[-400:].decode("utf-8", "replace"),
+}))
+sys.exit(0 if ready and resized else 1)
+`;
+const PYTHON_LIVE_TUI_BATCH_INPUT_SCRIPT = String.raw`
+import json
+import os
+import pty
+import select
+import subprocess
+import sys
+import time
+
+fixture_path = sys.argv[1]
+master_fd, slave_fd = pty.openpty()
+child = subprocess.Popen(
+    [fixture_path, "tui"],
+    stdin=slave_fd,
+    stdout=slave_fd,
+    stderr=subprocess.PIPE,
+    close_fds=True,
+)
+os.close(slave_fd)
+os.set_blocking(master_fd, False)
+output = bytearray()
+ready = False
+exited = False
+try:
+    ready_deadline = time.monotonic() + 5.0
+    while time.monotonic() < ready_deadline:
+        readable, _, _ = select.select([master_fd], [], [], 0.1)
+        if master_fd not in readable:
+            continue
+        try:
+            chunk = os.read(master_fd, 4096)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        output.extend(chunk)
+        if b"021 DAR_TUI_READY" in output:
+            ready = True
+            break
+    if ready:
+        os.write(master_fd, b"abq")
+        exit_deadline = time.monotonic() + 1.5
+        while time.monotonic() < exit_deadline:
+            readable, _, _ = select.select([master_fd], [], [], 0.1)
+            if master_fd not in readable:
+                continue
+            try:
+                chunk = os.read(master_fd, 4096)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                break
+            output.extend(chunk)
+            if b"040 DAR_TUI_EXIT" in output:
+                exited = True
+                break
+finally:
+    if child.poll() is None:
+        child.kill()
+    child.wait(timeout=1.5)
+    os.close(master_fd)
+stderr_text = child.stderr.read().decode("utf-8", "replace")
+print(json.dumps({
+    "exited": exited,
+    "ready": ready,
+    "stderr": stderr_text,
+    "stdoutTail": output[-400:].decode("utf-8", "replace"),
+}))
+sys.exit(0 if ready and exited else 1)
+`;
 
 function futureDeadline(): number {
   return Date.now() + 10_000;
@@ -108,7 +322,7 @@ function spawnFixture(args: string[]) {
   return child;
 }
 
-function collectProcessText(child: ReturnType<typeof spawnFixture>) {
+function collectProcessText(child: { stdout: Readable; stderr: Readable }) {
   let stdout = "";
   let stderr = "";
   const stdoutLines: string[] = [];
@@ -451,6 +665,121 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
       screen.dispose();
     }
   }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32" || !PYTHON3_PATH)(
+    "drains multiple live events buffered in a single PTY write",
+    async () => {
+      await buildFixture();
+      const child = spawn(PYTHON3_PATH!, [
+        "-c",
+        PYTHON_LIVE_TUI_BATCH_INPUT_SCRIPT,
+        FIXTURE_PATH,
+      ], {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(signal).toBeNull();
+      expect(code).toBe(0);
+      expect(text.stderr).toBe("");
+
+      const result = JSON.parse(text.stdout.trim()) as {
+        exited: boolean;
+        ready: boolean;
+        stderr: string;
+        stdoutTail: string;
+      };
+
+      expect(result.ready).toBe(true);
+      expect(result.exited).toBe(true);
+      expect(result.stderr).toBe("");
+      expect(result.stdoutTail).toContain("022 DAR_TUI_TEXT a");
+      expect(result.stdoutTail).toContain("023 DAR_TUI_TEXT b");
+      expect(result.stdoutTail).toContain("040 DAR_TUI_EXIT");
+    },
+    FIXTURE_TEST_TIMEOUT_MS
+  );
+
+  test.skipIf(process.platform === "win32" || !PYTHON3_PATH)(
+    "emits a live resize marker after the PTY size changes",
+    async () => {
+      await buildFixture();
+      const child = spawn(PYTHON3_PATH!, [
+        "-c",
+        PYTHON_LIVE_TUI_RESIZE_SCRIPT,
+        FIXTURE_PATH,
+      ], {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(signal).toBeNull();
+      expect(code).toBe(0);
+      expect(text.stderr).toBe("");
+
+      const result = JSON.parse(text.stdout.trim()) as {
+        ready: boolean;
+        resized: boolean;
+        stderr: string;
+        stdoutTail: string;
+      };
+
+      expect(result.ready).toBe(true);
+      expect(result.resized).toBe(true);
+      expect(result.stderr).toBe("");
+      expect(result.stdoutTail).toContain("DAR_TUI_RESIZE 100 30");
+    },
+    FIXTURE_TEST_TIMEOUT_MS
+  );
+
+  test.skipIf(process.platform === "win32" || !PYTHON3_PATH)(
+    "exits promptly when a live TUI stdin PTY disconnects",
+    async () => {
+      await buildFixture();
+      const child = spawn(PYTHON3_PATH!, [
+        "-c",
+        PYTHON_LIVE_TUI_DISCONNECT_SCRIPT,
+        FIXTURE_PATH,
+        String(LIVE_TUI_DISCONNECT_TIMEOUT_MS),
+      ], {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(signal).toBeNull();
+      expect(code).toBe(0);
+      expect(text.stderr).toBe("");
+
+      const result = JSON.parse(text.stdout.trim()) as {
+        durationMs: number;
+        exitCode: number | null;
+        ready: boolean;
+        stderr: string;
+        stdoutTail: string;
+        timedOut: boolean;
+      };
+
+      expect(result.ready).toBe(true);
+      expect(result.timedOut).toBe(false);
+      expect(result.durationMs).toBeLessThanOrEqual(LIVE_TUI_DISCONNECT_TIMEOUT_MS + 500);
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdoutTail).toContain("021 DAR_TUI_READY");
+    },
+    FIXTURE_TEST_TIMEOUT_MS
+  );
 });
 
 describe("climon-harness-fixture command dispatch", () => {
