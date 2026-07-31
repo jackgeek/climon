@@ -1,4 +1,4 @@
-import { appendFile, copyFile, lstat, mkdir, readdir, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { HarnessError } from "./types.js";
 
@@ -81,6 +81,7 @@ export class CaseArtifacts {
   public constructor(public readonly dir: string) {}
 
   public async initialize(): Promise<void> {
+    await rm(this.dir, { recursive: true, force: true });
     await mkdir(this.dir, { recursive: true });
   }
 

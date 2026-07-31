@@ -124,6 +124,32 @@ describe("SessionLedger", () => {
     }
   });
 
+  test("fails immediately when a different terminal status is reached", async () => {
+    const workspace = makeWorkspace("session-ledger-wrong-terminal");
+    const id = "failed-session";
+    const home = join(workspace, "home");
+    let sleepCalls = 0;
+    const ledger = new SessionLedger(home, {
+      sleep: async () => {
+        sleepCalls += 1;
+      },
+    });
+
+    try {
+      ledger.track(id);
+      writeSession(home, id, { id, status: "failed", exitCode: 9 });
+
+      await expect(
+        ledger.waitForStatus(id, "completed", Date.now() + 1_000)
+      ).rejects.toThrow(
+        "Session failed-session reached terminal status failed while waiting for completed"
+      );
+      expect(sleepCalls).toBe(0);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("rejects metadata with a non-string or unknown status", async () => {
     const workspace = makeWorkspace("session-ledger-invalid-status");
     const id = "invalid-status";

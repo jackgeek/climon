@@ -62,6 +62,34 @@ describe("CaseArtifacts", () => {
     }
   });
 
+  test("recreates the case directory without stale files or symlinks", async () => {
+    const workspace = makeWorkspace("artifacts-fresh-case");
+    const dir = join(workspace, "case");
+    const outside = join(workspace, "outside");
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(dir, "stale.log"), "old");
+
+    try {
+      symlinkSync(outside, join(dir, "linked"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" && code !== "EACCES" && code !== "ENOTSUP") {
+        throw error;
+      }
+    }
+
+    try {
+      await new CaseArtifacts(dir).initialize();
+
+      expect(existsSync(join(dir, "stale.log"))).toBe(false);
+      expect(existsSync(join(dir, "linked"))).toBe(false);
+      expect(statSync(dir).isDirectory()).toBe(true);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("appends text incrementally and writes stable JSON with a trailing newline", async () => {
     const workspace = makeWorkspace("artifacts-write");
     const artifacts = new CaseArtifacts(join(workspace, "case"));

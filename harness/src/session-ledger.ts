@@ -105,6 +105,12 @@ export class SessionLedger {
       if (meta?.status === status) {
         return meta;
       }
+      if (meta && TERMINAL_STATUSES.has(meta.status)) {
+        throw new HarnessError(
+          "assertion",
+          `Session ${id} reached terminal status ${meta.status} while waiting for ${status}`
+        );
+      }
 
       if (this.now() >= deadline) {
         throw new HarnessError(
