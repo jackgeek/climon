@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
-  scenarioDefinitions,
+  SCENARIO_DEFINITIONS,
   validateScenarioDefinitions,
 } from "../src/scenario-registry.js";
 import type { ScenarioDefinition } from "../src/scenario-registry.js";
@@ -23,7 +23,7 @@ function makeWorkspace(name: string): string {
   return workspace;
 }
 
-describe("scenarioDefinitions", () => {
+describe("SCENARIO_DEFINITIONS", () => {
   test("registers DAR-01 and DAR-02 in order with typed per-platform expectations", () => {
     const expectedDefinitions: readonly ScenarioDefinition[] = [
       {
@@ -82,11 +82,11 @@ describe("scenarioDefinitions", () => {
       },
     ];
 
-    expect(scenarioDefinitions.map(({ darId }) => darId)).toEqual([
+    expect(SCENARIO_DEFINITIONS.map(({ darId }) => darId)).toEqual([
       "DAR-01",
       "DAR-02",
     ]);
-    expect(scenarioDefinitions).toEqual(expectedDefinitions);
+    expect(SCENARIO_DEFINITIONS).toEqual(expectedDefinitions);
   });
 });
 
@@ -125,5 +125,16 @@ describe("validateScenarioDefinitions", () => {
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
+  });
+
+  test("rejects duplicate DAR ids", async () => {
+    const duplicateDefinitions = [
+      SCENARIO_DEFINITIONS[0],
+      SCENARIO_DEFINITIONS[0],
+    ];
+
+    await expect(
+      validateScenarioDefinitions(process.cwd(), duplicateDefinitions)
+    ).rejects.toThrow("Duplicate DAR id: DAR-01");
   });
 });

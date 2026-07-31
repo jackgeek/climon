@@ -14,7 +14,7 @@ export interface ScenarioDefinition {
   expectations: Record<HarnessPlatform, PlatformExpectation>;
 }
 
-export const scenarioDefinitions: readonly ScenarioDefinition[] = [
+export const SCENARIO_DEFINITIONS: readonly ScenarioDefinition[] = [
   {
     darId: "DAR-01",
     title: "Attached shell input, output, and terminal restoration",
@@ -70,11 +70,14 @@ export const scenarioDefinitions: readonly ScenarioDefinition[] = [
   },
 ];
 
-export async function validateScenarioDefinitions(rootDir: string): Promise<void> {
+export async function validateScenarioDefinitions(
+  rootDir: string,
+  definitions: readonly ScenarioDefinition[] = SCENARIO_DEFINITIONS
+): Promise<void> {
   const seenIds = new Set<DarId>();
   const manualContents = new Map<string, string>();
 
-  for (const definition of scenarioDefinitions) {
+  for (const definition of definitions) {
     if (seenIds.has(definition.darId)) {
       throw new HarnessError(
         "prerequisite",
