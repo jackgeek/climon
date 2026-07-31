@@ -103,6 +103,49 @@ describe("SessionLedger", () => {
     }
   });
 
+  test("treats disconnected metadata as terminal", async () => {
+    const workspace = makeWorkspace("session-ledger-disconnected");
+    const id = "remote-session";
+    const home = join(workspace, "home");
+    const ledger = new SessionLedger(home);
+
+    try {
+      ledger.track(id);
+      writeSession(home, id, { id, status: "disconnected" });
+
+      await expect(
+        ledger.waitForTerminalStatus(id, Date.now() + 1_000)
+      ).resolves.toEqual({
+        id,
+        status: "disconnected",
+      } satisfies SessionMeta);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects metadata with a non-string or unknown status", async () => {
+    const workspace = makeWorkspace("session-ledger-invalid-status");
+    const id = "invalid-status";
+    const home = join(workspace, "home");
+    const ledger = new SessionLedger(home);
+
+    try {
+      ledger.track(id);
+      writeSession(home, id, { id, status: 42 });
+      await expect(ledger.read(id)).rejects.toThrow(
+        "Session metadata for invalid-status has invalid status: 42"
+      );
+
+      writeSession(home, id, { id, status: "starting" });
+      await expect(ledger.read(id)).rejects.toThrow(
+        "Session metadata for invalid-status has invalid status: starting"
+      );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("surfaces malformed or mismatched metadata immediately instead of looping", async () => {
     const workspace = makeWorkspace("session-ledger-invalid");
     const id = "good-id";
