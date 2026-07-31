@@ -1270,15 +1270,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       : detected;
   }
 
-  // Created only after the port is finalized so the tunnel maps and hosts the
-  // port this server actually bound. Creating it earlier (with the requested
-  // port) means a restart that shifts to the next free port — common during a
-  // takeover while the old listener is still releasing the socket — would
-  // forward the restored tunnel to a dead port, so the link never comes back.
+  let publishedDashboardPort = dashboardPort.port;
+
+  // Create the tunnel manager up front, but resolve its port lazily so it can
+  // follow the actual Bun listener port after startup. This keeps the manager
+  // available for early requests/shutdown while still fixing `--port 0`.
   startupLog("creating dashboard tunnel manager");
   const keepAliveSec = config.tunnelLink?.keepAlive ?? 60;
   const dashboardTunnel = createDashboardTunnelManager({
-    port: config.server.port,
+    port: () => publishedDashboardPort,
     keepAliveMs: keepAliveSec * 1000,
     persisted: {
       tunnelId: config.remote?.dashboardTunnelId,
@@ -1395,7 +1395,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
    * (filesystem reads only) so it never slows or hangs the health probe.
    */
   async function collectServerPorts(): Promise<HealthServerPorts> {
-    const ports: HealthServerPorts = { dashboard: dashboardPort.port };
+    const ports: HealthServerPorts = { dashboard: publishedDashboardPort };
     try {
       if (await isIngestDaemonAlive()) {
         ports.ingest = await resolveIngestPort();
@@ -2228,17 +2228,20 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
     throw describeListenError(error, config.server.host, config.server.port);
   }
 
+  publishedDashboardPort =
+    typeof server.port === "number" && server.port > 0 ? server.port : dashboardPort.port;
+
   startupLog("Bun.serve started; writing server state file");
   const recordedPorts = await collectServerPorts();
   const localStartedAt = Date.now();
-  const serverState: ServerState = { pid: process.pid, port: dashboardPort.port, startedAt: localStartedAt };
+  const serverState: ServerState = { pid: process.pid, port: publishedDashboardPort, startedAt: localStartedAt };
   if (recordedPorts.ingest !== undefined) serverState.ingest = recordedPorts.ingest;
   const serverStatePath = getServerStatePath();
   logMsg(getLogger(), "debug", "server.server_state_writing", { path: serverStatePath, content: JSON.stringify(serverState) });
   await atomicWrite(serverStatePath, serializeServerState(serverState));
   logMsg(getLogger(), "debug", "server.server_state_written", {});
   startupLog("state file written; advertising URL");
-  printStartup(config, dashboardPort.port);
+  printStartup(config, publishedDashboardPort);
 
   // Re-establish a previously-enabled Tunnel Link. The dashboard tunnel manager
   // reuses the persisted tunnel identity, so the public URL is stable across

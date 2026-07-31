@@ -55,7 +55,7 @@ export interface DashboardTunnelInfo extends DashboardTunnelStatus {
 export type DashboardTunnelGatewayFactory = (handlers: DevtunnelProcessHandlers) => DevtunnelGateway;
 
 interface DashboardTunnelManagerOptions {
-  port: number;
+  port: number | (() => number);
   gateway?: DevtunnelGateway | DashboardTunnelGatewayFactory;
   /**
    * Raw runner used only for the best-effort verbose expiry probe
@@ -270,14 +270,17 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   // so we tag intentional stops here and consume the tag in onExit.
   let intentionalStops = 0;
 
+  const currentPort = (): number =>
+    typeof options.port === "function" ? options.port() : options.port;
+
   const hostHandlers: DevtunnelProcessHandlers = {
     onStdout: (text) => {
       startupStdout += text;
-      url = parseDashboardTunnelUrl(text, options.port) ?? url;
+      url = parseDashboardTunnelUrl(text, currentPort()) ?? url;
     },
     onStderr: (text) => {
       startupStderr += text;
-      url = parseDashboardTunnelUrl(text, options.port) ?? url;
+      url = parseDashboardTunnelUrl(text, currentPort()) ?? url;
     },
     onExit: (failure) => {
       if (intentionalStops > 0) {
@@ -407,7 +410,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
   async function ensurePort(): Promise<boolean> {
     if (!tunnelId) return false;
     try {
-      await gateway.createPort(tunnelId, options.port, "http");
+      await gateway.createPort(tunnelId, currentPort(), "http");
       return false;
     } catch (error) {
       if (error instanceof DevtunnelError && error.failure.code === "tunnel_not_found") {
@@ -441,8 +444,9 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
     } catch {
       return;
     }
+    const livePort = currentPort();
     for (const port of ports) {
-      if (port === options.port) continue;
+      if (port === livePort) continue;
       try {
         await gateway.deletePort(id, port);
       } catch {
@@ -531,7 +535,7 @@ export function createDashboardTunnelManager(options: DashboardTunnelManagerOpti
         return startHost();
       }
       if (startedHost.isAlive() && cluster) {
-        url = buildDashboardTunnelUrl(attemptedTunnelId, options.port, cluster);
+        url = buildDashboardTunnelUrl(attemptedTunnelId, currentPort(), cluster);
       } else {
         // The host exited before printing a browser link. Surface the classified
         // exit failure (which carries sanitized technical detail) so callers can
