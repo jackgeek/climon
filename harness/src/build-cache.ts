@@ -189,7 +189,19 @@ async function sha256(filePath: string): Promise<string> {
 }
 
 async function assertFileExists(filePath: string, label: string): Promise<void> {
-  const fileStat = await stat(filePath);
+  let fileStat;
+  try {
+    fileStat = await stat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new HarnessError(
+        "build",
+        `Expected ${label} artifact file: ${filePath}`,
+        { cause: error }
+      );
+    }
+    throw error;
+  }
   if (!fileStat.isFile()) {
     throw new HarnessError("build", `Expected ${label} artifact file: ${filePath}`);
   }

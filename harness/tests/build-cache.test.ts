@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { buildArtifacts, planBuild } from "../src/build-cache.js";
 import type { CommandResult, CommandRunner, CommandSpec } from "../src/command.js";
-import type { HarnessPlatform } from "../src/types.js";
+import { HarnessError, type HarnessPlatform } from "../src/types.js";
 
 function makeWorkspace(name: string): string {
   const workspace = resolve(
@@ -507,6 +507,33 @@ describe("buildArtifacts", () => {
       expect(runner.calls).toHaveLength(6);
       expect(statSync(manifestPath).isFile()).toBe(true);
       expect(readFileSync(serverArtifactPath(cacheDir, platform), "utf8")).toBe("server-1");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("classifies a missing build artifact as a build failure", async () => {
+    const workspace = makeWorkspace("build-cache-missing-artifact");
+
+    try {
+      const error = await buildArtifacts(
+        {
+          root: workspace,
+          cacheRoot: join(workspace, "cache"),
+          platform: "linux",
+          runner: new FakeCommandRunner(() => undefined),
+        },
+        buildDependencies("missing-artifact", "x64")
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "build",
+          message: expect.stringContaining("client artifact"),
+        })
+      );
+      expect(error).toBeInstanceOf(HarnessError);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
