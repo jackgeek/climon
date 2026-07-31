@@ -283,6 +283,14 @@ export function sessionAccessibleLabel(
   return `${sessionDisplayTitle(session)}, ${STATUS_LABELS[session.status]}`;
 }
 
+export function sessionAutomationAttributes(session: Pick<SessionMeta, "id" | "status">) {
+  return {
+    "data-testid": "session-item",
+    "data-session-id": session.id,
+    "data-session-status": session.status
+  } as const;
+}
+
 export function SessionItem({
   session,
   active,
@@ -321,6 +329,7 @@ export function SessionItem({
       onClick={() => onSelect(session.id)}
       role="button"
       tabIndex={0}
+      {...sessionAutomationAttributes(session)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();

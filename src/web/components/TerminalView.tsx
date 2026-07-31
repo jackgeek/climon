@@ -1248,6 +1248,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     <div className={styles.wrapper}>
       <div
         ref={containerRef}
+        data-testid="session-terminal"
         className={mergeClasses(styles.root, contentVisible ? undefined : styles.hidden)}
         style={{
           backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,

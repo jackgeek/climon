@@ -28,6 +28,20 @@ function renderPanel(overrides: Partial<Parameters<typeof TerminalPanel>[0]> = {
 }
 
 describe("TerminalPanel", () => {
+  test("Sidebar exposes the semantic session list hook on the list container", () => {
+    const source = readFileSync("src/web/components/Sidebar.tsx", "utf8");
+
+    expect(source).toContain('data-testid="session-list"');
+    expect(source.match(/data-testid=/g)?.length ?? 0).toBe(1);
+  });
+
+  test("TerminalView exposes the semantic terminal hook on the xterm container", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain('data-testid="session-terminal"');
+    expect(source.match(/data-testid=/g)?.length ?? 0).toBe(1);
+  });
+
   test("maps chooser arrow buttons to page key input", () => {
     expect(terminalPanelArrowData("up")).toBe("\x1b[5~");
     expect(terminalPanelArrowData("down")).toBe("\x1b[6~");

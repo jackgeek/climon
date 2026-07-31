@@ -330,7 +330,7 @@ export function Sidebar({
           />
         )}
       </div>
-      <div className={styles.list} dir="rtl">
+      <div className={styles.list} dir="rtl" data-testid="session-list">
         {sessions.length === 0 ? (
           <div className={mergeClasses(styles.empty, collapsed && styles.collapsedEmpty)} dir="ltr">
             {collapsed ? "No sessions" : "No sessions yet."}

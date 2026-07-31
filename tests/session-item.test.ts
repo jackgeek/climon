@@ -79,9 +79,11 @@ mock.module("@fluentui/react-icons", () => ({
   ...iconStubs
 }));
 
-const { SessionItem, sessionAccessibleLabel, sessionDisplayTitle } = await import(
-  "../src/web/components/SessionItem.js"
-);
+const sessionItemModule = await import("../src/web/components/SessionItem.js");
+const { SessionItem, sessionAccessibleLabel, sessionDisplayTitle } = sessionItemModule;
+const sessionAutomationAttributes = (sessionItemModule as Record<string, unknown>).sessionAutomationAttributes as
+  | ((session: Pick<SessionMeta, "id" | "status">) => Record<string, string>)
+  | undefined;
 
 function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -117,6 +119,22 @@ describe("sessionDisplayTitle", () => {
   });
 });
 
+describe("sessionAutomationAttributes", () => {
+  test("exposes stable semantic id and status values", () => {
+    expect(sessionAutomationAttributes).toBeDefined();
+    expect(
+      sessionAutomationAttributes?.({
+        id: "quiet-otters-run",
+        status: "running"
+      })
+    ).toEqual({
+      "data-testid": "session-item",
+      "data-session-id": "quiet-otters-run",
+      "data-session-status": "running"
+    });
+  });
+});
+
 describe("sessionAccessibleLabel", () => {
   test("uses the visible title in expanded mode", () => {
     expect(
@@ -147,6 +165,26 @@ describe("sessionAccessibleLabel", () => {
 });
 
 describe("SessionItem compact rendering", () => {
+  test("renders semantic automation attributes on the root session item", () => {
+    const markup = renderToStaticMarkup(
+      createElement(SessionItem, {
+        active: false,
+        compact: false,
+        session: makeSession({ id: "dar-session", status: "paused" }),
+        onClose: () => {},
+        onEdit: () => {},
+        onMaximize: () => {},
+        onNew: () => {},
+        onPauseToggle: () => {},
+        onSelect: () => {}
+      })
+    );
+
+    expect(markup).toContain('data-testid="session-item"');
+    expect(markup).toContain('data-session-id="dar-session"');
+    expect(markup).toContain('data-session-status="paused"');
+  });
+
   test("keeps the session title as the only compact hover title", () => {
     const markup = renderToStaticMarkup(
       createElement(SessionItem, {
