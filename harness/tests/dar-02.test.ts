@@ -285,6 +285,7 @@ function createHarness(
     overallDeadline: 60_000,
     build: {
       clientPath: "/repo/bin/climon",
+      fixturePath: "/repo/bin/climon-harness-fixture",
     },
     browser,
     runtime: {
@@ -373,7 +374,7 @@ describe("runDar02", () => {
           "--headless",
           "--name",
           "DAR-02-abc123",
-          "fixture",
+          "/repo/bin/climon-harness-fixture",
           "streaming",
         ],
         cwd: "/repo",

@@ -303,7 +303,7 @@ function ptySpec(context: Dar01Context, runId: string): PtySpawnSpec {
       "run",
       "--name",
       sessionName(runId),
-      "fixture",
+      context.build.fixturePath,
       "interactive-tui",
     ],
     cwd: context.runtime.root,
@@ -389,7 +389,7 @@ export async function runDar01(
   try {
     pty = spawnPty(ptySpec(context, runId), {
       now,
-      appendText: context.runtime.artifacts.appendText,
+      appendText: context.runtime.artifacts.appendText.bind(context.runtime.artifacts),
     });
   } catch (error) {
     spawnFailure = `Failed to spawn DAR-01 PTY: ${stringifyError(error)}`;

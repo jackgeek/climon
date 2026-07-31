@@ -278,7 +278,7 @@ function buildOutput(
       "run",
       "--name",
       sessionName,
-      "fixture",
+      "/repo/bin/climon-harness-fixture",
       "interactive-tui",
     ],
     platform,
@@ -371,33 +371,32 @@ describe("runDar01", () => {
       evidence: expect.arrayContaining([expect.stringContaining("DAR_MODE_BASELINE ")]),
     });
 
-    expect(spawnCalls).toEqual([
-      {
-        spec: {
-          file: "/repo/bin/climon-harness-fixture",
-          args: [
-            "mode-probe",
-            "--",
-            "/repo/bin/climon",
-            "run",
-            "--name",
-            "DAR-01-abc123",
-            "fixture",
-            "interactive-tui",
-          ],
-          cwd: "/repo",
-          env: context.runtime.env,
-          cols: 100,
-          rows: 30,
-          inputPath: "pty/input.log",
-          outputPath: "pty/output.log",
-        },
-        deps: {
-          now: clock,
-          appendText: context.runtime.artifacts.appendText,
-        },
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]).toMatchObject({
+      spec: {
+        file: "/repo/bin/climon-harness-fixture",
+        args: [
+          "mode-probe",
+          "--",
+          "/repo/bin/climon",
+          "run",
+          "--name",
+          "DAR-01-abc123",
+          "/repo/bin/climon-harness-fixture",
+          "interactive-tui",
+        ],
+        cwd: "/repo",
+        env: context.runtime.env,
+        cols: 100,
+        rows: 30,
+        inputPath: "pty/input.log",
+        outputPath: "pty/output.log",
       },
-    ]);
+      deps: {
+        now: clock,
+        appendText: expect.any(Function),
+      },
+    });
 
     expect(pty.callLog).toEqual([
       "expectRaw:DAR_MODE_BASELINE ",
@@ -472,6 +471,43 @@ describe("runDar01", () => {
     expect(pty.writeTextCalls.at(-1)).toBe("q");
     expect(pty.waitForExitCalls).toHaveLength(1);
     expect(pty.killCalls).toBe(0);
+  });
+
+  test("passes a bound artifact appender to the PTY driver", async () => {
+    const context = createContext();
+    const writes: Array<{ dir: string; artifactPath: string; text: string }> = [];
+    let appendPromise: Promise<void> | undefined;
+    context.runtime.artifacts = {
+      dir: "/repo/artifacts/cases/dar-01",
+      async appendText(
+        this: { dir: string },
+        artifactPath: string,
+        text: string
+      ): Promise<void> {
+        writes.push({ dir: this.dir, artifactPath, text });
+      },
+    };
+    const uuid = "bound-artifacts";
+
+    await runDar01(context, {
+      now: createClock(),
+      createUuid: () => uuid,
+      spawnPty(_spec, deps) {
+        appendPromise = deps.appendText?.("probe.log", "ok");
+        return new FakePty({ screenFrames: passingScreens(), exitCode: 0 });
+      },
+      readArtifactText: async () =>
+        buildOutput(context.platform, `DAR-01-${uuid}`, `dar01-é-${uuid}`),
+    });
+
+    await appendPromise;
+    expect(writes).toEqual([
+      {
+        dir: "/repo/artifacts/cases/dar-01",
+        artifactPath: "probe.log",
+        text: "ok",
+      },
+    ]);
   });
 
   test("fails baseline-terminal-mode when the unix baseline is not functionally cooked", async () => {

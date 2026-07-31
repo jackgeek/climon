@@ -61,7 +61,7 @@ export interface Dar02BrowserDriver {
 export interface Dar02Context {
   platform: HarnessPlatform;
   overallDeadline: number | Date;
-  build: Pick<BuildArtifacts, "clientPath">;
+  build: Pick<BuildArtifacts, "clientPath" | "fixturePath">;
   browser: Dar02BrowserDriver;
   runtime: Pick<RuntimeContext, "root" | "home" | "baseUrl" | "env"> & {
     artifacts: Pick<RuntimeContext["artifacts"], "dir">;
@@ -409,7 +409,14 @@ async function waitForText(
 function launchSpec(context: Dar02Context, runId: string): HeadlessSpawnSpec {
   return {
     file: context.build.clientPath,
-    args: ["run", "--headless", "--name", `DAR-02-${runId}`, "fixture", "streaming"],
+    args: [
+      "run",
+      "--headless",
+      "--name",
+      `DAR-02-${runId}`,
+      context.build.fixturePath,
+      "streaming",
+    ],
     cwd: context.runtime.root,
     env: context.runtime.env,
     stdoutPath: headlessStdoutPath(context),
