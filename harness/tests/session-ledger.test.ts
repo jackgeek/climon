@@ -146,6 +146,24 @@ describe("SessionLedger", () => {
     }
   });
 
+  test("rejects metadata with a non-integer exitCode", async () => {
+    const workspace = makeWorkspace("session-ledger-invalid-exit-code");
+    const id = "invalid-exit-code";
+    const home = join(workspace, "home");
+    const ledger = new SessionLedger(home);
+
+    try {
+      ledger.track(id);
+      writeSession(home, id, { id, status: "failed", exitCode: 1.5 });
+
+      await expect(ledger.read(id)).rejects.toThrow(
+        "Session metadata for invalid-exit-code has invalid exitCode: 1.5"
+      );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("surfaces malformed or mismatched metadata immediately instead of looping", async () => {
     const workspace = makeWorkspace("session-ledger-invalid");
     const id = "good-id";
