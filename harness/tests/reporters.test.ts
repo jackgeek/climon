@@ -284,6 +284,29 @@ describe("reporters", () => {
     }
   });
 
+  test("rejects duplicate case rows while parsing report JSON", () => {
+    expect(() =>
+      parseResultsReport(
+        JSON.stringify({
+          revision: "rev-123",
+          generatedAt: FIXED_NOW,
+          results: [
+            createResult("linux", "DAR-01", "Attached shell input, output, and terminal restoration", {
+              expected: "pass",
+            }),
+            createResult("linux", "DAR-01", "Attached shell input, output, and terminal restoration", {
+              expected: "pass",
+            }),
+            createResult("linux", "DAR-02", "Headless session dashboard replay and live output", {
+              expected: "pass",
+            }),
+          ],
+        }),
+        "/reports/results.json"
+      )
+    ).toThrow("Malformed report JSON in /reports/results.json: duplicate case row for linux DAR-01");
+  });
+
   test("renders markdown summaries with expectation governance details", () => {
     expect(renderMarkdownReport(sampleReport())).toBe(`# DAR harness summary
 

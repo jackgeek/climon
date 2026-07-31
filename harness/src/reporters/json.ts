@@ -202,6 +202,17 @@ export function parseResultsReport(raw: string, sourcePath: string): ResultsRepo
     throw new Error(`Malformed report JSON in ${sourcePath}: invalid report shape`);
   }
 
+  const seenCaseRows = new Set<string>();
+  for (const result of candidate.results as ReportCaseResult[]) {
+    const caseKey = `${result.platform}\u0000${result.darId}`;
+    if (seenCaseRows.has(caseKey)) {
+      throw new Error(
+        `Malformed report JSON in ${sourcePath}: duplicate case row for ${result.platform} ${result.darId}`
+      );
+    }
+    seenCaseRows.add(caseKey);
+  }
+
   return createResultsReport(
     candidate.revision,
     candidate.generatedAt,

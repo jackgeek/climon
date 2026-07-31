@@ -503,6 +503,14 @@ async function writeReportSet(
   await writeAtomicText(join(resultsRoot, RESULT_JUNIT_NAME), renderJUnitReport(report), fs);
 }
 
+async function clearAggregateOutputs(resultsRoot: string, fs: CliFs): Promise<void> {
+  await Promise.all([
+    fs.rm(join(resultsRoot, RESULT_JSON_NAME), { force: true }),
+    fs.rm(join(resultsRoot, RESULT_MARKDOWN_NAME), { force: true }),
+    fs.rm(join(resultsRoot, RESULT_JUNIT_NAME), { force: true }),
+  ]);
+}
+
 async function collectResultReportPaths(
   root: string,
   fs: CliFs
@@ -924,6 +932,7 @@ async function executeAggregate(
 
     return aggregate.results.some((result) => result.blocking) ? 1 : 0;
   } catch (error) {
+    await clearAggregateOutputs(resultsRoot, fs);
     writeLine(stdout, formatError(error));
     return 2;
   }

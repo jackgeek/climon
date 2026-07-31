@@ -266,6 +266,48 @@ function expectationFor(
   return definition!.expectations[platform];
 }
 
+function definitionFor(
+  definitions: readonly ScenarioDefinition[],
+  darId: ScenarioDefinition["darId"]
+): ScenarioDefinition {
+  const definition = definitions.find((candidate) => candidate.darId === darId);
+  expect(definition).toBeDefined();
+  return definition!;
+}
+
+function writeAggregateReport(
+  root: string,
+  reportRoot: string,
+  platform: HarnessPlatform,
+  definitions: readonly ScenarioDefinition[],
+  darIds: readonly ScenarioDefinition["darId"][]
+): void {
+  mkdirSync(reportRoot, { recursive: true });
+  writeFileSync(
+    join(reportRoot, "results.json"),
+    `${JSON.stringify(
+      {
+        revision: DEFAULT_REVISION,
+        generatedAt: FIXED_NOW.toISOString(),
+        results: darIds.map((darId) => ({
+          artifactDir: join(root, platform, "cases", darId),
+          blocking: false,
+          darId,
+          durationMs: 1,
+          expectation: expectationFor(definitions, darId, platform),
+          failedSubchecks: [],
+          platform,
+          status: "passed",
+          subchecks: [],
+          title: definitionFor(definitions, darId).title,
+        })),
+      },
+      null,
+      2
+    )}\n`
+  );
+}
+
 describe("runCli", () => {
   test("loads the harness CLI module", () => {
     expect(runCli).toBeDefined();
@@ -854,6 +896,67 @@ describe("runCli", () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+
+  test.each([
+    {
+      darIds: ["DAR-01", "DAR-01", "DAR-02"],
+      duplicateDarId: "DAR-01",
+    },
+    {
+      darIds: ["DAR-01", "DAR-02", "DAR-02"],
+      duplicateDarId: "DAR-02",
+    },
+  ] as const)(
+    "rejects duplicate aggregate DAR rows for $duplicateDarId with exit code 2 and no combined report output",
+    async ({ darIds, duplicateDarId }) => {
+      const workspace = makeWorkspace(`cli-aggregate-duplicate-${duplicateDarId.toLowerCase()}`);
+
+      try {
+        const root = join(workspace, "artifacts");
+        const definitions = createDefinitions({
+          "DAR-01": {
+            linux: { expected: "pass" },
+            macos: { expected: "pass" },
+            windows: { expected: "pass" },
+          },
+          "DAR-02": {
+            linux: { expected: "pass" },
+            macos: { expected: "pass" },
+            windows: { expected: "pass" },
+          },
+        });
+
+        writeAggregateReport(root, join(root, "linux", "run-1"), "linux", definitions, darIds);
+        writeAggregateReport(
+          root,
+          join(root, "macos", "run-1"),
+          "macos",
+          definitions,
+          ["DAR-01", "DAR-02"]
+        );
+        writeAggregateReport(
+          root,
+          join(root, "windows", "run-1"),
+          "windows",
+          definitions,
+          ["DAR-01", "DAR-02"]
+        );
+
+        const options = createRunOptions(workspace, { definitions });
+        const cli = requireRunCli();
+
+        await expect(cli(["aggregate", "--results-root", root], options)).resolves.toBe(2);
+        expect((options.stdout as CapturedStream).text).toContain(
+          `duplicate case row for linux ${duplicateDarId}`
+        );
+        expect(() => readFileSync(join(root, "results.json"), "utf8")).toThrow();
+        expect(() => readFileSync(join(root, "summary.md"), "utf8")).toThrow();
+        expect(() => readFileSync(join(root, "junit.xml"), "utf8")).toThrow();
+      } finally {
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    }
+  );
 
   test("rejects aggregate inputs with a missing platform report", async () => {
     const workspace = makeWorkspace("cli-aggregate-missing-platform");
