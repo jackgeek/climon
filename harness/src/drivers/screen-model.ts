@@ -45,8 +45,11 @@ export class ScreenModel {
   public contents(): string {
     const active = this.terminal.buffer.active;
     const lines: string[] = [];
+    const start =
+      active.type === "alternate" ? 0 : Math.min(active.viewportY, active.baseY);
+    const end = start + this.terminal.rows;
 
-    for (let index = 0; index < active.length; index += 1) {
+    for (let index = start; index < end; index += 1) {
       const line = active.getLine(index);
 
       if (!line) {

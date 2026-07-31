@@ -140,7 +140,7 @@ export class PtyDriver {
   private readonly clearTimeoutFn: typeof globalThis.clearTimeout;
   private readonly appendText: (path: string, text: string) => Promise<void>;
   private readonly subscriptions: DisposableLike[];
-  private readonly rawChunks: string[] = [];
+  private readonly durableRawChunks: string[] = [];
   private readonly rawWaiters = new Set<RawWaiter>();
   private readonly screenWaiters = new Set<ScreenWaiter>();
   private readonly exitWaiters = new Set<{
@@ -148,8 +148,7 @@ export class PtyDriver {
     reject: (error: unknown) => void;
   }>();
   private inputQueue: Promise<void> = Promise.resolve();
-  private screenQueue: Promise<void> = Promise.resolve();
-  private outputQueue: Promise<void> = Promise.resolve();
+  private orderedOutputQueue: Promise<void> = Promise.resolve();
   private recentRaw = "";
   private pendingError: unknown;
   private exitResult?: Promise<number>;
@@ -218,7 +217,10 @@ export class PtyDriver {
     assertPositiveInteger(cols, "PTY dimensions");
     assertPositiveInteger(rows, "PTY dimensions");
     this.pty.resize(cols, rows);
-    this.screen.resize(cols, rows);
+    this.enqueueOrderedOutput(async () => {
+      this.screen.resize(cols, rows);
+      this.resolveScreenWaiters();
+    });
   }
 
   public expectRaw(marker: string, deadline: Deadline): Promise<void> {
@@ -360,21 +362,22 @@ export class PtyDriver {
   }
 
   private handleData(data: string): void {
-    this.rawChunks.push(data);
     this.recentRaw = `${this.recentRaw}${data}`.slice(-RECENT_RAW_LIMIT);
-    this.resolveRawWaiters(data);
+    this.enqueueOrderedOutput(async () => {
+      await this.appendText(this.spec.outputPath, data);
+      this.durableRawChunks.push(data);
+      this.resolveRawWaiters(data);
+      await this.screen.write(data);
+      this.resolveScreenWaiters();
+    });
+  }
 
-    this.screenQueue = this.screenQueue
+  private enqueueOrderedOutput(operation: () => Promise<void>): void {
+    this.orderedOutputQueue = this.orderedOutputQueue
       .then(async () => {
-        await this.screen.write(data);
-        this.resolveScreenWaiters();
+        this.throwIfPendingError();
+        await operation();
       })
-      .catch((error) => {
-        this.recordAsyncError(error);
-      });
-
-    this.outputQueue = this.outputQueue
-      .then(() => this.appendText(this.spec.outputPath, data))
       .catch((error) => {
         this.recordAsyncError(error);
       });
@@ -413,7 +416,7 @@ export class PtyDriver {
     }
 
     let tail = "";
-    for (const chunk of this.rawChunks) {
+    for (const chunk of this.durableRawChunks) {
       const combined = `${tail}${chunk}`;
       if (combined.includes(marker)) {
         return true;
@@ -429,7 +432,7 @@ export class PtyDriver {
     }
 
     let tail = "";
-    for (const chunk of this.rawChunks) {
+    for (const chunk of this.durableRawChunks) {
       tail = `${tail}${chunk}`.slice(-length);
     }
     return tail;
@@ -481,8 +484,7 @@ export class PtyDriver {
 
   private async finalizeExit(exitCode: number): Promise<number> {
     try {
-      await this.screenQueue;
-      await this.outputQueue;
+      await this.orderedOutputQueue;
       await this.inputQueue;
       this.throwIfPendingError();
       return exitCode;

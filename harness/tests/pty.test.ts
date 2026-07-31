@@ -128,6 +128,57 @@ class FakeScreen implements ScreenLike {
   }
 }
 
+class DeferredScreen implements ScreenLike {
+  public readonly operations: string[] = [];
+  public readonly resizeCalls: Array<{ cols: number; rows: number }> = [];
+  public contentsValue = "";
+  public cursorValue = { col: 0, row: 0 };
+  private readonly pendingWrites: Array<{
+    text: string;
+    resolve: () => void;
+  }> = [];
+
+  public write(data: string | Uint8Array): Promise<void> {
+    const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+    this.operations.push(`write:start:${text}`);
+    return new Promise<void>((resolve) => {
+      this.pendingWrites.push({
+        text,
+        resolve: () => {
+          this.operations.push(`write:end:${text}`);
+          this.contentsValue += text;
+          this.cursorValue = {
+            col: this.cursorValue.col + text.length,
+            row: this.cursorValue.row,
+          };
+          resolve();
+        },
+      });
+    });
+  }
+
+  public resize(cols: number, rows: number): void {
+    this.operations.push(`resize:${cols}x${rows}`);
+    this.resizeCalls.push({ cols, rows });
+  }
+
+  public releaseNextWrite(): void {
+    const next = this.pendingWrites.shift();
+    if (!next) {
+      throw new Error("No pending write to release");
+    }
+    next.resolve();
+  }
+
+  public contents(): string {
+    return this.contentsValue;
+  }
+
+  public cursor(): { col: number; row: number } {
+    return this.cursorValue;
+  }
+}
+
 function futureDeadline(): number {
   return Date.now() + 1_000;
 }
@@ -211,8 +262,8 @@ describe("PtyDriver", () => {
       'marker "missing"'
     );
     await expect(driver.expectRaw("missing", 499)).rejects.toThrow("recent output");
-    await expect(driver.expectRaw("missing", 499)).rejects.toThrow("renderedrecent output");
-    await expect(driver.expectRaw("missing", 499)).rejects.toThrow("cursor=(20,2)");
+    await expect(driver.expectRaw("missing", 499)).rejects.toThrow("rendered");
+    await expect(driver.expectRaw("missing", 499)).rejects.toThrow("cursor=(7,2)");
   });
 
   test("reevaluates screen predicates after screen writes", async () => {
@@ -227,7 +278,7 @@ describe("PtyDriver", () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
-  test("does not block screen expectations on output artifact writes", async () => {
+  test("applies screen updates only after output artifact writes complete", async () => {
     let releaseArtifactWrite: (() => void) | undefined;
     const { driver, pty, screen } = createDriver({
       appendText(artifactPath) {
@@ -247,20 +298,88 @@ describe("PtyDriver", () => {
     );
     pty.emitData("READY");
 
-    await expect(pending).resolves.toBeUndefined();
-    expect(screen.contents()).toContain("READY");
+    await Promise.resolve();
+    expect(screen.contents()).toBe("");
 
     releaseArtifactWrite?.();
+    await expect(pending).resolves.toBeUndefined();
+    expect(screen.contents()).toContain("READY");
     pty.emitExit(0);
     await expect(driver.waitForExit(futureDeadline())).resolves.toBe(0);
   });
 
-  test("resizes the PTY and screen with exact dimensions", () => {
+  test("queues screen resize between earlier and later screen updates and reevaluates screen waiters", async () => {
+    const screen = new DeferredScreen();
+    const pty = new FakePty();
+    const driver = PtyDriver.spawn(
+      {
+        file: "bash",
+        args: ["-lc", "echo ready"],
+        cwd: "/repo",
+        env: { TERM: "xterm-256color" },
+        cols: 80,
+        rows: 24,
+        inputPath: "artifacts/input.log",
+        outputPath: "artifacts/output.log",
+      },
+      {
+        appendText: () => Promise.resolve(),
+        createScreen: () => screen,
+        spawnPty: () => pty,
+      }
+    );
+
+    let resized = false;
+    const resizedWaiter = driver.expectScreen((currentScreen) => {
+      if (currentScreen === screen && screen.resizeCalls.length > 0) {
+        resized = true;
+        return true;
+      }
+      return false;
+    }, futureDeadline());
+    const postResizeWriteWaiter = driver.expectScreen(
+      (currentScreen) =>
+        currentScreen === screen && screen.contents().includes("beforeafter"),
+      futureDeadline()
+    );
+
+    pty.emitData("before");
+    driver.resize(120, 40);
+    pty.emitData("after");
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(pty.resizeCalls).toEqual([{ cols: 120, rows: 40 }]);
+    expect(screen.resizeCalls).toEqual([]);
+    expect(resized).toBe(false);
+
+    screen.releaseNextWrite();
+    await expect(resizedWaiter).resolves.toBeUndefined();
+    expect(screen.resizeCalls).toEqual([{ cols: 120, rows: 40 }]);
+
+    screen.releaseNextWrite();
+    await expect(postResizeWriteWaiter).resolves.toBeUndefined();
+    expect(screen.operations).toEqual([
+      "write:start:before",
+      "write:end:before",
+      "resize:120x40",
+      "write:start:after",
+      "write:end:after",
+    ]);
+  });
+
+  test("resizes the PTY immediately and queues the screen resize with exact dimensions", async () => {
     const { driver, pty, screen } = createDriver();
+    const resized = driver.expectScreen(
+      () => screen.resizeCalls.length === 1,
+      futureDeadline()
+    );
 
     driver.resize(120, 40);
 
     expect(pty.resizeCalls).toEqual([{ cols: 120, rows: 40 }]);
+    await expect(resized).resolves.toBeUndefined();
     expect(screen.resizeCalls).toEqual([{ cols: 120, rows: 40 }]);
   });
 
@@ -335,5 +454,108 @@ describe("PtyDriver", () => {
 
     expect(() => driver.kill()).not.toThrow();
     expect(pty.killCalls).toEqual([undefined]);
+  });
+
+  test("waits for output evidence to append before resolving raw and screen waiters", async () => {
+    let releaseOutputAppend: (() => void) | undefined;
+    const { driver, pty } = createDriver({
+      appendText(artifactPath) {
+        if (artifactPath !== "artifacts/output.log") {
+          return Promise.resolve();
+        }
+
+        return new Promise<void>((resolve) => {
+          releaseOutputAppend = resolve;
+        });
+      },
+    });
+
+    let rawResolved = false;
+    let screenResolved = false;
+    const rawWaiter = driver.expectRaw("READY", futureDeadline()).then(() => {
+      rawResolved = true;
+    });
+    const screenWaiter = driver
+      .expectScreen((screen) => screen.contents().includes("READY"), futureDeadline())
+      .then(() => {
+        screenResolved = true;
+      });
+
+    pty.emitData("READY");
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(rawResolved).toBe(false);
+    expect(screenResolved).toBe(false);
+
+    releaseOutputAppend?.();
+
+    await expect(rawWaiter).resolves.toBeUndefined();
+    await expect(screenWaiter).resolves.toBeUndefined();
+  });
+
+  test("rejects output waiters and exit waiters when output evidence append fails", async () => {
+    let failOutputAppend: (() => void) | undefined;
+    const { driver, pty } = createDriver({
+      appendText(artifactPath) {
+        if (artifactPath !== "artifacts/output.log") {
+          return Promise.resolve();
+        }
+
+        return new Promise<void>((resolve) => {
+          failOutputAppend = resolve;
+        }).then(() => {
+          throw new Error("disk full");
+        });
+      },
+    });
+
+    const rawWaiter = driver.expectRaw("READY", futureDeadline());
+    const screenWaiter = driver.expectScreen(
+      (screen) => screen.contents().includes("READY"),
+      futureDeadline()
+    );
+    const exitWaiter = driver.waitForExit(futureDeadline());
+    const rawFailure = rawWaiter.then(
+      () => ({ status: "resolved" as const }),
+      (error) => ({ status: "rejected" as const, error })
+    );
+    const screenFailure = screenWaiter.then(
+      () => ({ status: "resolved" as const }),
+      (error) => ({ status: "rejected" as const, error })
+    );
+    const exitFailure = exitWaiter.then(
+      () => ({ status: "resolved" as const }),
+      (error) => ({ status: "rejected" as const, error })
+    );
+
+    pty.emitData("READY");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(failOutputAppend).toBeDefined();
+    failOutputAppend?.();
+
+    await expect(rawFailure).resolves.toMatchObject({
+      status: "rejected",
+      error: expect.objectContaining({
+        message: "PTY driver async failure: Error: disk full",
+      }),
+    });
+    await expect(screenFailure).resolves.toMatchObject({
+      status: "rejected",
+      error: expect.objectContaining({
+        message: "PTY driver async failure: Error: disk full",
+      }),
+    });
+    await expect(exitFailure).resolves.toMatchObject({
+      status: "rejected",
+      error: expect.objectContaining({
+        message: "PTY driver async failure: Error: disk full",
+      }),
+    });
+    await expect(driver.waitForExit(futureDeadline())).rejects.toThrow(
+      "PTY driver async failure: Error: disk full"
+    );
   });
 });

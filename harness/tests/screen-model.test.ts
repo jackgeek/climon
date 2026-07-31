@@ -35,6 +35,18 @@ describe("ScreenModel", () => {
     }
   });
 
+  test("returns only the visible viewport rows instead of scrollback", async () => {
+    const screen = new ScreenModel(5, 2);
+
+    try {
+      await screen.write("11111\r\n22222\r\n33333");
+
+      expect(screen.contents()).toBe("22222\n33333");
+    } finally {
+      screen.dispose();
+    }
+  });
+
   test("tracks alternate screen contents and restores the main buffer on exit", async () => {
     const screen = new ScreenModel(20, 8);
 
