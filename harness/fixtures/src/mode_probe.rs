@@ -91,16 +91,19 @@ pub fn run(command: Vec<String>, stdout: &mut impl Write) -> io::Result<i32> {
     let after = snapshot_platform();
     emit_line(
         stdout,
-        &serde_json::to_string(&ModeProbeResult {
-            command,
-            platform: platform_name(),
-            functional_restored: functional_restored(&before, &after),
-            pendin_changed: pendin_changed(&before, &after),
-            before,
-            after,
-            child_exit_code,
-            spawn_error,
-        })?,
+        &format!(
+            "DAR_MODE_RESULT {}",
+            serde_json::to_string(&ModeProbeResult {
+                command,
+                platform: platform_name(),
+                functional_restored: functional_restored(&before, &after),
+                pendin_changed: pendin_changed(&before, &after),
+                before,
+                after,
+                child_exit_code,
+                spawn_error,
+            })?
+        ),
     )?;
     Ok(child_exit_code)
 }

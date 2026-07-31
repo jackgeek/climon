@@ -18,6 +18,51 @@ interface FakeScreenFrame {
   cursor: { col: number; row: number };
 }
 
+interface UnixConsoleStateJson {
+  echo?: boolean | null;
+  icanon?: boolean | null;
+  isig?: boolean | null;
+  iexten?: boolean | null;
+  pendin?: boolean | null;
+  error?: string | null;
+}
+
+interface WindowsConsoleStateJson {
+  validHandle: boolean;
+  mode?: number | null;
+  echoInput?: boolean | null;
+  lineInput?: boolean | null;
+  processedInput?: boolean | null;
+  extendedFlags?: boolean | null;
+  vtInput?: boolean | null;
+  processedOutput?: boolean | null;
+  wrapAtEol?: boolean | null;
+  vtOutput?: boolean | null;
+  error?: string | null;
+}
+
+type PlatformSnapshotJson =
+  | { kind: "unix"; stdin: UnixConsoleStateJson }
+  | { kind: "windows"; input: WindowsConsoleStateJson; output: WindowsConsoleStateJson }
+  | { kind: "unsupported"; error: string };
+
+interface ModeProbeBaselineJson {
+  command: string[];
+  platform: HarnessPlatform;
+  before: PlatformSnapshotJson;
+}
+
+interface ModeProbeResultJson {
+  command: string[];
+  platform: HarnessPlatform;
+  before: PlatformSnapshotJson;
+  after: PlatformSnapshotJson;
+  childExitCode: number;
+  functionalRestored: boolean | null;
+  pendinChanged: boolean | null;
+  spawnError: string | null;
+}
+
 class FakeScreen implements ScreenLike {
   public constructor(private readonly frame: FakeScreenFrame) {}
 
@@ -147,13 +192,83 @@ function createContext(platform: HarnessPlatform = "linux"): Dar01Context {
   };
 }
 
+function unixSnapshot(overrides: Partial<UnixConsoleStateJson> = {}): PlatformSnapshotJson {
+  return {
+    kind: "unix",
+    stdin: {
+      echo: true,
+      icanon: true,
+      isig: true,
+      iexten: true,
+      pendin: false,
+      error: null,
+      ...overrides,
+    },
+  };
+}
+
+function windowsInputState(
+  overrides: Partial<WindowsConsoleStateJson> = {}
+): WindowsConsoleStateJson {
+  return {
+    validHandle: true,
+    mode: 39,
+    echoInput: true,
+    lineInput: true,
+    processedInput: true,
+    extendedFlags: true,
+    vtInput: false,
+    error: null,
+    ...overrides,
+  };
+}
+
+function windowsOutputState(
+  overrides: Partial<WindowsConsoleStateJson> = {}
+): WindowsConsoleStateJson {
+  return {
+    validHandle: true,
+    mode: 3,
+    processedOutput: true,
+    wrapAtEol: true,
+    vtOutput: false,
+    error: null,
+    ...overrides,
+  };
+}
+
+function windowsSnapshot(options: {
+  input?: Partial<WindowsConsoleStateJson>;
+  output?: Partial<WindowsConsoleStateJson>;
+} = {}): PlatformSnapshotJson {
+  return {
+    kind: "windows",
+    input: windowsInputState(options.input),
+    output: windowsOutputState(options.output),
+  };
+}
+
 function buildOutput(
   platform: HarnessPlatform,
   sessionName: string,
   textMarker: string,
-  options: { pendinChanged?: boolean | null; includeResult?: boolean } = {}
+  options: {
+    baselineBefore?: PlatformSnapshotJson;
+    resultBefore?: PlatformSnapshotJson;
+    resultAfter?: PlatformSnapshotJson;
+    childExitCode?: number;
+    functionalRestored?: boolean | null;
+    pendinChanged?: boolean | null;
+    includeResult?: boolean;
+    resultPrefix?: string;
+    baselineLine?: string;
+    resultLine?: string;
+    extraLines?: string[];
+  } = {}
 ): string {
-  const baseline = {
+  const baselineBefore =
+    options.baselineBefore ?? (platform === "windows" ? windowsSnapshot() : unixSnapshot());
+  const baseline: ModeProbeBaselineJson = {
     command: [
       "/repo/bin/climon",
       "run",
@@ -163,17 +278,21 @@ function buildOutput(
       "interactive-tui",
     ],
     platform,
+    before: baselineBefore,
   };
-  const result = {
+  const result: ModeProbeResultJson = {
     command: baseline.command,
     platform,
-    childExitCode: 0,
-    functionalRestored: true,
+    before: options.resultBefore ?? baselineBefore,
+    after: options.resultAfter ?? options.resultBefore ?? baselineBefore,
+    childExitCode: options.childExitCode ?? 0,
+    functionalRestored: options.functionalRestored ?? true,
     pendinChanged: options.pendinChanged ?? false,
+    spawnError: null,
   };
 
   return [
-    `DAR_MODE_BASELINE ${JSON.stringify(baseline)}`,
+    options.baselineLine ?? `DAR_MODE_BASELINE ${JSON.stringify(baseline)}`,
     "021 DAR_TUI_READY",
     `DAR_TUI_TEXT ${textMarker}`,
     "DAR_TUI_CONTROL Ctrl+C",
@@ -183,9 +302,11 @@ function buildOutput(
     "DAR_TUI_MOUSE_WHEEL_UP 10 6",
     "DAR_TUI_RESIZE 120 40",
     "040 DAR_TUI_EXIT",
+    ...(options.extraLines ?? []),
     options.includeResult === false
       ? ""
-      : `\u001b[?25h\u001b[?1049l${JSON.stringify(result)}`,
+      : options.resultLine ??
+        `\u001b[?25h\u001b[?1049l${options.resultPrefix ?? "DAR_MODE_RESULT "}${JSON.stringify(result)}`,
   ]
     .filter((line) => line.length > 0)
     .join("\n");
@@ -241,6 +362,12 @@ describe("runDar01", () => {
     expect(results.every((result) => result.durationMs > 0)).toBe(true);
     expect(results.every((result) => result.evidence?.includes("pty/input.log"))).toBe(true);
     expect(results.every((result) => result.evidence?.includes("pty/output.log"))).toBe(true);
+    expect(results[0]).toMatchObject({
+      name: "baseline-terminal-mode",
+      status: "passed",
+      message: expect.stringContaining("before.kind=unix"),
+      evidence: expect.arrayContaining([expect.stringContaining("DAR_MODE_BASELINE ")]),
+    });
 
     expect(spawnCalls).toEqual([
       {
@@ -345,6 +472,42 @@ describe("runDar01", () => {
     expect(pty.killCalls).toBe(0);
   });
 
+  test("fails baseline-terminal-mode when the unix baseline is not functionally cooked", async () => {
+    const uuid = "unix-baseline";
+    const results = await runDar01(createContext("linux"), {
+      now: createClock(),
+      createUuid: () => uuid,
+      spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
+      readArtifactText: async () =>
+        buildOutput("linux", `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+          baselineBefore: unixSnapshot({ echo: false }),
+        }),
+    });
+
+    expect(results.find((result) => result.name === "baseline-terminal-mode")).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("stdin.echo=true"),
+    });
+  });
+
+  test("fails baseline-terminal-mode when the windows baseline is not functionally cooked", async () => {
+    const uuid = "windows-baseline";
+    const results = await runDar01(createContext("windows"), {
+      now: createClock(),
+      createUuid: () => uuid,
+      spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
+      readArtifactText: async () =>
+        buildOutput("windows", `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+          baselineBefore: windowsSnapshot({ output: { wrapAtEol: false } }),
+        }),
+    });
+
+    expect(results.find((result) => result.name === "baseline-terminal-mode")).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("output.wrapAtEol=true"),
+    });
+  });
+
   test("kills the PTY when clean exit fails", async () => {
     const context = createContext();
     const uuid = "exit-timeout";
@@ -371,6 +534,92 @@ describe("runDar01", () => {
     });
     expect(pty.writeTextCalls.filter((call) => call === "q")).toHaveLength(1);
     expect(pty.killCalls).toBe(1);
+  });
+
+  test("requires the exact DAR_MODE_RESULT prefix instead of accepting bare JSON", async () => {
+    const uuid = "result-prefix";
+    const results = await runDar01(createContext("linux"), {
+      now: createClock(),
+      createUuid: () => uuid,
+      spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
+      readArtifactText: async () =>
+        buildOutput("linux", `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+          resultPrefix: "",
+        }),
+    });
+
+    expect(results.find((result) => result.name === "terminal-mode-restoration")).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("Missing DAR_MODE_RESULT marker"),
+    });
+  });
+
+  test("rejects malformed and duplicate mode markers", async () => {
+    const cases = [
+      {
+        name: "duplicate baseline marker",
+        output: buildOutput("linux", "DAR-01-duplicate-baseline", "DAR-01-こんにちは-ß-duplicate-baseline", {
+          extraLines: [
+            `DAR_MODE_BASELINE ${JSON.stringify({
+              command: ["/repo/bin/climon", "run"],
+              platform: "linux",
+              before: unixSnapshot(),
+            })}`,
+          ],
+        }),
+        expectedSubcheck: "baseline-terminal-mode",
+        expectedMessage: "Expected exactly one DAR_MODE_BASELINE marker, found 2",
+      },
+      {
+        name: "malformed baseline marker",
+        output: buildOutput("linux", "DAR-01-malformed-baseline", "DAR-01-こんにちは-ß-malformed-baseline", {
+          baselineLine: "DAR_MODE_BASELINE {not-json}",
+        }),
+        expectedSubcheck: "baseline-terminal-mode",
+        expectedMessage: "Malformed DAR_MODE_BASELINE marker JSON",
+      },
+      {
+        name: "duplicate result marker",
+        output: buildOutput("linux", "DAR-01-duplicate-result", "DAR-01-こんにちは-ß-duplicate-result", {
+          extraLines: [
+            `DAR_MODE_RESULT ${JSON.stringify({
+              command: ["/repo/bin/climon", "run"],
+              platform: "linux",
+              before: unixSnapshot(),
+              after: unixSnapshot(),
+              childExitCode: 0,
+              functionalRestored: true,
+              pendinChanged: false,
+              spawnError: null,
+            })}`,
+          ],
+        }),
+        expectedSubcheck: "terminal-mode-restoration",
+        expectedMessage: "Expected exactly one DAR_MODE_RESULT marker, found 2",
+      },
+      {
+        name: "malformed result marker",
+        output: buildOutput("linux", "DAR-01-malformed-result", "DAR-01-こんにちは-ß-malformed-result", {
+          resultLine: "DAR_MODE_RESULT {not-json}",
+        }),
+        expectedSubcheck: "terminal-mode-restoration",
+        expectedMessage: "Malformed DAR_MODE_RESULT marker JSON",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const results = await runDar01(createContext("linux"), {
+        now: createClock(),
+        createUuid: () => testCase.name,
+        spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
+        readArtifactText: async () => testCase.output,
+      });
+
+      expect(results.find((result) => result.name === testCase.expectedSubcheck)).toMatchObject({
+        status: "failed",
+        message: expect.stringContaining(testCase.expectedMessage),
+      });
+    }
   });
 
   test("allows macOS pendinChanged=true but fails terminal restoration on linux", async () => {

@@ -74,15 +74,64 @@ export interface Dar01Dependencies {
 interface ModeProbeBaseline {
   command: string[];
   platform: string;
+  before: PlatformSnapshot;
 }
 
 interface ModeProbeResult {
   command: string[];
   platform: string;
+  before: PlatformSnapshot;
+  after: PlatformSnapshot;
   childExitCode: number;
   functionalRestored: boolean | null;
   pendinChanged: boolean | null;
   spawnError?: string | null;
+}
+
+interface UnixConsoleState {
+  echo?: boolean | null;
+  icanon?: boolean | null;
+  isig?: boolean | null;
+  iexten?: boolean | null;
+  pendin?: boolean | null;
+  error?: string | null;
+}
+
+interface UnixSnapshot {
+  kind: "unix";
+  stdin: UnixConsoleState;
+}
+
+interface WindowsConsoleState {
+  validHandle: boolean;
+  mode?: number | null;
+  echoInput?: boolean | null;
+  lineInput?: boolean | null;
+  processedInput?: boolean | null;
+  extendedFlags?: boolean | null;
+  vtInput?: boolean | null;
+  processedOutput?: boolean | null;
+  wrapAtEol?: boolean | null;
+  vtOutput?: boolean | null;
+  error?: string | null;
+}
+
+interface WindowsSnapshot {
+  kind: "windows";
+  input: WindowsConsoleState;
+  output: WindowsConsoleState;
+}
+
+interface UnsupportedSnapshot {
+  kind: "unsupported";
+  error: string;
+}
+
+type PlatformSnapshot = UnixSnapshot | WindowsSnapshot | UnsupportedSnapshot;
+
+interface ParsedMarker<T> {
+  line: string;
+  value: T;
 }
 
 interface ScreenSnapshot {
@@ -122,46 +171,87 @@ function normalizeSubcheckError(name: Dar01SubcheckName, error: unknown): Error 
     : new Error(`${name} failed: ${String(error)}`);
 }
 
-function parsePrefixedJson<T>(rawOutput: string, prefix: string): T {
-  for (const line of rawOutput.split(/\r?\n/)) {
-    const cleaned = stripAnsi(line).trim();
-    if (!cleaned.startsWith(prefix)) {
-      continue;
-    }
-    return JSON.parse(cleaned.slice(prefix.length)) as T;
+function parseSinglePrefixedJson<T>(
+  rawOutput: string,
+  prefix: string,
+  label: string
+): ParsedMarker<T> {
+  const markers = rawOutput
+    .split(/\r?\n/)
+    .map((line) => stripAnsi(line).trim())
+    .filter((line) => line.startsWith(prefix));
+
+  if (markers.length === 0) {
+    throw new Error(`Missing ${label} marker`);
+  }
+  if (markers.length !== 1) {
+    throw new Error(`Expected exactly one ${label} marker, found ${markers.length}`);
   }
 
-  throw new Error(`Missing ${prefix.trim()} JSON marker`);
+  try {
+    return {
+      line: markers[0]!,
+      value: JSON.parse(markers[0]!.slice(prefix.length)) as T,
+    };
+  } catch (error) {
+    throw new Error(`Malformed ${label} marker JSON: ${stringifyError(error)}`);
+  }
 }
 
-function parseModeResult(rawOutput: string): ModeProbeResult {
-  const lines = rawOutput.split(/\r?\n/).reverse();
+function expectTrue(field: string, value: boolean | null | undefined): void {
+  if (value !== true) {
+    throw new Error(`Expected ${field}=true, received ${String(value)}`);
+  }
+}
 
-  for (const line of lines) {
-    const cleaned = stripAnsi(line).trim();
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start < 0 || end <= start) {
-      continue;
-    }
+function expectErrorAbsent(field: string, value: string | null | undefined): void {
+  if (value != null) {
+    throw new Error(`Expected ${field} to be absent, received ${JSON.stringify(value)}`);
+  }
+}
 
-    try {
-      const parsed = JSON.parse(cleaned.slice(start, end + 1)) as Partial<ModeProbeResult>;
-      if (
-        Array.isArray(parsed.command) &&
-        typeof parsed.platform === "string" &&
-        typeof parsed.childExitCode === "number" &&
-        "functionalRestored" in parsed &&
-        "pendinChanged" in parsed
-      ) {
-        return parsed as ModeProbeResult;
-      }
-    } catch {
-      // Ignore non-JSON lines.
-    }
+function validateUnixBaseline(snapshot: UnixSnapshot): string {
+  expectErrorAbsent("stdin.error", snapshot.stdin.error);
+  expectTrue("stdin.echo", snapshot.stdin.echo);
+  expectTrue("stdin.icanon", snapshot.stdin.icanon);
+  expectTrue("stdin.isig", snapshot.stdin.isig);
+  expectTrue("stdin.iexten", snapshot.stdin.iexten);
+  return "baseline before.kind=unix stdin.echo=true stdin.icanon=true stdin.isig=true stdin.iexten=true";
+}
+
+function validateWindowsBaseline(snapshot: WindowsSnapshot): string {
+  expectTrue("input.validHandle", snapshot.input.validHandle);
+  expectErrorAbsent("input.error", snapshot.input.error);
+  expectTrue("input.echoInput", snapshot.input.echoInput);
+  expectTrue("input.lineInput", snapshot.input.lineInput);
+  expectTrue("input.processedInput", snapshot.input.processedInput);
+  expectTrue("input.extendedFlags", snapshot.input.extendedFlags);
+  expectTrue("output.validHandle", snapshot.output.validHandle);
+  expectErrorAbsent("output.error", snapshot.output.error);
+  expectTrue("output.processedOutput", snapshot.output.processedOutput);
+  expectTrue("output.wrapAtEol", snapshot.output.wrapAtEol);
+  return "baseline before.kind=windows input.validHandle=true input.echoInput=true input.lineInput=true input.processedInput=true input.extendedFlags=true output.validHandle=true output.processedOutput=true output.wrapAtEol=true";
+}
+
+function validateBaseline(baseline: ModeProbeBaseline, platform: HarnessPlatform): string {
+  if (baseline.platform !== platform) {
+    throw new Error(`Expected baseline platform=${platform}, received ${baseline.platform}`);
   }
 
-  throw new Error("Missing final DAR_MODE_RESULT JSON");
+  if (platform === "windows") {
+    if (baseline.before.kind !== "windows") {
+      throw new Error(`Expected before.kind=windows, received before.kind=${baseline.before.kind}`);
+    }
+    return validateWindowsBaseline(baseline.before);
+  }
+
+  if (baseline.before.kind === "unsupported") {
+    throw new Error(`Unsupported baseline snapshot: ${baseline.before.error}`);
+  }
+  if (baseline.before.kind !== "unix") {
+    throw new Error(`Expected before.kind=unix, received before.kind=${baseline.before.kind}`);
+  }
+  return validateUnixBaseline(baseline.before);
 }
 
 async function captureScreen(
@@ -305,9 +395,14 @@ export async function runDar01(
 
       const deadline = remainingDeadline("baseline-terminal-mode", overallDeadline, now);
       await pty.expectRaw("DAR_MODE_BASELINE ", deadline);
-      const baseline = parsePrefixedJson<ModeProbeBaseline>(await readOutput(), "DAR_MODE_BASELINE ");
+      const baseline = parseSinglePrefixedJson<ModeProbeBaseline>(
+        await readOutput(),
+        "DAR_MODE_BASELINE ",
+        "DAR_MODE_BASELINE"
+      );
       return {
-        message: `baseline platform=${baseline.platform} command=${baseline.command.join(" ")}`,
+        message: validateBaseline(baseline.value, context.platform),
+        evidence: [baseline.line],
       };
     })
   );
@@ -460,7 +555,11 @@ export async function runDar01(
       }
 
       const rawOutput = await readOutput();
-      const result = parseModeResult(rawOutput);
+      const result = parseSinglePrefixedJson<ModeProbeResult>(
+        rawOutput,
+        "DAR_MODE_RESULT ",
+        "DAR_MODE_RESULT"
+      ).value;
       if (result.spawnError) {
         throw new Error(`mode-probe child spawn error: ${result.spawnError}`);
       }

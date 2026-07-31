@@ -539,7 +539,7 @@ describe("climon-harness-fixture stream protocol", () => {
 });
 
 describe("climon-harness-fixture terminal modes and TUI", () => {
-  test("emits the baseline marker before mode probing and returns the child exit code", async () => {
+  test("emits DAR_MODE_BASELINE then DAR_MODE_RESULT lines and returns the child exit code", async () => {
     await buildFixture();
     const child = spawnFixture([
       "mode-probe",
@@ -557,12 +557,13 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
     expect(text.stderr).toBe("");
     expect(text.stdoutLines).toHaveLength(2);
     expect(text.stdoutLines[0]?.startsWith("DAR_MODE_BASELINE ")).toBe(true);
+    expect(text.stdoutLines[1]?.startsWith("DAR_MODE_RESULT ")).toBe(true);
 
     const baseline = JSON.parse(text.stdoutLines[0]!.slice("DAR_MODE_BASELINE ".length)) as {
       command: string[];
       platform: string;
     };
-    const result = JSON.parse(text.stdoutLines[1]!) as {
+    const result = JSON.parse(text.stdoutLines[1]!.slice("DAR_MODE_RESULT ".length)) as {
       childExitCode: number;
       command: string[];
       functionalRestored: boolean | null;
