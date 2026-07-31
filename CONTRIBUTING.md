@@ -68,21 +68,24 @@ with `bun test tests/config.test.ts -t "name"`.
 ### DAR harness
 
 Run the DAR harness from an isolated `.worktrees/` checkout so its branch-local
-client/server/fixture builds and `harness-artifacts/` outputs do not pollute the
+client/server/fixture builds and `.test-tmp/dar-harness/` outputs do not pollute the
 main checkout:
 
 ```bash
 bun install --frozen-lockfile
 bun run harness:install-browser             # macOS / Windows
 bunx playwright install --with-deps chromium # Linux CI-style hosts
-bun run harness doctor
-bun run harness run --artifact-root harness-artifacts/<platform>/run-1
-bun run harness aggregate --results-root harness-artifacts/results
+bun run harness -- doctor
+bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/<platform>
+bun run harness -- aggregate --results-root .test-tmp/dar-harness-results
 ```
 
-`bun run harness doctor` checks the toolchain, Chromium install, fixture
+`bun run harness -- doctor` checks the toolchain, Chromium install, fixture
 manifest, and manual-heading wiring before a run. The aggregate step writes
 `results.json`, `summary.md`, and `junit.xml` under the results root.
+For Windows ConPTY / DAR results, the GitHub-hosted `windows-latest` runner is
+the authority; local macOS/Linux development cannot validate the real Windows
+console path.
 
 ## Workflow
 

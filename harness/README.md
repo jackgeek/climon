@@ -18,21 +18,25 @@ and writes machine-readable results for local debugging and CI aggregation.
 ## Commands
 
 ```bash
-bun run harness doctor
+bun run harness -- doctor
 bun run harness list
-bun run harness run --artifact-root harness-artifacts/<platform>/run-1
-bun run harness aggregate --results-root harness-artifacts/results
+bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/<platform>
+bun run harness -- aggregate --results-root .test-tmp/dar-harness-results
 ```
 
 ## Artifact layout
 
 - Per run: `<artifact-root>/results.json`, `summary.md`, `junit.xml`
 - Per case: `<artifact-root>/cases/DAR-0X/`
-- CI matrix convention: `harness-artifacts/<platform>/run-1/`
-- CI aggregate convention: `harness-artifacts/results/`
+- CI matrix convention: `.test-tmp/dar-harness/<platform>/`
+- CI aggregate convention: `.test-tmp/dar-harness-results/`
 
 Case folders carry `result.json`, logs, browser traces, server state snapshots,
 and any scenario-specific evidence.
+
+Markdown docs never configure executable tests. The manual DAR docs describe
+coverage and release-gate scope, while the typed scenario registry, harness CLI,
+and GitHub Actions workflow define what actually runs.
 
 ## Outcome governance
 
@@ -52,17 +56,18 @@ failed-subcheck allowlist, and `unsupported` stays non-blocking.
    [`harness/src/scenario-registry.ts`](src/scenario-registry.ts).
 3. Implement the scenario in `harness/src/scenarios/` and add focused
    `bun:test` coverage under `harness/tests/`.
-4. Update workflow/docs if CI should execute the new scenario.
+4. Update the typed scenario registry, workflow, and docs if CI should execute
+   the new scenario; Markdown alone never makes a case runnable.
 
 ## Debugging
 
-- Start with `bun run harness doctor`; it checks toolchain, Chromium, fixture
+- Start with `bun run harness -- doctor`; it checks toolchain, Chromium, fixture
   manifest, and scenario/manual wiring.
-- Run one or more DAR ids locally: `bun run harness run DAR-02 --artifact-root …`
+- Run one or more DAR ids locally: `bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/<platform>`
 - Inspect `summary.md`, `junit.xml`, and per-case `logs/`, `home/`, and
   `browser-trace.zip` artifacts before re-running.
 - Re-aggregate downloaded CI artifacts locally with
-  `bun run harness aggregate --results-root harness-artifacts/results`.
+  `bun run harness -- aggregate --results-root .test-tmp/dar-harness-results`.
 
 ## Native `node-pty` notes
 
@@ -70,4 +75,4 @@ The CLI entrypoint runs
 [`prepareNodePty`](src/node-pty-preflight.ts) before loading the harness. On
 non-Windows hosts it fixes executable bits on
 `node_modules/node-pty/prebuilds/*/spawn-helper`. Linux GitHub-hosted runners
-still need `CLIMON_DISABLE_SETSID=1` during `bun run harness run`.
+still need `CLIMON_DISABLE_SETSID=1` during `bun run harness -- run DAR-01 DAR-02`.

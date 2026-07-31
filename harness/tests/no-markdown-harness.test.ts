@@ -4,6 +4,7 @@ import { join, relative, resolve } from "node:path";
 
 const REPOSITORY_ROOT = resolve(import.meta.dir, "..", "..");
 const MANUAL_TESTS_ROOT = join(REPOSITORY_ROOT, "docs", "manual-tests");
+const HARNESS_README_PATH = join(REPOSITORY_ROOT, "harness", "README.md");
 const SKIP_DIRECTORIES = new Set([
   ".git",
   ".test-workspace",
@@ -130,6 +131,22 @@ test("manual Markdown never contains executable harness metadata or CIH ids", as
     expect(text).not.toContain("```yaml harness");
     expect(text).not.toMatch(/\bCIH-\d+\b/);
   }
+});
+
+test("harness README documents the exact workflow commands and keeps Markdown non-executable", async () => {
+  const readme = await readFile(HARNESS_README_PATH, "utf8");
+
+  expect(readme).toContain("bun run harness -- doctor");
+  expect(readme).toContain("bun run harness -- run DAR-01 DAR-02");
+  expect(readme).toContain(
+    "bun run harness -- aggregate --results-root .test-tmp/dar-harness-results"
+  );
+  expect(readme).toContain(".test-tmp/dar-harness/<platform>/");
+  expect(readme).toContain(".test-tmp/dar-harness-results/");
+  expect(readme).toContain("Markdown docs never configure executable tests");
+  expect(readme).not.toContain("bun run harness doctor");
+  expect(readme).not.toContain("bun run harness aggregate --results-root harness-artifacts/results");
+  expect(readme).not.toContain("harness-artifacts/<platform>/run-1");
 });
 
 test("repository source tree no longer carries markdown-driven CI harness remnants", async () => {

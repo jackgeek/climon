@@ -28,12 +28,15 @@ and the CI workflow
 [`../../.github/workflows/dar-e2e-harness.yml`](../../.github/workflows/dar-e2e-harness.yml)
 exercise a narrower automated slice of this matrix:
 
-- `bun run harness doctor` validates toolchain, Playwright Chromium, fixture,
-  and manual-heading wiring.
-- `bun run harness run` currently automates **`DAR-01` and `DAR-02` only** with
+- `bun run harness -- doctor` validates toolchain, Playwright Chromium,
+  fixture, and manual-heading wiring.
+- `bun run harness -- run DAR-01 DAR-02` currently automates **`DAR-01` and
+  `DAR-02` only** with
   typed per-platform expectations from `harness/src/scenario-registry.ts`.
-- `bun run harness aggregate` merges per-platform `results.json` files into
-  combined `results.json`, `summary.md`, and `junit.xml` outputs for CI.
+- `bun run harness -- aggregate --results-root .test-tmp/dar-harness-results`
+  merges per-platform `results.json` files into combined `results.json`,
+  `summary.md`, and `junit.xml` outputs for CI after recursively scanning nested
+  downloaded artifact folders under `.test-tmp/dar-harness-results/`.
 
 **Automation status:** useful regression coverage, **not** proof that the full
 Windows/macOS/Linux release gate has passed. `DAR-03` through `DAR-10`, real PWA
@@ -110,6 +113,9 @@ differ per cell call it out.
 - **Preconditions:** Built client; a real interactive console.
 - **Config-matrix cell:** all (attached local terminal, default config)
 - **Platforms:** macOS, Linux, Windows
+- **Automated coverage:** [`harness/src/scenarios/dar-01.ts`](../../harness/src/scenarios/dar-01.ts),
+  [`harness/tests/dar-01.test.ts`](../../harness/tests/dar-01.test.ts), and
+  [`../../.github/workflows/dar-e2e-harness.yml`](../../.github/workflows/dar-e2e-harness.yml)
 
 **Steps:**
 1. In an interactive terminal that is in normal cooked mode (local echo on, line
@@ -160,6 +166,9 @@ differ per cell call it out.
   `CLIMON_SESSION_ENGINE=actor` exported.
 - **Config-matrix cell:** all (detached daemon + one browser viewer)
 - **Platforms:** macOS, Linux, Windows
+- **Automated coverage:** [`harness/src/scenarios/dar-02.ts`](../../harness/src/scenarios/dar-02.ts),
+  [`harness/tests/dar-02.test.ts`](../../harness/tests/dar-02.test.ts), and
+  [`../../.github/workflows/dar-e2e-harness.yml`](../../.github/workflows/dar-e2e-harness.yml)
 
 **Steps:**
 1. Export `CLIMON_SESSION_ENGINE=actor`.

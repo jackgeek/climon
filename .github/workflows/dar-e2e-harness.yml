@@ -7,9 +7,11 @@ on:
       - "harness/**"
       - "rust/**"
       - "src/**"
+      - "scripts/server-build.ts"
+      - "scripts/compile.ts"
       - "package.json"
       - "bun.lock"
-      - "docs/manual-tests/daemon-actor-rewrite.md"
+      - "docs/manual-tests/**"
   workflow_dispatch:
 
 permissions:
@@ -38,8 +40,8 @@ jobs:
 
       - name: Prepare platform artifact root
         run: |
-          mkdir -p harness-artifacts/${{ matrix.platform }}
-          printf '%s\n' "${{ matrix.platform }}" > harness-artifacts/${{ matrix.platform }}/platform.txt
+          mkdir -p .test-tmp/dar-harness/${{ matrix.platform }}
+          printf '%s\n' "${{ matrix.platform }}" > .test-tmp/dar-harness/${{ matrix.platform }}/platform.txt
 
       - uses: actions/setup-node@v4
         with:
@@ -67,19 +69,19 @@ jobs:
         run: bun run harness:install-browser
 
       - name: Run DAR harness doctor
-        run: bun run harness doctor
+        run: bun run harness -- doctor
 
       - name: Run DAR harness
         env:
           CLIMON_DISABLE_SETSID: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
-        run: bun run harness run --artifact-root harness-artifacts/${{ matrix.platform }}/run-1
+        run: bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/${{ matrix.platform }}
 
       - name: Upload DAR harness artifact
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: dar-e2e-harness-${{ matrix.platform }}
-          path: harness-artifacts/${{ matrix.platform }}
+          path: .test-tmp/dar-harness/${{ matrix.platform }}
           if-no-files-found: error
 
   aggregate:
@@ -91,7 +93,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Prepare aggregate artifact root
-        run: mkdir -p harness-artifacts/results
+        run: mkdir -p .test-tmp/dar-harness-results
 
       - uses: actions/setup-node@v4
         with:
@@ -109,18 +111,18 @@ jobs:
         with:
           pattern: dar-e2e-harness-*
           merge-multiple: false
-          path: harness-artifacts/results
+          path: .test-tmp/dar-harness-results
 
       - name: Aggregate DAR harness reports
         id: aggregate
         continue-on-error: true
-        run: bun run harness aggregate --results-root harness-artifacts/results
+        run: bun run harness -- aggregate --results-root .test-tmp/dar-harness-results
 
       - name: Append DAR harness summary
         if: ${{ always() }}
         run: |
-          if [ -f harness-artifacts/results/summary.md ]; then
-            cat harness-artifacts/results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f .test-tmp/dar-harness-results/summary.md ]; then
+            cat .test-tmp/dar-harness-results/summary.md >> "$GITHUB_STEP_SUMMARY"
           else
             echo "DAR harness aggregate summary was not created." >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -130,7 +132,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dar-e2e-harness-results
-          path: harness-artifacts/results
+          path: .test-tmp/dar-harness-results
           if-no-files-found: error
 
       - name: Fail when aggregate reports blocking results

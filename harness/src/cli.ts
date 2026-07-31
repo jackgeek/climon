@@ -47,10 +47,10 @@ const playwrightPackage = require("playwright/package.json") as { version: strin
 
 const USAGE = [
   "Usage:",
-  "  bun run harness doctor",
-  "  bun run harness list",
-  "  bun run harness run [DAR-01|DAR-02 ...] [--artifact-root <path>]",
-  "  bun run harness aggregate [--results-root <path>]",
+  "  bun run harness -- doctor",
+  "  bun run harness -- list",
+  "  bun run harness -- run [DAR-01|DAR-02 ...] [--artifact-root <path>]",
+  "  bun run harness -- aggregate [--results-root <path>]",
 ].join("\n");
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._~-]+$/;
