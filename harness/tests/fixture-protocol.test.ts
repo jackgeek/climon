@@ -20,59 +20,82 @@ const FIXTURE_PATH = join(
   FIXTURE_PROFILE,
   process.platform === "win32" ? "climon-harness-fixture.exe" : "climon-harness-fixture"
 );
-
-let fixtureBuildPromise: Promise<string> | undefined;
+const FIXTURE_TEST_TIMEOUT_MS = 120_000;
 
 function futureDeadline(): number {
   return Date.now() + 10_000;
 }
 
-async function buildFixture(): Promise<string> {
-  fixtureBuildPromise ??= new Promise<string>((resolvePath, reject) => {
-    const args =
-      FIXTURE_PROFILE === "release"
-        ? ["build", "--release", "--manifest-path", FIXTURE_MANIFEST]
-        : ["build", "--manifest-path", FIXTURE_MANIFEST];
-    const child = spawn("cargo", args, {
-      cwd: ROOT,
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-    });
+function createFixtureBuilder(build: () => Promise<string>): () => Promise<string> {
+  let buildPromise: Promise<string> | undefined;
+  return () => {
+    if (buildPromise) {
+      return buildPromise;
+    }
 
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (code === 0 && signal === null && existsSync(FIXTURE_PATH)) {
-        resolvePath(FIXTURE_PATH);
-        return;
+    let nextBuildPromise: Promise<string>;
+    try {
+      nextBuildPromise = build();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    const currentBuildPromise = nextBuildPromise.catch((error) => {
+      if (buildPromise === currentBuildPromise) {
+        buildPromise = undefined;
       }
-
-      reject(
-        new Error(
-          [
-            `cargo ${args.join(" ")} failed`,
-            `code=${String(code)} signal=${String(signal)}`,
-            stdout.trim(),
-            stderr.trim(),
-          ]
-            .filter((part) => part.length > 0)
-            .join("\n")
-        )
-      );
+      throw error;
     });
-  });
-
-  return fixtureBuildPromise;
+    buildPromise = currentBuildPromise;
+    return currentBuildPromise;
+  };
 }
+
+const buildFixture = createFixtureBuilder(
+  () =>
+    new Promise<string>((resolvePath, reject) => {
+      const args =
+        FIXTURE_PROFILE === "release"
+          ? ["build", "--release", "--manifest-path", FIXTURE_MANIFEST]
+          : ["build", "--manifest-path", FIXTURE_MANIFEST];
+      const child = spawn("cargo", args, {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.once("error", reject);
+      child.once("exit", (code, signal) => {
+        if (code === 0 && signal === null && existsSync(FIXTURE_PATH)) {
+          resolvePath(FIXTURE_PATH);
+          return;
+        }
+
+        reject(
+          new Error(
+            [
+              `cargo ${args.join(" ")} failed`,
+              `code=${String(code)} signal=${String(signal)}`,
+              stdout.trim(),
+              stderr.trim(),
+            ]
+              .filter((part) => part.length > 0)
+              .join("\n")
+          )
+        );
+      });
+    })
+);
 
 function spawnFixture(args: string[]) {
   const child = spawn(FIXTURE_PATH, args, {
@@ -187,6 +210,36 @@ function markerList(raw: string): string[] {
   );
 }
 
+describe("fixture build memoization", () => {
+  test("retries after a rejected build and memoizes the first successful retry", async () => {
+    let attempts = 0;
+    let resolveRetry!: (path: string) => void;
+    const retryResult = new Promise<string>((resolve) => {
+      resolveRetry = resolve;
+    });
+    const build = createFixtureBuilder(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("first build failed");
+      }
+      return retryResult;
+    });
+
+    await expect(build()).rejects.toThrow("first build failed");
+
+    const retriedBuild = build();
+    const concurrentRetry = build();
+    expect(attempts).toBe(2);
+
+    resolveRetry("/fixture/path");
+
+    await expect(retriedBuild).resolves.toBe("/fixture/path");
+    await expect(concurrentRetry).resolves.toBe("/fixture/path");
+    await expect(build()).resolves.toBe("/fixture/path");
+    expect(attempts).toBe(2);
+  });
+});
+
 describe("climon-harness-fixture stream protocol", () => {
   test("streams exact 001..020 markers in order and exits after the exit handshake", async () => {
     await buildFixture();
@@ -252,7 +305,7 @@ describe("climon-harness-fixture stream protocol", () => {
       "019 DAR_STREAM_TEXT final marker",
       "020 DAR_STREAM_EXIT 0",
     ]);
-  });
+  }, FIXTURE_TEST_TIMEOUT_MS);
 
   test("rejects malformed stream input with stable stderr and exit 2", async () => {
     await buildFixture();
@@ -268,7 +321,7 @@ describe("climon-harness-fixture stream protocol", () => {
     expect(signal).toBeNull();
     expect(text.stdoutLines).toEqual(["001 DAR_STREAM_READY"]);
     expect(text.stderr).toBe("Malformed stream input: MOUSE PRESS left nope 1\n");
-  });
+  }, FIXTURE_TEST_TIMEOUT_MS);
 });
 
 describe("climon-harness-fixture terminal modes and TUI", () => {
@@ -311,7 +364,7 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
       true
     );
     expect(typeof result.pendinChanged === "boolean" || result.pendinChanged === null).toBe(true);
-  });
+  }, FIXTURE_TEST_TIMEOUT_MS);
 
   test("renders exact 021..040 markers for TUI input and exits only on plain q", async () => {
     await buildFixture();
@@ -397,7 +450,7 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
     } finally {
       screen.dispose();
     }
-  });
+  }, FIXTURE_TEST_TIMEOUT_MS);
 });
 
 describe("climon-harness-fixture command dispatch", () => {
@@ -412,5 +465,5 @@ describe("climon-harness-fixture command dispatch", () => {
     expect(signal).toBeNull();
     expect(text.stdout).toBe("");
     expect(text.stderr).toBe("Unknown command: bogus\n");
-  });
+  }, FIXTURE_TEST_TIMEOUT_MS);
 });
