@@ -151,6 +151,28 @@ describe("compareOutcome", () => {
     });
   });
 
+  test("marks declared failures that pass as an unexpected pass", () => {
+    const expectation: PlatformExpectation = {
+      expected: "partial",
+      reason: "Attach and cleanup are flaky on Windows",
+      tracking: "https://tracker.example/windows-attach-cleanup",
+      reviewAfter: "2026-08-15",
+      allowedFailedSubchecks: ["attach", "cleanup"],
+    };
+
+    expect(
+      compareOutcome(expectation, [
+        failedSubcheck("attach"),
+        passedSubcheck("cleanup"),
+      ])
+    ).toEqual({
+      status: "unexpected-pass",
+      blocking: true,
+      failedSubchecks: ["attach"],
+      message: "Unexpected passing subchecks for partial expectation: cleanup",
+    });
+  });
+
   test("returns unsupported as non-blocking without failed subchecks", () => {
     const expectation: PlatformExpectation = {
       expected: "unsupported",

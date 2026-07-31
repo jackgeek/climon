@@ -119,6 +119,22 @@ export function compareOutcome(
     };
   }
 
+  const failedNames = new Set(failedSubchecks);
+  const unexpectedPasses = expectation.allowedFailedSubchecks.filter(
+    (allowedFailure) => !failedNames.has(allowedFailure)
+  );
+
+  if (unexpectedPasses.length > 0) {
+    return {
+      status: "unexpected-pass",
+      blocking: true,
+      failedSubchecks,
+      message: `Unexpected passing subchecks for ${expectationLabel(expectation)}: ${unexpectedPasses.join(
+        ", "
+      )}`,
+    };
+  }
+
   return {
     status:
       expectation.expected === "partial"
