@@ -18,7 +18,6 @@
     "build:web": "bun scripts/build-web.ts",
     "build:rust": "bun scripts/build-rust.ts",
     "build": "bun run clean && bun run build:web && bun run build:server && bun run build:rust",
-    "harness": "bun harness/src/main.ts",
     "harness:install-browser": "playwright install chromium",
     "postinstall": "bun scripts/rust-toolchain.ts",
     "compile": "bun scripts/compile.ts",
