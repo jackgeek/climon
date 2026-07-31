@@ -131,6 +131,15 @@ export class ProcessLedger {
 
         await this.markExited(owned.pid, await owned.wait());
       } catch (error) {
+        const exitAfterFailure = await Promise.race([
+          owned.wait(),
+          Promise.resolve(stillRunning),
+        ]);
+        if (exitAfterFailure !== stillRunning) {
+          await this.markExited(owned.pid, exitAfterFailure);
+          continue;
+        }
+
         failures.push(
           new Error(
             `Process ${owned.pid} (${owned.label}) failed to terminate: ${

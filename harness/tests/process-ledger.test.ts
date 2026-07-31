@@ -222,4 +222,35 @@ describe("ProcessLedger", () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
+
+  test("recognizes a process that exits between the probe and kill", async () => {
+    const workspace = makeWorkspace("process-ledger-exit-race");
+    const owned = controlledProcess({
+      pid: 400,
+      label: "racey-client",
+      platform: "linux",
+    });
+    const ledger = new ProcessLedger(join(workspace, "case"), {
+      kill() {
+        owned.exit(0);
+        const error = new Error("no such process") as NodeJS.ErrnoException;
+        error.code = "ESRCH";
+        throw error;
+      },
+    });
+
+    try {
+      await ledger.register(owned.process);
+      await ledger.terminateAll();
+      await ledger.assertNoSurvivors();
+
+      expect(readLedgerLines(workspace).map((entry) => entry.action)).toEqual([
+        "register",
+        "terminate",
+        "exit",
+      ]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
 });
