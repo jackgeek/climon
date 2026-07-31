@@ -1,0 +1,498 @@
+import { describe, expect, test } from "bun:test";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import type { Browser, BrowserContext, Page } from "playwright";
+import type { BuildArtifacts } from "../src/build-cache.js";
+import type { CommandResult, CommandRunner, CommandSpec } from "../src/command.js";
+import type { OwnedProcess } from "../src/process-ledger.js";
+import {
+  RuntimeSupervisor,
+  type RuntimeSupervisorDependencies,
+  type RuntimeSupervisorOptions,
+  type SpawnProcessSpec,
+} from "../src/runtime-supervisor.js";
+
+function makeWorkspace(name: string): string {
+  const workspace = resolve(
+    import.meta.dir,
+    "..",
+    ".test-workspace",
+    `${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  );
+  rmSync(workspace, { recursive: true, force: true });
+  mkdirSync(workspace, { recursive: true });
+  return workspace;
+}
+
+function buildArtifacts(root: string): BuildArtifacts {
+  return {
+    clientPath: join(root, "bin", "climon"),
+    serverPath: join(root, "bin", "climon-server"),
+    fixturePath: join(root, "bin", "climon-harness-fixture"),
+    revision: "abc123",
+    manifestPath: join(root, "build", "manifest.json"),
+  };
+}
+
+function runtimeOptions(workspace: string, overrides: Partial<RuntimeSupervisorOptions> = {}): RuntimeSupervisorOptions {
+  const root = join(workspace, "repo");
+  mkdirSync(root, { recursive: true });
+
+  return {
+    root,
+    darId: "DAR-01",
+    artifactRoot: join(workspace, "artifacts"),
+    platform: "linux",
+    build: buildArtifacts(root),
+    runner: new FakeCommandRunner(),
+    startupTimeoutMs: 1_000,
+    cleanupTimeoutMs: 1_000,
+    ...overrides,
+  };
+}
+
+class FakeCommandRunner implements CommandRunner {
+  public readonly calls: CommandSpec[] = [];
+
+  public constructor(
+    private readonly onRun: (spec: CommandSpec) => CommandResult | Promise<CommandResult> = () => ({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      durationMs: 1,
+    })
+  ) {}
+
+  public async run(spec: CommandSpec): Promise<CommandResult> {
+    this.calls.push(spec);
+    return this.onRun(spec);
+  }
+}
+
+function controlledProcess(
+  values: Omit<OwnedProcess, "wait">
+): { process: OwnedProcess; exit(code: number | null): void } {
+  let resolveExit!: (code: number | null) => void;
+  const exitPromise = new Promise<number | null>((resolve) => {
+    resolveExit = resolve;
+  });
+
+  return {
+    process: {
+      ...values,
+      wait: () => exitPromise,
+    },
+    exit: resolveExit,
+  };
+}
+
+function readyBrowser(log: string[] = []) {
+  let newPageCalls = 0;
+  let newContextCalls = 0;
+  const page = {
+    async close() {
+      log.push("page-close");
+    },
+  } as unknown as Page;
+  const context = {
+    get newPageCalls() {
+      return newPageCalls;
+    },
+    async newPage() {
+      newPageCalls += 1;
+      return page;
+    },
+    async close() {
+      log.push("context-close");
+    },
+  } as unknown as BrowserContext & { newPageCalls: number };
+  const browser = {
+    get newContextCalls() {
+      return newContextCalls;
+    },
+    async newContext() {
+      newContextCalls += 1;
+      return context;
+    },
+    async close() {
+      log.push("browser-close");
+    },
+  } as unknown as Browser & { newContextCalls: number };
+
+  return { browser, context, page };
+}
+
+async function createReadySupervisor(
+  options: RuntimeSupervisorOptions,
+  overrides: Partial<RuntimeSupervisorDependencies> = {}
+) {
+  const server = controlledProcess({
+    pid: 4123,
+    label: "dashboard-server",
+    platform: options.platform,
+    processGroup: options.platform === "windows" ? undefined : 4123,
+  });
+  const spawnCalls: SpawnProcessSpec[] = [];
+  const fetchCalls: string[] = [];
+  const { browser, context, page } = readyBrowser();
+  const dependencies: RuntimeSupervisorDependencies = {
+    spawnProcess: async (spec) => {
+      spawnCalls.push(spec);
+      mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+      writeFileSync(
+        join(spec.env.CLIMON_HOME!, "server.json"),
+        `${JSON.stringify({ pid: server.process.pid, port: 43123 })}\n`
+      );
+      return server.process;
+    },
+    fetch: async (input) => {
+      fetchCalls.push(String(input));
+      return {
+        ok: true,
+        json: async () => ({ ok: true }),
+      } as Response;
+    },
+    launchBrowser: async () => browser,
+    processLedgerDependencies: {
+      server: {
+        kill() {
+          server.exit(0);
+        },
+      },
+    },
+    ...overrides,
+  };
+
+  const supervisor = await RuntimeSupervisor.create(options, dependencies);
+  return { supervisor, server, spawnCalls, fetchCalls, browser, context, page };
+}
+
+function withEnv<T>(entries: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(entries)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  return fn().finally(() => {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+}
+
+describe("RuntimeSupervisor.create", () => {
+  test("initializes an isolated DAR runtime with exact env, config, server startup, and one browser context/page", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-create");
+    const options = runtimeOptions(workspace);
+
+    try {
+      const { supervisor, spawnCalls, fetchCalls, browser, context, page } =
+        await createReadySupervisor(options);
+
+      expect(spawnCalls).toHaveLength(1);
+      expect(spawnCalls[0]).toMatchObject({
+        file: options.build.serverPath,
+        args: ["server", "--no-takeover", "--port", "0"],
+        cwd: options.root,
+        shell: false,
+        label: "climon-server",
+        platform: "linux",
+      });
+      expect(spawnCalls[0].env.CLIMON_CLIENT_BIN).toBe(options.build.clientPath);
+      expect(spawnCalls[0].env.CLIMON_HOME).toBe(supervisor.context.home);
+      expect(spawnCalls[0].env.CLIMON_SESSION_ENGINE).toBe("actor");
+      expect(spawnCalls[0].env.CLIMON_COLS).toBe("100");
+      expect(spawnCalls[0].env.CLIMON_ROWS).toBe("30");
+      expect(spawnCalls[0].env.CI).toBe("true");
+      expect(spawnCalls[0].env.NO_COLOR).toBe("1");
+      expect(spawnCalls[0].env.CLIMON_DISABLE_SETSID).toBeUndefined();
+
+      expect(supervisor.context.root).toBe(options.root);
+      expect(supervisor.context.home).toBe(
+        join(options.artifactRoot, "cases", "DAR-01", "temp", "h")
+      );
+      expect(supervisor.context.baseUrl).toBe("http://127.0.0.1:43123/");
+      expect(supervisor.context.artifacts.dir).toBe(
+        join(options.artifactRoot, "cases", "DAR-01")
+      );
+      expect(supervisor.context.browser).toBe(browser);
+      expect(supervisor.context.context).toBe(context);
+      expect(supervisor.context.page).toBe(page);
+
+      expect(fetchCalls).toEqual(["http://127.0.0.1:43123/health"]);
+      expect(browser.newContextCalls).toBe(1);
+      expect(context.newPageCalls).toBe(1);
+
+      expect(
+        JSON.parse(readFileSync(join(supervisor.context.home, "config.jsonc"), "utf8"))
+      ).toEqual({
+        version: 1,
+        telemetry: { enabled: false },
+        update: { auto: false },
+        remote: {
+          enabled: false,
+          discover: false,
+          autoLink: false,
+        },
+        feature: {
+          remoteSpawn: "disabled",
+          wslBridge: "disabled",
+          remotes: "disabled",
+        },
+      });
+
+      await supervisor.dispose();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("creates unique isolated homes for different DAR cases", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-homes");
+    const firstOptions = runtimeOptions(workspace, { darId: "DAR-01" });
+    const secondOptions = runtimeOptions(workspace, { darId: "DAR-02" });
+
+    try {
+      const first = await createReadySupervisor(firstOptions);
+      const second = await createReadySupervisor(secondOptions);
+
+      expect(first.supervisor.context.home).not.toBe(second.supervisor.context.home);
+      expect(first.supervisor.context.home).toBe(
+        join(firstOptions.artifactRoot, "cases", "DAR-01", "temp", "h")
+      );
+      expect(second.supervisor.context.home).toBe(
+        join(secondOptions.artifactRoot, "cases", "DAR-02", "temp", "h")
+      );
+
+      await first.supervisor.dispose();
+      await second.supervisor.dispose();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves CLIMON_DISABLE_SETSID only for Linux CI", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-setsid");
+
+    try {
+      await withEnv({ CI: undefined, CLIMON_DISABLE_SETSID: "1" }, async () => {
+        const localLinux = await createReadySupervisor(runtimeOptions(workspace), {
+          processLedgerDependencies: {
+            server: {
+              kill() {},
+            },
+          },
+        });
+        expect(localLinux.spawnCalls[0].env.CLIMON_DISABLE_SETSID).toBeUndefined();
+        localLinux.server.exit(0);
+        await localLinux.supervisor.dispose();
+      });
+
+      await withEnv({ CI: "true", CLIMON_DISABLE_SETSID: "1" }, async () => {
+        const linux = await createReadySupervisor(runtimeOptions(workspace));
+        const macos = await createReadySupervisor(
+          runtimeOptions(workspace, { darId: "DAR-02", platform: "macos" })
+        );
+
+        expect(linux.spawnCalls[0].env.CLIMON_DISABLE_SETSID).toBe("1");
+        expect(macos.spawnCalls[0].env.CLIMON_DISABLE_SETSID).toBeUndefined();
+
+        await linux.supervisor.dispose();
+        await macos.supervisor.dispose();
+      });
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("fails startup when server.json does not match the spawned server pid", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-pid-mismatch");
+    const options = runtimeOptions(workspace);
+    const server = controlledProcess({
+      pid: 5001,
+      label: "dashboard-server",
+      platform: "linux",
+      processGroup: 5001,
+    });
+    const fetchCalls: string[] = [];
+    let terminated = false;
+
+    try {
+      await expect(
+        RuntimeSupervisor.create(options, {
+          spawnProcess: async (spec) => {
+            mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+            writeFileSync(
+              join(spec.env.CLIMON_HOME!, "server.json"),
+              `${JSON.stringify({ pid: 9999, port: 43123 })}\n`
+            );
+            return server.process;
+          },
+          fetch: async (input) => {
+            fetchCalls.push(String(input));
+            return {
+              ok: true,
+              json: async () => ({ ok: true }),
+            } as Response;
+          },
+          launchBrowser: async () => readyBrowser().browser,
+          processLedgerDependencies: {
+            server: {
+              kill() {
+                terminated = true;
+                server.exit(0);
+              },
+            },
+          },
+        })
+      ).rejects.toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "server-startup",
+          message: expect.stringContaining("pid"),
+        })
+      );
+      expect(fetchCalls).toEqual([]);
+      expect(terminated).toBe(true);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("RuntimeSupervisor.dispose", () => {
+  test("attempts every cleanup phase, kills tracked sessions before the server, snapshots home, and aggregates failures", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-dispose");
+    const log: string[] = [];
+    const runner = new FakeCommandRunner((spec) => {
+      log.push(`kill:${spec.args.at(-1)}`);
+      return {
+        code: 9,
+        stdout: "",
+        stderr: "kill failed",
+        durationMs: 1,
+      };
+    });
+    const options = runtimeOptions(workspace, {
+      runner,
+      cleanupTimeoutMs: 0,
+    });
+    const server = controlledProcess({
+      pid: 6123,
+      label: "dashboard-server",
+      platform: "linux",
+      processGroup: 6123,
+    });
+    const client = controlledProcess({
+      pid: 7123,
+      label: "fixture-client",
+      platform: "linux",
+      processGroup: 7123,
+    });
+    const browser = {
+      async newContext() {
+        return {
+          async newPage() {
+            return {
+              async close() {
+                log.push("page-close");
+                throw new Error("page close failed");
+              },
+            };
+          },
+          async close() {
+            log.push("context-close");
+            throw new Error("context close failed");
+          },
+        };
+      },
+      async close() {
+        log.push("browser-close");
+        throw new Error("browser close failed");
+      },
+    } as unknown as Browser;
+
+    try {
+      const supervisor = await RuntimeSupervisor.create(options, {
+        now: () => 1_000,
+        sleep: async () => {
+          throw new Error("sleep should not be called");
+        },
+        spawnProcess: async (spec) => {
+          mkdirSync(spec.env.CLIMON_HOME!, { recursive: true });
+          writeFileSync(
+            join(spec.env.CLIMON_HOME!, "server.json"),
+            `${JSON.stringify({ pid: server.process.pid, port: 43123 })}\n`
+          );
+          return server.process;
+        },
+        fetch: async () => {
+          return {
+            ok: true,
+            json: async () => ({ ok: true }),
+          } as Response;
+        },
+        launchBrowser: async () => browser,
+        processLedgerDependencies: {
+          client: {
+            kill() {
+              log.push("client-terminate");
+              throw new Error("client stuck");
+            },
+          },
+          server: {
+            kill() {
+              log.push("server-terminate");
+              server.exit(0);
+            },
+          },
+        },
+      });
+
+      supervisor.context.sessions.track("session-1");
+      mkdirSync(join(supervisor.context.home, "sessions"), { recursive: true });
+      writeFileSync(
+        join(supervisor.context.home, "sessions", "session-1.json"),
+        `${JSON.stringify({ id: "session-1", status: "running" })}\n`
+      );
+      await supervisor.context.processes.register(client.process);
+
+      const error = await supervisor.dispose().catch((caught: unknown) => caught);
+
+      expect(log).toEqual([
+        "page-close",
+        "context-close",
+        "kill:session-1",
+        "client-terminate",
+        "server-terminate",
+        "browser-close",
+      ]);
+      expect(readFileSync(join(supervisor.context.artifacts.dir, "home", "config.jsonc"), "utf8"))
+        .toContain('"telemetry"');
+      expect(error).toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "cleanup",
+          message: expect.stringContaining("session-1"),
+          cause: expect.any(AggregateError),
+        })
+      );
+      expect((error as Error).message).toContain("page close failed");
+      expect((error as Error).message).toContain("context close failed");
+      expect((error as Error).message).toContain("client stuck");
+      expect((error as Error).message).toContain("Owned processes still running");
+      expect((error as Error).message).toContain("browser close failed");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
