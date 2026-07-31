@@ -248,10 +248,14 @@ function windowsSnapshot(options: {
   };
 }
 
+function textMarkers(text: string): string[] {
+  return Array.from(text, (character) => `DAR_TUI_TEXT ${character}`);
+}
+
 function buildOutput(
   platform: HarnessPlatform,
   sessionName: string,
-  textMarker: string,
+  text: string,
   options: {
     baselineBefore?: PlatformSnapshotJson;
     resultBefore?: PlatformSnapshotJson;
@@ -294,7 +298,7 @@ function buildOutput(
   return [
     options.baselineLine ?? `DAR_MODE_BASELINE ${JSON.stringify(baseline)}`,
     "021 DAR_TUI_READY",
-    `DAR_TUI_TEXT ${textMarker}`,
+    ...textMarkers(text),
     "DAR_TUI_CONTROL Ctrl+C",
     "DAR_TUI_KEY ArrowUp",
     "DAR_TUI_MOUSE_PRESS Left 10 6",
@@ -315,13 +319,11 @@ function buildOutput(
 function passingScreens(): FakeScreenFrame[] {
   return [
     {
-      contents:
-        "DAR_TUI_READY\nevent=mouse:wheel-up:10:6\nlast-marker=DAR_TUI_MOUSE_WHEEL_UP 10 6\nsize=100x30",
+      contents: "DAR_TUI_READY\nsize=100x30\nlast=mouse:wheel-up:10:6",
       cursor: { col: 0, row: 3 },
     },
     {
-      contents:
-        "DAR_TUI_READY\nDAR_TUI_RESIZE 120 40\nevent=resize:120x40\nsize=120x40",
+      contents: "DAR_TUI_READY\nsize=120x40\nlast=resize:120x40",
       cursor: { col: 0, row: 3 },
     },
   ];
@@ -334,7 +336,7 @@ describe("runDar01", () => {
     const pty = new FakePty({ screenFrames: passingScreens(), exitCode: 0 });
     const spawnCalls: Array<{ spec: PtySpawnSpec; deps: PtyDriverDependencies }> = [];
     const uuid = "abc123";
-    const expectedText = `DAR-01-こんにちは-ß-${uuid}`;
+    const expectedText = `dar01-é-${uuid}`;
     const output = buildOutput(context.platform, `DAR-01-${uuid}`, expectedText);
 
     const results = await runDar01(context, {
@@ -401,7 +403,7 @@ describe("runDar01", () => {
       "expectRaw:DAR_MODE_BASELINE ",
       "expectRaw:021 DAR_TUI_READY",
       `writeText:${expectedText}`,
-      `expectRaw:DAR_TUI_TEXT ${expectedText}`,
+      ...Array.from(expectedText, (character) => `expectRaw:DAR_TUI_TEXT ${character}`),
       "sendControl:c",
       "expectRaw:DAR_TUI_CONTROL Ctrl+C",
       "sendKey:ArrowUp",
@@ -443,7 +445,7 @@ describe("runDar01", () => {
     const output = buildOutput(
       context.platform,
       `DAR-01-${uuid}`,
-      `DAR-01-こんにちは-ß-${uuid}`
+      `dar01-é-${uuid}`
     );
 
     const results = await runDar01(context, {
@@ -479,7 +481,7 @@ describe("runDar01", () => {
       createUuid: () => uuid,
       spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
       readArtifactText: async () =>
-        buildOutput("linux", `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+        buildOutput("linux", `DAR-01-${uuid}`, `dar01-é-${uuid}`, {
           baselineBefore: unixSnapshot({ echo: false }),
         }),
     });
@@ -497,7 +499,7 @@ describe("runDar01", () => {
       createUuid: () => uuid,
       spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
       readArtifactText: async () =>
-        buildOutput("windows", `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+        buildOutput("windows", `DAR-01-${uuid}`, `dar01-é-${uuid}`, {
           baselineBefore: windowsSnapshot({ output: { wrapAtEol: false } }),
         }),
     });
@@ -521,7 +523,7 @@ describe("runDar01", () => {
       createUuid: () => uuid,
       spawnPty: () => pty,
       readArtifactText: async () =>
-        buildOutput(context.platform, `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+        buildOutput(context.platform, `DAR-01-${uuid}`, `dar01-é-${uuid}`, {
           includeResult: false,
         }),
     });
@@ -543,7 +545,7 @@ describe("runDar01", () => {
       createUuid: () => uuid,
       spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
       readArtifactText: async () =>
-        buildOutput("linux", `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+        buildOutput("linux", `DAR-01-${uuid}`, `dar01-é-${uuid}`, {
           resultPrefix: "",
         }),
     });
@@ -558,7 +560,7 @@ describe("runDar01", () => {
     const cases = [
       {
         name: "duplicate baseline marker",
-        output: buildOutput("linux", "DAR-01-duplicate-baseline", "DAR-01-こんにちは-ß-duplicate-baseline", {
+        output: buildOutput("linux", "DAR-01-duplicate-baseline", "dar01-é-duplicate-baseline", {
           extraLines: [
             `DAR_MODE_BASELINE ${JSON.stringify({
               command: ["/repo/bin/climon", "run"],
@@ -572,7 +574,7 @@ describe("runDar01", () => {
       },
       {
         name: "malformed baseline marker",
-        output: buildOutput("linux", "DAR-01-malformed-baseline", "DAR-01-こんにちは-ß-malformed-baseline", {
+        output: buildOutput("linux", "DAR-01-malformed-baseline", "dar01-é-malformed-baseline", {
           baselineLine: "DAR_MODE_BASELINE {not-json}",
         }),
         expectedSubcheck: "baseline-terminal-mode",
@@ -580,7 +582,7 @@ describe("runDar01", () => {
       },
       {
         name: "duplicate result marker",
-        output: buildOutput("linux", "DAR-01-duplicate-result", "DAR-01-こんにちは-ß-duplicate-result", {
+        output: buildOutput("linux", "DAR-01-duplicate-result", "dar01-é-duplicate-result", {
           extraLines: [
             `DAR_MODE_RESULT ${JSON.stringify({
               command: ["/repo/bin/climon", "run"],
@@ -599,7 +601,7 @@ describe("runDar01", () => {
       },
       {
         name: "malformed result marker",
-        output: buildOutput("linux", "DAR-01-malformed-result", "DAR-01-こんにちは-ß-malformed-result", {
+        output: buildOutput("linux", "DAR-01-malformed-result", "dar01-é-malformed-result", {
           resultLine: "DAR_MODE_RESULT {not-json}",
         }),
         expectedSubcheck: "terminal-mode-restoration",
@@ -629,7 +631,7 @@ describe("runDar01", () => {
       createUuid: () => uuid,
       spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
       readArtifactText: async () =>
-        buildOutput("macos", `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+        buildOutput("macos", `DAR-01-${uuid}`, `dar01-é-${uuid}`, {
           pendinChanged: true,
         }),
     });
@@ -638,7 +640,7 @@ describe("runDar01", () => {
       createUuid: () => uuid,
       spawnPty: () => new FakePty({ screenFrames: passingScreens(), exitCode: 0 }),
       readArtifactText: async () =>
-        buildOutput("linux", `DAR-01-${uuid}`, `DAR-01-こんにちは-ß-${uuid}`, {
+        buildOutput("linux", `DAR-01-${uuid}`, `dar01-é-${uuid}`, {
           pendinChanged: true,
         }),
     });

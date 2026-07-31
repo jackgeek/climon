@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
@@ -23,7 +24,188 @@ const FIXTURE_PATH = join(
 );
 const FIXTURE_TEST_TIMEOUT_MS = 120_000;
 const LIVE_TUI_DISCONNECT_TIMEOUT_MS = 1_500;
+const REAL_PTY_TEST_TIMEOUT_MS = 30_000;
+const NODE_PATH = Bun.which("node");
 const PYTHON3_PATH = Bun.which("python3");
+const NODE_LIVE_TUI_DRIVER_SCRIPT = String.raw`
+import nodePty from "node-pty";
+import headless from "@xterm/headless";
+
+const { spawn } = nodePty;
+const { Terminal } = headless;
+
+const fixturePath = process.argv[1];
+const textInput = process.argv[2];
+const timeoutMs = Number(process.argv[3]);
+const terminal = new Terminal({ cols: 100, rows: 30, allowProposedApi: true });
+let writeQueue = Promise.resolve();
+let raw = "";
+let exitCode = null;
+let exitSignal = null;
+
+function contents() {
+  const active = terminal.buffer.active;
+  const lines = [];
+  const start =
+    active.type === "alternate" ? 0 : Math.min(active.viewportY, active.baseY);
+  const end = start + terminal.rows;
+
+  for (let index = start; index < end; index += 1) {
+    const line = active.getLine(index);
+    if (!line) {
+      lines.push("");
+      continue;
+    }
+
+    let lastOccupied = -1;
+    for (let column = terminal.cols - 1; column >= 0; column -= 1) {
+      const cell = line.getCell(column);
+      if (cell?.getChars() !== "") {
+        lastOccupied = column;
+        break;
+      }
+    }
+
+    lines.push(
+      lastOccupied >= 0 ? line.translateToString(false, 0, lastOccupied + 1) : ""
+    );
+  }
+
+  while (lines.length > 0 && lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  return lines.join("\n");
+}
+
+function cursor() {
+  const active = terminal.buffer.active;
+  return { col: active.cursorX, row: active.cursorY };
+}
+
+async function waitFor(label, predicate) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await writeQueue;
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error(
+    "Timed out waiting for " +
+      label +
+      "; rawTail=" +
+      JSON.stringify(raw.slice(-4000)) +
+      "; screen=" +
+      JSON.stringify(contents()) +
+      "; cursor=" +
+      JSON.stringify(cursor())
+  );
+}
+
+async function main() {
+  const child = spawn(fixturePath, ["tui"], {
+    name: "xterm-256color",
+    cols: 100,
+    rows: 30,
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: "utf8",
+  });
+  const exitPromise = new Promise((resolve) => {
+    child.onExit((event) => {
+      exitCode = event.exitCode;
+      exitSignal = event.signal ?? null;
+      resolve();
+    });
+  });
+  child.onData((data) => {
+    raw += data;
+    writeQueue = writeQueue.then(
+      () =>
+        new Promise((resolve) => {
+          terminal.write(data, resolve);
+        })
+    );
+  });
+
+  let markerOffset = 0;
+  const waitForMarker = async (marker) => {
+    await waitFor("marker " + marker, () => {
+      const index = raw.indexOf(marker, markerOffset);
+      if (index < 0) {
+        return false;
+      }
+      markerOffset = index + marker.length;
+      return true;
+    });
+  };
+
+  try {
+    await waitForMarker("021 DAR_TUI_READY");
+    await waitFor("initial frame", () => {
+      const currentCursor = cursor();
+      return (
+        contents() === "DAR_TUI_READY\nsize=100x30\nlast=ready" &&
+        currentCursor.col === 0 &&
+        currentCursor.row === 3
+      );
+    });
+
+    child.write(textInput);
+    for (const character of textInput) {
+      await waitForMarker("DAR_TUI_TEXT " + character);
+    }
+
+    child.write("\x1b[<64;10;6M");
+    await waitForMarker("DAR_TUI_MOUSE_WHEEL_UP 10 6");
+    await waitFor("mouse frame", () => {
+      const currentCursor = cursor();
+      return (
+        contents() === "DAR_TUI_READY\nsize=100x30\nlast=mouse:wheel-up:10:6" &&
+        currentCursor.col === 0 &&
+        currentCursor.row === 3
+      );
+    });
+
+    child.resize(120, 40);
+    await waitForMarker("DAR_TUI_RESIZE 120 40");
+    await waitFor("resize frame", () => {
+      const currentCursor = cursor();
+      return (
+        contents() === "DAR_TUI_READY\nsize=120x40\nlast=resize:120x40" &&
+        currentCursor.col === 0 &&
+        currentCursor.row === 3
+      );
+    });
+
+    child.kill();
+    await exitPromise;
+
+    console.log(
+      JSON.stringify({
+        childExited: true,
+        exitCode,
+        exitSignal,
+        finalCursor: cursor(),
+        finalScreen: contents(),
+        rawTail: raw.slice(-4000),
+      })
+    );
+  } catch (error) {
+    child.kill();
+    await exitPromise;
+    throw error;
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  process.exit(1);
+});
+`;
 const PYTHON_LIVE_TUI_DISCONNECT_SCRIPT = String.raw`
 import json
 import os
@@ -597,7 +779,7 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
       await screenWrites;
       await waitForScreen(
         () => screen.contents(),
-        "021 DAR_TUI_READY\nevent=ready\nsize=80x24"
+        "DAR_TUI_READY\nsize=80x24\nlast=ready"
       );
 
       const steps: Array<[string, string]> = [
@@ -632,7 +814,7 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
       await screenWrites;
       await waitForScreen(
         () => screen.contents(),
-        "039 DAR_TUI_KEY Delete\nevent=key:Delete\nsize=100x30"
+        "DAR_TUI_READY\nsize=100x30\nlast=key:Delete"
       );
 
       await writeChunks(child.stdin, ["q"]);
@@ -666,6 +848,53 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
       screen.dispose();
     }
   }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test.skipIf(!NODE_PATH)(
+    "streams per-character markers and preserves the approved stable frame through node-pty",
+    async () => {
+      await buildFixture();
+      const textInput = `dar01-é-${randomUUID()}`;
+      const child = spawn(NODE_PATH!, [
+        "--input-type=module",
+        "-e",
+        NODE_LIVE_TUI_DRIVER_SCRIPT,
+        FIXTURE_PATH,
+        textInput,
+        String(REAL_PTY_TEST_TIMEOUT_MS),
+      ], {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(signal).toBeNull();
+      expect(code).toBe(0);
+      expect(text.stderr).toBe("");
+
+      const result = JSON.parse(text.stdout.trim()) as {
+        childExited: boolean;
+        exitCode: number | null;
+        exitSignal: number | null;
+        finalCursor: { col: number; row: number };
+        finalScreen: string;
+        rawTail: string;
+      };
+
+      expect(result.childExited).toBe(true);
+      expect(result.finalCursor).toEqual({ col: 0, row: 3 });
+      expect(result.finalScreen).toBe("DAR_TUI_READY\nsize=120x40\nlast=resize:120x40");
+      expect(result.rawTail).toContain("021 DAR_TUI_READY");
+      for (const character of textInput) {
+        expect(result.rawTail).toContain(`DAR_TUI_TEXT ${character}`);
+      }
+      expect(result.rawTail).toContain("DAR_TUI_MOUSE_WHEEL_UP 10 6");
+      expect(result.rawTail).toContain("DAR_TUI_RESIZE 120 40");
+    },
+    REAL_PTY_TEST_TIMEOUT_MS
+  );
 
   test.skipIf(process.platform === "win32" || !PYTHON3_PATH)(
     "drains multiple live events buffered in a single PTY write",

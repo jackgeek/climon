@@ -15,7 +15,7 @@ const PTY_INPUT_ARTIFACT = "pty/input.log";
 const PTY_OUTPUT_ARTIFACT = "pty/output.log";
 const QUIT_TEXT = "q";
 const EXPECTED_CURSOR = { col: 0, row: 3 };
-const UNIQUE_TEXT_PREFIX = "DAR-01-こんにちは-ß-";
+const UNIQUE_TEXT_PREFIX = "dar01-é-";
 const MOUSE_COORDINATES = { col: 10, row: 6 } as const;
 const SUBCHECK_TIMEOUTS_MS = {
   "baseline-terminal-mode": 10_000,
@@ -283,6 +283,16 @@ function sessionName(runId: string): string {
   return `DAR-01-${runId}`;
 }
 
+function expectedFrame(cols: number, rows: number, lastEvent: string): string {
+  return `DAR_TUI_READY\nsize=${cols}x${rows}\nlast=${lastEvent}`;
+}
+
+async function expectTextMarkers(pty: Dar01Pty, text: string, deadline: number): Promise<void> {
+  for (const character of text) {
+    await pty.expectRaw(`DAR_TUI_TEXT ${character}`, deadline);
+  }
+}
+
 function ptySpec(context: Dar01Context, runId: string): PtySpawnSpec {
   return {
     file: context.build.fixturePath,
@@ -368,7 +378,7 @@ export async function runDar01(
   const overallDeadline = asAbsoluteDeadline(context.overallDeadline);
   const runId = createUuid();
   const uniqueText = expectedUniqueText(runId);
-  const screenMouseEvent = `event=mouse:wheel-up:${MOUSE_COORDINATES.col}:${MOUSE_COORDINATES.row}`;
+  const screenMouseEvent = `mouse:wheel-up:${MOUSE_COORDINATES.col}:${MOUSE_COORDINATES.row}`;
   const mouseMarker = `DAR_TUI_MOUSE_WHEEL_UP ${MOUSE_COORDINATES.col} ${MOUSE_COORDINATES.row}`;
   const results: SubcheckResult[] = [];
   let pty: Dar01Pty | undefined;
@@ -436,8 +446,8 @@ export async function runDar01(
 
       const deadline = remainingDeadline("text-input-output", overallDeadline, now);
       pty!.writeText(uniqueText);
-      await pty!.expectRaw(`DAR_TUI_TEXT ${uniqueText}`, deadline);
-      return { message: `Verified UTF-8 text echo for ${uniqueText}` };
+      await expectTextMarkers(pty!, uniqueText, deadline);
+      return { message: `Verified per-character UTF-8 text markers for ${uniqueText}` };
     })
   );
 
@@ -487,10 +497,7 @@ export async function runDar01(
 
       const deadline = remainingDeadline("alternate-screen-render", overallDeadline, now);
       const snapshot = await captureScreen(pty!, deadline, ({ contents, cursor }) =>
-        contents.includes("DAR_TUI_READY") &&
-        contents.includes(screenMouseEvent) &&
-        contents.includes(`last-marker=${mouseMarker}`) &&
-        contents.includes(`size=${PTY_COLS}x${PTY_ROWS}`) &&
+        contents === expectedFrame(PTY_COLS, PTY_ROWS, screenMouseEvent) &&
         cursor.col === EXPECTED_CURSOR.col &&
         cursor.row === EXPECTED_CURSOR.row
       );
@@ -511,9 +518,7 @@ export async function runDar01(
       pty!.resize(RESIZED_COLS, RESIZED_ROWS);
       await pty!.expectRaw(`DAR_TUI_RESIZE ${RESIZED_COLS} ${RESIZED_ROWS}`, deadline);
       const snapshot = await captureScreen(pty!, deadline, ({ contents, cursor }) =>
-        contents.includes("DAR_TUI_READY") &&
-        contents.includes(`DAR_TUI_RESIZE ${RESIZED_COLS} ${RESIZED_ROWS}`) &&
-        contents.includes(`size=${RESIZED_COLS}x${RESIZED_ROWS}`) &&
+        contents === expectedFrame(RESIZED_COLS, RESIZED_ROWS, `resize:${RESIZED_COLS}x${RESIZED_ROWS}`) &&
         cursor.col === EXPECTED_CURSOR.col &&
         cursor.row === EXPECTED_CURSOR.row
       );

@@ -48,8 +48,8 @@ impl TerminalGuard {
         Ok(guard)
     }
 
-    fn render(&mut self, marker: &str, event: &str, cols: u16, rows: u16) -> io::Result<()> {
-        render_frame(&mut self.stdout, marker, event, cols, rows)
+    fn show(&mut self, marker: &str, event: &str, cols: u16, rows: u16) -> io::Result<()> {
+        emit_marker_and_render(&mut self.stdout, marker, event, cols, rows)
     }
 }
 
@@ -94,7 +94,7 @@ fn run_live(
 ) -> io::Result<LiveRunOutcome> {
     let mut phase = 21_u16;
     let mut maybe_buffered_events = false;
-    terminal.render("021 DAR_TUI_READY", "ready", *cols, *rows)?;
+    terminal.show("021 DAR_TUI_READY", "ready", *cols, *rows)?;
 
     loop {
         let event = match next_live_input(&mut maybe_buffered_events)? {
@@ -120,7 +120,7 @@ fn run_live(
             *cols = new_cols;
             *rows = new_rows;
         }
-        terminal.render(
+        terminal.show(
             &format!("{phase:03} {}", event.marker),
             &event.event_line,
             *cols,
@@ -138,7 +138,7 @@ fn run_scripted(mut stdin: BufReader<&mut impl Read>, stdout: &mut impl Write) -
     let mut cols = 80_u16;
     let mut rows = 24_u16;
     let mut phase = 21_u16;
-    render_frame(stdout, "021 DAR_TUI_READY", "ready", cols, rows)?;
+    emit_marker_and_render(stdout, "021 DAR_TUI_READY", "ready", cols, rows)?;
 
     while let Some(event) = read_scripted_event(&mut stdin)? {
         if event.exit {
@@ -149,7 +149,7 @@ fn run_scripted(mut stdin: BufReader<&mut impl Read>, stdout: &mut impl Write) -
             cols = new_cols;
             rows = new_rows;
         }
-        render_frame(
+        emit_marker_and_render(
             stdout,
             &format!("{phase:03} {}", event.marker),
             &event.event_line,
@@ -163,22 +163,30 @@ fn run_scripted(mut stdin: BufReader<&mut impl Read>, stdout: &mut impl Write) -
     Ok(0)
 }
 
-fn render_frame(
+fn render_frame(writer: &mut impl Write, event: &str, cols: u16, rows: u16) -> io::Result<()> {
+    execute!(
+        writer,
+        MoveTo(0, 0),
+        Clear(ClearType::All),
+        Print(render_lines(event, cols, rows))
+    )?;
+    writer.flush()
+}
+
+fn emit_marker_and_render(
     writer: &mut impl Write,
     marker: &str,
     event: &str,
     cols: u16,
     rows: u16,
 ) -> io::Result<()> {
-    execute!(
-        writer,
-        MoveTo(0, 0),
-        Clear(ClearType::All),
-        Print(format!(
-            "{marker}\r\nevent={event}\r\nsize={cols}x{rows}\r\n"
-        ))
-    )?;
-    writer.flush()
+    writeln!(writer, "{marker}")?;
+    writer.flush()?;
+    render_frame(writer, event, cols, rows)
+}
+
+fn render_lines(event: &str, cols: u16, rows: u16) -> String {
+    format!("DAR_TUI_READY\r\nsize={cols}x{rows}\r\nlast={event}\r\n")
 }
 
 fn pending_live_resize(cols: u16, rows: u16) -> Option<RenderEvent> {
@@ -720,7 +728,8 @@ mod tests {
 
     use super::{
         classify_key, classify_mouse_live, control_name, logical_coord_live, named_key_name,
-        parse_csi_payload, parse_resize_sequence, parse_sgr_mouse, read_char, RenderEvent,
+        parse_csi_payload, parse_resize_sequence, parse_sgr_mouse, read_char, render_lines,
+        RenderEvent,
     };
 
     #[test]
@@ -755,6 +764,14 @@ mod tests {
                 resize: None,
                 exit: false,
             }
+        );
+    }
+
+    #[test]
+    fn renders_stable_ready_size_last_frame() {
+        assert_eq!(
+            render_lines("mouse:wheel-up:10:6", 100, 30),
+            "DAR_TUI_READY\r\nsize=100x30\r\nlast=mouse:wheel-up:10:6\r\n"
         );
     }
 
