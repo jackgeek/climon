@@ -58,6 +58,7 @@ interface BuildCacheDependencies {
   architecture: string;
   readRevision(root: string): Promise<string>;
   readToolVersions(): Promise<ToolVersions>;
+  isWorktreeClean(root: string): Promise<boolean>;
 }
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -260,6 +261,42 @@ async function readGitRevision(root: string): Promise<string> {
   }
 
   throw new HarnessError("prerequisite", `Unable to resolve git revision for ${root}`);
+}
+
+async function readGitWorktreeClean(root: string): Promise<boolean> {
+  const spawnOptions = {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    shell: false,
+  };
+  let subprocess: ReturnType<typeof Bun.spawn>;
+
+  try {
+    subprocess = Bun.spawn(
+      ["git", "-C", root, "status", "--porcelain", "--untracked-files=no"],
+      spawnOptions as Parameters<typeof Bun.spawn>[1]
+    );
+  } catch (error) {
+    throw new HarnessError(
+      "prerequisite",
+      `Failed to start git status for ${root}`,
+      { cause: error }
+    );
+  }
+
+  const stdout = await readStreamText(subprocess.stdout);
+  const stderr = await readStreamText(subprocess.stderr);
+  const code = await subprocess.exited;
+
+  if (code !== 0) {
+    throw new HarnessError(
+      "prerequisite",
+      `Failed to check git worktree status for ${root}: ${stderr.trim() || stdout.trim() || `exit code ${code}`}`
+    );
+  }
+
+  return stdout.trim().length === 0;
 }
 
 async function readRustVersion(): Promise<string> {
@@ -494,8 +531,10 @@ export async function buildArtifacts(
   const architecture = dependencies.architecture ?? process.arch;
   const readRevision = dependencies.readRevision ?? readGitRevision;
   const readToolVersions = dependencies.readToolVersions ?? readInstalledToolVersions;
+  const isWorktreeClean = dependencies.isWorktreeClean ?? readGitWorktreeClean;
   const revision = await readRevision(root);
   const versions = await readToolVersions();
+  const worktreeClean = await isWorktreeClean(root);
   const pathApi = pathApiFor(root, cacheRoot);
   const cacheDir = pathApi.join(cacheRoot, revision, platform, architecture);
   const manifestPath = buildManifestPath(pathApi, cacheDir);
@@ -513,19 +552,21 @@ export async function buildArtifacts(
 
   await mkdir(cacheDir, { recursive: true });
 
-  const existingManifest = await readManifest(manifestPath);
-  if (
-    existingManifest !== null &&
-    sameIdentity(existingManifest, manifestIdentity) &&
-    (await manifestChecksumsMatch(existingManifest, artifacts))
-  ) {
-    return {
-      clientPath: artifacts.clientPath,
-      serverPath: artifacts.serverPath,
-      fixturePath: artifacts.fixturePath,
-      revision,
-      manifestPath,
-    };
+  if (worktreeClean) {
+    const existingManifest = await readManifest(manifestPath);
+    if (
+      existingManifest !== null &&
+      sameIdentity(existingManifest, manifestIdentity) &&
+      (await manifestChecksumsMatch(existingManifest, artifacts))
+    ) {
+      return {
+        clientPath: artifacts.clientPath,
+        serverPath: artifacts.serverPath,
+        fixturePath: artifacts.fixturePath,
+        revision,
+        manifestPath,
+      };
+    }
   }
 
   const plan = planBuild(root, cacheDir, platform);
@@ -536,7 +577,9 @@ export async function buildArtifacts(
     checksums: await checksumsForArtifacts(artifacts),
   };
 
-  await writeManifestAtomic(manifestPath, manifest);
+  if (worktreeClean) {
+    await writeManifestAtomic(manifestPath, manifest);
+  }
 
   return {
     clientPath: artifacts.clientPath,

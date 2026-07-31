@@ -69,6 +69,7 @@ function buildDependencies(revision: string, architecture: string, overrides = {
     architecture,
     readRevision: async () => revision,
     readToolVersions: async () => toolVersions(),
+    isWorktreeClean: async () => true,
     ...overrides,
   };
 }
@@ -385,6 +386,126 @@ describe("buildArtifacts", () => {
 
       expect(rebuilt).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
       expect(runner.calls).toHaveLength(6);
+      expect(readFileSync(serverArtifactPath(cacheDir, platform), "utf8")).toBe("server-1");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("bypasses an existing manifest cache when the worktree is dirty", async () => {
+    const workspace = makeWorkspace("build-cache-dirty-bypass");
+    const root = join(workspace, "repo");
+    const cacheRoot = join(workspace, "cache");
+    const platform: HarnessPlatform = "linux";
+    const architecture = "x64";
+    const revision = "dirty123";
+    const cacheDir = join(cacheRoot, revision, platform, architecture);
+
+    mkdirSync(join(root, "rust"), { recursive: true });
+    mkdirSync(join(root, "harness", "fixtures"), { recursive: true });
+
+    let buildNumber = 0;
+    const runner = new FakeCommandRunner((spec) => {
+      mkdirSync(dirname(spec.stdoutPath), { recursive: true });
+      writeFileSync(spec.stdoutPath, "");
+      writeFileSync(spec.stderrPath, "");
+
+      if (spec.file === "bun") {
+        writeFileSync(serverArtifactPath(cacheDir, platform), `server-${buildNumber}`);
+        return;
+      }
+
+      if (spec.args.includes("-p")) {
+        mkdirSync(dirname(clientArtifactPath(root, platform)), { recursive: true });
+        writeFileSync(clientArtifactPath(root, platform), `client-${buildNumber}`);
+        return;
+      }
+
+      mkdirSync(dirname(fixtureArtifactPath(root, platform)), { recursive: true });
+      writeFileSync(fixtureArtifactPath(root, platform), `fixture-${buildNumber}`);
+    });
+
+    try {
+      await buildArtifacts(
+        { root, cacheRoot, platform, runner },
+        buildDependencies(revision, architecture)
+      );
+
+      const cleanManifest = readFileSync(join(cacheDir, "manifest.json"), "utf8");
+      buildNumber = 1;
+
+      const rebuilt = await buildArtifacts(
+        { root, cacheRoot, platform, runner },
+        buildDependencies(revision, architecture, {
+          isWorktreeClean: async () => false,
+        })
+      );
+
+      expect(rebuilt).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
+      expect(runner.calls).toHaveLength(6);
+      expect(readFileSync(serverArtifactPath(cacheDir, platform), "utf8")).toBe("server-1");
+      expect(readFileSync(join(cacheDir, "manifest.json"), "utf8")).toBe(cleanManifest);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("does not write a manifest for a dirty first build and writes one after a later clean rebuild", async () => {
+    const workspace = makeWorkspace("build-cache-dirty-first");
+    const root = join(workspace, "repo");
+    const cacheRoot = join(workspace, "cache");
+    const platform: HarnessPlatform = "linux";
+    const architecture = "x64";
+    const revision = "dirty-first-123";
+    const cacheDir = join(cacheRoot, revision, platform, architecture);
+    const manifestPath = join(cacheDir, "manifest.json");
+
+    mkdirSync(join(root, "rust"), { recursive: true });
+    mkdirSync(join(root, "harness", "fixtures"), { recursive: true });
+
+    let buildNumber = 0;
+    const runner = new FakeCommandRunner((spec) => {
+      mkdirSync(dirname(spec.stdoutPath), { recursive: true });
+      writeFileSync(spec.stdoutPath, "");
+      writeFileSync(spec.stderrPath, "");
+
+      if (spec.file === "bun") {
+        writeFileSync(serverArtifactPath(cacheDir, platform), `server-${buildNumber}`);
+        return;
+      }
+
+      if (spec.args.includes("-p")) {
+        mkdirSync(dirname(clientArtifactPath(root, platform)), { recursive: true });
+        writeFileSync(clientArtifactPath(root, platform), `client-${buildNumber}`);
+        return;
+      }
+
+      mkdirSync(dirname(fixtureArtifactPath(root, platform)), { recursive: true });
+      writeFileSync(fixtureArtifactPath(root, platform), `fixture-${buildNumber}`);
+    });
+
+    try {
+      const dirtyBuild = await buildArtifacts(
+        { root, cacheRoot, platform, runner },
+        buildDependencies(revision, architecture, {
+          isWorktreeClean: async () => false,
+        })
+      );
+
+      expect(dirtyBuild).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
+      expect(() => statSync(manifestPath)).toThrow();
+
+      buildNumber = 1;
+      const cleanBuild = await buildArtifacts(
+        { root, cacheRoot, platform, runner },
+        buildDependencies(revision, architecture, {
+          isWorktreeClean: async () => true,
+        })
+      );
+
+      expect(cleanBuild).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
+      expect(runner.calls).toHaveLength(6);
+      expect(statSync(manifestPath).isFile()).toBe(true);
       expect(readFileSync(serverArtifactPath(cacheDir, platform), "utf8")).toBe("server-1");
     } finally {
       rmSync(workspace, { recursive: true, force: true });
