@@ -750,7 +750,48 @@ describe("runDar02", () => {
 });
 
 describe("spawnHeadlessProcessWithChildProcess", () => {
-  test("kills the child when process-ledger registration fails", async () => {
+  test("kills the detached Unix process group with a negative pid", async () => {
+    const events: string[] = [];
+    const stdoutChunks: Array<string | Buffer> = [];
+    const stderrChunks: Array<string | Buffer> = [];
+    const child = createSpawnedChild(stdoutChunks, stderrChunks);
+    const dependencies = createSpawnDependencies(child, events);
+
+    const process = await spawnHeadlessProcessWithChildProcess(
+      {
+        file: "/repo/bin/climon",
+        args: ["run", "--headless", "fixture", "streaming"],
+        cwd: "/repo",
+        env: {},
+        stdoutPath: "/repo/artifacts/cases/DAR-02/headless/stdout.log",
+        stderrPath: "/repo/artifacts/cases/DAR-02/headless/stderr.log",
+        shell: false,
+        label: "climon-headless-launch",
+        platform: "linux",
+      },
+      {
+        runtime: {
+          processes: {
+            register: dependencies.register,
+          },
+        },
+      } as unknown as Dar02Context,
+      {
+        now: () => 1_000,
+        sleep: async () => {},
+        pollIntervalMs: 5,
+      },
+      dependencies
+    );
+
+    await process.kill();
+
+    expect(events).toContain("kill:-4242:SIGKILL");
+    expect(dependencies.spawnOptions?.detached).toBe(true);
+    expect(dependencies.registeredOwned?.processGroup).toBe(4242);
+  });
+
+  test("uses taskkill with exact Windows args for registration-failure cleanup", async () => {
     const events: string[] = [];
     const stdoutChunks: Array<string | Buffer> = [];
     const stderrChunks: Array<string | Buffer> = [];
@@ -770,7 +811,7 @@ describe("spawnHeadlessProcessWithChildProcess", () => {
           stderrPath: "/repo/artifacts/cases/DAR-02/headless/stderr.log",
           shell: false,
           label: "climon-headless-launch",
-          platform: "linux",
+          platform: "windows",
         },
         {
           runtime: {
@@ -788,7 +829,15 @@ describe("spawnHeadlessProcessWithChildProcess", () => {
       )
     ).rejects.toThrow("register failed");
 
-    expect(events).toContain("kill:4242:SIGKILL");
+    expect(dependencies.runCommandCalls).toEqual([
+      {
+        file: "taskkill",
+        args: ["/PID", "4242", "/T", "/F"],
+        options: { shell: false, windowsHide: true },
+      },
+    ]);
+    expect(dependencies.spawnOptions?.detached).toBe(false);
+    expect(dependencies.registeredOwned?.processGroup).toBeUndefined();
   });
 
   test("spawns the short-lived launcher with ignored stdin and no public writeLine seam", async () => {
@@ -829,9 +878,51 @@ describe("spawnHeadlessProcessWithChildProcess", () => {
       cwd: "/repo",
       env: {},
       shell: false,
+      detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
     expect("writeLine" in process).toBe(false);
+  });
+
+  test("does not terminate an already exited launcher a second time", async () => {
+    const events: string[] = [];
+    const stdoutChunks: Array<string | Buffer> = [];
+    const stderrChunks: Array<string | Buffer> = [];
+    const child = createSpawnedChild(stdoutChunks, stderrChunks);
+    const dependencies = createSpawnDependencies(child, events);
+
+    const process = await spawnHeadlessProcessWithChildProcess(
+      {
+        file: "/repo/bin/climon",
+        args: ["run", "--headless", "fixture", "streaming"],
+        cwd: "/repo",
+        env: {},
+        stdoutPath: "/repo/artifacts/cases/DAR-02/headless/stdout.log",
+        stderrPath: "/repo/artifacts/cases/DAR-02/headless/stderr.log",
+        shell: false,
+        label: "climon-headless-launch",
+        platform: "linux",
+      },
+      {
+        runtime: {
+          processes: {
+            register: dependencies.register,
+          },
+        },
+      } as unknown as Dar02Context,
+      {
+        now: () => 1_000,
+        sleep: async () => {},
+        pollIntervalMs: 5,
+      },
+      dependencies
+    );
+    child.emitExit(0);
+
+    await process.kill();
+
+    expect(events.filter((event) => event.startsWith("kill:"))).toEqual([]);
+    expect(dependencies.runCommandCalls).toEqual([]);
   });
 
   test("rejects invalid completedAt timestamps", async () => {
@@ -864,6 +955,8 @@ interface SpawnedChildLike {
   };
   once(event: "error", listener: (error: unknown) => void): void;
   once(event: "exit", listener: (code: number | null) => void): void;
+  emitExit(code: number | null): void;
+  emitError(error: unknown): void;
 }
 
 function createSpawnedChild(
@@ -900,6 +993,16 @@ function createSpawnedChild(
       }
       exitListeners.add(listener as (code: number | null) => void);
     },
+    emitExit(code) {
+      for (const listener of exitListeners) {
+        listener(code);
+      }
+    },
+    emitError(error) {
+      for (const listener of errorListeners) {
+        listener(error);
+      }
+    },
   };
 }
 
@@ -910,20 +1013,39 @@ function createSpawnDependencies(
     registerError?: Error;
   } = {}
 ): DefaultHeadlessSpawnDependencies & {
-  register: (owned: { pid: number }) => Promise<void>;
+  register: (owned: { pid: number; processGroup?: number }) => Promise<void>;
+  registeredOwned?: { pid: number; processGroup?: number };
+  runCommandCalls: Array<{
+    file: string;
+    args: string[];
+    options: { shell: false; windowsHide: true };
+  }>;
   spawnOptions?: {
     cwd: string;
     env: Record<string, string | undefined>;
     shell: false;
+    detached: boolean;
     stdio: ["ignore", "pipe", "pipe"];
   };
 } {
+  const runCommandCalls: Array<{
+    file: string;
+    args: string[];
+    options: { shell: false; windowsHide: true };
+  }> = [];
   let spawnOptions:
     | {
         cwd: string;
         env: Record<string, string | undefined>;
         shell: false;
+        detached: boolean;
         stdio: ["ignore", "pipe", "pipe"];
+      }
+    | undefined;
+  let registeredOwned:
+    | {
+        pid: number;
+        processGroup?: number;
       }
     | undefined;
 
@@ -938,15 +1060,30 @@ function createSpawnDependencies(
     kill(pid, signal) {
       events.push(`kill:${pid}:${signal}`);
     },
+    runCommand(file, args, options) {
+      runCommandCalls.push({
+        file,
+        args,
+        options: { shell: options.shell, windowsHide: options.windowsHide },
+      });
+      return { status: 0 };
+    },
     spawn(_file, _args, nextSpawnOptions) {
       spawnOptions = nextSpawnOptions;
       return child as never;
+    },
+    get runCommandCalls() {
+      return runCommandCalls;
+    },
+    get registeredOwned() {
+      return registeredOwned;
     },
     get spawnOptions() {
       return spawnOptions;
     },
     async register(owned) {
       events.push(`register:${owned.pid}`);
+      registeredOwned = owned;
       if (options.registerError) {
         throw options.registerError;
       }

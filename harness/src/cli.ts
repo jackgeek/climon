@@ -88,6 +88,10 @@ interface BrowserSnapshotDriver extends Dar02BrowserDriver {
   snapshotTerminalText?(): Promise<string>;
 }
 
+async function ensureDirectory(pathToCreate: string): Promise<void> {
+  await mkdir(pathToCreate, { recursive: true });
+}
+
 export interface RunCliOptions {
   root: string;
   stdout?: { write(chunk: string): void };
@@ -669,6 +673,7 @@ async function executeRun(
     const artifacts = new CaseArtifacts(artifactDir);
     let result: CaseResult;
     let runtime: Awaited<ReturnType<typeof createRuntimeSupervisor>> | undefined;
+    let runtimeCreationAttempted = false;
 
     if (expectation.expected === "unsupported") {
       await artifacts.initialize();
@@ -686,6 +691,7 @@ async function executeRun(
           throw new HarnessError("build", "Build artifacts were not created");
         }
 
+        runtimeCreationAttempted = true;
         runtime = await createRuntimeSupervisor({
           root: options.root,
           darId: definition.darId,
@@ -792,7 +798,11 @@ async function executeRun(
     }
 
     if (!runtime) {
-      await artifacts.initialize();
+      if (runtimeCreationAttempted) {
+        await ensureDirectory(artifactDir);
+      } else {
+        await artifacts.initialize();
+      }
       await artifacts.writeJson("result.json", result);
     } else {
       await runtime.context.artifacts.writeJson("result.json", result);

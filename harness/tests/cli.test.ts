@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { BuildArtifacts } from "../src/build-cache.js";
@@ -561,6 +561,75 @@ describe("runCli", () => {
       expect(result.message).toContain("runtime cleanup failed");
       expect(result.message).toContain("unexpected-failure");
       expect(runtimeRecord.disposals).toEqual(["DAR-01"]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves setup-failure logs when runtime creation initialized the case before throwing", async () => {
+    const workspace = makeWorkspace("cli-run-setup-failure-artifacts");
+
+    try {
+      writeDoctorFixtureFiles(workspace);
+      const options = createRunOptions(workspace, {
+        createRuntimeSupervisor: async (runtimeOptions: RuntimeSupervisorOptions) => {
+          const artifacts = new CaseArtifacts(caseArtifactDir(runtimeOptions.artifactRoot, runtimeOptions.darId));
+          await artifacts.initialize();
+          await artifacts.appendText("logs/server.stderr.log", "runtime boot stderr\n");
+          throw new Error("runtime bootstrap exploded");
+        },
+      });
+      const cli = requireRunCli();
+
+      await expect(cli(["run", "DAR-01"], options)).resolves.toBe(1);
+
+      const caseDir = join(
+        workspace,
+        ".test-tmp",
+        "dar-harness",
+        "linux",
+        "cases",
+        "DAR-01"
+      );
+      const result = readJson(join(caseDir, "result.json")) as CaseResult;
+
+      expect(result.status).toBe("setup-failure");
+      expect(result.message).toContain("runtime bootstrap exploded");
+      expect(readFileSync(join(caseDir, "logs", "server.stderr.log"), "utf8")).toBe(
+        "runtime boot stderr\n"
+      );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("reinitializes stale artifacts when setup fails before runtime creation starts", async () => {
+    const workspace = makeWorkspace("cli-run-pre-runtime-failure");
+
+    try {
+      writeDoctorFixtureFiles(workspace);
+      const caseDir = join(
+        workspace,
+        ".test-tmp",
+        "dar-harness",
+        "linux",
+        "cases",
+        "DAR-01"
+      );
+      mkdirSync(join(caseDir, "logs"), { recursive: true });
+      writeFileSync(join(caseDir, "logs", "stale.log"), "stale\n");
+
+      const options = createRunOptions(workspace, {
+        buildArtifacts: async () => undefined as unknown as BuildArtifacts,
+      });
+      const cli = requireRunCli();
+
+      await expect(cli(["run", "DAR-01"], options)).resolves.toBe(1);
+
+      const result = readJson(join(caseDir, "result.json")) as CaseResult;
+      expect(result.status).toBe("setup-failure");
+      expect(result.message).toContain("Build artifacts were not created");
+      expect(existsSync(join(caseDir, "logs", "stale.log"))).toBe(false);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

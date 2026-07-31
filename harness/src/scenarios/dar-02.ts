@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { BuildArtifacts } from "../build-cache.js";
+import type { OwnedProcess } from "../process-ledger.js";
 import type { RuntimeContext } from "../runtime-supervisor.js";
 import type { SessionLedger, SessionStatus } from "../session-ledger.js";
 import type { HarnessPlatform, SubcheckResult } from "../types.js";
@@ -134,6 +135,12 @@ interface SpawnedChildLike {
   once(event: "exit", listener: (code: number | null) => void): void;
 }
 
+interface HeadlessTerminateCommandOptions {
+  shell: false;
+  stdio: "ignore";
+  windowsHide: true;
+}
+
 export interface DefaultHeadlessSpawnDependencies {
   spawn?: (
     file: string,
@@ -142,12 +149,18 @@ export interface DefaultHeadlessSpawnDependencies {
       cwd: string;
       env: Record<string, string | undefined>;
       shell: false;
+      detached: boolean;
       stdio: ["ignore", "pipe", "pipe"];
     }
   ) => SpawnedChildLike;
   createWriteStream?: (path: string) => Pick<WriteStream, "write" | "end">;
   mkdir?: typeof mkdir;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
+  runCommand?: (
+    file: string,
+    args: string[],
+    options: HeadlessTerminateCommandOptions
+  ) => { status: number | null; error?: unknown };
 }
 
 function asAbsoluteDeadline(deadline: number | Date): number {
@@ -407,11 +420,55 @@ function launchSpec(context: Dar02Context, runId: string): HeadlessSpawnSpec {
   };
 }
 
-function terminatePid(pid: number, kill: (pid: number, signal: NodeJS.Signals) => void): void {
+const defaultRunCommand = (
+  file: string,
+  args: string[],
+  options: HeadlessTerminateCommandOptions
+): { status: number | null; error?: unknown } => {
+  const result = spawnSync(file, args, options);
+  return { status: result.status, error: result.error };
+};
+
+async function terminateOwnedProcess(
+  owned: OwnedProcess,
+  dependencies: Pick<DefaultHeadlessSpawnDependencies, "kill" | "runCommand">,
+  hasExited: () => boolean
+): Promise<void> {
+  if (hasExited()) {
+    return;
+  }
+
+  const kill = dependencies.kill ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal));
+  const runCommand = dependencies.runCommand ?? defaultRunCommand;
+  const targetPid =
+    owned.platform === "windows"
+      ? owned.pid
+      : owned.processGroup !== undefined
+        ? -owned.processGroup
+        : owned.pid;
+
   try {
-    kill(pid, "SIGKILL");
-  } catch {
-    // The process may already be gone.
+    if (owned.platform === "windows") {
+      const result = runCommand(
+        "taskkill",
+        ["/PID", String(owned.pid), "/T", "/F"],
+        { shell: false, stdio: "ignore", windowsHide: true }
+      );
+      if (result.error) {
+        throw result.error;
+      }
+      if (result.status !== 0) {
+        throw new Error(`taskkill exited with status ${result.status}`);
+      }
+      return;
+    }
+
+    kill(targetPid, "SIGKILL");
+  } catch (error) {
+    if (hasExited()) {
+      return;
+    }
+    throw error;
   }
 }
 
@@ -425,11 +482,11 @@ export async function spawnHeadlessProcessWithChildProcess(
   const openStream =
     dependencies.createWriteStream ??
     ((path: string) => createWriteStream(path, { flags: "w" }));
-  const kill = dependencies.kill ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal));
   const spawnChild =
     dependencies.spawn ??
     ((file: string, args: string[], options: Parameters<typeof spawn>[2]) =>
       spawn(file, args, options) as unknown as SpawnedChildLike);
+  const detached = spec.platform !== "windows";
 
   await makeDir(dirname(spec.stdoutPath), { recursive: true });
   await makeDir(dirname(spec.stderrPath), { recursive: true });
@@ -438,6 +495,7 @@ export async function spawnHeadlessProcessWithChildProcess(
     cwd: spec.cwd,
     env: spec.env,
     shell: false,
+    detached,
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -472,30 +530,33 @@ export async function spawnHeadlessProcessWithChildProcess(
     stderrStream.end();
   });
 
-  try {
-    await context.runtime.processes.register({
-      pid,
-      label: spec.label,
-      platform: spec.platform,
-      processGroup: spec.platform === "windows" ? undefined : pid,
-      wait: async () => {
+  const ownedProcess: OwnedProcess = {
+    pid,
+    label: spec.label,
+    platform: spec.platform,
+    processGroup: detached ? pid : undefined,
+    wait: async () => {
+      if (exitCode !== undefined) {
+        return exitCode;
+      }
+
+      while (true) {
+        if (exitError) {
+          throw exitError;
+        }
         if (exitCode !== undefined) {
           return exitCode;
         }
+        await timing.sleep(timing.pollIntervalMs);
+      }
+    },
+  };
+  const hasExited = () => exitCode !== undefined || exitError !== undefined;
 
-        while (true) {
-          if (exitError) {
-            throw exitError;
-          }
-          if (exitCode !== undefined) {
-            return exitCode;
-          }
-          await timing.sleep(timing.pollIntervalMs);
-        }
-      },
-    });
+  try {
+    await context.runtime.processes.register(ownedProcess);
   } catch (error) {
-    terminatePid(pid, kill);
+    await terminateOwnedProcess(ownedProcess, dependencies, hasExited);
     throw error;
   }
 
@@ -521,8 +582,8 @@ export async function spawnHeadlessProcessWithChildProcess(
         await timing.sleep(Math.max(1, Math.min(timing.pollIntervalMs, deadline - timing.now())));
       }
     },
-    kill() {
-      terminatePid(pid, kill);
+    async kill() {
+      await terminateOwnedProcess(ownedProcess, dependencies, hasExited);
     },
   };
 }
