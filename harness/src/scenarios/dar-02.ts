@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -122,7 +122,7 @@ interface SpawnTiming {
   pollIntervalMs: number;
 }
 
-interface ChildProcessLike {
+interface SpawnedChildLike {
   pid?: number;
   stdout: {
     on(event: "data", listener: (chunk: Uint8Array | string) => void): void;
@@ -144,7 +144,7 @@ export interface DefaultHeadlessSpawnDependencies {
       shell: false;
       stdio: ["ignore", "pipe", "pipe"];
     }
-  ) => ChildProcessLike;
+  ) => SpawnedChildLike;
   createWriteStream?: (path: string) => Pick<WriteStream, "write" | "end">;
   mkdir?: typeof mkdir;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
@@ -429,7 +429,7 @@ export async function spawnHeadlessProcessWithChildProcess(
   const spawnChild =
     dependencies.spawn ??
     ((file: string, args: string[], options: Parameters<typeof spawn>[2]) =>
-      spawn(file, args, options) as unknown as ChildProcessByStdio<null, NodeJS.ReadableStream, NodeJS.ReadableStream>);
+      spawn(file, args, options) as unknown as SpawnedChildLike);
 
   await makeDir(dirname(spec.stdoutPath), { recursive: true });
   await makeDir(dirname(spec.stderrPath), { recursive: true });
@@ -439,7 +439,7 @@ export async function spawnHeadlessProcessWithChildProcess(
     env: spec.env,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
-  }) as ChildProcessLike;
+  });
 
   const pid = child.pid;
   if (pid === undefined) {
@@ -550,6 +550,7 @@ export async function runDar02(
   let parsedSessionId: ParsedSessionId | undefined;
   let dashboardOpened = false;
   let browserAttached = false;
+  let attachFailure: string | undefined;
   let continueSent = false;
 
   const evidence = () => {
@@ -658,19 +659,24 @@ export async function runDar02(
 
   results.push(
     await runSubcheck("midstream-attach", now, evidence, async () => {
-      if (!parsedSessionId) {
-        throw new Error(impossibleMessage("session id unavailable"));
-      }
+      try {
+        if (!parsedSessionId) {
+          throw new Error(impossibleMessage("session id unavailable"));
+        }
 
-      const deadline = remainingDeadline("midstream-attach", overallDeadline, now);
-      await context.browser.open(context.runtime.baseUrl, deadline);
-      dashboardOpened = true;
-      await context.browser.waitForSessionStatus(parsedSessionId.id, "running", deadline);
-      await context.browser.openTerminal(parsedSessionId.id, deadline);
-      browserAttached = true;
-      return {
-        message: `Opened dashboard terminal for ${parsedSessionId.id}`,
-      };
+        const deadline = remainingDeadline("midstream-attach", overallDeadline, now);
+        await context.browser.open(context.runtime.baseUrl, deadline);
+        dashboardOpened = true;
+        await context.browser.waitForSessionStatus(parsedSessionId.id, "running", deadline);
+        await context.browser.openTerminal(parsedSessionId.id, deadline);
+        browserAttached = true;
+        return {
+          message: `Opened dashboard terminal for ${parsedSessionId.id}`,
+        };
+      } catch (error) {
+        attachFailure = stringifyError(error);
+        throw error;
+      }
     })
   );
 
@@ -755,13 +761,18 @@ export async function runDar02(
 
   results.push(
     await runSubcheck("successful-finalization", now, evidence, async () => {
-      const deadline = remainingDeadline("successful-finalization", overallDeadline, now);
       const cleanupNotes: string[] = [];
+      let exitDelivered = false;
 
       try {
+        if (attachFailure) {
+          cleanupNotes.push(attachFailure);
+        }
+
         if (parsedSessionId && browserAttached) {
           try {
             await context.browser.sendTerminalLine("EXIT 0");
+            exitDelivered = true;
           } catch (error) {
             cleanupNotes.push(`browser EXIT 0 failed: ${stringifyError(error)}`);
           }
@@ -770,13 +781,18 @@ export async function runDar02(
         }
 
         if (!parsedSessionId) {
-          throw new Error(impossibleMessage("session id unavailable for completion verification"));
+          cleanupNotes.push(impossibleMessage("session id unavailable for completion verification"));
+          throw new Error(cleanupNotes.join("; "));
         }
+
+        if (!exitDelivered) {
+          throw new Error(cleanupNotes.join("; "));
+        }
+
+        const deadline = remainingDeadline("successful-finalization", overallDeadline, now);
 
         if (dashboardOpened) {
           await context.browser.waitForSessionStatus(parsedSessionId.id, "completed", deadline);
-        } else {
-          cleanupNotes.push("dashboard completion could not be verified after attach failure");
         }
 
         await context.runtime.sessions.waitForStatus(parsedSessionId.id, "completed", deadline);

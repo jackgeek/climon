@@ -510,6 +510,108 @@ describe("runDar02", () => {
     expect(sessions.readCalls).toContain(SESSION_ID);
   });
 
+  test("fails successful-finalization immediately when the page opens but terminal attach fails", async () => {
+    const { browser, clock, context, dependencies, events, process, sessions } = createHarness(
+      createState(),
+      {
+        browser: {
+          openTerminalError: new Error("terminal attach failed"),
+        },
+      }
+    );
+
+    const results = await runDar02(context, dependencies);
+    const successfulFinalization = results.find(
+      (result) => result.name === "successful-finalization"
+    );
+
+    expect(results.find((result) => result.name === "midstream-attach")).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("terminal attach failed"),
+    });
+    expect(successfulFinalization?.status).toBe("failed");
+    expect(successfulFinalization?.durationMs).toBe(1);
+    expect(successfulFinalization?.message).toContain("terminal attach failed");
+    expect(successfulFinalization?.message).toContain(
+      "browser terminal unavailable for EXIT 0 session control"
+    );
+    expect(browser.waitForSessionStatusCalls).toEqual([{ id: SESSION_ID, status: "running" }]);
+    expect(sessions.waitForStatusCalls).toEqual([
+      expect.objectContaining({ id: SESSION_ID, status: "running" }),
+    ]);
+    expect(events).not.toContain("scrollback.final");
+    expect(clock.sleepCalls).toEqual([]);
+    expect(process.killCalls).toBe(0);
+  });
+
+  test("fails successful-finalization immediately when the browser attach fails early", async () => {
+    const { browser, clock, context, dependencies, events, process, sessions } = createHarness(
+      createState(),
+      {
+        browser: {
+          openError: new Error("dashboard unavailable"),
+        },
+      }
+    );
+
+    const results = await runDar02(context, dependencies);
+    const successfulFinalization = results.find(
+      (result) => result.name === "successful-finalization"
+    );
+
+    expect(results.find((result) => result.name === "midstream-attach")).toMatchObject({
+      status: "failed",
+      message: expect.stringContaining("dashboard unavailable"),
+    });
+    expect(successfulFinalization?.status).toBe("failed");
+    expect(successfulFinalization?.durationMs).toBe(1);
+    expect(successfulFinalization?.message).toContain("dashboard unavailable");
+    expect(successfulFinalization?.message).toContain(
+      "browser terminal unavailable for EXIT 0 session control"
+    );
+    expect(browser.waitForSessionStatusCalls).toEqual([]);
+    expect(browser.sendTerminalLineCalls).toEqual([]);
+    expect(sessions.waitForStatusCalls).toEqual([
+      expect.objectContaining({ id: SESSION_ID, status: "running" }),
+    ]);
+    expect(events).not.toContain("scrollback.final");
+    expect(clock.sleepCalls).toEqual([]);
+    expect(process.killCalls).toBe(0);
+  });
+
+  test("fails successful-finalization immediately when EXIT 0 cannot be sent", async () => {
+    const { browser, clock, context, dependencies, events, process, sessions } = createHarness(
+      createState(),
+      {
+        browser: {
+          exitInputError: new Error("terminal write failed"),
+        },
+      }
+    );
+
+    const results = await runDar02(context, dependencies);
+    const successfulFinalization = results.find(
+      (result) => result.name === "successful-finalization"
+    );
+
+    expect(successfulFinalization?.status).toBe("failed");
+    expect(successfulFinalization?.durationMs).toBe(1);
+    expect(successfulFinalization?.message).toContain(
+      "browser EXIT 0 failed: terminal write failed"
+    );
+    expect(browser.waitForSessionStatusCalls).toEqual([
+      { id: SESSION_ID, status: "running" },
+      { id: SESSION_ID, status: "running" },
+    ]);
+    expect(browser.sendTerminalLineCalls).toEqual([`CONTINUE ${RUN_ID}`, "EXIT 0"]);
+    expect(sessions.waitForStatusCalls).toEqual([
+      expect.objectContaining({ id: SESSION_ID, status: "running" }),
+    ]);
+    expect(events).not.toContain("scrollback.final");
+    expect(clock.sleepCalls).toEqual([]);
+    expect(process.killCalls).toBe(0);
+  });
+
   test("records browser-only finalization inability when the page opens but terminal attach fails", async () => {
     const { browser, context, dependencies, process } = createHarness(createState(), {
       browser: {
@@ -518,19 +620,20 @@ describe("runDar02", () => {
     });
 
     const results = await runDar02(context, dependencies);
+    const successfulFinalization = results.find(
+      (result) => result.name === "successful-finalization"
+    );
 
     expect(results.find((result) => result.name === "midstream-attach")).toMatchObject({
       status: "failed",
       message: expect.stringContaining("terminal attach failed"),
     });
-    expect(results.find((result) => result.name === "successful-finalization")).toMatchObject({
-      status: "failed",
-      message: expect.stringContaining("browser terminal unavailable for EXIT 0 session control"),
-    });
-    expect(browser.waitForSessionStatusCalls).toEqual([
-      { id: SESSION_ID, status: "running" },
-      { id: SESSION_ID, status: "completed" },
-    ]);
+    expect(successfulFinalization?.status).toBe("failed");
+    expect(successfulFinalization?.message).toContain("terminal attach failed");
+    expect(successfulFinalization?.message).toContain(
+      "browser terminal unavailable for EXIT 0 session control"
+    );
+    expect(browser.waitForSessionStatusCalls).toEqual([{ id: SESSION_ID, status: "running" }]);
     expect(process.killCalls).toBe(0);
   });
 
@@ -542,15 +645,19 @@ describe("runDar02", () => {
     });
 
     const results = await runDar02(context, dependencies);
+    const successfulFinalization = results.find(
+      (result) => result.name === "successful-finalization"
+    );
 
     expect(results.find((result) => result.name === "midstream-attach")).toMatchObject({
       status: "failed",
       message: expect.stringContaining("dashboard unavailable"),
     });
-    expect(results.find((result) => result.name === "successful-finalization")).toMatchObject({
-      status: "failed",
-      message: expect.stringContaining("browser terminal unavailable for EXIT 0 session control"),
-    });
+    expect(successfulFinalization?.status).toBe("failed");
+    expect(successfulFinalization?.message).toContain("dashboard unavailable");
+    expect(successfulFinalization?.message).toContain(
+      "browser terminal unavailable for EXIT 0 session control"
+    );
     expect(browser.sendTerminalLineCalls).toEqual([]);
     expect(process.killCalls).toBe(0);
   });
@@ -750,22 +857,23 @@ describe("spawnHeadlessProcessWithChildProcess", () => {
 interface SpawnedChildLike {
   pid?: number;
   stdout: {
-    on(event: "data", listener: (chunk: string | Buffer) => void): void;
+    on(event: "data", listener: (chunk: string | Uint8Array) => void): void;
   };
   stderr: {
-    on(event: "data", listener: (chunk: string | Buffer) => void): void;
+    on(event: "data", listener: (chunk: string | Uint8Array) => void): void;
   };
-  once(event: "error" | "exit", listener: (value: unknown) => void): void;
+  once(event: "error", listener: (error: unknown) => void): void;
+  once(event: "exit", listener: (code: number | null) => void): void;
 }
 
 function createSpawnedChild(
-  stdoutChunks: Array<string | Buffer>,
-  stderrChunks: Array<string | Buffer>
+  stdoutChunks: Array<string | Uint8Array>,
+  stderrChunks: Array<string | Uint8Array>
 ): SpawnedChildLike {
-  const stdoutListeners = new Set<(chunk: string | Buffer) => void>();
-  const stderrListeners = new Set<(chunk: string | Buffer) => void>();
+  const stdoutListeners = new Set<(chunk: string | Uint8Array) => void>();
+  const stderrListeners = new Set<(chunk: string | Uint8Array) => void>();
   const errorListeners = new Set<(error: unknown) => void>();
-  const exitListeners = new Set<(code: unknown) => void>();
+  const exitListeners = new Set<(code: number | null) => void>();
 
   return {
     pid: 4242,
@@ -785,18 +893,12 @@ function createSpawnedChild(
         }
       },
     },
-    stdin: {
-      writable: true,
-      write(_text, callback) {
-        callback(undefined);
-      },
-    },
     once(event, listener) {
       if (event === "error") {
-        errorListeners.add(listener);
+        errorListeners.add(listener as (error: unknown) => void);
         return;
       }
-      exitListeners.add(listener);
+      exitListeners.add(listener as (code: number | null) => void);
     },
   };
 }
