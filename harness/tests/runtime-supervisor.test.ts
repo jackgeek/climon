@@ -5,6 +5,7 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import type { BuildArtifacts } from "../src/build-cache.js";
 import type { CommandResult, CommandRunner, CommandSpec } from "../src/command.js";
 import type { OwnedProcess } from "../src/process-ledger.js";
+import { BrowserDriver } from "../src/drivers/browser.js";
 import { HarnessError } from "../src/types.js";
 import {
   RuntimeSupervisor,
@@ -90,12 +91,45 @@ function controlledProcess(
 function readyBrowser(log: string[] = []) {
   let newPageCalls = 0;
   let newContextCalls = 0;
+  const tracing = {
+    startCalls: [] as unknown[],
+    stopCalls: [] as unknown[],
+    stopErrors: [] as unknown[],
+    async start(options: unknown) {
+      this.startCalls.push(options);
+      log.push("trace:start");
+    },
+    async stop(options: unknown) {
+      this.stopCalls.push(options);
+      log.push(`trace:stop:${String((options as { path?: string }).path ?? "")}`);
+      const error = this.stopErrors.shift();
+      if (error !== undefined) {
+        throw error;
+      }
+    },
+  };
   const page = {
+    locator(selector: string) {
+      return {
+        async waitFor() {
+          log.push(`wait:${selector}`);
+        },
+      };
+    },
+    async goto(url: string) {
+      log.push(`goto:${url}`);
+    },
+    on() {},
+    keyboard: {
+      async insertText() {},
+      async press() {},
+    },
     async close() {
       log.push("page-close");
     },
   } as unknown as Page;
   const context = {
+    tracing,
     get newPageCalls() {
       return newPageCalls;
     },
@@ -120,7 +154,7 @@ function readyBrowser(log: string[] = []) {
     },
   } as unknown as Browser & { newContextCalls: number };
 
-  return { browser, context, page };
+  return { browser, context, page, tracing };
 }
 
 async function createReadySupervisor(
@@ -166,6 +200,19 @@ async function createReadySupervisor(
 
   const supervisor = await RuntimeSupervisor.create(options, dependencies);
   return { supervisor, server, spawnCalls, fetchCalls, browser, context, page };
+}
+
+async function startBrowserTrace(baseUrl: string, context: BrowserContext, page: Page): Promise<void> {
+  const driver = new BrowserDriver(
+    { context, page },
+    {
+      now: () => 0,
+      sleep: async () => {},
+      pollIntervalMs: 1,
+    }
+  );
+
+  await driver.open(baseUrl, 1_000);
 }
 
 function withEnv<T>(entries: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
@@ -788,6 +835,98 @@ describe("RuntimeSupervisor.dispose", () => {
       expect((error as Error).message).toContain("client stuck");
       expect((error as Error).message).toContain("Owned processes still running");
       expect((error as Error).message).toContain("browser close failed");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("stops and saves the browser trace before closing the page and context", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-dispose-trace");
+    const log: string[] = [];
+    const options = runtimeOptions(workspace);
+    const fakeBrowser = readyBrowser(log);
+
+    try {
+      const { supervisor } = await createReadySupervisor(options, {
+        launchBrowser: async () => fakeBrowser.browser,
+      });
+      const tracePath = join(supervisor.context.artifacts.dir, "browser-trace.zip");
+
+      await startBrowserTrace(
+        supervisor.context.baseUrl,
+        supervisor.context.context,
+        supervisor.context.page
+      );
+      await supervisor.dispose();
+
+      expect(fakeBrowser.tracing.stopCalls).toEqual([{ path: tracePath }]);
+      expect(log.indexOf(`trace:stop:${tracePath}`)).toBeGreaterThan(-1);
+      expect(log.indexOf(`trace:stop:${tracePath}`)).toBeLessThan(log.indexOf("page-close"));
+      expect(log.indexOf("page-close")).toBeLessThan(log.indexOf("context-close"));
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("retries failed trace cleanup without rerunning successful later phases", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-dispose-trace-retry");
+    const log: string[] = [];
+    const options = runtimeOptions(workspace);
+    const fakeBrowser = readyBrowser(log);
+    fakeBrowser.tracing.stopErrors.push(new Error("trace stop failed"));
+
+    try {
+      const { supervisor } = await createReadySupervisor(options, {
+        launchBrowser: async () => fakeBrowser.browser,
+      });
+      const tracePath = join(supervisor.context.artifacts.dir, "browser-trace.zip");
+      const serverLedgerPath = join(
+        supervisor.context.artifacts.dir,
+        "server",
+        "process-ledger.jsonl"
+      );
+
+      await startBrowserTrace(
+        supervisor.context.baseUrl,
+        supervisor.context.context,
+        supervisor.context.page
+      );
+
+      const firstError = await supervisor.dispose().catch((caught: unknown) => caught);
+      expect(firstError).toEqual(
+        expect.objectContaining({
+          name: "HarnessError",
+          kind: "cleanup",
+          cause: expect.any(AggregateError),
+        })
+      );
+      expect((firstError as Error).message).toContain("trace stop failed");
+      expect(log).toContain(`trace:stop:${tracePath}`);
+      expect(log).not.toContain("page-close");
+      expect(log).not.toContain("context-close");
+      expect(log).not.toContain("browser-close");
+      expect(
+        readFileSync(serverLedgerPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line).action)
+          .filter((action) => action === "terminate")
+      ).toHaveLength(1);
+
+      await expect(supervisor.dispose()).resolves.toBeUndefined();
+
+      expect(fakeBrowser.tracing.stopCalls).toEqual([{ path: tracePath }, { path: tracePath }]);
+      expect(log.lastIndexOf(`trace:stop:${tracePath}`)).toBeLessThan(log.indexOf("page-close"));
+      expect(log).toContain("page-close");
+      expect(log).toContain("context-close");
+      expect(log).toContain("browser-close");
+      expect(
+        readFileSync(serverLedgerPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line).action)
+          .filter((action) => action === "terminate")
+      ).toHaveLength(1);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

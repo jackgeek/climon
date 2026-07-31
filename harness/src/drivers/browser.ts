@@ -27,10 +27,11 @@ interface RequestLike {
 
 interface LocatorLike {
   locator(selector: string): LocatorLike;
+  getByRole(role: string, options: { name: string }): LocatorLike;
   waitFor(options?: { state?: "attached" | "visible"; timeout?: number }): Promise<void>;
   click(options?: { timeout?: number }): Promise<void>;
   count(): Promise<number>;
-  getAttribute(name: string): Promise<string | null>;
+  getAttribute(name: string, options?: { timeout?: number }): Promise<string | null>;
   allInnerTexts(): Promise<string[]>;
 }
 
@@ -42,8 +43,8 @@ interface KeyboardLike {
 interface PageLike {
   locator(selector: string): LocatorLike;
   getByRole(role: string, options: { name: string }): LocatorLike;
-  goto(url: string, options: { timeout?: number; waitUntil?: "domcontentloaded" }): Promise<void>;
-  close(): Promise<void>;
+  goto(url: string, options: { timeout?: number; waitUntil?: "domcontentloaded" }): Promise<unknown>;
+  close(): Promise<unknown>;
   on(event: "console", listener: (message: ConsoleMessageLike) => void): void;
   on(event: "requestfailed", listener: (request: RequestLike) => void): void;
   keyboard: KeyboardLike;
@@ -52,8 +53,20 @@ interface PageLike {
 interface BrowserContextLike {
   tracing: {
     start(options?: { screenshots?: boolean; snapshots?: boolean }): Promise<void>;
+    stop(options: { path: string }): Promise<void>;
   };
   newPage(): Promise<PageLike>;
+}
+
+const tracedContexts = new WeakSet<BrowserContextLike>();
+
+export async function stopBrowserTracing(context: BrowserContextLike, path: string): Promise<void> {
+  if (!tracedContexts.has(context)) {
+    return;
+  }
+
+  await context.tracing.stop({ path });
+  tracedContexts.delete(context);
 }
 
 type BrowserRuntime = Pick<RuntimeContext, "context" | "page"> & {
@@ -136,7 +149,6 @@ export class BrowserDriver {
   private readonly consoleHistory: string[] = [];
   private readonly requestFailureHistory: string[] = [];
   private page: PageLike | null;
-  private tracingStarted = false;
 
   public constructor(runtime: BrowserRuntime, dependencies: BrowserDriverDependencies = {}) {
     this.context = runtime.context;
@@ -175,17 +187,19 @@ export class BrowserDriver {
     const page = this.requirePage();
     const sessionItem = page.locator(selector);
     let currentStatus: string | null = null;
+    const diagnostics = () => ({
+      selector,
+      id: JSON.stringify(id),
+      expectedStatus: JSON.stringify(targetStatus),
+      currentStatus: JSON.stringify(currentStatus)
+    });
 
     while (true) {
+      const timeoutMs = this.remainingMs(deadline, () => this.timeoutError("session status", diagnostics()));
       try {
-        currentStatus = await sessionItem.getAttribute("data-session-status");
+        currentStatus = await sessionItem.getAttribute("data-session-status", { timeout: timeoutMs });
       } catch (error) {
-        this.throwTranslatedError("session status", error, {
-          selector,
-          id: JSON.stringify(id),
-          expectedStatus: JSON.stringify(targetStatus),
-          currentStatus: JSON.stringify(currentStatus)
-        });
+        this.throwTranslatedError("session status", error, diagnostics());
       }
 
       if (currentStatus === targetStatus) {
@@ -193,12 +207,7 @@ export class BrowserDriver {
       }
 
       if (this.now() >= deadline) {
-        throw this.timeoutError("session status", {
-          selector,
-          id: JSON.stringify(id),
-          expectedStatus: JSON.stringify(targetStatus),
-          currentStatus: JSON.stringify(currentStatus)
-        });
+        throw this.timeoutError("session status", diagnostics());
       }
 
       await this.sleep(Math.max(1, Math.min(this.pollIntervalMs, deadline - this.now())));
@@ -209,6 +218,9 @@ export class BrowserDriver {
     assertAbsoluteDeadline(deadline);
     const selector = sessionSelector(id);
     const page = this.requirePage();
+    const sessionItem = page.locator(selector);
+    const terminal = page.locator(SESSION_TERMINAL_SELECTOR);
+    const openButton = sessionItem.getByRole("button", { name: OPEN_TERMINAL_BUTTON_LABEL });
     const diagnostics = {
       selector,
       terminalSelector: SESSION_TERMINAL_SELECTOR,
@@ -216,21 +228,40 @@ export class BrowserDriver {
     };
 
     try {
-      await page.locator(selector).click({
+      await sessionItem.click({
         timeout: this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics))
       });
+      let openButtonClicked = false;
 
-      const openButton = page.getByRole("button", { name: OPEN_TERMINAL_BUTTON_LABEL });
-      if ((await openButton.count()) > 0) {
-        await openButton.click({
-          timeout: this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics))
-        });
+      while (true) {
+        try {
+          await terminal.waitFor({
+            state: "visible",
+            timeout: Math.max(
+              1,
+              Math.min(
+                this.pollIntervalMs,
+                this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics))
+              )
+            )
+          });
+          return;
+        } catch (error) {
+          if (!isTimeoutError(error)) {
+            throw error;
+          }
+        }
+
+        if (!openButtonClicked && (await openButton.count()) > 0) {
+          await openButton.click({
+            timeout: this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics))
+          });
+          openButtonClicked = true;
+          continue;
+        }
+
+        await this.sleep(Math.max(1, Math.min(this.pollIntervalMs, deadline - this.now())));
       }
-
-      await page.locator(SESSION_TERMINAL_SELECTOR).waitFor({
-        state: "visible",
-        timeout: this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics))
-      });
     } catch (error) {
       this.throwTranslatedError("terminal open", error, diagnostics);
     }
@@ -347,12 +378,12 @@ export class BrowserDriver {
   }
 
   private async startTracing(): Promise<void> {
-    if (this.tracingStarted) {
+    if (tracedContexts.has(this.context)) {
       return;
     }
 
     await this.context.tracing.start({ screenshots: true, snapshots: true });
-    this.tracingStarted = true;
+    tracedContexts.add(this.context);
   }
 
   private async readTerminalText(terminal: LocatorLike): Promise<string> {

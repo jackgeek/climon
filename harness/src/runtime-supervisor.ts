@@ -6,6 +6,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { CaseArtifacts, caseArtifactDir } from "./artifacts.js";
 import type { BuildArtifacts } from "./build-cache.js";
 import type { CommandRunner, CommandSpec } from "./command.js";
+import { stopBrowserTracing } from "./drivers/browser.js";
 import { ProcessLedger, type OwnedProcess } from "./process-ledger.js";
 import { SessionLedger, type SessionStatus } from "./session-ledger.js";
 import { HarnessError, type HarnessPlatform } from "./types.js";
@@ -97,6 +98,7 @@ type ObservedServerExit =
   | { type: "error"; cause: unknown };
 
 interface CleanupProgress {
+  browserTracingStopped: boolean;
   pageClosed: boolean;
   contextClosed: boolean;
   trackedSessionsSettled: boolean;
@@ -515,6 +517,7 @@ export class RuntimeSupervisor {
   public readonly context: RuntimeContext;
   private disposed = false;
   private readonly cleanupProgress: CleanupProgress = {
+    browserTracingStopped: false,
     pageClosed: false,
     contextClosed: false,
     trackedSessionsSettled: false,
@@ -663,13 +666,29 @@ export class RuntimeSupervisor {
     const errors: unknown[] = [];
     const deadline = this.now() + this.options.cleanupTimeoutMs;
     if (this.cleanupProgress.browserClosed) {
+      this.cleanupProgress.browserTracingStopped = true;
       this.cleanupProgress.contextClosed = true;
       this.cleanupProgress.pageClosed = true;
     } else if (this.cleanupProgress.contextClosed) {
+      this.cleanupProgress.browserTracingStopped = true;
       this.cleanupProgress.pageClosed = true;
+    } else if (this.cleanupProgress.pageClosed) {
+      this.cleanupProgress.browserTracingStopped = true;
     }
 
-    if (!this.cleanupProgress.pageClosed) {
+    if (!this.cleanupProgress.browserTracingStopped) {
+      try {
+        await stopBrowserTracing(
+          this.context.context,
+          join(this.context.artifacts.dir, "browser-trace.zip")
+        );
+        this.cleanupProgress.browserTracingStopped = true;
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+
+    if (this.cleanupProgress.browserTracingStopped && !this.cleanupProgress.pageClosed) {
       try {
         await this.context.page.close();
         this.cleanupProgress.pageClosed = true;
@@ -678,7 +697,7 @@ export class RuntimeSupervisor {
       }
     }
 
-    if (!this.cleanupProgress.contextClosed) {
+    if (this.cleanupProgress.browserTracingStopped && !this.cleanupProgress.contextClosed) {
       try {
         await this.context.context.close();
         this.cleanupProgress.pageClosed = true;
@@ -770,7 +789,7 @@ export class RuntimeSupervisor {
       }
     }
 
-    if (!this.cleanupProgress.browserClosed) {
+    if (this.cleanupProgress.browserTracingStopped && !this.cleanupProgress.browserClosed) {
       try {
         await this.context.browser.close();
         this.cleanupProgress.pageClosed = true;
