@@ -1,9 +1,9 @@
-name: dar-e2e-harness
+name: e2e-harness
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/dar-e2e-harness.yml"
+      - ".github/workflows/e2e-harness.yml"
       - "harness/**"
       - "rust/**"
       - "src/**"
@@ -38,10 +38,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare platform artifact root
+      - name: Prepare E2E harness artifact root
         run: |
-          mkdir -p .test-tmp/dar-harness/${{ matrix.platform }}
-          printf '%s\n' "${{ matrix.platform }}" > .test-tmp/dar-harness/${{ matrix.platform }}/platform.txt
+          mkdir -p .test-tmp/e2e-harness/${{ matrix.platform }}
+          printf '%s\n' "${{ matrix.platform }}" > .test-tmp/e2e-harness/${{ matrix.platform }}/platform.txt
 
       - uses: actions/setup-node@v4
         with:
@@ -68,20 +68,20 @@ jobs:
         if: ${{ matrix.os != 'ubuntu-latest' }}
         run: bun run harness:install-browser
 
-      - name: Run DAR harness doctor
+      - name: Run E2E harness doctor
         run: bun run harness -- doctor
 
-      - name: Run DAR harness
+      - name: Run E2E harness
         env:
           CLIMON_DISABLE_SETSID: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
-        run: bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/${{ matrix.platform }}
+        run: bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/e2e-harness/${{ matrix.platform }}
 
-      - name: Upload DAR harness artifact
+      - name: Upload E2E harness artifact
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: dar-e2e-harness-${{ matrix.platform }}
-          path: .test-tmp/dar-harness/${{ matrix.platform }}
+          name: e2e-harness-${{ matrix.platform }}
+          path: .test-tmp/e2e-harness/${{ matrix.platform }}
           if-no-files-found: error
 
   aggregate:
@@ -92,8 +92,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare aggregate artifact root
-        run: mkdir -p .test-tmp/dar-harness-results
+      - name: Prepare E2E harness aggregate root
+        run: mkdir -p .test-tmp/e2e-harness-results
 
       - uses: actions/setup-node@v4
         with:
@@ -106,33 +106,33 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Download DAR harness artifacts
+      - name: Download E2E harness artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: dar-e2e-harness-*
+          pattern: e2e-harness-*
           merge-multiple: false
-          path: .test-tmp/dar-harness-results
+          path: .test-tmp/e2e-harness-results
 
-      - name: Aggregate DAR harness reports
+      - name: Aggregate E2E harness reports
         id: aggregate
         continue-on-error: true
-        run: bun run harness -- aggregate --results-root .test-tmp/dar-harness-results
+        run: bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results
 
-      - name: Append DAR harness summary
+      - name: Append E2E harness summary
         if: ${{ always() }}
         run: |
-          if [ -f .test-tmp/dar-harness-results/summary.md ]; then
-            cat .test-tmp/dar-harness-results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f .test-tmp/e2e-harness-results/summary.md ]; then
+            cat .test-tmp/e2e-harness-results/summary.md >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "DAR harness aggregate summary was not created." >> "$GITHUB_STEP_SUMMARY"
+            echo "E2E harness aggregate summary was not created." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Upload aggregate DAR harness outputs
+      - name: Upload aggregate E2E harness outputs
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: dar-e2e-harness-results
-          path: .test-tmp/dar-harness-results
+          name: e2e-harness-results
+          path: .test-tmp/e2e-harness-results
           if-no-files-found: error
 
       - name: Fail when aggregate reports blocking results

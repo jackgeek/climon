@@ -7,18 +7,19 @@ const WORKFLOW_PATH = join(
   REPOSITORY_ROOT,
   ".github",
   "workflows",
-  "dar-e2e-harness.yml"
+  "e2e-harness.yml"
 );
 
 function readWorkflow(): string {
   return readFileSync(WORKFLOW_PATH, "utf8");
 }
 
-describe("DAR harness workflow", () => {
+describe("E2E harness workflow", () => {
   test("pins the three-OS matrix toolchains, trigger paths, and avoids retries", () => {
     const workflow = readWorkflow();
 
-    expect(workflow).toContain("name: dar-e2e-harness");
+    expect(workflow).toContain("name: e2e-harness");
+    expect(workflow).toContain('- ".github/workflows/e2e-harness.yml"');
     expect(workflow).toContain('- "scripts/server-build.ts"');
     expect(workflow).toContain('- "scripts/compile.ts"');
     expect(workflow).toContain('- "docs/manual-tests/**"');
@@ -47,7 +48,7 @@ describe("DAR harness workflow", () => {
 
     expect(workflow).toContain("run: bun run harness -- doctor");
     expect(workflow).toContain(
-      "run: bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/dar-harness/${{ matrix.platform }}"
+      "run: bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/e2e-harness/${{ matrix.platform }}"
     );
     expect(workflow).toContain(
       "CLIMON_DISABLE_SETSID: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}"
@@ -58,14 +59,16 @@ describe("DAR harness workflow", () => {
     const workflow = readWorkflow();
 
     expect(workflow).toContain("if: ${{ always() }}");
-    expect(workflow).toContain("name: dar-e2e-harness-${{ matrix.platform }}");
-    expect(workflow).toContain("path: .test-tmp/dar-harness/${{ matrix.platform }}");
-    expect(workflow).toContain("path: .test-tmp/dar-harness-results");
+    expect(workflow).toContain("name: e2e-harness-${{ matrix.platform }}");
+    expect(workflow).toContain("path: .test-tmp/e2e-harness/${{ matrix.platform }}");
+    expect(workflow).toContain("pattern: e2e-harness-*");
+    expect(workflow).toContain("path: .test-tmp/e2e-harness-results");
     expect(workflow).toContain(
-      "run: bun run harness -- aggregate --results-root .test-tmp/dar-harness-results"
+      "run: bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results"
     );
+    expect(workflow).toContain("name: e2e-harness-results");
     expect(workflow).toContain(
-      "cat .test-tmp/dar-harness-results/summary.md >> \"$GITHUB_STEP_SUMMARY\""
+      "cat .test-tmp/e2e-harness-results/summary.md >> \"$GITHUB_STEP_SUMMARY\""
     );
   });
 });
