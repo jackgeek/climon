@@ -3,9 +3,9 @@
 # Print GitHub release download stats for climon.
 #
 # Usage:
-#   scripts/download-stats.sh              # per-release totals + grand total
-#   scripts/download-stats.sh --assets     # per-asset breakdown
-#   REPO=owner/name scripts/download-stats.sh   # override repo
+#   scripts/download-stats.sh                 # ZIP downloads + manifest requests
+#   scripts/download-stats.sh --assets        # raw per-asset breakdown
+#   REPO=owner/name scripts/download-stats.sh # override repo
 #
 # Requires: gh (authenticated) and jq.
 
@@ -29,10 +29,22 @@ if [[ "${1:-}" == "--assets" ]]; then
   exit 0
 fi
 
-printf 'TAG\tPUBLISHED\tDOWNLOADS\n'
-jq -r '.[] | "\(.tag_name)\t\(.published_at)\t\([.assets[].download_count] | add // 0)"' <<<"$releases_json" \
+printf 'TAG\tPUBLISHED\tDOWNLOADS\tMANIFEST_REQUESTS\n'
+jq -r '
+  def zip_downloads:
+    [(.assets[]? | select(.name | test("^climon-.*\\.zip$")) | .download_count)] | add // 0;
+  def manifest_requests:
+    [(.assets[]? | select(.name == "manifest.json") | .download_count)] | add // 0;
+  .[] | "\(.tag_name)\t\(.published_at)\t\(zip_downloads)\t\(manifest_requests)"
+' <<<"$releases_json" \
   | { column -t -s$'\t' 2>/dev/null || cat; }
 
-total="$(jq '[.[].assets[].download_count] | add // 0' <<<"$releases_json")"
+actual_downloads="$(jq '
+  [(.[] | .assets[]? | select(.name | test("^climon-.*\\.zip$")) | .download_count)] | add // 0
+' <<<"$releases_json")"
+manifest_requests="$(jq '
+  [(.[] | .assets[]? | select(.name == "manifest.json") | .download_count)] | add // 0
+' <<<"$releases_json")"
 echo
-echo "Total asset downloads: ${total}"
+echo "Total actual downloads: ${actual_downloads}"
+echo "Total manifest requests: ${manifest_requests}"
