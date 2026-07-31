@@ -1204,6 +1204,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     } else {
       // Hide the content until the captured scrollback is written, matching the
       // live-attach masking (see contentVisible).
+      clearReadySessionId();
       hideContent();
       void fetchScrollback(session.id).then((buf) => {
         if (cancelled) {
@@ -1211,11 +1212,43 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         }
         if (buf) {
           term.write(buf, () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal);
+            completeInitialReplay(
+              attachmentGeneration,
+              attachmentGenerationRef.current,
+              () => {
+                const selectedSession = selectedSessionRef.current;
+                if (
+                  !selectedSession ||
+                  selectedSession.id !== session.id ||
+                  isLiveStatus(selectedSession.status)
+                ) {
+                  return;
+                }
+                markReadySessionId(session.id);
+                scheduleContentReveal();
+              },
+              refreshActiveTerminal
+            );
           });
         } else {
           term.write("\x1b[90m[no output captured]\x1b[0m\r\n", () => {
-            completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal);
+            completeInitialReplay(
+              attachmentGeneration,
+              attachmentGenerationRef.current,
+              () => {
+                const selectedSession = selectedSessionRef.current;
+                if (
+                  !selectedSession ||
+                  selectedSession.id !== session.id ||
+                  isLiveStatus(selectedSession.status)
+                ) {
+                  return;
+                }
+                markReadySessionId(session.id);
+                scheduleContentReveal();
+              },
+              refreshActiveTerminal
+            );
           });
         }
       });

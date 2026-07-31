@@ -72,7 +72,9 @@ describe("TerminalView", () => {
     // (settle-delayed) when the replay/scrollback write completes.
     expect(source).toContain("hideContent();");
     expect(source).toContain("reconnectAttemptRef.current = 0;\n                scheduleContentReveal();");
-    expect(source).toContain("completeInitialReplay(attachmentGeneration, attachmentGenerationRef.current, scheduleContentReveal, refreshActiveTerminal)");
+    expect(source).toMatch(
+      /completeInitialReplay\([\s\S]*attachmentGeneration,[\s\S]*attachmentGenerationRef\.current,[\s\S]*scheduleContentReveal\(\);[\s\S]*markReadySessionId\(liveSession\.id\);[\s\S]*refreshActiveTerminal/
+    );
     // Disconnect reveals immediately so the content can never stick hidden.
     expect(source).toContain("revealContentNow();");
   });
@@ -523,6 +525,8 @@ describe("TerminalView", () => {
     expect(canRefitTerminalForSession({ status: "running" }, true)).toBe(true);
     expect(canRefitTerminalForSession({ status: "running" }, false)).toBe(false);
     expect(canRefitTerminalForSession({ status: "completed" }, false)).toBe(false);
+    expect(canRefitTerminalForSession({ status: "failed" }, false)).toBe(false);
+    expect(canRefitTerminalForSession({ status: "disconnected" }, false)).toBe(false);
   });
 
   test("ignores stale initial replay callbacks from a previous session", () => {
@@ -542,6 +546,16 @@ describe("TerminalView", () => {
 
     expect(replayComplete).toBe(true);
     expect(refits).toBe(1);
+  });
+
+  test("marks terminated sessions ready only from the current scrollback write callback", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("clearReadySessionId();\n      hideContent();");
+    expect(source).toContain("selectedSessionRef.current");
+    expect(source).toMatch(
+      /term\.write\([\s\S]*\(\) => \{[\s\S]*markReadySessionId\(session\.id\);[\s\S]*scheduleContentReveal\(\);[\s\S]*\}\);/
+    );
   });
 
   test("reconnects only the current visible live attachment", () => {
