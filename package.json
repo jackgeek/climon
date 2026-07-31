@@ -18,14 +18,18 @@
     "build:web": "bun scripts/build-web.ts",
     "build:rust": "bun scripts/build-rust.ts",
     "build": "bun run clean && bun run build:web && bun run build:server && bun run build:rust",
+    "harness": "bun harness/src/main.ts",
+    "harness:install-browser": "playwright install chromium",
     "postinstall": "bun scripts/rust-toolchain.ts",
     "compile": "bun scripts/compile.ts",
     "sign-release": "bun scripts/sign-release.ts",
     "verify-signing-key": "bun scripts/verify-signing-key.ts",
     "check:peers": "bun scripts/check-peer-deps.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:harness": "tsc -p harness/tsconfig.json --noEmit",
     "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",
+    "test:harness": "bun test harness/tests",
     "release": "bun scripts/release.ts",
     "dev": "bun scripts/dev.ts",
     "server": "bun src/server.ts server",
@@ -40,6 +44,9 @@
     "messages:hints": "bun scripts/extract-messages.ts hints",
     "messages:publish": "bun scripts/extract-messages.ts publish"
   },
+  "trustedDependencies": [
+    "node-pty"
+  ],
   "engines": {
     "bun": ">=1.1.0"
   },
@@ -69,6 +76,8 @@
     "@types/web-push": "^3.6.4",
     "bun-types": "^1.3.10",
     "fflate": "^0.8.3",
+    "node-pty": "^1.1.0",
+    "playwright": "^1.62.1",
     "typescript": "^7.0.2"
   }
 }

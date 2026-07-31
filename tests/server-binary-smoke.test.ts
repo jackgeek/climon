@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EMBEDDED_DEFINE_ARGS } from "../scripts/compile.js";
+import { compiledServerBuildArgs } from "../scripts/server-build.js";
 
 // Opt-in only: this test runs the real, slow `bun build --compile` of
 // src/server.ts for the native target and boots the resulting binary. CI runs
@@ -43,7 +43,7 @@ describe.skipIf(!RUN)("compiled climon-server binary", () => {
         expect(
           spawnSync(
             "bun",
-            ["build", "src/server.ts", "--compile", ...EMBEDDED_DEFINE_ARGS, "--outfile", out],
+            compiledServerBuildArgs(out),
             {
               stdio: "inherit",
             }
