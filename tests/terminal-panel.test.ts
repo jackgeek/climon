@@ -39,6 +39,8 @@ describe("TerminalPanel", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
     expect(source).toContain('data-testid="session-terminal"');
+    expect(source).toContain("const [readySessionId, setReadySessionId] = useState<string | null>(null);");
+    expect(source).toContain("data-session-id={readySessionId ?? undefined}");
     expect(source.match(/data-testid=/g)?.length ?? 0).toBe(1);
   });
 

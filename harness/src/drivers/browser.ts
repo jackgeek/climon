@@ -4,6 +4,7 @@ import { HarnessError } from "../types.js";
 const SESSION_LIST_SELECTOR = '[data-testid="session-list"]';
 const SESSION_ITEM_SELECTOR = '[data-testid="session-item"]';
 const SESSION_TERMINAL_SELECTOR = '[data-testid="session-terminal"]';
+const SESSION_TERMINAL_READY_ATTRIBUTE = "data-session-id";
 const ACCESSIBILITY_ROW_SELECTOR = ".xterm-accessibility-tree > div";
 const XTERM_ROW_SELECTOR = ".xterm-rows > div";
 const OPEN_TERMINAL_BUTTON_LABEL = "Open terminal";
@@ -124,6 +125,10 @@ function sessionSelector(id: string): string {
   return `${SESSION_ITEM_SELECTOR}[data-session-id="${escapeCssString(assertToken("id", id))}"]`;
 }
 
+function sessionTerminalReadySelector(id: string): string {
+  return `${SESSION_TERMINAL_SELECTOR}[${SESSION_TERMINAL_READY_ATTRIBUTE}="${escapeCssString(assertToken("id", id))}"]`;
+}
+
 function normalizeBaseUrl(baseUrl: string): string {
   return new URL(baseUrl).toString();
 }
@@ -216,34 +221,36 @@ export class BrowserDriver {
 
   public async openTerminal(id: string, deadline: number): Promise<void> {
     assertAbsoluteDeadline(deadline);
+    const requestedSessionId = assertToken("id", id);
     const selector = sessionSelector(id);
     const page = this.requirePage();
     const sessionItem = page.locator(selector);
+    const readySelector = sessionTerminalReadySelector(requestedSessionId);
     const terminal = page.locator(SESSION_TERMINAL_SELECTOR);
+    const readyTerminal = page.locator(readySelector);
     const openButton = sessionItem.getByRole("button", { name: OPEN_TERMINAL_BUTTON_LABEL });
-    const diagnostics = {
+    let currentReadySessionId: string | null = null;
+    const diagnostics = () => ({
       selector,
+      readySelector,
       terminalSelector: SESSION_TERMINAL_SELECTOR,
-      id: JSON.stringify(id)
-    };
+      requestedSessionId: JSON.stringify(requestedSessionId),
+      currentReadySessionId: JSON.stringify(currentReadySessionId)
+    });
 
     try {
       await sessionItem.click({
-        timeout: this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics))
+        timeout: this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics()))
       });
       let openButtonClicked = false;
 
       while (true) {
+        const timeoutMs = this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics()));
+        const pollTimeoutMs = Math.max(1, Math.min(this.pollIntervalMs, timeoutMs));
         try {
-          await terminal.waitFor({
+          await readyTerminal.waitFor({
             state: "visible",
-            timeout: Math.max(
-              1,
-              Math.min(
-                this.pollIntervalMs,
-                this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics))
-              )
-            )
+            timeout: pollTimeoutMs
           });
           return;
         } catch (error) {
@@ -252,9 +259,17 @@ export class BrowserDriver {
           }
         }
 
+        try {
+          currentReadySessionId = await terminal.getAttribute(SESSION_TERMINAL_READY_ATTRIBUTE, {
+            timeout: pollTimeoutMs
+          });
+        } catch {
+          currentReadySessionId = null;
+        }
+
         if (!openButtonClicked && (await openButton.count()) > 0) {
           await openButton.click({
-            timeout: this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics))
+            timeout: this.remainingMs(deadline, () => this.timeoutError("terminal open", diagnostics()))
           });
           openButtonClicked = true;
           continue;
@@ -263,7 +278,7 @@ export class BrowserDriver {
         await this.sleep(Math.max(1, Math.min(this.pollIntervalMs, deadline - this.now())));
       }
     } catch (error) {
-      this.throwTranslatedError("terminal open", error, diagnostics);
+      this.throwTranslatedError("terminal open", error, diagnostics());
     }
   }
 

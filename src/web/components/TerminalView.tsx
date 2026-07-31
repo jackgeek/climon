@@ -481,6 +481,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const xtermThemeRef = useRef(xtermTheme);
   const onFontSizeChangeRef = useRef(onFontSizeChange);
   const [displayState, setDisplayState] = useState<ControlState>("controlling");
+  const [readySessionId, setReadySessionId] = useState<string | null>(null);
   // False while an attach's replay/reflow is in flight so the xterm content is
   // hidden over the solid theme background; flipped true (fading the content in)
   // once the replay/scrollback settles. Starts hidden so the very first attach
@@ -500,6 +501,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const replayAfterNextResizeRef = useRef(false);
   const lastServerReconnectTokenRef = useRef(serverReconnectToken);
   const onLiveInteractionRef = useRef(onLiveInteraction);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     selectedSessionRef.current = session;
@@ -515,6 +517,26 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   useEffect(() => {
     onFontSizeChangeRef.current = onFontSizeChange;
   }, [onFontSizeChange]);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  function clearReadySessionId(): void {
+    if (!mountedRef.current) {
+      return;
+    }
+    setReadySessionId(null);
+  }
+
+  function markReadySessionId(sessionId: string): void {
+    if (!mountedRef.current) {
+      return;
+    }
+    setReadySessionId(sessionId);
+  }
 
   // Apply font-size changes driven from App state (panel buttons or the
   // Ctrl +/- shortcut, which both flow through App as the single source of
@@ -773,6 +795,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     clearReconnectTimer();
     reconnectAttemptRef.current = 0;
     attachmentGenerationRef.current++;
+    clearReadySessionId();
     initialReplayCompleteRef.current = true;
     awaitingReplayRef.current = false;
     replayWriteInProgressRef.current = false;
@@ -840,6 +863,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   function attachLiveSession(liveSession: SessionMeta, resetBeforeReplay: boolean): void {
     clearReconnectTimer();
     attachmentGenerationRef.current++;
+    clearReadySessionId();
     const attachmentGeneration = attachmentGenerationRef.current;
     const ws = new WebSocket(attachSocketUrl(liveSession.id));
     ws.binaryType = "arraybuffer";
@@ -867,6 +891,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         wsRef.current = null;
         attachedSessionIdRef.current = null;
       }
+      clearReadySessionId();
       initialReplayCompleteRef.current = true;
       // Never leave the content stuck hidden if we disconnect before the replay
       // settles; the reconnect overlay covers any interaction meanwhile.
@@ -975,6 +1000,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
                 initialReplayCompleteRef.current = true;
                 reconnectAttemptRef.current = 0;
                 scheduleContentReveal();
+                markReadySessionId(liveSession.id);
               },
               refreshActiveTerminal
             );
@@ -1249,6 +1275,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       <div
         ref={containerRef}
         data-testid="session-terminal"
+        data-session-id={readySessionId ?? undefined}
         className={mergeClasses(styles.root, contentVisible ? undefined : styles.hidden)}
         style={{
           backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,

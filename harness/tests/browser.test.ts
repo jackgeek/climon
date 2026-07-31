@@ -368,7 +368,9 @@ describe("BrowserDriver", () => {
     const clock = new FakeClock();
     const page = new FakePage(log);
     page.registerLocator('[data-testid="session-list"]');
-    const terminal = page.registerLocator('[data-testid="session-terminal"]');
+    const terminal = page.registerLocator(
+      '[data-testid="session-terminal"][data-session-id="dar-session"]'
+    );
     const selector = '[data-testid="session-item"][data-session-id="dar-session"]';
     const session = page.registerLocator(selector);
     const staleButton = page.registerRoleLocator("button", "Open terminal");
@@ -388,28 +390,95 @@ describe("BrowserDriver", () => {
     expect(staleButton.clickCalls).toHaveLength(0);
     expect(targetButton.clickCalls).toHaveLength(1);
     expect(clock.sleepCalls).toEqual([25]);
+    expect(log).toContain(
+      'wait:[data-testid="session-terminal"][data-session-id="dar-session"]'
+    );
     expect(log).toContain(`click:${selector} >> role=button[name=Open terminal]`);
     expect(log).not.toContain("click:role=button[name=Open terminal]");
   });
 
-  test("escapes semantic session selectors and opens the terminal surface", async () => {
+  test("waits for the requested terminal readiness instead of generic terminal visibility", async () => {
     const log: string[] = [];
+    const clock = new FakeClock();
     const page = new FakePage(log);
     page.registerLocator('[data-testid="session-list"]');
     page.registerLocator('[data-testid="session-terminal"]');
+    const readySelector =
+      '[data-testid="session-terminal"][data-session-id="dar-session"]';
+    const readyTerminal = page.registerLocator(readySelector);
+    const selector = '[data-testid="session-item"][data-session-id="dar-session"]';
+    const session = page.registerLocator(selector);
+    const openButton = session.registerRoleLocator("button", "Open terminal");
+    openButton.countValues = [0, 1];
+    readyTerminal.waitImpl = async () => {
+      if (openButton.clickCalls.length === 0) {
+        throw new FakeTimeoutError("requested terminal not ready yet");
+      }
+    };
+    const { driver } = createDriver({ clock, log, pages: [page], pollIntervalMs: 25 });
+
+    await driver.open("http://127.0.0.1:43123/", 1_000);
+    await driver.openTerminal("dar-session", 60);
+
+    expect(openButton.clickCalls).toHaveLength(1);
+    expect(log).toContain(`wait:${readySelector}`);
+    expect(log).not.toContain('wait:[data-testid="session-terminal"]');
+    expect(clock.sleepCalls).toEqual([25]);
+  });
+
+  test("escapes semantic session selectors and terminal readiness selectors", async () => {
+    const log: string[] = [];
+    const page = new FakePage(log);
+    page.registerLocator('[data-testid="session-list"]');
     const { driver } = createDriver({ log, pages: [page] });
     const id = 'quote"slash\\\\tail';
     const selector =
       '[data-testid="session-item"][data-session-id="quote\\"slash\\\\\\\\tail"]';
+    const readySelector =
+      '[data-testid="session-terminal"][data-session-id="quote\\"slash\\\\\\\\tail"]';
     page.registerLocator(selector).registerRoleLocator("button", "Open terminal");
+    page.registerLocator(readySelector);
 
     await driver.open("http://127.0.0.1:43123/", 1_000);
     await driver.openTerminal(id, 1_000);
 
     expect(page.locatorCalls).toContain(selector);
+    expect(page.locatorCalls).toContain(readySelector);
     expect(log).toContain(`click:${selector}`);
     expect(page.roleCalls).toEqual([]);
-    expect(log).toContain('wait:[data-testid="session-terminal"]');
+    expect(log).toContain(`wait:${readySelector}`);
+  });
+
+  test("includes requested and current terminal readiness in timeout diagnostics", async () => {
+    const clock = new FakeClock();
+    const page = new FakePage([]);
+    page.registerLocator('[data-testid="session-list"]');
+    const terminal = page.registerLocator('[data-testid="session-terminal"]');
+    terminal.attributeValues = ["old-session", "old-session", "old-session"];
+    const readySelector =
+      '[data-testid="session-terminal"][data-session-id="dar-session"]';
+    const readyTerminal = page.registerLocator(readySelector);
+    readyTerminal.waitError = new FakeTimeoutError("terminal never became ready");
+    const selector = '[data-testid="session-item"][data-session-id="dar-session"]';
+    const session = page.registerLocator(selector);
+    session.registerRoleLocator("button", "Open terminal").countValue = 0;
+    const { driver } = createDriver({ clock, pages: [page], pollIntervalMs: 25 });
+
+    await driver.open("http://127.0.0.1:43123/", 1_000);
+    let error: Error | undefined;
+    try {
+      await driver.openTerminal("dar-session", 40);
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error).toMatchObject({
+      name: "HarnessError",
+      kind: "timeout"
+    });
+    expect(error?.message).toContain('requestedSessionId="dar-session"');
+    expect(error?.message).toContain('currentReadySessionId="old-session"');
+    expect(error?.message).toContain(`readySelector=${readySelector}`);
   });
 
   test("rejects control characters in session ids before building selectors", async () => {
