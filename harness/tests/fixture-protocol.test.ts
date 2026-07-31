@@ -106,7 +106,7 @@ async function waitFor(label, predicate) {
 }
 
 async function main() {
-  const child = spawn(fixturePath, ["tui"], {
+  const child = spawn(fixturePath, ["interactive-tui"], {
     name: "xterm-256color",
     cols: 100,
     rows: 30,
@@ -219,7 +219,7 @@ fixture_path = sys.argv[1]
 disconnect_timeout = float(sys.argv[2]) / 1000.0
 master_fd, slave_fd = pty.openpty()
 child = subprocess.Popen(
-    [fixture_path, "tui"],
+    [fixture_path, "interactive-tui"],
     stdin=slave_fd,
     stdout=slave_fd,
     stderr=subprocess.PIPE,
@@ -290,7 +290,7 @@ import time
 fixture_path = sys.argv[1]
 master_fd, slave_fd = pty.openpty()
 child = subprocess.Popen(
-    [fixture_path, "tui"],
+    [fixture_path, "interactive-tui"],
     stdin=slave_fd,
     stdout=slave_fd,
     stderr=subprocess.PIPE,
@@ -359,7 +359,7 @@ import time
 fixture_path = sys.argv[1]
 master_fd, slave_fd = pty.openpty()
 child = subprocess.Popen(
-    [fixture_path, "tui"],
+    [fixture_path, "interactive-tui"],
     stdin=slave_fd,
     stdout=slave_fd,
     stderr=subprocess.PIPE,
@@ -639,7 +639,7 @@ describe("fixture build memoization", () => {
 describe("climon-harness-fixture stream protocol", () => {
   test("streams exact 001..020 markers in order and exits after the exit handshake", async () => {
     await buildFixture();
-    const child = spawnFixture(["stream-protocol"]);
+    const child = spawnFixture(["streaming"]);
     const exitPromise = once(child, "exit");
     const text = collectProcessText(child);
 
@@ -705,7 +705,7 @@ describe("climon-harness-fixture stream protocol", () => {
 
   test("rejects malformed stream input with stable stderr and exit 2", async () => {
     await buildFixture();
-    const child = spawnFixture(["stream-protocol"]);
+    const child = spawnFixture(["streaming"]);
     const exitPromise = once(child, "exit");
     const text = collectProcessText(child);
 
@@ -765,7 +765,7 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
 
   test("renders exact 021..040 markers for TUI input and exits only on plain q", async () => {
     await buildFixture();
-    const child = spawnFixture(["tui"]);
+    const child = spawnFixture(["interactive-tui"]);
     const exitPromise = once(child, "exit");
     const text = collectProcessText(child);
     const screen = new ScreenModel(80, 24);
@@ -1013,6 +1013,22 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
 });
 
 describe("climon-harness-fixture command dispatch", () => {
+  test("rejects removed public aliases with stable stderr and exit 2", async () => {
+    await buildFixture();
+
+    for (const command of ["tui", "stream-protocol"]) {
+      const child = spawnFixture([command]);
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(code).toBe(2);
+      expect(signal).toBeNull();
+      expect(text.stdout).toBe("");
+      expect(text.stderr).toBe(`Unknown command: ${command}\n`);
+    }
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
   test("rejects an unknown subcommand with stable stderr and exit 2", async () => {
     await buildFixture();
     const child = spawnFixture(["bogus"]);

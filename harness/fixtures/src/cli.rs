@@ -4,6 +4,12 @@ use crate::mode_probe;
 use crate::stream_protocol;
 use crate::tui;
 
+const STREAMING_COMMAND: &str = "streaming";
+const INTERACTIVE_TUI_COMMAND: &str = "interactive-tui";
+const MODE_PROBE_COMMAND: &str = "mode-probe";
+const APPROVED_COMMANDS: &str =
+    "Expected one of: streaming, interactive-tui, mode-probe -- <executable> [args...]";
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum CliError {
     Usage(String),
@@ -34,17 +40,15 @@ where
 {
     let collected: Vec<String> = args.into_iter().collect();
     let Some(command) = collected.get(1).map(String::as_str) else {
-        return Err(CliError::Usage(
-            "Expected one of: stream-protocol, tui, mode-probe".to_string(),
-        ));
+        return Err(CliError::Usage(APPROVED_COMMANDS.to_string()));
     };
 
     match command {
-        "stream-protocol" => stream_protocol::run(&mut BufReader::new(stdin), stdout, stderr),
-        "tui" => {
+        STREAMING_COMMAND => stream_protocol::run(&mut BufReader::new(stdin), stdout, stderr),
+        INTERACTIVE_TUI_COMMAND => {
             tui::run(BufReader::new(stdin), stdout).map_err(|error| CliError::Io(error.to_string()))
         }
-        "mode-probe" => {
+        MODE_PROBE_COMMAND => {
             let executable = parse_mode_probe_command(&collected[2..])?;
             mode_probe::run(executable, stdout).map_err(|error| CliError::Io(error.to_string()))
         }
@@ -78,7 +82,23 @@ pub fn write_error(error: &CliError, stderr: &mut impl Write) -> io::Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_mode_probe_command, run, CliError};
+    use super::{parse_mode_probe_command, run, CliError, APPROVED_COMMANDS};
+
+    #[test]
+    fn lists_only_approved_public_commands_in_usage() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = run(
+            vec!["fixture".to_string()],
+            &b""[..],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(result, Err(CliError::Usage(APPROVED_COMMANDS.to_string())));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
 
     #[test]
     fn rejects_missing_mode_probe_executable() {
@@ -116,5 +136,29 @@ mod tests {
             "Unknown command: bogus\n"
         );
         assert!(stdout.is_empty());
+    }
+
+    #[test]
+    fn rejects_removed_public_aliases() {
+        for alias in ["tui", "stream-protocol"] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result = run(
+                vec!["fixture".to_string(), alias.to_string()],
+                &b""[..],
+                &mut stdout,
+                &mut stderr,
+            );
+
+            assert_eq!(
+                result,
+                Err(CliError::Usage(format!("Unknown command: {alias}")))
+            );
+            assert_eq!(
+                String::from_utf8(stderr).unwrap(),
+                format!("Unknown command: {alias}\n")
+            );
+            assert!(stdout.is_empty());
+        }
     }
 }
