@@ -20,7 +20,7 @@ const MODE_BASELINE_PREFIX = "DAR_MODE_BASELINE ";
 const READY_MARKER = `DAR_CONTROL_READY ${LOCAL_COLS} ${LOCAL_ROWS}`;
 const OVERLAY_MESSAGE = "This session is being viewed on a climon dashboard.";
 const OVERLAY_HINT = "Press Space to take control.";
-const LOCAL_QUIET_PERIOD_MS = 300;
+const LOCAL_QUIET_PERIOD_MS = 500;
 const SUBCHECK_TIMEOUTS_MS = {
   "local-starts-as-controller": 30_000,
   "desktop-transfers-control-and-pty-size": 30_000,
@@ -74,6 +74,7 @@ export interface Dar03BrowserSurface {
   openTerminal(id: string, deadline: number): Promise<void>;
   takeControl(id: string, deadline: number): Promise<void>;
   controllerId(id: string, deadline: number): Promise<string>;
+  waitForDisplaced(id: string, deadline: number): Promise<string>;
   waitForTerminalText(text: string, deadline: number): Promise<void>;
   sendTerminalLine(text: string): Promise<void>;
   terminalText(): Promise<string>;
@@ -443,6 +444,14 @@ async function waitForControlledSurfaceSize(
   );
 }
 
+async function waitForDisplacedSurface(
+  surface: Dar03BrowserSurface,
+  sessionId: string,
+  deadline: number
+): Promise<string> {
+  return surface.waitForDisplaced(sessionId, deadline);
+}
+
 function surfaceEvidence(
   createdDesktop: boolean,
   createdPwa: boolean
@@ -510,7 +519,10 @@ async function cleanupPty(
   pty: Dar03Pty | undefined,
   exitSent: boolean,
   localDisplaced: boolean,
+  waitForQuietBeforeExit: boolean,
   trackedSessionId: string | undefined,
+  desktop: Dar03BrowserSurface | undefined,
+  pwa: Dar03BrowserSurface | undefined,
   home: string,
   overallDeadline: number,
   now: () => number,
@@ -524,9 +536,11 @@ async function cleanupPty(
   }
 
   const cleanupDeadline = Math.min(overallDeadline, now() + 5_000);
+  let shouldWaitForQuietBeforeExit = waitForQuietBeforeExit;
 
   if (localDisplaced) {
     pty.writeText(" ");
+    shouldWaitForQuietBeforeExit = true;
     try {
       await pty.expectScreen(
         (screen) =>
@@ -553,6 +567,30 @@ async function cleanupPty(
       } catch (error) {
         cleanupErrors.push(cleanupFailure("PTY cleanup reclaim wait failed", error));
       }
+
+      if (desktop) {
+        try {
+          await waitForDisplacedSurface(desktop, trackedSessionId, cleanupDeadline);
+        } catch (error) {
+          cleanupErrors.push(cleanupFailure("PTY cleanup reclaim wait failed", error));
+        }
+      }
+
+      if (pwa) {
+        try {
+          await waitForDisplacedSurface(pwa, trackedSessionId, cleanupDeadline);
+        } catch (error) {
+          cleanupErrors.push(cleanupFailure("PTY cleanup reclaim wait failed", error));
+        }
+      }
+    }
+  }
+
+  if (shouldWaitForQuietBeforeExit) {
+    try {
+      await pty.waitForQuiet(LOCAL_QUIET_PERIOD_MS, cleanupDeadline);
+    } catch (error) {
+      cleanupErrors.push(cleanupFailure("PTY cleanup quiet wait failed", error));
     }
   }
 
@@ -605,6 +643,7 @@ export async function runDar03(
   let exitSent = false;
   let createdDesktop = false;
   let createdPwa = false;
+  let waitForQuietBeforeExit = false;
 
   const baseEvidence = () => {
     const evidence = [PTY_INPUT_ARTIFACT, PTY_OUTPUT_ARTIFACT];
@@ -851,7 +890,7 @@ export async function runDar03(
   );
 
   const pwaBlocked = () =>
-    pwaControlled && desktop
+    pwaControlled && desktop && pwa
       ? undefined
       : "pwa-newest-controller-wins did not leave the local terminal displaced";
 
@@ -878,17 +917,6 @@ export async function runDar03(
             !screen.contents().includes(OVERLAY_HINT),
           deadline
         );
-        await waitForValue(
-          deadline,
-          now,
-          sleep,
-          pollIntervalMs,
-          async () => {
-            const controllerId = await desktop!.controllerId(trackedSessionId!, deadline);
-            return controllerId === "local" ? controllerId : undefined;
-          },
-          "Timed out waiting for the local terminal to reclaim control"
-        );
         await waitForSessionSize(
           trackedSessionId!,
           context.runtime.home,
@@ -899,13 +927,31 @@ export async function runDar03(
           pollIntervalMs,
           readSessionMeta
         );
+        const desktopControllerId = await waitForDisplacedSurface(
+          desktop!,
+          trackedSessionId!,
+          deadline
+        );
+        const pwaControllerId = await waitForDisplacedSurface(
+          pwa!,
+          trackedSessionId!,
+          deadline
+        );
         pty!.writeText(`${localToken}\r`);
         await pty!.expectRaw(`DAR_CONTROL_INPUT ${localToken}`, deadline);
         localReclaimed = true;
         localDisplaced = false;
+        waitForQuietBeforeExit = true;
         return {
           message: `Local Space reclaimed control and accepted ${localToken}`,
-          evidence: ["local", `DAR_CONTROL_INPUT ${localToken}`],
+          evidence: [
+            `desktop-controller!=${desktop!.viewerId}`,
+            `pwa-controller!=${pwa!.viewerId}`,
+            `${LOCAL_COLS}x${LOCAL_ROWS}`,
+            `DAR_CONTROL_INPUT ${localToken}`,
+            desktopControllerId,
+            pwaControllerId,
+          ],
         };
       }
     )
@@ -922,7 +968,12 @@ export async function runDar03(
       }
 
       const deadline = remainingDeadline("local-resize-authoritative", overallDeadline, now);
+      if (waitForQuietBeforeExit) {
+        await pty!.waitForQuiet(LOCAL_QUIET_PERIOD_MS, deadline);
+        waitForQuietBeforeExit = false;
+      }
       pty!.resize(RESIZED_LOCAL_COLS, RESIZED_LOCAL_ROWS);
+      waitForQuietBeforeExit = true;
       const resizeMarker = await waitForValue(
         deadline,
         now,
@@ -952,6 +1003,10 @@ export async function runDar03(
         readSessionMeta
       );
 
+      if (waitForQuietBeforeExit) {
+        await pty!.waitForQuiet(LOCAL_QUIET_PERIOD_MS, deadline);
+        waitForQuietBeforeExit = false;
+      }
       pty!.writeText("q");
       exitSent = true;
       const exitCode = await pty!.waitForExit(deadline);
@@ -967,13 +1022,14 @@ export async function runDar03(
   );
 
   const cleanupErrors: Error[] = [];
-  await closeSurface(pwa, "PWA surface", cleanupErrors);
-  await closeSurface(desktop, "Desktop surface", cleanupErrors);
   await cleanupPty(
     pty,
     exitSent,
     localDisplaced,
+    waitForQuietBeforeExit,
     trackedSessionId,
+    desktop,
+    pwa,
     context.runtime.home,
     overallDeadline,
     now,
@@ -982,6 +1038,8 @@ export async function runDar03(
     readSessionMeta,
     cleanupErrors
   );
+  await closeSurface(pwa, "PWA surface", cleanupErrors);
+  await closeSurface(desktop, "Desktop surface", cleanupErrors);
   throwCleanupErrors(cleanupErrors, "Failed to finalize DAR-03");
 
   return results;

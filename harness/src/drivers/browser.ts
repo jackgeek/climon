@@ -109,6 +109,7 @@ export interface BrowserSurface {
   openTerminal(id: string, deadline: number): Promise<void>;
   takeControl(id: string, deadline: number): Promise<void>;
   controllerId(id: string, deadline: number): Promise<string>;
+  waitForDisplaced(id: string, deadline: number): Promise<string>;
   acknowledgeAttention(id: string, deadline: number): Promise<void>;
   resizeViewport(width: number, height: number): Promise<void>;
   terminalText(): Promise<string>;
@@ -694,6 +695,64 @@ class BrowserSurfaceSession implements BrowserSurface {
         throw this.timeoutError("controller id", diagnostics());
       }
       await this.dependencies.sleep(Math.max(1, Math.min(this.dependencies.pollIntervalMs, deadline - this.dependencies.now())));
+    }
+  }
+
+  public async waitForDisplaced(id: string, deadline: number): Promise<string> {
+    assertAbsoluteDeadline(deadline);
+    const readySelector = sessionTerminalReadySelector(id);
+    const readyTerminal = this.requirePage().locator(readySelector);
+    const button = this.requirePage().getByRole("button", { name: TAKE_CONTROL_BUTTON_LABEL });
+    let currentControllerId: string | null = null;
+    let takeControlVisible = false;
+    const diagnostics = () => ({
+      readySelector,
+      expectedControllerId: JSON.stringify(this.viewerId),
+      currentControllerId: JSON.stringify(currentControllerId),
+      takeControlVisible: JSON.stringify(takeControlVisible),
+    });
+
+    try {
+      await readyTerminal.waitFor({
+        state: "attached",
+        timeout: this.remainingMs(deadline, () => this.timeoutError("displaced control", diagnostics())),
+      });
+    } catch (error) {
+      this.throwTranslatedError("displaced control", error, diagnostics());
+    }
+
+    while (true) {
+      try {
+        currentControllerId = await readyTerminal.getAttribute(CONTROLLER_ID_ATTRIBUTE, {
+          timeout: this.remainingMs(deadline, () => this.timeoutError("displaced control", diagnostics())),
+        });
+      } catch (error) {
+        this.throwTranslatedError("displaced control", error, diagnostics());
+      }
+
+      if (currentControllerId !== this.viewerId) {
+        return currentControllerId && currentControllerId.length > 0
+          ? currentControllerId
+          : "controller-cleared";
+      }
+
+      try {
+        takeControlVisible = (await button.count()) > 0;
+      } catch (error) {
+        this.throwTranslatedError("displaced control", error, diagnostics());
+      }
+
+      if (takeControlVisible) {
+        return TAKE_CONTROL_BUTTON_LABEL;
+      }
+
+      if (this.dependencies.now() >= deadline) {
+        throw this.timeoutError("displaced control", diagnostics());
+      }
+
+      await this.dependencies.sleep(
+        Math.max(1, Math.min(this.dependencies.pollIntervalMs, deadline - this.dependencies.now()))
+      );
     }
   }
 

@@ -37,6 +37,7 @@ interface ScenarioState {
   status: "running" | "completed";
   cols: number;
   rows: number;
+  localControllerId: string;
   currentController: string;
   lastToken: string;
   resizeSequence: number;
@@ -81,24 +82,36 @@ class FakePty implements Dar03Pty {
       spawnMarker?: string;
       screenError?: Error;
       waitForExitError?: Error;
+      requireQuietBeforeExitAfterReclaim?: boolean;
+      requireQuietBeforeResizeAfterReclaim?: boolean;
+      requireQuietBeforeExitAfterResize?: boolean;
     } = {}
   ) {}
+
+  private requiresQuietBeforeExit = false;
+  private requiresQuietBeforeResize = false;
+
+  private localOwnsControl(): boolean {
+    return this.state.currentController === this.state.localControllerId;
+  }
 
   public writeText(text: string): void {
     this.callLog.push(`writeText:${JSON.stringify(text)}`);
     this.writeTextCalls.push(text);
 
     if (text === " ") {
-      if (this.state.currentController !== "local") {
-        this.state.currentController = "local";
+      if (!this.localOwnsControl()) {
+        this.state.currentController = this.state.localControllerId;
         this.state.cols = LOCAL_COLS;
         this.state.rows = LOCAL_ROWS;
         this.state.localScreen = renderProbeScreen(this.state.cols, this.state.rows, this.state.lastToken);
       }
+      this.requiresQuietBeforeExit ||= this.options.requireQuietBeforeExitAfterReclaim ?? false;
+      this.requiresQuietBeforeResize ||= this.options.requireQuietBeforeResizeAfterReclaim ?? false;
       return;
     }
 
-    if (this.state.currentController !== "local") {
+    if (!this.localOwnsControl()) {
       return;
     }
 
@@ -122,7 +135,10 @@ class FakePty implements Dar03Pty {
   public resize(cols: number, rows: number): void {
     this.callLog.push(`resize:${cols}x${rows}`);
     this.resizeCalls.push({ cols, rows });
-    if (this.state.currentController !== "local") {
+    if (!this.localOwnsControl()) {
+      return;
+    }
+    if (this.requiresQuietBeforeResize) {
       return;
     }
     this.state.cols = cols;
@@ -130,6 +146,7 @@ class FakePty implements Dar03Pty {
     this.state.resizeSequence += 1;
     this.state.localOutput += `DAR_CONTROL_RESIZE ${this.state.resizeSequence} ${cols} ${rows}\n`;
     this.state.localScreen = renderProbeScreen(cols, rows, this.state.lastToken);
+    this.requiresQuietBeforeExit ||= this.options.requireQuietBeforeExitAfterResize ?? false;
   }
 
   public async expectRaw(marker: string): Promise<void> {
@@ -159,6 +176,8 @@ class FakePty implements Dar03Pty {
   public async waitForQuiet(quietPeriodMs: number, deadline: number): Promise<void> {
     this.callLog.push(`waitForQuiet:${quietPeriodMs}`);
     this.waitForQuietCalls.push({ quietPeriodMs, deadline });
+    this.requiresQuietBeforeExit = false;
+    this.requiresQuietBeforeResize = false;
   }
 
   public async waitForExit(deadline: number): Promise<number> {
@@ -166,6 +185,9 @@ class FakePty implements Dar03Pty {
     this.waitForExitCalls.push(deadline);
     if (this.options.waitForExitError) {
       throw this.options.waitForExitError;
+    }
+    if (this.requiresQuietBeforeExit) {
+      throw new Error("Timed out waiting for process exit");
     }
     if (!this.state.exited) {
       throw new Error("Timed out waiting for process exit");
@@ -221,6 +243,14 @@ class FakeSurface implements Dar03BrowserSurface {
 
   public async controllerId(): Promise<string> {
     this.controllerIdCalls.push(this.state.currentController);
+    return this.state.currentController;
+  }
+
+  public async waitForDisplaced(): Promise<string> {
+    this.controllerIdCalls.push(this.state.currentController);
+    if (this.state.currentController === this.viewerId) {
+      throw new Error(`${this.name} still controls the session`);
+    }
     return this.state.currentController;
   }
 
@@ -337,13 +367,15 @@ function wrapTerminalText(text: string, cols: number): string {
     .join("\n");
 }
 
-function createState(): ScenarioState {
+function createState(overrides: Partial<ScenarioState> = {}): ScenarioState {
+  const localControllerId = overrides.localControllerId ?? "local";
   return {
     sessionId: SESSION_ID,
     status: "running",
     cols: LOCAL_COLS,
     rows: LOCAL_ROWS,
-    currentController: "local",
+    localControllerId,
+    currentController: overrides.currentController ?? localControllerId,
     lastToken: "ready",
     resizeSequence: 0,
     localOutput: [
@@ -353,6 +385,7 @@ function createState(): ScenarioState {
     localScreen: renderProbeScreen(LOCAL_COLS, LOCAL_ROWS, "ready"),
     browserTranscript: [],
     exited: false,
+    ...overrides,
   };
 }
 
@@ -538,6 +571,123 @@ describe("runDar03", () => {
     );
   });
 
+  test("accepts a non-literal local controller id once both browser viewers are displaced", async () => {
+    const state = createState({ localControllerId: "host-terminal-7" });
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state);
+    const pty = new FakePty(state);
+
+    const results = await runDar03(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => ++current;
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 5,
+      createUuid: () => RUN_ID,
+      createBrowserDriver: () => browser,
+      spawnPty: () => pty,
+      findSession: async () => ({ id: SESSION_ID, status: "running", cols: state.cols, rows: state.rows }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+    });
+
+    expect(results.map((result) => result.status)).toEqual(Array(6).fill("passed"));
+    expect(results[4]?.evidence).toEqual(
+      expect.arrayContaining([
+        `desktop-controller!=${browser.desktop.viewerId}`,
+        `pwa-controller!=${browser.pwa.viewerId}`,
+        `DAR_CONTROL_INPUT dar03-local-${RUN_ID}`,
+      ])
+    );
+    expect(browser.desktop.controllerIdCalls).toContain("host-terminal-7");
+    expect(browser.pwa.controllerIdCalls).toContain("host-terminal-7");
+  });
+
+  test("waits for PTY quiet before final q after resize jiggle output is still settling", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state);
+    const pty = new FakePty(state, {
+      requireQuietBeforeExitAfterResize: true,
+    });
+
+    const results = await runDar03(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => ++current;
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 5,
+      createUuid: () => RUN_ID,
+      createBrowserDriver: () => browser,
+      spawnPty: () => pty,
+      findSession: async () => ({ id: SESSION_ID, status: "running", cols: state.cols, rows: state.rows }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+    });
+
+    expect(results.map((result) => result.status)).toEqual(Array(6).fill("passed"));
+    expect(pty.callLog.slice(-5)).toEqual([
+      `resize:${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`,
+      "expectScreen",
+      `waitForQuiet:500`,
+      `writeText:${JSON.stringify("q")}`,
+      "waitForExit",
+    ]);
+  });
+
+  test("waits for PTY quiet before resizing when reclaim jiggle output is still settling", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state);
+    const pty = new FakePty(state, {
+      requireQuietBeforeResizeAfterReclaim: true,
+    });
+
+    const results = await runDar03(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => ++current;
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 5,
+      createUuid: () => RUN_ID,
+      createBrowserDriver: () => browser,
+      spawnPty: () => pty,
+      findSession: async () => ({ id: SESSION_ID, status: "running", cols: state.cols, rows: state.rows }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+    });
+
+    expect(results.map((result) => result.status)).toEqual(Array(6).fill("passed"));
+    expect(pty.callLog).toEqual(
+      expect.arrayContaining([
+        `waitForQuiet:500`,
+        `resize:${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`,
+      ])
+    );
+    const reclaimQuietIndex = pty.callLog.indexOf(`waitForQuiet:500`);
+    const resizeIndex = pty.callLog.indexOf(`resize:${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`);
+    expect(reclaimQuietIndex).toBeGreaterThan(-1);
+    expect(resizeIndex).toBeGreaterThan(reclaimQuietIndex);
+  });
+
   test("reports explicit dependent failures after a desktop take-control error", async () => {
     const state = createState();
     const context = createContext();
@@ -594,7 +744,9 @@ describe("runDar03", () => {
     const browser = new FakeBrowserDriver(state, {
       pwaSendTerminalLineError: new Error("pwa send failed"),
     });
-    const pty = new FakePty(state);
+    const pty = new FakePty(state, {
+      requireQuietBeforeExitAfterReclaim: true,
+    });
 
     const results = await runDar03(context, {
       now: (() => {
@@ -626,9 +778,10 @@ describe("runDar03", () => {
     ]);
     expect(results[3]?.message).toContain("pwa send failed");
     expect(pty.writeTextCalls).toEqual([`dar03-local-suppressed-${RUN_ID}\r`, " ", "q"]);
-    expect(pty.callLog.slice(-4)).toEqual([
+    expect(pty.callLog.slice(-5)).toEqual([
       `writeText:${JSON.stringify(" ")}`,
       "expectScreen",
+      `waitForQuiet:500`,
       `writeText:${JSON.stringify("q")}`,
       "waitForExit",
     ]);
@@ -716,7 +869,7 @@ describe("runDar03", () => {
         }),
       })
     ).rejects.toThrow(
-      "PWA surface close failed: pwa close failed; PTY cleanup failed: pty cleanup wait failed"
+      "PTY cleanup failed: pty cleanup wait failed; PWA surface close failed: pwa close failed"
     );
 
     expect(browser.pwa.closeCalls).toEqual(["pwa"]);
