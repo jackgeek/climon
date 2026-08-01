@@ -231,6 +231,11 @@ function sessionName(runId: string): string {
   return `DAR-03-${runId}`;
 }
 
+function tokenSuffix(runId: string): string {
+  const condensed = runId.replaceAll("-", "");
+  return (condensed.length > 0 ? condensed : runId).slice(0, 8);
+}
+
 function ptySpec(context: Dar03Context, runId: string): PtySpawnSpec {
   const fixturePath = resolve(context.build.fixturePath);
   return {
@@ -337,6 +342,10 @@ function parseProbeSize(text: string): SurfaceSize | undefined {
     rows: Number.parseInt(match[2]!, 10),
     marker: `${match[1]}x${match[2]}`,
   };
+}
+
+function lastTokenMarker(token: string): string {
+  return `last=${token}`;
 }
 
 function readMetaSize(meta: SessionMetaLike): { cols: number; rows: number } | undefined {
@@ -575,10 +584,11 @@ export async function runDar03(
   const readLocalOutput = dependencies.readLocalOutput ?? defaultReadLocalOutput;
   const overallDeadline = asAbsoluteDeadline(context.overallDeadline);
   const runId = createUuid();
-  const desktopToken = `dar03-desktop-${runId}`;
-  const suppressedLocalToken = `dar03-local-suppressed-${runId}`;
-  const pwaToken = `dar03-pwa-${runId}`;
-  const localToken = `dar03-local-${runId}`;
+  const runToken = tokenSuffix(runId);
+  const desktopToken = `dar03-desktop-${runToken}`;
+  const suppressedLocalToken = `dar03-local-suppressed-${runToken}`;
+  const pwaToken = `dar03-pwa-${runToken}`;
+  const localToken = `dar03-local-${runToken}`;
   const results: SubcheckResult[] = [];
   let browser: Dar03BrowserDriver | undefined;
   let desktop: Dar03BrowserSurface | undefined;
@@ -712,7 +722,8 @@ export async function runDar03(
           deadline
         );
         await desktop.sendTerminalLine(desktopToken);
-        await desktop.waitForTerminalText(`DAR_CONTROL_INPUT ${desktopToken}`, deadline);
+        const desktopLastMarker = lastTokenMarker(desktopToken);
+        await desktop.waitForTerminalText(desktopLastMarker, deadline);
         desktopSize = await waitForControlledSurfaceSize(
           desktop,
           trackedSessionId!,
@@ -728,7 +739,7 @@ export async function runDar03(
         desktopControlled = true;
         return {
           message: `Desktop surface ${desktop.viewerId} controls ${desktopSize.marker}`,
-          evidence: [`DAR_CONTROL_INPUT ${desktopToken}`, desktopSize.marker],
+          evidence: [desktopLastMarker, desktopSize.marker],
         };
       }
     )
@@ -762,9 +773,10 @@ export async function runDar03(
         if (localOutput.includes(blockedMarker)) {
           throw new Error(`Displaced local input leaked into the attached terminal: ${blockedMarker}`);
         }
+        const blockedLastMarker = lastTokenMarker(suppressedLocalToken);
         const desktopSnapshot = await desktop!.terminalText();
-        if (desktopSnapshot.includes(blockedMarker)) {
-          throw new Error(`Displaced local input reached the shared PTY: ${blockedMarker}`);
+        if (desktopSnapshot.includes(blockedLastMarker)) {
+          throw new Error(`Displaced local input reached the shared PTY: ${blockedLastMarker}`);
         }
         return {
           message: `Suppressed displaced local token ${suppressedLocalToken}`,
@@ -815,7 +827,8 @@ export async function runDar03(
           );
         }
         await pwa.sendTerminalLine(pwaToken);
-        await pwa.waitForTerminalText(`DAR_CONTROL_INPUT ${pwaToken}`, deadline);
+        const pwaLastMarker = lastTokenMarker(pwaToken);
+        await pwa.waitForTerminalText(pwaLastMarker, deadline);
         const pwaSize = await waitForControlledSurfaceSize(
           pwa,
           trackedSessionId!,
@@ -831,7 +844,7 @@ export async function runDar03(
         pwaControlled = true;
         return {
           message: `Simulated PWA ${pwa.viewerId} became the newest controller at ${pwaSize.marker}`,
-          evidence: [`DAR_CONTROL_INPUT ${pwaToken}`, pwaSize.marker],
+          evidence: [pwaLastMarker, pwaSize.marker],
         };
       }
     )

@@ -19,6 +19,7 @@ const DAR_03_SUBCHECK_TITLES = [
 ] as const;
 
 const RUN_ID = "abc123";
+const LONG_RUN_ID = "df3d19d3-3bc7-4c23-adc2-aa9c2866b6a7";
 const SESSION_ID = "dar-03-session";
 const LOCAL_COLS = 100;
 const LOCAL_ROWS = 30;
@@ -243,10 +244,10 @@ class FakeSurface implements Dar03BrowserSurface {
   }
 
   public async terminalText(): Promise<string> {
-    return [
+    return wrapTerminalText(
       renderProbeScreen(this.state.cols, this.state.rows, this.state.lastToken),
-      ...this.state.browserTranscript,
-    ].join("\n");
+      this.state.cols
+    );
   }
 
   public async close(): Promise<void> {
@@ -320,6 +321,22 @@ function renderProbeScreen(cols: number, rows: number, lastToken: string): strin
   return `DAR_CONTROL_READY\nsize=${cols}x${rows}\nlast=${lastToken}\nresizes=0`;
 }
 
+function wrapTerminalText(text: string, cols: number): string {
+  return text
+    .split("\n")
+    .flatMap((line) => {
+      if (line.length <= cols) {
+        return [line];
+      }
+      const wrapped: string[] = [];
+      for (let start = 0; start < line.length; start += cols) {
+        wrapped.push(line.slice(start, start + cols));
+      }
+      return wrapped;
+    })
+    .join("\n");
+}
+
 function createState(): ScenarioState {
   return {
     sessionId: SESSION_ID,
@@ -373,7 +390,7 @@ function createContext(): Dar03Context {
 }
 
 describe("runDar03", () => {
-  test("runs all DAR-03 subchecks in order with exact mode-probe, browser-surface, and control-probe evidence", async () => {
+  test("runs all DAR-03 subchecks in order when browser surfaces only expose durable last=<token> screen state", async () => {
     const state = createState();
     const context = createContext();
     const browser = new FakeBrowserDriver(state);
@@ -453,14 +470,14 @@ describe("runDar03", () => {
     );
     expect(results[1]?.evidence).toEqual(
       expect.arrayContaining([
-        `DAR_CONTROL_INPUT dar03-desktop-${RUN_ID}`,
+        `last=dar03-desktop-${RUN_ID}`,
         `${DESKTOP_COLS}x${DESKTOP_ROWS}`,
       ])
     );
     expect(results[2]?.message).toContain(`dar03-local-suppressed-${RUN_ID}`);
     expect(results[3]?.evidence).toEqual(
       expect.arrayContaining([
-        `DAR_CONTROL_INPUT dar03-pwa-${RUN_ID}`,
+        `last=dar03-pwa-${RUN_ID}`,
         `${PWA_COLS}x${PWA_ROWS}`,
       ])
     );
@@ -476,6 +493,49 @@ describe("runDar03", () => {
       ])
     );
     expect(pty.killCalls).toBe(0);
+  });
+
+  test("shortens long browser tokens so the durable last=<token> marker survives narrow PWA wrapping", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state);
+    const pty = new FakePty(state);
+
+    const results = await runDar03(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => ++current;
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 5,
+      createUuid: () => LONG_RUN_ID,
+      createBrowserDriver: () => browser,
+      spawnPty: () => pty,
+      findSession: async () => ({ id: SESSION_ID, status: "running", cols: state.cols, rows: state.rows }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+    });
+
+    expect(results.map((result) => result.status)).toEqual(Array(6).fill("passed"));
+    expect(browser.desktop.sendTerminalLineCalls).toEqual(["dar03-desktop-df3d19d3"]);
+    expect(browser.pwa.sendTerminalLineCalls).toEqual(["dar03-pwa-df3d19d3"]);
+    expect(pty.writeTextCalls).toEqual([
+      "dar03-local-suppressed-df3d19d3\r",
+      " ",
+      "dar03-local-df3d19d3\r",
+      "q",
+    ]);
+    expect(results[1]?.evidence).toEqual(
+      expect.arrayContaining(["last=dar03-desktop-df3d19d3", `${DESKTOP_COLS}x${DESKTOP_ROWS}`])
+    );
+    expect(results[3]?.evidence).toEqual(
+      expect.arrayContaining(["last=dar03-pwa-df3d19d3", `${PWA_COLS}x${PWA_ROWS}`])
+    );
   });
 
   test("reports explicit dependent failures after a desktop take-control error", async () => {
