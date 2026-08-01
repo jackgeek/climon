@@ -209,7 +209,7 @@ describe("terminal touch wheel adapter", () => {
     expect(target?.events.map((event) => event.init.deltaY)).toEqual([20]);
   });
 
-  test("release stops scrolling without scheduling momentum", () => {
+  test("release stops scrolling without another wheel event", () => {
     const { container, target } = installHarness();
 
     container.emit("touchstart", new FakeTouchEvent([touch(10, 20), touch(30, 40)], 0));
