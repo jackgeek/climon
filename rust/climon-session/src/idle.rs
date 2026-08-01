@@ -8,6 +8,36 @@
 //! not changed for `idle_seconds`.
 
 use crate::attention::fingerprint_body;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::time::Duration;
+
+const IDLE_SAMPLE_MIN_MS: u64 = 800;
+const IDLE_SAMPLE_JITTER_VALUES: u64 = 201;
+
+/// Produces a fresh 800–1000ms delay for each idle-screen sample.
+pub(crate) struct IdleSampleSchedule {
+    state: u64,
+}
+
+impl IdleSampleSchedule {
+    pub(crate) fn new(session_id: &str) -> Self {
+        let mut hasher = DefaultHasher::new();
+        session_id.hash(&mut hasher);
+        Self {
+            state: hasher.finish(),
+        }
+    }
+
+    pub(crate) fn next_delay(&mut self) -> Duration {
+        self.state = self
+            .state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        let jitter_ms = (self.state >> 32) % IDLE_SAMPLE_JITTER_VALUES;
+        Duration::from_millis(IDLE_SAMPLE_MIN_MS + jitter_ms)
+    }
+}
 
 /// A transition emitted by [`ScreenIdleDetector::update`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +193,7 @@ impl ScreenIdleDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn attention(reason: &str) -> Option<IdleTransition> {
         Some(IdleTransition {
@@ -395,5 +426,27 @@ mod tests {
         let mut disabled = ScreenIdleDetector::new(0);
         disabled.acknowledge("80x24\nidle screen", 0);
         assert_eq!(disabled.update("80x24\nidle screen", 100_000), None);
+    }
+
+    #[test]
+    fn idle_sample_schedule_stays_within_the_jitter_window() {
+        let mut schedule = IdleSampleSchedule::new("session-a");
+
+        for _ in 0..1_000 {
+            let delay = schedule.next_delay();
+            assert!(delay >= Duration::from_millis(800));
+            assert!(delay <= Duration::from_millis(1_000));
+        }
+    }
+
+    #[test]
+    fn idle_sample_schedule_varies_between_samples() {
+        let mut schedule = IdleSampleSchedule::new("session-a");
+        let first = schedule.next_delay();
+
+        assert!(
+            (0..32).any(|_| schedule.next_delay() != first),
+            "sampling delay must not remain fixed"
+        );
     }
 }
