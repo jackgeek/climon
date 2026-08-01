@@ -1,5 +1,8 @@
 use std::io::{self, BufReader, Read, Write};
 
+use crate::control_probe;
+use crate::lifecycle_probe;
+use crate::metadata_probe;
 use crate::mode_probe;
 use crate::stream_protocol;
 use crate::tui;
@@ -7,8 +10,11 @@ use crate::tui;
 const STREAMING_COMMAND: &str = "streaming";
 const INTERACTIVE_TUI_COMMAND: &str = "interactive-tui";
 const MODE_PROBE_COMMAND: &str = "mode-probe";
+const CONTROL_PROBE_COMMAND: &str = "control-probe";
+const METADATA_PROBE_COMMAND: &str = "metadata-probe";
+const LIFECYCLE_PROBE_COMMAND: &str = "lifecycle-probe";
 const APPROVED_COMMANDS: &str =
-    "Expected one of: streaming, interactive-tui, mode-probe -- <executable> [args...]";
+    "Expected one of: streaming, interactive-tui, mode-probe -- <executable> [args...], control-probe, metadata-probe, lifecycle-probe <fast-success|failed-exit|flood|signal-hold|engine-echo>";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CliError {
@@ -45,6 +51,13 @@ where
 
     match command {
         STREAMING_COMMAND => stream_protocol::run(&mut BufReader::new(stdin), stdout, stderr),
+        CONTROL_PROBE_COMMAND => {
+            control_probe::run(stdin, stdout).map_err(|error| CliError::Io(error.to_string()))
+        }
+        METADATA_PROBE_COMMAND => metadata_probe::run(&mut BufReader::new(stdin), stdout),
+        LIFECYCLE_PROBE_COMMAND => {
+            lifecycle_probe::run(&collected[2..], &mut BufReader::new(stdin), stdout)
+        }
         INTERACTIVE_TUI_COMMAND => {
             tui::run(BufReader::new(stdin), stdout).map_err(|error| CliError::Io(error.to_string()))
         }
@@ -113,6 +126,14 @@ mod tests {
             Err(CliError::Usage(
                 "mode-probe requires: mode-probe -- <executable> [args...]".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn lists_new_public_commands_in_usage() {
+        assert_eq!(
+            APPROVED_COMMANDS,
+            "Expected one of: streaming, interactive-tui, mode-probe -- <executable> [args...], control-probe, metadata-probe, lifecycle-probe <fast-success|failed-exit|flood|signal-hold|engine-echo>"
         );
     }
 

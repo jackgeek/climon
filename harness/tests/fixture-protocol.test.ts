@@ -417,6 +417,149 @@ print(json.dumps({
 }))
 sys.exit(0 if ready and exited else 1)
 `;
+const NODE_CONTROL_PROBE_DRIVER_SCRIPT = String.raw`
+import nodePty from "node-pty";
+import headless from "@xterm/headless";
+
+const { spawn } = nodePty;
+const { Terminal } = headless;
+
+const fixturePath = process.argv[1];
+const mode = process.argv[2];
+const timeoutMs = Number(process.argv[3]);
+const terminal = new Terminal({ cols: 100, rows: 30, allowProposedApi: true });
+let writeQueue = Promise.resolve();
+let raw = "";
+let exitCode = null;
+let exitSignal = null;
+
+function contents() {
+  const active = terminal.buffer.active;
+  const lines = [];
+  const start =
+    active.type === "alternate" ? 0 : Math.min(active.viewportY, active.baseY);
+  const end = start + terminal.rows;
+
+  for (let index = start; index < end; index += 1) {
+    const line = active.getLine(index);
+    if (!line) {
+      lines.push("");
+      continue;
+    }
+
+    let lastOccupied = -1;
+    for (let column = terminal.cols - 1; column >= 0; column -= 1) {
+      const cell = line.getCell(column);
+      if (cell?.getChars() !== "") {
+        lastOccupied = column;
+        break;
+      }
+    }
+
+    lines.push(
+      lastOccupied >= 0 ? line.translateToString(false, 0, lastOccupied + 1) : ""
+    );
+  }
+
+  while (lines.length > 0 && lines.at(-1) === "") {
+    lines.pop();
+  }
+
+  return lines.join("\n");
+}
+
+async function waitFor(label, predicate) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await writeQueue;
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error(
+    "Timed out waiting for " +
+      label +
+      "; rawTail=" +
+      JSON.stringify(raw.slice(-4000)) +
+      "; screen=" +
+      JSON.stringify(contents())
+  );
+}
+
+async function main() {
+  const child = spawn(fixturePath, ["control-probe"], {
+    name: "xterm-256color",
+    cols: 100,
+    rows: 30,
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: "utf8",
+  });
+  const exitPromise = new Promise((resolve) => {
+    child.onExit((event) => {
+      exitCode = event.exitCode;
+      exitSignal = event.signal ?? null;
+      resolve();
+    });
+  });
+  child.onData((data) => {
+    raw += data;
+    writeQueue = writeQueue.then(
+      () =>
+        new Promise((resolve) => {
+          terminal.write(data, resolve);
+        })
+    );
+  });
+
+  try {
+    await waitFor("ready marker", () => raw.includes("DAR_CONTROL_READY 100 30"));
+    await waitFor("initial frame", () =>
+      contents() === "DAR_CONTROL_READY\nsize=100x30\nlast=ready\nresizes=0"
+    );
+
+    child.write("surface-alpha\r");
+    await waitFor("input marker", () => raw.includes("DAR_CONTROL_INPUT surface-alpha"));
+    await waitFor("input frame", () =>
+      contents() ===
+      "DAR_CONTROL_READY\nsize=100x30\nlast=surface-alpha\nresizes=0"
+    );
+
+    if (mode === "resize") {
+      child.resize(120, 40);
+      await waitFor("resize marker", () => raw.includes("DAR_CONTROL_RESIZE 1 120 40"));
+      await waitFor("resize frame", () =>
+        contents() ===
+        "DAR_CONTROL_READY\nsize=120x40\nlast=surface-alpha\nresizes=1"
+      );
+      child.kill();
+    } else {
+      child.write("q");
+    }
+    await exitPromise;
+
+    console.log(
+      JSON.stringify({
+        exitCode,
+        exitSignal,
+        finalScreen: contents(),
+        rawTail: raw.slice(-4000),
+      })
+    );
+  } catch (error) {
+    child.kill();
+    await exitPromise;
+    throw error;
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  process.exit(1);
+});
+`;
 
 function futureDeadline(): number {
   return Date.now() + 10_000;
@@ -1020,7 +1163,265 @@ describe("climon-harness-fixture terminal modes and TUI", () => {
   );
 });
 
+describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols", () => {
+  test("drives control-probe through scripted input, resize markers, and q exit", async () => {
+    await buildFixture();
+    const child = spawnFixture(["control-probe"]);
+    const exitPromise = once(child, "exit");
+    const text = collectProcessText(child);
+    const screen = new ScreenModel(80, 24);
+    let screenWrites = Promise.resolve();
+    child.stdout.on("data", (chunk: string) => {
+      screenWrites = screenWrites.then(() => screen.write(chunk));
+    });
+
+    try {
+      await waitForSubstring(() => text.stdout, "DAR_CONTROL_READY 80 24");
+      await screenWrites;
+      await waitForScreen(
+        () => screen.contents(),
+        "DAR_CONTROL_READY\nsize=80x24\nlast=ready\nresizes=0"
+      );
+
+      await writeChunks(child.stdin, ["surface-alpha\r"]);
+      await waitForSubstring(() => text.stdout, "DAR_CONTROL_INPUT surface-alpha");
+      await screenWrites;
+      await waitForScreen(
+        () => screen.contents(),
+        "DAR_CONTROL_READY\nsize=80x24\nlast=surface-alpha\nresizes=0"
+      );
+
+      await writeChunks(child.stdin, ["\x1b[8;30;100t"]);
+      await waitForSubstring(() => text.stdout, "DAR_CONTROL_RESIZE 1 100 30");
+      await screenWrites;
+      await waitForScreen(
+        () => screen.contents(),
+        "DAR_CONTROL_READY\nsize=100x30\nlast=surface-alpha\nresizes=1"
+      );
+
+      await writeChunks(child.stdin, ["browser-token\r", "q"]);
+      await waitForSubstring(() => text.stdout, "DAR_CONTROL_INPUT browser-token");
+      await expect(exitPromise).resolves.toEqual([0, null]);
+      expect(text.stderr).toBe("");
+      await screenWrites;
+      expect(screen.contents()).toBe(
+        "DAR_CONTROL_READY\nsize=100x30\nlast=browser-token\nresizes=1"
+      );
+      expect(text.stdout).toContain("DAR_CONTROL_READY 80 24");
+      expect(text.stdout).toContain("DAR_CONTROL_INPUT surface-alpha");
+      expect(text.stdout).toContain("DAR_CONTROL_RESIZE 1 100 30");
+      expect(text.stdout).toContain("DAR_CONTROL_INPUT browser-token");
+    } finally {
+      screen.dispose();
+    }
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test.skipIf(!NODE_PATH)(
+    "streams alternate-screen control-probe frames and live resize markers through node-pty",
+    async () => {
+      await buildFixture();
+      const child = spawn(NODE_PATH!, [
+        "--input-type=module",
+        "-e",
+        NODE_CONTROL_PROBE_DRIVER_SCRIPT,
+        FIXTURE_PATH,
+        "resize",
+        String(REAL_PTY_TEST_TIMEOUT_MS),
+      ], {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(code).toBe(0);
+      expect(text.stderr).toBe("");
+
+      const result = JSON.parse(text.stdout.trim()) as {
+        exitCode: number | null;
+        exitSignal: number | null;
+        finalScreen: string;
+        rawTail: string;
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.exitSignal).not.toBeNull();
+      expect(result.finalScreen).toBe(
+        "DAR_CONTROL_READY\nsize=120x40\nlast=surface-alpha\nresizes=1"
+      );
+      expect(result.rawTail).toContain("\u001b[?1049h");
+      expect(result.rawTail).toContain("DAR_CONTROL_READY 100 30");
+      expect(result.rawTail).toContain("DAR_CONTROL_INPUT surface-alpha");
+      expect(result.rawTail).toContain("DAR_CONTROL_RESIZE 1 120 40");
+    },
+    REAL_PTY_TEST_TIMEOUT_MS
+  );
+
+  test.skipIf(!NODE_PATH)(
+    "restores control-probe alternate-screen state on q through node-pty",
+    async () => {
+      await buildFixture();
+      const child = spawn(NODE_PATH!, [
+        "--input-type=module",
+        "-e",
+        NODE_CONTROL_PROBE_DRIVER_SCRIPT,
+        FIXTURE_PATH,
+        "exit",
+        String(REAL_PTY_TEST_TIMEOUT_MS),
+      ], {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(signal).toBeNull();
+      expect(code).toBe(0);
+      expect(text.stderr).toBe("");
+
+      const result = JSON.parse(text.stdout.trim()) as {
+        exitCode: number | null;
+        exitSignal: number | null;
+        finalScreen: string;
+        rawTail: string;
+      };
+
+      expect(result.exitCode).toBe(0);
+      expect(result.exitSignal === null || result.exitSignal === 0).toBe(true);
+      expect(
+        result.finalScreen === "" ||
+          result.finalScreen ===
+            "DAR_CONTROL_READY\nsize=100x30\nlast=surface-alpha\nresizes=0"
+      ).toBe(true);
+      expect(result.rawTail).toContain("\u001b[?1049h");
+      expect(result.rawTail).toContain("\u001b[?1049l");
+      expect(result.rawTail).toContain("DAR_CONTROL_INPUT surface-alpha");
+    },
+    REAL_PTY_TEST_TIMEOUT_MS
+  );
+
+  test("emits metadata markers and raw OSC passthrough in command order", async () => {
+    await buildFixture();
+    const child = spawnFixture(["metadata-probe"]);
+    const exitPromise = once(child, "exit");
+    const text = collectProcessText(child);
+
+    await waitForLine(text.stdoutLines, "DAR_METADATA_STATIC");
+    await writeChunks(child.stdin, [
+      "STATIC\n",
+      "CHANGE token-alpha\n",
+      "TITLE0 title-zero\n",
+      "TITLE2 title-two\n",
+      "PROGRESS 1 42\n",
+      "PROGRESS 3 0\n",
+      "CLEAR_PROGRESS\n",
+      "EXIT\n",
+    ]);
+
+    const [code, signal] = await exitPromise;
+    expect(code).toBe(0);
+    expect(signal).toBeNull();
+    expect(text.stderr).toBe("");
+    expect(text.stdout).toBe(
+      [
+        "DAR_METADATA_STATIC\n",
+        "DAR_METADATA_STATIC\n",
+        "DAR_METADATA_BODY_CHANGED token-alpha\n",
+        "\u001b]0;title-zero\u0007DAR_METADATA_OSC_EMITTED TITLE0\n",
+        "\u001b]2;title-two\u0007DAR_METADATA_OSC_EMITTED TITLE2\n",
+        "\u001b]9;4;1;42\u0007DAR_METADATA_OSC_EMITTED PROGRESS 1 42\n",
+        "\u001b]9;4;3;0\u0007DAR_METADATA_OSC_EMITTED PROGRESS 3 0\n",
+        "\u001b]9;4;0;0\u0007DAR_METADATA_OSC_EMITTED CLEAR_PROGRESS\n",
+      ].join("")
+    );
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test("runs lifecycle fast-success, failed-exit, and engine-echo commands", async () => {
+    await buildFixture();
+
+    for (const [args, expectedExit, expectedStdout] of [
+      [["lifecycle-probe", "fast-success"], 0, "DAR_LIFECYCLE_EARLY success\n"],
+      [["lifecycle-probe", "failed-exit"], 7, "DAR_LIFECYCLE_EARLY failure\n"],
+      [["lifecycle-probe", "engine-echo"], 0, "DAR_ENGINE_ECHO\n"],
+    ] as const) {
+      const child = spawnFixture([...args]);
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(code).toBe(expectedExit);
+      expect(signal).toBeNull();
+      expect(text.stdout).toBe(expectedStdout);
+      expect(text.stderr).toBe("");
+    }
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test("gates lifecycle flood output on a matching CONTINUE token", async () => {
+    await buildFixture();
+    const child = spawnFixture(["lifecycle-probe", "flood", "6", "gate-token"]);
+    const exitPromise = once(child, "exit");
+    const text = collectProcessText(child);
+
+    await waitForLine(text.stdoutLines, "DAR_LIFECYCLE_FLOOD 000003");
+    await Bun.sleep(150);
+    expect(text.stdoutLines).toEqual([
+      "DAR_LIFECYCLE_FLOOD 000001",
+      "DAR_LIFECYCLE_FLOOD 000002",
+      "DAR_LIFECYCLE_FLOOD 000003",
+    ]);
+
+    await writeChunks(child.stdin, ["CONTINUE gate-token\n"]);
+
+    const [code, signal] = await exitPromise;
+    expect(code).toBe(0);
+    expect(signal).toBeNull();
+    expect(text.stderr).toBe("");
+    expect(text.stdoutLines).toEqual([
+      "DAR_LIFECYCLE_FLOOD 000001",
+      "DAR_LIFECYCLE_FLOOD 000002",
+      "DAR_LIFECYCLE_FLOOD 000003",
+      "DAR_LIFECYCLE_FLOOD 000004",
+      "DAR_LIFECYCLE_FLOOD 000005",
+      "DAR_LIFECYCLE_FLOOD 000006",
+    ]);
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test("holds for signals after printing lifecycle readiness", async () => {
+    await buildFixture();
+    const child = spawnFixture(["lifecycle-probe", "signal-hold"]);
+    const exitPromise = once(child, "exit");
+    const text = collectProcessText(child);
+
+    await waitForLine(text.stdoutLines, "DAR_LIFECYCLE_HOLD_READY");
+    child.kill("SIGTERM");
+
+    const [code, signal] = await exitPromise;
+    expect(text.stdout).toBe("DAR_LIFECYCLE_HOLD_READY\n");
+    expect(text.stderr).toBe("");
+    expect(code === null || code !== 0 || signal !== null).toBe(true);
+  }, FIXTURE_TEST_TIMEOUT_MS);
+});
+
 describe("climon-harness-fixture command dispatch", () => {
+  test("advertises the exact approved public commands when no command is provided", async () => {
+    await buildFixture();
+    const child = spawnFixture([]);
+    const exitPromise = once(child, "exit");
+    const text = collectProcessText(child);
+
+    const [code, signal] = await exitPromise;
+    expect(code).toBe(2);
+    expect(signal).toBeNull();
+    expect(text.stdout).toBe("");
+    expect(text.stderr).toBe(
+      "Expected one of: streaming, interactive-tui, mode-probe -- <executable> [args...], control-probe, metadata-probe, lifecycle-probe <fast-success|failed-exit|flood|signal-hold|engine-echo>\n"
+    );
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
   test("rejects removed public aliases with stable stderr and exit 2", async () => {
     await buildFixture();
 
@@ -1048,5 +1449,26 @@ describe("climon-harness-fixture command dispatch", () => {
     expect(signal).toBeNull();
     expect(text.stdout).toBe("");
     expect(text.stderr).toBe("Unknown command: bogus\n");
+  }, FIXTURE_TEST_TIMEOUT_MS);
+
+  test("rejects lifecycle-probe calls without a valid mode", async () => {
+    await buildFixture();
+
+    for (const args of [
+      ["lifecycle-probe"],
+      ["lifecycle-probe", "bogus"],
+      ["lifecycle-probe", "flood"],
+      ["lifecycle-probe", "flood", "0", "gate-token"],
+    ]) {
+      const child = spawnFixture(args);
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code, signal] = await exitPromise;
+      expect(code).toBe(2);
+      expect(signal).toBeNull();
+      expect(text.stdout).toBe("");
+      expect(text.stderr).toContain("lifecycle-probe requires");
+    }
   }, FIXTURE_TEST_TIMEOUT_MS);
 });
