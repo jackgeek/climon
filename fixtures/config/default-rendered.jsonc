@@ -20,6 +20,8 @@
     "theme": "Default",
     // Whether the web dashboard key bar is pinned open.
     "keyBarPinned": true,
+    // When true, reverses only the dashboard terminal's synthetic two-finger wheel gesture. Physical mouse and trackpad wheel direction is unchanged.
+    "touchWheelInverted": false,
     // When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated).
     "stateIconNoMotion": false
   },

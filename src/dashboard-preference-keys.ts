@@ -14,4 +14,5 @@ export {
 /** Config path → dashboard-writable preference. */
 export const PREF_THEME = "dashboard.theme";
 export const PREF_KEY_BAR_PINNED = "dashboard.keyBarPinned";
+export const PREF_TOUCH_WHEEL_INVERTED = "dashboard.touchWheelInverted";
 export const PREF_STATE_ICON_NO_MOTION = "dashboard.stateIconNoMotion";

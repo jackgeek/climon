@@ -80,6 +80,7 @@ result-tracking row.
 | — | Terminal progress indicator — capture PTY OSC 9;4 progress, per-session bar/spinner/error/warning on the list (+ `dashboard.stateIconNoMotion`) | [terminal-progress-indicator.md](terminal-progress-indicator.md) |
 | — | Terminal selection / copy (touch) — Select button captures full scrollback into a monospaced textarea for native copy, with a strip-decorations toggle | [terminal-select-mode.md](terminal-select-mode.md) |
 | — | Terminal keyboard copy/paste — Cmd/Ctrl(+Shift) clipboard chords copy the xterm selection and paste into the PTY (Ctrl+V no longer sends a literal ^V; Ctrl+C without a selection still interrupts) | [terminal-keyboard-clipboard.md](terminal-keyboard-clipboard.md) |
+| — | Two-finger terminal wheel gesture — touch scrollback, mouse-aware TUIs, inversion, stop-on-release scrolling | [two-finger-terminal-wheel.md](two-finger-terminal-wheel.md) |
 | — | `bun run build` builds the Rust client + on-demand rustup bootstrap when cargo is missing | [build-all-rust-toolchain.md](build-all-rust-toolchain.md) |
 | — | Smart Notifications — attention notification body from fuzzy-extracted terminal output snippet | [smart-notifications.md](smart-notifications.md) |
 | — | Remote uplink/ingest singleton — OS advisory lock immune to PID recycling (fixes silent uplink exit) | [singleton-lock-pid-recycle.md](singleton-lock-pid-recycle.md) |

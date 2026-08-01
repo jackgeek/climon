@@ -15,14 +15,16 @@ describe("collectDashboardPreferences", () => {
     const prefs = collectDashboardPreferences(freshConfig());
     expect(prefs["dashboard.theme"]).toBe("Default");
     expect(prefs["dashboard.keyBarPinned"]).toBe(true);
+    expect(prefs["dashboard.touchWheelInverted"]).toBe(false);
   });
 
   test("reflects values set on the config", () => {
     const config = freshConfig();
-    config.dashboard = { theme: "Dracula", keyBarPinned: true };
+    config.dashboard = { theme: "Dracula", keyBarPinned: true, touchWheelInverted: true };
     const prefs = collectDashboardPreferences(config);
     expect(prefs["dashboard.theme"]).toBe("Dracula");
     expect(prefs["dashboard.keyBarPinned"]).toBe(true);
+    expect(prefs["dashboard.touchWheelInverted"]).toBe(true);
   });
 });
 
@@ -39,6 +41,13 @@ describe("applyDashboardPreference", () => {
     const result = applyDashboardPreference(config, "dashboard.keyBarPinned", true);
     expect(result.ok).toBe(true);
     expect(config.dashboard?.keyBarPinned).toBe(true);
+  });
+
+  test("writes a valid touch wheel inversion preference", () => {
+    const config = freshConfig();
+    const result = applyDashboardPreference(config, "dashboard.touchWheelInverted", true);
+    expect(result.ok).toBe(true);
+    expect(config.dashboard?.touchWheelInverted).toBe(true);
   });
 
   test("rejects an unknown key with status 400", () => {
@@ -80,12 +89,14 @@ describe("persistDashboardPreference", () => {
 
     await Promise.all([
       persistDashboardPreference("dashboard.theme", "Dracula", load, save),
-      persistDashboardPreference("dashboard.keyBarPinned", true, load, save)
+      persistDashboardPreference("dashboard.keyBarPinned", true, load, save),
+      persistDashboardPreference("dashboard.touchWheelInverted", true, load, save)
     ]);
 
-    // Both updates survive because the writes were serialized.
+    // All updates survive because the writes were serialized.
     expect(stored.dashboard?.theme).toBe("Dracula");
     expect(stored.dashboard?.keyBarPinned).toBe(true);
+    expect(stored.dashboard?.touchWheelInverted).toBe(true);
   });
 
   test("returns the saved config on success and null on rejection", async () => {

@@ -13,6 +13,7 @@
   "dashboard": {
     "theme": "Default",
     "keyBarPinned": true,
+    "touchWheelInverted": false,
     "stateIconNoMotion": false
   },
   "attention": {

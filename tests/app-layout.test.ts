@@ -293,6 +293,33 @@ describe("scheduleTerminalRefit", () => {
 
       expect(source).toContain("if (!maximized && !keyBarDockedInline) {\n      return;\n    }");
     });
+
+    test("wires the shared touch wheel inversion preference from cache, health, and menu props", () => {
+      const source = readFileSync("src/web/App.tsx", "utf8");
+      const sidebarSource = readFileSync("src/web/components/Sidebar.tsx", "utf8");
+
+      expect(source).toContain(
+        "import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED, PREF_TOUCH_WHEEL_INVERTED, PREF_STATE_ICON_NO_MOTION } from \"../dashboard-preference-keys.js\";"
+      );
+      expect(source).toContain(
+        "const [touchWheelInverted, setTouchWheelInverted] = useState<boolean>(\n    () => readCachedPreference(PREF_TOUCH_WHEEL_INVERTED) === true\n  );"
+      );
+      expect(source).toContain("const serverTouchWheelInverted = preferences[PREF_TOUCH_WHEEL_INVERTED];");
+      expect(source).toContain(
+        "if (typeof serverTouchWheelInverted === \"boolean\") {\n          setTouchWheelInverted(serverTouchWheelInverted);\n        }"
+      );
+      expect(source).toContain("const handleToggleTouchWheelInverted = useCallback((): void => {");
+      expect(source).toContain(
+        "setTouchWheelInverted((prev) => {\n      const next = !prev;\n      void setDashboardPreference(PREF_TOUCH_WHEEL_INVERTED, next);\n      return next;\n    });"
+      );
+      expect(source).toContain("touchWheelInverted={touchWheelInverted}");
+      expect(source).not.toContain("touchWheelInverted={false}");
+      expect(source).toContain("isTouchPrimary={isTouchPrimary}");
+      expect(source).toContain("onToggleTouchWheelInverted={handleToggleTouchWheelInverted}");
+      expect(sidebarSource).toContain("isTouchPrimary: boolean;");
+      expect(sidebarSource).toContain("touchWheelInverted: boolean;");
+      expect(sidebarSource).toContain("onToggleTouchWheelInverted: () => void;");
+    });
   });
 });
 
