@@ -10,11 +10,11 @@ import {
 } from "../src/scenarios/dar-04.js";
 
 const DAR_04_SUBCHECK_TITLES = [
-  "larger browser displaces local",
-  "local restore jiggles both dimensions",
-  "local restore complete authoritative repaint",
-  "same-size browser control jiggle",
-  "same-size complete repaint",
+  "Resizes the shared PTY when a larger browser acquires control",
+  "Jiggles both terminal dimensions when local control is restored",
+  "Repaints a complete authoritative frame after local restore",
+  "Jiggles both terminal dimensions when same-size browser control is acquired",
+  "Repaints a complete authoritative frame after same-size control handoff",
 ] as const;
 
 const RUN_ID = "abc123";

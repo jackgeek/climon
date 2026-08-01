@@ -29,23 +29,23 @@ const SUBCHECK_TIMEOUTS_MS = {
 export const DAR_04_SUBCHECKS = [
   {
     name: "larger-browser-displaces-local",
-    title: "larger browser displaces local",
+    title: "Resizes the shared PTY when a larger browser acquires control",
   },
   {
     name: "local-restore-jiggles-both-dimensions",
-    title: "local restore jiggles both dimensions",
+    title: "Jiggles both terminal dimensions when local control is restored",
   },
   {
     name: "local-restore-complete-authoritative-repaint",
-    title: "local restore complete authoritative repaint",
+    title: "Repaints a complete authoritative frame after local restore",
   },
   {
     name: "same-size-browser-control-jiggle",
-    title: "same-size browser control jiggle",
+    title: "Jiggles both terminal dimensions when same-size browser control is acquired",
   },
   {
     name: "same-size-complete-repaint",
-    title: "same-size complete repaint",
+    title: "Repaints a complete authoritative frame after same-size control handoff",
   },
 ] as const satisfies readonly SubcheckDefinition[];
 
