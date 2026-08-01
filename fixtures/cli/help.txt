@@ -1,4 +1,4 @@
-climon v3.3.3 — web-based monitor for interactive CLI sessions
+climon v3.4.0 — web-based monitor for interactive CLI sessions
 
 Usage:
   climon shell [--priority N] [--color C] [--name S] [--theme T]
