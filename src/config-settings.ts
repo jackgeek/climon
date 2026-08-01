@@ -141,6 +141,20 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     }
   },
   {
+    path: "dashboard.touchWheelInverted",
+    type: "boolean",
+    defaultValue: false,
+    purpose: "When true, reverses only the dashboard terminal's synthetic two-finger wheel gesture. Physical mouse and trackpad wheel direction is unchanged.",
+    scope: ["server", "browser"],
+    acceptInput: true,
+    dashboardWritable: true,
+    validate: (value: unknown) => {
+      if (typeof value !== "boolean") {
+        throw new Error("dashboard.touchWheelInverted must be a boolean");
+      }
+    }
+  },
+  {
     path: "dashboard.stateIconNoMotion",
     type: "boolean",
     defaultValue: false,

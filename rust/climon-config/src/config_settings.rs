@@ -333,6 +333,14 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         .default(Value::from(true))
         .accept_input(),
         ConfigSetting::new(
+            "dashboard.touchWheelInverted",
+            Boolean,
+            "When true, reverses only the dashboard terminal's synthetic two-finger wheel gesture. Physical mouse and trackpad wheel direction is unchanged.",
+            vec![Server, Browser],
+        )
+        .default(Value::from(false))
+        .accept_input(),
+        ConfigSetting::new(
             "dashboard.stateIconNoMotion",
             Boolean,
             "When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated).",
@@ -825,6 +833,7 @@ mod tests {
                 "hotKeys.focusTopSession",
                 "dashboard.theme",
                 "dashboard.keyBarPinned",
+                "dashboard.touchWheelInverted",
                 "dashboard.stateIconNoMotion",
                 "attention.idleSeconds",
                 "remote.enabled",
@@ -865,7 +874,7 @@ mod tests {
             assert!(s.purpose.len() > 20);
             assert!(!s.scope.is_empty());
         }
-        assert_eq!(all_config_keys().len(), 41);
+        assert_eq!(all_config_keys().len(), 42);
     }
 
     #[test]
@@ -890,7 +899,7 @@ mod tests {
                 "server": { "host": "127.0.0.1", "port": 3131 },
                 "terminal": { "detachPrefix": 28 },
                 "hotKeys": { "focusTopSession": "Alt+J" },
-                "dashboard": { "theme": "Default", "keyBarPinned": true, "stateIconNoMotion": false },
+                "dashboard": { "theme": "Default", "keyBarPinned": true, "touchWheelInverted": false, "stateIconNoMotion": false },
                 "attention": { "idleSeconds": 10 },
                 "remote": { "discover": true, "ingestPortRetryAttempts": 100, "keepAlive": 60, "autoLink": true },
                 "session": { "color": "auto", "priority": 500 },
@@ -942,6 +951,22 @@ mod tests {
     }
 
     #[test]
+    fn touch_wheel_inverted_is_boolean_dashboard_preference() {
+        let s = find_config_setting("dashboard.touchWheelInverted").expect("setting exists");
+        assert_eq!(s.kind, ConfigType::Boolean);
+        assert_eq!(s.default_value, Some(Value::from(false)));
+        assert!(s.accept_input);
+        assert_eq!(
+            s.purpose,
+            "When true, reverses only the dashboard terminal's synthetic two-finger wheel gesture. Physical mouse and trackpad wheel direction is unchanged."
+        );
+        assert_eq!(
+            s.scope,
+            vec![ConfigProcessScope::Server, ConfigProcessScope::Browser]
+        );
+    }
+
+    #[test]
     fn accepted_keys_exclude_internal_and_default_only() {
         assert_eq!(
             accepted_config_keys(),
@@ -949,6 +974,7 @@ mod tests {
                 "hotKeys.focusTopSession",
                 "dashboard.theme",
                 "dashboard.keyBarPinned",
+                "dashboard.touchWheelInverted",
                 "dashboard.stateIconNoMotion",
                 "remote.enabled",
                 "remote.host",
