@@ -13,13 +13,15 @@
 //! produced via [`climon_proto::frame`], whose encodings already match the Bun
 //! `src/ipc/frame.ts`. This crate never redefines those types.
 //!
-//! ## Idle fingerprint
-//! The idle detector samples a screen *fingerprint* at a jittered 800–1000ms interval. That
-//! fingerprint is **internal** daemon state — never sent over the wire — so it
-//! does not require byte-parity with xterm.js. We render PTY output into a
-//! [`vt100`]-backed grid ([`fingerprint::HeadlessGrid`]) and emit
-//! `{cols}x{rows}\n<trimmed rows>`; idle tests assert *behavior*, not exact
-//! bytes.
+//! ## Idle detection: PTY output inactivity
+//! The idle detector ([`idle::OutputIdleDetector`]) flags attention once no PTY
+//! output chunk has been recorded for `idle_seconds`, and clears on the next
+//! chunk. It does not sample or compare rendered screen content: a session that
+//! is genuinely producing no output (a hung command, a prompt waiting on
+//! input) is what "idle" means here, independent of whether the screen redraws
+//! identical bytes. The [`vt100`]-backed grid ([`fingerprint::HeadlessGrid`])
+//! is retained separately for reattach repaint and smart-notification snippet
+//! extraction — it is no longer sampled for idle detection.
 //!
 //! ## Deviation: force-exit safety net dropped
 //! `daemon.ts` arms a 2 s `process.exit(0)` to escape Bun's leaked ConPTY
@@ -40,4 +42,4 @@ pub mod title_capture;
 
 pub use error::{SessionError, SessionResult};
 pub use host::{run_session_host, SessionHostOptions};
-pub use idle::{IdleTransition, ScreenIdleDetector};
+pub use idle::{IdleTransition, OutputIdleDetector};

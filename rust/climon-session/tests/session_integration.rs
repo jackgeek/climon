@@ -326,7 +326,7 @@ fn input_clears_attention_via_three_state_patch() {
     let _guard = serial().lock().unwrap_or_else(|e| e.into_inner());
     let home = scratch_home("attention-clear");
     std::env::set_var("CLIMON_HOME", &home);
-    // Drive the idle detector quickly: flag attention after ~1s of a static screen.
+    // Drive the idle detector quickly: flag attention after ~1s of no PTY output.
     std::fs::write(
         home.join("config.jsonc"),
         "{ \"attention\": { \"idleSeconds\": 1 } }\n",
@@ -334,7 +334,7 @@ fn input_clears_attention_via_three_state_patch() {
     .unwrap();
 
     let id = "juliet-kilo-lima";
-    // `sleep` produces no output, so the screen stays static and goes idle.
+    // `sleep` produces no output, so the PTY stays inactive and goes idle.
     let meta = base_meta(id, &home, vec!["sh".into(), "-c".into(), "sleep 8".into()]);
     let socket_ref = meta.socket_path.clone();
 
@@ -359,7 +359,10 @@ fn input_clears_attention_via_three_state_patch() {
         let m = read_session_meta(&env, id).unwrap().unwrap();
         if m.status == SessionStatus::NeedsAttention {
             assert!(m.attention_matched_at.is_some());
-            assert_eq!(m.attention_reason.as_deref(), Some("Screen idle for 1s"));
+            assert_eq!(
+                m.attention_reason.as_deref(),
+                Some("No terminal output for 1s")
+            );
             token = m.attention_matched_at.clone();
             break;
         }
@@ -367,7 +370,7 @@ fn input_clears_attention_via_three_state_patch() {
     }
     let token = token.expect("detector flagged needs-attention");
 
-    // Acknowledge with the matching token; screen is unchanged so it clears.
+    // Acknowledge with the matching token; no new output arrived so it clears.
     let ack = encode_json_frame(
         FrameType::Attention,
         &climon_proto::frame::AttentionPayload {
@@ -445,7 +448,7 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
     }
     let token = token.expect("detector flagged needs-attention");
 
-    // Acknowledge it (screen is unchanged, so it transitions to Acknowledged).
+    // Acknowledge it (no new output has arrived, so it transitions to Acknowledged).
     let ack = encode_json_frame(
         FrameType::Attention,
         &climon_proto::frame::AttentionPayload {
@@ -467,7 +470,8 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
     }
     assert!(acknowledged, "session reached Acknowledged");
 
-    // A host resize changes the screen dimensions but not the (empty) body.
+    // A resize does not touch the detector, and `sleep` produces no redraw
+    // output in response to SIGWINCH, so the session stays idle throughout.
     let resize = encode_json_frame(
         FrameType::Resize,
         &ResizePayload {
@@ -480,14 +484,14 @@ fn acknowledged_session_stays_acknowledged_across_a_resize_and_idle() {
     stream.write_all(&resize).unwrap();
 
     // Across several idle windows the session must neither revert to Running nor
-    // re-flag needs-attention while its screen stays idle.
+    // re-flag needs-attention while no PTY output arrives.
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {
         let status = read_session_meta(&env, id).unwrap().unwrap().status;
         assert_eq!(
             status,
             SessionStatus::Acknowledged,
-            "acknowledged session must stay acknowledged while idle"
+            "acknowledged session must stay acknowledged while output stays idle"
         );
         thread::sleep(Duration::from_millis(200));
     }

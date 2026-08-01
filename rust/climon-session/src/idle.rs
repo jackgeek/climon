@@ -1,45 +1,12 @@
-//! Screen idle detector. Ports `src/daemon/idle-detector.ts`, extended so that
-//! dimension-only fingerprint differences never count as activity and a user
-//! acknowledgement suppresses re-flagging of the same idle screen.
+//! PTY output inactivity detector.
 //!
-//! Pure (no timers, no I/O): callers supply a screen fingerprint and the current
-//! time in milliseconds and it returns the transition to emit — or `None` when
-//! nothing changes. A session "needs attention" when its fingerprint body has
-//! not changed for `idle_seconds`.
+//! Pure (no timers, no I/O): the host calls [`OutputIdleDetector::record_output`]
+//! on every non-empty PTY reader chunk and [`OutputIdleDetector::poll`] on a
+//! fixed timer tick. A session "needs attention" when no PTY output has been
+//! recorded for `idle_seconds`.
 
-use crate::attention::fingerprint_body;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::time::Duration;
-
-const IDLE_SAMPLE_MIN_MS: u64 = 800;
-const IDLE_SAMPLE_JITTER_VALUES: u64 = 201;
-
-/// Produces a fresh 800–1000ms delay for each idle-screen sample.
-pub(crate) struct IdleSampleSchedule {
-    state: u64,
-}
-
-impl IdleSampleSchedule {
-    pub(crate) fn new(session_id: &str) -> Self {
-        let mut hasher = DefaultHasher::new();
-        session_id.hash(&mut hasher);
-        Self {
-            state: hasher.finish(),
-        }
-    }
-
-    pub(crate) fn next_delay(&mut self) -> Duration {
-        self.state = self
-            .state
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1);
-        let jitter_ms = (self.state >> 32) % IDLE_SAMPLE_JITTER_VALUES;
-        Duration::from_millis(IDLE_SAMPLE_MIN_MS + jitter_ms)
-    }
-}
-
-/// A transition emitted by [`ScreenIdleDetector::update`].
+/// A transition emitted by [`OutputIdleDetector::poll`] or
+/// [`OutputIdleDetector::record_output`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdleTransition {
     /// Whether the session now needs attention.
@@ -48,152 +15,105 @@ pub struct IdleTransition {
     pub reason: Option<String>,
 }
 
-/// How long after a viewer resize the detector keeps absorbing screen-content
-/// changes as reflow rather than program activity. A resize delivers a `SIGWINCH`
-/// to the child, whose redraw output arrives asynchronously on the PTY reader
-/// thread *after* the synchronous re-baseline. Without a settle window that
-/// trailing redraw is misread as activity and reverts an acknowledged or flagged
-/// session to `running`. Two idle samples (the loop samples every 800–1000ms) is ample
-/// for a shell to finish repainting.
-const RESIZE_SETTLE_MS: i64 = 2_000;
-
-/// Tracks a stream of screen fingerprints over time and decides when a session
-/// transitions into or out of the "needs attention" state.
-pub struct ScreenIdleDetector {
+/// Detects attention from PTY *output* inactivity rather than a sampled screen
+/// fingerprint. Pure (no timers, no I/O): the host calls [`record_output`] on
+/// every non-empty PTY reader chunk and [`poll`] on a fixed timer tick.
+///
+/// [`record_output`]: OutputIdleDetector::record_output
+/// [`poll`]: OutputIdleDetector::poll
+pub struct OutputIdleDetector {
     idle_ms: i64,
-    last_fingerprint: Option<String>,
-    last_change_at: i64,
+    last_output_at: i64,
     flagged: bool,
     acknowledged: bool,
-    settle_until: i64,
 }
 
-impl ScreenIdleDetector {
-    /// Creates a detector that flags attention after `idle_seconds` of an
-    /// unchanged fingerprint. A value `<= 0` disables detection.
+impl OutputIdleDetector {
+    /// Creates a detector that flags attention after `idle_seconds` without a
+    /// PTY output chunk. A value `<= 0` disables detection.
     pub fn new(idle_seconds: i64) -> Self {
-        ScreenIdleDetector {
-            idle_ms: idle_seconds * 1000,
-            last_fingerprint: None,
-            last_change_at: 0,
+        OutputIdleDetector {
+            idle_ms: idle_seconds.saturating_mul(1000),
+            last_output_at: 0,
             flagged: false,
             acknowledged: false,
-            settle_until: 0,
         }
     }
 
-    /// Whether the detector currently has the screen flagged as needing
+    /// Whether the detector currently has the session flagged as needing
     /// attention. Diagnostic accessor used by the host's status logging.
     pub fn is_flagged(&self) -> bool {
         self.flagged
     }
 
-    /// Whether the current screen has been user-acknowledged. Diagnostic
-    /// accessor used by the host's status logging.
+    /// Whether the session has been user-acknowledged. Diagnostic accessor
+    /// used by the host's status logging.
     pub fn is_acknowledged(&self) -> bool {
         self.acknowledged
     }
 
-    /// The timestamp (ms, on the host's monotonic clock) until which body
-    /// changes are absorbed as post-resize reflow. Diagnostic accessor.
-    pub fn settle_until(&self) -> i64 {
-        self.settle_until
+    /// The monotonic timestamp (ms) of the last recorded PTY output chunk (0
+    /// before the first chunk). Diagnostic accessor used by the host's status
+    /// logging.
+    pub fn last_output_at(&self) -> i64 {
+        self.last_output_at
     }
 
-    /// Feeds a fingerprint sampled at `now` (ms). Returns the transition, if any.
-    ///
-    /// Change detection compares only the fingerprint *body*: a difference in
-    /// the `{cols}x{rows}` dimension header alone (a resize, not program
-    /// activity) is never treated as a change and never produces a transition.
-    pub fn update(&mut self, fingerprint: &str, now: i64) -> Option<IdleTransition> {
-        if self.idle_ms <= 0 {
+    /// Called on a fixed timer tick with the current time (ms). Flags
+    /// attention once `idle_ms` has elapsed since the last recorded output.
+    /// Returns `None` when disabled, already flagged, or already
+    /// acknowledged.
+    pub fn poll(&mut self, now: i64) -> Option<IdleTransition> {
+        if self.idle_ms <= 0 || self.flagged || self.acknowledged {
             return None;
         }
-
-        let Some(last) = self.last_fingerprint.as_deref() else {
-            self.last_fingerprint = Some(fingerprint.to_string());
-            self.last_change_at = now;
-            return None;
-        };
-
-        if fingerprint_body(last) != fingerprint_body(fingerprint) {
-            // Within the post-resize settle window a body change is the child's
-            // asynchronous reflow/redraw, not program activity: re-baseline to it
-            // and preserve `flagged`/`acknowledged` and the idle countdown so the
-            // session does not revert to `running`.
-            if now < self.settle_until {
-                self.last_fingerprint = Some(fingerprint.to_string());
-                return None;
-            }
-            self.last_fingerprint = Some(fingerprint.to_string());
-            self.last_change_at = now;
-            let was_active = self.flagged || self.acknowledged;
-            self.flagged = false;
-            self.acknowledged = false;
-            if was_active {
-                return Some(IdleTransition {
-                    needs_attention: false,
-                    reason: None,
-                });
-            }
-            return None;
-        }
-
-        // Body unchanged (identical or a dimension-only difference). Refresh the
-        // stored header so it tracks the current dimensions, but leave the idle
-        // countdown untouched.
-        self.last_fingerprint = Some(fingerprint.to_string());
-
-        // An acknowledged screen must not re-flag while it stays unchanged.
-        if self.acknowledged {
-            return None;
-        }
-
-        if !self.flagged && now - self.last_change_at >= self.idle_ms {
+        if now - self.last_output_at >= self.idle_ms {
             self.flagged = true;
             return Some(IdleTransition {
                 needs_attention: true,
-                reason: Some(format!("Screen idle for {}s", self.idle_ms / 1000)),
+                reason: Some(format!("No terminal output for {}s", self.idle_ms / 1000)),
             });
         }
-
         None
     }
 
-    /// Records a user acknowledgement of the current screen. Clears the flagged
-    /// state so a later screen change cannot emit a stale revert, and marks the
-    /// screen acknowledged so it does not re-flag while it stays unchanged. The
-    /// next genuine body change resumes normal detection. No-op when disabled or
-    /// before the first update.
-    pub fn acknowledge(&mut self, fingerprint: &str, now: i64) {
-        if self.idle_ms <= 0 || self.last_fingerprint.is_none() {
+    /// Called on every non-empty PTY output chunk with the current time (ms).
+    /// Resets the output clock and clears `flagged`/`acknowledged`. Returns a
+    /// running transition iff either was active. No-op (returns `None`) when
+    /// disabled.
+    pub fn record_output(&mut self, now: i64) -> Option<IdleTransition> {
+        if self.idle_ms <= 0 {
+            return None;
+        }
+        let was_active = self.flagged || self.acknowledged;
+        self.last_output_at = now;
+        self.flagged = false;
+        self.acknowledged = false;
+        if was_active {
+            return Some(IdleTransition {
+                needs_attention: false,
+                reason: None,
+            });
+        }
+        None
+    }
+
+    /// Records a user acknowledgement of the current, outstanding attention.
+    /// Clears `flagged` so a later output chunk cannot emit a stale revert,
+    /// and marks the session acknowledged so it does not re-flag until output
+    /// resumes. No-op when disabled.
+    pub fn acknowledge(&mut self) {
+        if self.idle_ms <= 0 {
             return;
         }
         self.flagged = false;
         self.acknowledged = true;
-        self.last_fingerprint = Some(fingerprint.to_string());
-        self.last_change_at = now;
-    }
-
-    /// Re-baselines the tracked fingerprint after a viewer resize reflows the
-    /// screen. A resize is not program activity, so `flagged`, `acknowledged`
-    /// and the idle countdown are preserved. It also opens a [`RESIZE_SETTLE_MS`]
-    /// window (anchored at `now`) during which any further body change is treated
-    /// as the child's asynchronous `SIGWINCH` redraw rather than activity. No-op
-    /// when disabled or before the first update.
-    pub fn absorb_resize(&mut self, fingerprint: &str, now: i64) {
-        if self.idle_ms <= 0 || self.last_fingerprint.is_none() {
-            return;
-        }
-        self.last_fingerprint = Some(fingerprint.to_string());
-        self.settle_until = now + RESIZE_SETTLE_MS;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn attention(reason: &str) -> Option<IdleTransition> {
         Some(IdleTransition {
@@ -210,243 +130,78 @@ mod tests {
     }
 
     #[test]
-    fn seeds_on_first_update_and_does_not_flag_immediately() {
-        let mut detector = ScreenIdleDetector::new(10);
-        assert_eq!(detector.update("screen-a", 0), None);
+    fn flags_once_idle_ms_has_elapsed_since_the_epoch() {
+        let mut detector = OutputIdleDetector::new(10);
+        assert_eq!(detector.poll(0), None);
+        assert_eq!(detector.poll(9_999), None);
+        assert_eq!(
+            detector.poll(10_000),
+            attention("No terminal output for 10s")
+        );
+        // Does not fire twice while still idle.
+        assert_eq!(detector.poll(11_000), None);
     }
 
     #[test]
-    fn flags_after_the_idle_window_with_an_unchanged_fingerprint() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("screen-a", 0);
-        assert_eq!(detector.update("screen-a", 5_000), None);
+    fn recording_output_resets_the_idle_clock() {
+        let mut detector = OutputIdleDetector::new(10);
+        detector.record_output(5_000);
+        assert_eq!(detector.last_output_at(), 5_000);
+        assert_eq!(detector.poll(14_999), None);
         assert_eq!(
-            detector.update("screen-a", 10_000),
-            attention("Screen idle for 10s")
+            detector.poll(15_000),
+            attention("No terminal output for 10s")
         );
     }
 
     #[test]
-    fn does_not_fire_twice_while_still_idle() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("screen-a", 0);
-        detector.update("screen-a", 10_000);
-        assert_eq!(detector.update("screen-a", 11_000), None);
-    }
-
-    #[test]
-    fn reverts_to_running_when_the_fingerprint_changes_after_flagging() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("screen-a", 0);
-        detector.update("screen-a", 10_000);
-        assert_eq!(detector.update("screen-b", 10_500), running());
-    }
-
-    #[test]
-    fn a_change_before_the_window_resets_the_idle_timer() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("screen-a", 0);
-        assert_eq!(detector.update("screen-b", 9_000), None);
-        assert_eq!(detector.update("screen-b", 18_000), None);
+    fn recording_output_after_flagging_clears_it_and_reports_running() {
+        let mut detector = OutputIdleDetector::new(10);
         assert_eq!(
-            detector.update("screen-b", 19_000),
-            attention("Screen idle for 10s")
+            detector.poll(10_000),
+            attention("No terminal output for 10s")
+        );
+        assert_eq!(detector.record_output(10_500), running());
+        assert!(!detector.is_flagged());
+        // A further idle window re-flags from the new baseline.
+        assert_eq!(detector.poll(20_499), None);
+        assert_eq!(
+            detector.poll(20_500),
+            attention("No terminal output for 10s")
         );
     }
 
     #[test]
-    fn a_change_while_not_flagged_does_not_emit_a_transition() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("screen-a", 0);
-        assert_eq!(detector.update("screen-b", 5_000), None);
+    fn acknowledgement_suppresses_re_flagging_until_output_resumes() {
+        let mut detector = OutputIdleDetector::new(10);
+        assert_eq!(
+            detector.poll(10_000),
+            attention("No terminal output for 10s")
+        );
+        detector.acknowledge();
+        assert!(detector.is_acknowledged());
+        // No re-flag while acknowledged, however long it stays idle.
+        assert_eq!(detector.poll(50_000), None);
+        assert_eq!(detector.poll(100_000), None);
+        // Output resumes: clears the acknowledgement and reports running.
+        assert_eq!(detector.record_output(100_500), running());
+        assert!(!detector.is_acknowledged());
+        assert!(!detector.is_flagged());
+        // A fresh idle window re-flags.
+        assert_eq!(
+            detector.poll(110_500),
+            attention("No terminal output for 10s")
+        );
     }
 
     #[test]
     fn is_disabled_when_idle_seconds_is_zero() {
-        let mut detector = ScreenIdleDetector::new(0);
-        assert_eq!(detector.update("screen-a", 0), None);
-        assert_eq!(detector.update("screen-a", 100_000), None);
-    }
-
-    #[test]
-    fn absorbing_a_resize_re_baselines_without_clearing_the_flagged_state() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle screen", 0);
-        assert_eq!(
-            detector.update("80x24\nidle screen", 10_000),
-            attention("Screen idle for 10s")
-        );
-
-        detector.absorb_resize("120x30\nidle screen reflowed", 10_500);
-        assert_eq!(
-            detector.update("120x30\nidle screen reflowed", 11_000),
-            None
-        );
-
-        // Genuine output arriving after the post-resize settle window reverts.
-        assert_eq!(detector.update("120x30\nNEW OUTPUT", 13_000), running());
-    }
-
-    #[test]
-    fn absorbing_a_resize_before_flagging_preserves_the_idle_countdown() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle screen", 0);
-        detector.absorb_resize("120x30\nidle screen reflowed", 1_000);
-        assert_eq!(
-            detector.update("120x30\nidle screen reflowed", 10_000),
-            attention("Screen idle for 10s")
-        );
-    }
-
-    #[test]
-    fn a_dimension_only_change_does_not_revert_a_flagged_session() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle screen", 0);
-        assert_eq!(
-            detector.update("80x24\nidle screen", 10_000),
-            attention("Screen idle for 10s")
-        );
-        // A switch/resize changes only the dimension header; the body is the
-        // same, so no status change is emitted and the session stays flagged.
-        assert_eq!(detector.update("120x30\nidle screen", 11_000), None);
-        assert_eq!(detector.update("120x30\nidle screen", 12_000), None);
-    }
-
-    #[test]
-    fn a_dimension_only_change_emits_nothing_when_not_flagged() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle screen", 0);
-        assert_eq!(detector.update("120x30\nidle screen", 1_000), None);
-    }
-
-    #[test]
-    fn acknowledgement_suppresses_re_flagging_while_the_screen_stays_idle() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle screen", 0);
-        assert_eq!(
-            detector.update("80x24\nidle screen", 10_000),
-            attention("Screen idle for 10s")
-        );
-
-        detector.acknowledge("80x24\nidle screen", 11_000);
-
-        // The screen stays idle well past another idle window: no re-flag.
-        assert_eq!(detector.update("80x24\nidle screen", 21_000), None);
-        assert_eq!(detector.update("80x24\nidle screen", 40_000), None);
-    }
-
-    #[test]
-    fn acknowledgement_then_a_switch_keeps_the_session_acknowledged() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle screen", 0);
-        detector.update("80x24\nidle screen", 10_000);
-        detector.acknowledge("80x24\nidle screen", 11_000);
-
-        // A dimension-only switch must not emit a revert or a re-flag.
-        assert_eq!(detector.update("120x30\nidle screen", 12_000), None);
-        // A reflow absorbed on resize is likewise quiet.
-        detector.absorb_resize("120x30\nidle screen reflowed", 12_500);
-        assert_eq!(
-            detector.update("120x30\nidle screen reflowed", 30_000),
-            None
-        );
-    }
-
-    #[test]
-    fn a_real_change_after_acknowledgement_reverts_to_running_then_re_flags() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle screen", 0);
-        detector.update("80x24\nidle screen", 10_000);
-        detector.acknowledge("80x24\nidle screen", 11_000);
-
-        // Genuine program output (body changes) resumes normal behaviour.
-        assert_eq!(detector.update("80x24\nNEW OUTPUT", 12_000), running());
-        // Idle again for a full window -> flags afresh.
-        assert_eq!(
-            detector.update("80x24\nNEW OUTPUT", 22_000),
-            attention("Screen idle for 10s")
-        );
-    }
-
-    #[test]
-    fn a_resize_redraw_arriving_after_acknowledgement_does_not_revert_to_running() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("269x68\n$ prompt", 0);
-        detector.update("269x68\n$ prompt", 10_000);
-        detector.acknowledge("269x68\n$ prompt", 11_000);
-
-        // Switching away disconnects the last viewer, so the host reverts the PTY
-        // to its terminal size and re-baselines the detector synchronously.
-        detector.absorb_resize("269x68\n$ prompt", 12_000);
-
-        // The shell's SIGWINCH redraw output then arrives asynchronously on the
-        // PTY reader thread, changing the rendered body. A resize-induced reflow
-        // is not program activity and must not revert the acknowledged session.
-        assert_eq!(detector.update("269x68\n$ prompt redrawn", 12_200), None);
-
-        // Once the reflow settles, the session stays acknowledged.
-        assert_eq!(detector.update("269x68\n$ prompt redrawn", 20_000), None);
-    }
-
-    #[test]
-    fn a_resize_redraw_arriving_after_flagging_does_not_revert_to_running() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle", 0);
-        assert_eq!(
-            detector.update("80x24\nidle", 10_000),
-            attention("Screen idle for 10s")
-        );
-
-        detector.absorb_resize("100x30\nidle", 11_000);
-        // Async reflow output after the resize must keep the session flagged.
-        assert_eq!(detector.update("100x30\nidle reflowed", 11_200), None);
-        assert_eq!(detector.update("100x30\nidle reflowed", 12_000), None);
-    }
-
-    #[test]
-    fn genuine_output_after_the_resize_settle_window_still_reverts() {
-        let mut detector = ScreenIdleDetector::new(10);
-        detector.update("80x24\nidle", 0);
-        detector.update("80x24\nidle", 10_000);
-        detector.acknowledge("80x24\nidle", 11_000);
-        detector.absorb_resize("80x24\nidle", 12_000);
-
-        // Well past the settle window, real program output is genuine activity
-        // and resumes normal detection.
-        assert_eq!(detector.update("80x24\nNEW OUTPUT", 30_000), running());
-    }
-
-    #[test]
-    fn acknowledge_is_a_no_op_before_the_first_update_or_when_disabled() {
-        let mut fresh = ScreenIdleDetector::new(10);
-        fresh.acknowledge("80x24\nidle screen", 0);
-        // No baseline was seeded, so the first real update just seeds.
-        assert_eq!(fresh.update("80x24\nidle screen", 0), None);
-
-        let mut disabled = ScreenIdleDetector::new(0);
-        disabled.acknowledge("80x24\nidle screen", 0);
-        assert_eq!(disabled.update("80x24\nidle screen", 100_000), None);
-    }
-
-    #[test]
-    fn idle_sample_schedule_stays_within_the_jitter_window() {
-        let mut schedule = IdleSampleSchedule::new("session-a");
-
-        for _ in 0..1_000 {
-            let delay = schedule.next_delay();
-            assert!(delay >= Duration::from_millis(800));
-            assert!(delay <= Duration::from_millis(1_000));
-        }
-    }
-
-    #[test]
-    fn idle_sample_schedule_varies_between_samples() {
-        let mut schedule = IdleSampleSchedule::new("session-a");
-        let first = schedule.next_delay();
-
-        assert!(
-            (0..32).any(|_| schedule.next_delay() != first),
-            "sampling delay must not remain fixed"
-        );
+        let mut detector = OutputIdleDetector::new(0);
+        assert_eq!(detector.poll(0), None);
+        assert_eq!(detector.poll(1_000_000), None);
+        assert_eq!(detector.record_output(1_000_000), None);
+        detector.acknowledge();
+        assert!(!detector.is_acknowledged());
+        assert!(!detector.is_flagged());
     }
 }

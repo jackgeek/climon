@@ -28,12 +28,11 @@ use climon_pty::{resolve_command, Pty, PtyOptions};
 use climon_store::paths::now_iso;
 use climon_store::Env as StoreEnv;
 
-use crate::attention::fingerprint_body;
 use crate::attention::should_apply_user_attention_acknowledgement;
 use crate::control::{choose_controller, Surface};
 use crate::error::{SessionError, SessionResult};
 use crate::fingerprint::{render_screen_from_replay, HeadlessGrid};
-use crate::idle::{IdleSampleSchedule, ScreenIdleDetector};
+use crate::idle::OutputIdleDetector;
 use crate::replay::{
     build_mouse_private_mode_replay_suffix, build_mouse_private_mode_restore_suffix,
     track_mouse_private_modes_from_output, TRACKED_MOUSE_PRIVATE_MODES,
@@ -137,7 +136,12 @@ struct HostState {
 
     last_attention_state: Option<bool>,
     current_attention_matched_at: Option<String>,
-    current_attention_fingerprint: Option<String>,
+    /// PTY output generation ([`HostState::output_generation`]) at the moment
+    /// attention was last flagged. `None` when attention is not outstanding.
+    /// Compared against the current generation to reject a stale browser
+    /// acknowledgement: any output since flagging means the screen has moved
+    /// on.
+    current_attention_output_generation: Option<u64>,
     /// True when an interactive local terminal is attached (non-headless, stdin
     /// and stdout are real consoles). The in-process local terminal is the
     /// session host, so it counts as a host presence for displacement detection
@@ -172,7 +176,12 @@ struct HostState {
 
     scrollback: climon_pty::Scrollback,
     grid: HeadlessGrid,
-    idle_detector: ScreenIdleDetector,
+    idle_detector: OutputIdleDetector,
+    /// Monotonic counter incremented (`wrapping_add(1)`) on every non-empty
+    /// PTY reader chunk. Used to reject a browser attention acknowledgement
+    /// that references a screen from before newer output arrived, without
+    /// needing to compare screen content.
+    output_generation: u64,
     started_at: Instant,
     mouse_mode_state: HashMap<String, bool>,
     mouse_mode_remainder: String,
@@ -192,10 +201,6 @@ struct HostState {
 type Shared = Arc<Mutex<HostState>>;
 
 impl HostState {
-    fn fingerprint(&self) -> String {
-        self.grid.fingerprint()
-    }
-
     /// Enqueues bytes for the local-terminal writer thread. Non-blocking (the
     /// channel is unbounded), so this is safe to call while holding the `state`
     /// lock — the actual, potentially-blocking console write happens off-lock on
@@ -417,22 +422,6 @@ impl HostState {
         self.resizer.resize(cols, rows);
         if changed {
             self.grid.resize(cols, rows);
-            let fp = self.fingerprint();
-            let now_ms = self.started_at.elapsed().as_millis() as i64;
-            self.idle_detector.absorb_resize(&fp, now_ms);
-            climon_logging::logger::child("idle").log_with(
-                climon_logging::level::LogLevel::Debug,
-                serde_json::json!({
-                    "sessionId": self.id,
-                    "event": "set_pty_size",
-                    "cols": cols,
-                    "rows": rows,
-                    "controller": self.controller_id,
-                    "now": now_ms,
-                    "settleUntil": self.idle_detector.settle_until(),
-                }),
-                "resize absorbed",
-            );
             let _ = climon_store::patch::patch_session_meta(
                 &self.env,
                 &self.id,
@@ -539,12 +528,7 @@ impl HostState {
         }
     }
 
-    fn apply_attention(
-        &mut self,
-        payload: AttentionPayload,
-        source: AttentionSource,
-        current_fp: &str,
-    ) {
+    fn apply_attention(&mut self, payload: AttentionPayload, source: AttentionSource) {
         if self.exited {
             return;
         }
@@ -554,15 +538,15 @@ impl HostState {
                     self.last_attention_state,
                     self.current_attention_matched_at.as_deref(),
                     payload.attention_matched_at.as_deref(),
-                    self.current_attention_fingerprint.as_deref(),
-                    current_fp,
+                    self.current_attention_output_generation,
+                    self.output_generation,
                 )
             {
                 return;
             }
             self.last_attention_state = Some(false);
             self.current_attention_matched_at = None;
-            self.current_attention_fingerprint = None;
+            self.current_attention_output_generation = None;
             let now = now_iso();
             let is_user = source == AttentionSource::User;
             climon_logging::logger::child("idle").log_with(
@@ -577,10 +561,10 @@ impl HostState {
             );
             if is_user {
                 // A user acknowledgement clears the detector's flagged state so a
-                // later screen change cannot emit a stale revert, and marks the
-                // screen acknowledged so it does not re-flag while unchanged.
-                let now_ms = self.started_at.elapsed().as_millis() as i64;
-                self.idle_detector.acknowledge(current_fp, now_ms);
+                // later idle poll cannot emit a stale revert, and marks the
+                // session acknowledged so it does not re-flag until output
+                // resumes.
+                self.idle_detector.acknowledge();
             }
             let _ = climon_store::patch::patch_session_meta_from_current(
                 &self.env,
@@ -639,7 +623,7 @@ impl HostState {
         if applied {
             self.last_attention_state = Some(true);
             self.current_attention_matched_at = Some(now);
-            self.current_attention_fingerprint = Some(current_fp.to_string());
+            self.current_attention_output_generation = Some(self.output_generation);
             climon_logging::logger::child("idle").log_with(
                 climon_logging::level::LogLevel::Debug,
                 serde_json::json!({
@@ -818,7 +802,7 @@ pub fn run_session_host(
         next_seq: 0,
         last_attention_state: None,
         current_attention_matched_at: None,
-        current_attention_fingerprint: None,
+        current_attention_output_generation: None,
         local_attached: false,
         local_output_suppressed: false,
         local_restore_at: None,
@@ -828,7 +812,8 @@ pub fn run_session_host(
         exit_code: None,
         scrollback: climon_pty::Scrollback::new(SCROLLBACK_CAP),
         grid: HeadlessGrid::new(meta.cols, meta.rows),
-        idle_detector: ScreenIdleDetector::new(idle_seconds),
+        idle_detector: OutputIdleDetector::new(idle_seconds),
+        output_generation: 0,
         started_at: Instant::now(),
         mouse_mode_state: HashMap::new(),
         mouse_mode_remainder: String::new(),
@@ -1086,6 +1071,9 @@ fn spawn_reader_thread(
             let frame = encode_frame(FrameType::Output, data);
             {
                 let mut s = state.lock().unwrap();
+                let now_ms = s.started_at.elapsed().as_millis() as i64;
+                s.output_generation = s.output_generation.wrapping_add(1);
+                let idle_transition = s.idle_detector.record_output(now_ms);
                 let remainder = std::mem::take(&mut s.mouse_mode_remainder);
                 s.mouse_mode_remainder = track_mouse_private_modes_from_output(
                     &mut s.mouse_mode_state,
@@ -1106,6 +1094,20 @@ fn spawn_reader_thread(
                 s.captured_progress = captured_progress;
                 s.scrollback.append(data);
                 s.grid.write(data);
+                if let Some(transition) = idle_transition {
+                    // PTY output arrived while the session was flagged/acknowledged:
+                    // apply the detector's running transition synchronously, before
+                    // this chunk's Output frame/local echo go out, so viewers never
+                    // observe stale attention alongside fresh output.
+                    s.apply_attention(
+                        AttentionPayload {
+                            needs_attention: transition.needs_attention,
+                            reason: transition.reason,
+                            attention_matched_at: None,
+                        },
+                        AttentionSource::Detector,
+                    );
+                }
                 s.broadcast(&frame);
                 // Enqueue local output while still holding the lock, so it is
                 // ordered (FIFO) against the displaced-notice / restore-repaint
@@ -1267,7 +1269,6 @@ fn spawn_connection_reader(
                             ) {
                                 false
                             } else {
-                                let fp = s.fingerprint();
                                 s.apply_attention(
                                     AttentionPayload {
                                         needs_attention: false,
@@ -1275,7 +1276,6 @@ fn spawn_connection_reader(
                                         attention_matched_at: None,
                                     },
                                     AttentionSource::User,
-                                    &fp,
                                 );
                                 true
                             }
@@ -1323,8 +1323,7 @@ fn spawn_connection_reader(
                         if let Ok(payload) = parse_json_payload::<AttentionPayload>(&frame.payload)
                         {
                             let mut s = state.lock().unwrap();
-                            let fp = s.fingerprint();
-                            s.apply_attention(payload, AttentionSource::User, &fp);
+                            s.apply_attention(payload, AttentionSource::User);
                             s.write_initial_frames(client_id);
                         }
                     }
@@ -1599,11 +1598,8 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
 fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
         let log = climon_logging::logger::child("idle");
-        let session_id = state.lock().unwrap().id.clone();
-        let mut sample_schedule = IdleSampleSchedule::new(&session_id);
-        let mut prev_body: Option<String> = None;
         loop {
-            thread::sleep(sample_schedule.next_delay());
+            thread::sleep(Duration::from_millis(1000));
             if shutdown.load(Ordering::SeqCst) {
                 break;
             }
@@ -1612,30 +1608,24 @@ fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()>
                 break;
             }
             let now_ms = s.started_at.elapsed().as_millis() as i64;
-            let fp = s.fingerprint();
-            let body = fingerprint_body(&fp);
-            let body_changed = prev_body.as_deref() != Some(body);
-            let settle_until = s.idle_detector.settle_until();
+            let last_output_at = s.idle_detector.last_output_at();
             let was_flagged = s.idle_detector.is_flagged();
             let was_ack = s.idle_detector.is_acknowledged();
-            let transition = s.idle_detector.update(&fp, now_ms);
-            if body_changed || transition.is_some() {
+            let transition = s.idle_detector.poll(now_ms);
+            if transition.is_some() {
                 log.log_with(
                     climon_logging::level::LogLevel::Debug,
                     serde_json::json!({
                         "sessionId": s.id,
                         "now": now_ms,
-                        "settleUntil": settle_until,
-                        "withinSettle": now_ms < settle_until,
+                        "lastOutputAt": last_output_at,
                         "wasFlagged": was_flagged,
                         "wasAcknowledged": was_ack,
-                        "bodyChanged": body_changed,
                         "transition": transition.as_ref().map(|t| if t.needs_attention { "needs-attention" } else { "running" }),
                     }),
-                    "idle sample",
+                    "idle poll",
                 );
             }
-            prev_body = Some(body.to_string());
             if let Some(transition) = transition {
                 s.apply_attention(
                     AttentionPayload {
@@ -1644,7 +1634,6 @@ fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()>
                         attention_matched_at: None,
                     },
                     AttentionSource::Detector,
-                    &fp,
                 );
             }
         }

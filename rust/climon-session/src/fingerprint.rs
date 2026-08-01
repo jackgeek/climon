@@ -1,17 +1,20 @@
-//! Headless VT-grid fingerprint for static-screen idle detection.
+//! Headless VT-grid for reattach repaint and smart-notification snippets.
 //!
-//! PTY output is mirrored into a [`vt100`] parser grid; at a jittered 800–1000ms interval the
-//! [`HeadlessGrid::fingerprint`] is sampled and fed to the pure
-//! [`crate::idle::ScreenIdleDetector`]. The fingerprint is `{cols}x{rows}\n` plus
-//! one trailing-trimmed line per visible row, mirroring the TS daemon's
-//! `@xterm/headless` sampling.
+//! PTY output is mirrored into a [`vt100`] parser grid so a reconnecting
+//! client (browser reattach, local-terminal restore repaint) can be replayed
+//! the current screen, and so [`crate::snippet`] can extract a
+//! smart-notification snippet from the visible rows. [`HeadlessGrid::fingerprint`]
+//! renders `{cols}x{rows}\n` plus one trailing-trimmed line per visible row;
+//! it is **not** used for idle/attention detection — see
+//! [`crate::idle::OutputIdleDetector`], which detects attention purely from
+//! PTY output inactivity.
 //!
-//! **The fingerprint is internal state — never sent over the wire — so it does
-//! not need byte-parity with xterm.js.** It only has to be stable when content
-//! is stable and change when visible content changes. We therefore use `vt100`
-//! (MIT) rather than attempting to replicate xterm.js cell rendering.
+//! The rendered grid is internal state — never sent over the wire — so it does
+//! not need byte-parity with xterm.js. It only has to render a screen a human
+//! (or the snippet extractor) recognizes as the current one. We therefore use
+//! `vt100` (MIT) rather than attempting to replicate xterm.js cell rendering.
 
-/// A headless terminal grid producing idle-detection fingerprints.
+/// A headless terminal grid used for repaint replay and snippet extraction.
 pub struct HeadlessGrid {
     parser: vt100::Parser,
     cols: u16,
