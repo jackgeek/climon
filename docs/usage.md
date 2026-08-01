@@ -153,10 +153,14 @@ newer version is available instead of applying it automatically.
     visible status until you resume.
   - For **completed/failed** sessions, the terminal shows the captured final
     output (read-only).
-  - On touch devices, scroll the terminal with a vertical one-finger swipe: it
-    drives the same scrolling as a mouse wheel — moving through scrollback for
-    normal output, or scrolling within apps that track the mouse. The swipe does
-    not trigger the browser's pull-to-refresh while you are over the terminal.
+  - On touch devices, scroll the terminal with a vertical two-finger gesture:
+    swiping down moves toward older scrollback, swiping up moves back toward
+    newer output, and apps that track the mouse receive a synthetic wheel event
+    with coordinates at the touch point. A one-finger swipe stays native to the
+    browser/OS and does not drive the terminal wheel. The gesture carries
+    momentum that decays naturally after release, and a new touch sequence stops
+    the old momentum immediately. The gesture does not trigger the browser's
+    pull-to-refresh while you are over the terminal.
 - **Sharing control between viewers**: several browsers, PWAs, and an attached
   local terminal can view the same session at once, but only one — the
   **controller** — sets the shared terminal size at any moment. A viewer that is
@@ -188,9 +192,14 @@ newer version is available instead of applying it automatically.
   chrome to the Fluent light base. The selected default and the mobile **Pin key
   bar** toggle are stored in `config.jsonc` (`dashboard.theme` and
   `dashboard.keyBarPinned`), so they persist across reloads and are shared across
-  every browser and device — including remote Tunnel Link viewers. You can also
-  set them from the CLI with `climon config dashboard.theme "<name>"` (a theme
-  display name, e.g. `"Dracula"`) and `climon config dashboard.keyBarPinned <bool>`.
+  every browser and device — including remote Tunnel Link viewers. On
+  touch-primary devices, the menu also exposes **Invert two-finger scrolling**,
+  stored as `dashboard.touchWheelInverted`; it reverses only the synthetic
+  two-finger gesture and leaves physical mouse/trackpad wheel direction alone.
+  You can also set them from the CLI with `climon config dashboard.theme
+  "<name>"` (a theme display name, e.g. `"Dracula"`), `climon config
+  dashboard.keyBarPinned <bool>`, and `climon config
+  dashboard.touchWheelInverted <bool>`.
 - **Per-session theme.** A session can override the default with its own theme,
   set from the **Edit Session** dialog (and chosen at creation in the **New
   Session** dialog) or from the CLI with `--theme` (see *Monitor a command*).
