@@ -79,7 +79,7 @@ On first run, climon writes `~/.climon/config.jsonc`:
     "detachPrefix": 28
   },
   "attention": {
-    // Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.
+    // Number of seconds with no terminal output before the session is flagged as needing attention. Set to 0 or negative to disable output-idle detection.
     "idleSeconds": 10
   },
   "session": {

@@ -343,7 +343,7 @@ pub fn config_settings() -> Vec<ConfigSetting> {
         ConfigSetting::new(
             "attention.idleSeconds",
             Number,
-            "Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.",
+            "Number of seconds with no terminal output before the session is flagged as needing attention. Set to 0 or negative to disable output-idle detection.",
             vec![Daemon],
         )
         .default(Value::from(10)),

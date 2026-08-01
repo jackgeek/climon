@@ -253,18 +253,14 @@ broken by most-recent update. This drives both the dashboard and `climon ls`.
 
 ## Attention detection (`rust/climon-session/`)
 
-Detection is client-side and based on a static screen, not text patterns. While a
-local client is attached it feeds every PTY output byte into a headless
-`@xterm/headless` grid and, at a jittered 800–1000ms interval, fingerprints the visible rows
-(`translateToString` joined per row). The pure `ScreenIdleDetector` compares
-successive fingerprints: if the screen stops changing for
-`attention.idleSeconds` (default 10) the client sends a `FrameType.Attention`
-frame to the daemon, which is the single writer that patches the session to
-`needs-attention`; when the screen changes again it reverts to `running`.
-
-Because only cell contents are fingerprinted (not the cursor position), a
-blinking cursor is treated as static. Detection runs only while a local client is
-attached, and setting `attention.idleSeconds` to `0` or less disables it.
+The daemon's PTY reader records every output chunk as it arrives. A fixed 1-second
+poll checks how long ago the last chunk landed: if no PTY output has arrived for
+`attention.idleSeconds` (default 10) the daemon patches the session to
+`needs-attention`. Any subsequent PTY output clears both `needs-attention` and
+`acknowledged` back to `running` and starts a fresh idle window; resize-triggered
+redraw output counts as activity, so a browser resize that causes the shell to
+redraw its prompt also returns the session to `running` and starts the window fresh.
+Setting `attention.idleSeconds` to `0` or less disables output-idle detection.
 
 When the daemon transitions a session to `needs-attention`, it also extracts a
 fuzzy "smart snippet" of the last relevant terminal output from its live

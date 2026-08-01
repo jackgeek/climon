@@ -42,9 +42,8 @@
 
   attention.idleSeconds
     Type: number; Default: 10; Scope: daemon
-    Number of seconds the rendered terminal grid must remain unchanged before the
-    session is flagged as needing attention. Set to 0 or negative to disable
-    static-screen detection.
+    Number of seconds with no terminal output before the session is flagged as needing
+    attention. Set to 0 or negative to disable output-idle detection.
 
   remote.enabled
     Type: boolean; Default: unset; Scope: client

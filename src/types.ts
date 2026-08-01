@@ -149,10 +149,9 @@ export interface InstallConfig {
 
 export interface AttentionConfig {
   /**
-   * Number of seconds the rendered terminal grid must remain unchanged before
-   * the session is flagged as needing attention. A blinking cursor does not
-   * count as a change because only cell contents are fingerprinted. Set to 0 or
-   * a negative number to disable static-screen detection.
+   * Number of seconds with no terminal output before the session is flagged as
+   * needing attention. Set to 0 or a negative number to disable output-idle
+   * detection.
    */
   idleSeconds: number;
 }

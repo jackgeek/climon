@@ -5,8 +5,8 @@ like the TypeScript client's session host across the three first-class
 platforms, on the live wire/metadata boundary that browsers and the unmodified
 Bun `climon-server` actually exercise. They cover the attach/detach local
 relay, the shared-PTY control-handoff model (single controller, follow/displaced
-surfaces), screen-idle → needs-attention →
-input-clears attention, dashboard rename → title broadcast, headless
+surfaces), output-idle → needs-attention →
+new-output-clears attention, dashboard rename → title broadcast, headless
 (background) sessions, the completed/failed lifecycle, and a best-effort
 live-interop round-trip against a spawned
 unmodified Bun server.
@@ -17,10 +17,9 @@ Background: Phase 7 ports `src/session-host.ts` and the richer superset
 one cohesive `SessionHost` (`rust/climon-session/src/host.rs`) with the
 mouse-private-mode replay suffix, the shared-PTY control-handoff controller model
 (`src/control.rs`), and the
-attached-only local relay gated behind a `headless` flag. The screen-idle
-fingerprint is rendered by a `vt100`-backed headless grid
-(`src/fingerprint.rs`); it is **internal** daemon state never sent over the
-wire, so it does not require byte-parity with xterm.js. See the
+attached-only local relay gated behind a `headless` flag. Attention detection is
+PTY-output based: the daemon records each chunk and a 1-second poll flags the
+session after `attention.idleSeconds` of silence. See the
 [master plan](../superpowers/specs/2026-06-17-rust-client-rewrite-master-plan.md)
 and the [Phase 7 plan](../superpowers/plans/2026-06-18-phase07-climon-session.md).
 
@@ -234,36 +233,37 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
-## MT-P7-05 — Idle → needs-attention → input clears it (three-state patch)
+## MT-P7-05 — Output silence → needs-attention → ack → new output returns running
 
 - **ID:** MT-P7-05
-- **Feature / phase:** Phase 7 — `ScreenIdleDetector` + `applyAttention`
+- **Feature / phase:** Phase 7 — PTY-output idle detection + `applyAttention`
 - **Preconditions:** `attention.idleSeconds` set to a small value (e.g. `2`) in
   `$CLIMON_HOME/config.jsonc`. A running session and a viewer client.
 - **Config-matrix cell:** all
 - **Platforms:** macOS, Linux, Windows
 
 **Steps:**
-1. Start a session running a command that leaves the screen static (e.g. a shell
+1. Start a session running a command that produces no further output (e.g. a shell
    sitting at a prompt, or `sleep 60`).
 2. Wait `idleSeconds`. Confirm the session metadata flips to
    `status: needs-attention`, `priorityReason: attention`, with
-   `attentionMatchedAt` + `attentionReason` set.
+   `attentionMatchedAt` + `attentionReason` set (reason includes the idle
+   duration, e.g. `"No terminal output for 2s"`).
 3. From the browser viewer (or by sending an `Attention { needsAttention:false,
-   attentionMatchedAt:<the token> }` frame), acknowledge the attention while the
-   screen is unchanged. Confirm the metadata flips to `status: acknowledged` and
-   that `attentionMatchedAt` / `attentionReason` are **removed** from the JSON
-   (the Phase 5 `Some(None)` three-state clear, not left as `null`).
-4. Produce new output (type a command). Confirm the detector re-baselines and
-   does not immediately re-flag.
+   attentionMatchedAt:<the token> }` frame), acknowledge the attention while no
+   new output has arrived. Confirm the metadata flips to `status: acknowledged`
+   and that `attentionMatchedAt` / `attentionReason` are **removed** from the
+   JSON (the Phase 5 `Some(None)` three-state clear, not left as `null`).
+4. Produce new PTY output (type a command that triggers output). Confirm the
+   session reverts to `status: running` and the idle window resets.
 
 **Expected result:**
-- The idle detector flags attention after `idleSeconds` of an unchanged screen
-  fingerprint.
+- The idle detector flags attention after `idleSeconds` of no PTY output.
 - A matching-token acknowledgement clears attention and **deletes** the
   `attentionMatchedAt` / `attentionReason` keys via `Some(None)`.
-- A stale token or a changed screen does **not** clear attention
+- A stale token does **not** clear attention
   (`shouldApplyUserAttentionAcknowledgement`).
+- New PTY output returns the session to `running`.
 
 **Result-tracking row:**
 
@@ -273,34 +273,33 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
-## MT-P7-09 — Acknowledged stays acknowledged across session switch / resize
+## MT-P7-09 — Ack persists until PTY output (resize alone with no output stays ack)
 
 - **ID:** MT-P7-09
-- **Feature / phase:** Phase 7 — `ScreenIdleDetector` dimension-aware change
-  detection + `acknowledge`
+- **Feature / phase:** Phase 7 — PTY-output idle detection + `acknowledge`
 - **Preconditions:** `attention.idleSeconds` set to a small value (e.g. `2`) in
   `$CLIMON_HOME/config.jsonc`. The dashboard open with at least two sessions.
 - **Config-matrix cell:** all
 - **Platforms:** macOS, Linux, Windows
 
 **Steps:**
-1. Start a session that leaves the screen static (e.g. `sleep 120`) and wait
+1. Start a session that produces no further output (e.g. `sleep 120`) and wait
    `idleSeconds` so it flips to `status: needs-attention`.
-2. In the dashboard, view that session and acknowledge it (any input / focus that
-   sends the matching-token acknowledgement). Confirm `status: acknowledged`.
+2. In the dashboard, view that session and acknowledge it (matching-token
+   acknowledgement). Confirm `status: acknowledged`.
 3. Switch the dashboard to another session and back, and/or resize the browser
-   window (changing the viewer dimensions). The acknowledged session's screen
-   content does not change — only its dimensions do.
+   window (changing the viewer dimensions). The session's program produces no new
+   output during this time.
 4. Leave it idle for more than another `idleSeconds`.
 
 **Expected result:**
-- The acknowledged session **stays `acknowledged`**. Switching sessions or
-  resizing (a dimension-only fingerprint difference, or a reflow absorbed on
-  resize) never flips it to `running`.
-- While its screen stays unchanged, the acknowledged session does **not** re-flag
+- The acknowledged session **stays `acknowledged`**. A resize that produces no
+  PTY output never flips it to `running`.
+- While no new PTY output arrives the acknowledged session does **not** re-flag
   `needs-attention`.
-- Only a genuine screen-content change (real program output) resumes normal
-  detection (`running`, then re-flag after a fresh idle window).
+- Only genuine PTY output (real program output, not a dimension-only resize that
+  triggers no shell redraw) resumes normal detection (`running`, then re-flag
+  after a fresh idle window).
 
 **Result-tracking row:**
 
@@ -310,11 +309,11 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 
 ---
 
-## MT-P7-10 — Acknowledged survives a control-handoff resize redraw
+## MT-P7-10 — Resize-triggered redraw counts as PTY output, returns running, fresh idle window
 
 - **ID:** MT-P7-10
-- **Feature / phase:** Phase 7 — `ScreenIdleDetector` post-resize settle window
-  (`absorb_resize` + `RESIZE_SETTLE_MS`)
+- **Feature / phase:** Phase 7 — PTY-output idle detection; resize-triggered
+  redraw counts as activity
 - **Preconditions:** A small `attention.idleSeconds` (e.g. `2`) in
   `$CLIMON_HOME/config.jsonc`. The dashboard open with at least two sessions. Use
   an interactive shell (e.g. `zsh` or `bash`) as the session command so it
@@ -322,13 +321,10 @@ sessions under `$CLIMON_HOME/sock/<id>.sock` stay well under the limit.
 - **Config-matrix cell:** default config
 - **Platforms:** macOS, Linux, Windows
 
-**Background:** This reproduces the real "Acknowledged → Running" report. When a
-larger browser surface takes control it grows the shared PTY; switching away
-disconnects it, so control falls back to the attached local terminal and the
-daemon resizes the PTY back down to it. That resize delivers a `SIGWINCH` whose
-**redraw output lands asynchronously** on the PTY reader thread, *after* the
-synchronous re-baseline — previously it was misread as activity and reverted the
-acknowledged session to `running`.
+**Background:** When a browser surface takes control and grows the PTY, then
+disconnects, control falls back to the attached local terminal which resizes the
+PTY back down. That resize delivers a `SIGWINCH` whose **redraw output lands on
+the PTY reader** and counts as real PTY activity.
 
 **Steps:**
 1. Start an interactive-shell session and let it sit at a static prompt; wait
@@ -338,16 +334,16 @@ acknowledged session to `running`.
    Confirm `status: acknowledged`.
 3. **Switch away** to another session (disconnecting the controller of the first
    one). Control falls back to the local terminal, resizing its PTY back down and
-   triggering the shell's `SIGWINCH` prompt redraw.
-4. Watch the first session's status for several seconds.
+   triggering the shell's `SIGWINCH` prompt redraw — real PTY output lands.
+4. Confirm the first session reverts to `status: running` (the redraw output was
+   activity).
+5. Wait another `idleSeconds` of silence.
 
 **Expected result:**
-- The acknowledged session **stays `acknowledged`**. The trailing async redraw
-  from the control-handoff resize is absorbed by the post-resize settle window and
-  never flips it to `running`.
-- Only a genuine screen-content change (real program output, well after the
-  resize settles) resumes normal detection (`running`, then re-flag after a fresh
-  idle window).
+- The resize-triggered redraw output counts as PTY activity: the session flips
+  from `acknowledged` to `running` when that output arrives.
+- After the redraw output stops, a fresh idle window starts; the session
+  re-flags `needs-attention` after another full `idleSeconds` of silence.
 
 **Result-tracking row:**
 

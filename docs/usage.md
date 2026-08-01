@@ -232,22 +232,21 @@ running the server (loopback).
 
 ## Attention queue
 
-While you have a session attached locally, climon watches its rendered screen. If
-the visible terminal content stops changing for `attention.idleSeconds` (default
-10) — for example a command paused at a prompt, where only a blinking cursor
-remains — climon flags the session as `needs-attention` and bumps it to the top
-of the dashboard. As soon as the screen changes again the session reverts to
+climon watches every byte of PTY output from your session. If no terminal output
+arrives for `attention.idleSeconds` (default 10) — for example a command paused
+at a prompt — climon flags the session as `needs-attention` and bumps it to the
+top of the dashboard. As soon as any new PTY output arrives the session reverts to
 `running`. Open it and type the response in the web terminal to unblock the
 command.
 
 Opening a flagged session in the dashboard marks it `acknowledged`: it stays in
-that calmer state — and is not re-flagged — until the screen meaningfully
-changes. A browser resize or refit alone does not count as a change, so simply
-viewing a static screen will not bounce it back to `needs-attention`. Typing into
-a session has the same effect: after you send input, climon will not raise
-`needs-attention` again until the program emits genuinely new output that then
-sits idle for the window. This keeps a command you started but that runs silently
-(for example `sleep 30`) from being flagged while it works.
+that calmer state — and is not re-flagged — until new PTY output arrives.
+Acknowledging a session and then resizing the browser window (without generating
+new program output) leaves it `acknowledged`. When a resize causes the shell to
+redraw its prompt (real PTY output), that output counts as activity: the session
+returns to `running` and a fresh idle window starts. Sending input has the same
+effect once the program responds with output; climon will not raise
+`needs-attention` again until the program sits silent for another full window.
 
 Browser notifications use the session's label as the message title and the
 session's terminal title as the body. Sound and browser notifications depend on the
@@ -255,8 +254,7 @@ browser allowing notification permission and audio playback; the tab title count
 still updates when those browser features are blocked.
 
 Tune the idle window in `~/.climon/config.jsonc` under `attention.idleSeconds`;
-set it to `0` (or less) to disable static-screen detection. Detection runs only
-while a local client is attached.
+set it to `0` (or less) to disable output-idle detection.
 
 ## Completion
 
@@ -459,7 +457,7 @@ climon writes `config.jsonc` so generated comments can explain each setting. Leg
 | `dashboard.theme` | string | `Default` | server, browser | Default web dashboard terminal colour theme (by display name, e.g. "Dracula"). Sessions without their own theme inherit this. Choose from the dashboard "Default theme" picker; defaults to "Default". |
 | `dashboard.keyBarPinned` | boolean | `true` | server, browser | Whether the web dashboard key bar is pinned open. |
 | `dashboard.stateIconNoMotion` | boolean | `false` | server, browser | When true, the web dashboard freezes the animated terminal-progress indicator (OSC 9;4 indeterminate spinner) into a static icon, honouring reduced-motion preferences. Defaults to false (animated). |
-| `attention.idleSeconds` | number | `10` | daemon | Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection. |
+| `attention.idleSeconds` | number | `10` | daemon | Number of seconds with no terminal output before the session is flagged as needing attention. Set to 0 or negative to disable output-idle detection. |
 | `remote.enabled` | boolean | unset | client | Enables remote uplink so the local devbox forwards session metadata and I/O to a remote dashboard over a dev tunnel or direct connection. |
 | `remote.host` | string | unset | client | Direct remote uplink host for same-machine or LAN setups. Takes precedence over dev tunnel forwarding when set. |
 | `remote.ingestHost` | string | unset | client | Host address where the dashboard-side ingest daemon should listen for incoming remote session connections. |

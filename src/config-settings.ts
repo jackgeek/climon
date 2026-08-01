@@ -158,7 +158,7 @@ export const CONFIG_SETTINGS: ConfigSetting[] = [
     path: "attention.idleSeconds",
     type: "number",
     defaultValue: 10,
-    purpose: "Number of seconds the rendered terminal grid must remain unchanged before the session is flagged as needing attention. Set to 0 or negative to disable static-screen detection.",
+    purpose: "Number of seconds with no terminal output before the session is flagged as needing attention. Set to 0 or negative to disable output-idle detection.",
     scope: ["daemon"]
   },
   {
