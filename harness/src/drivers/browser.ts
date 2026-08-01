@@ -238,13 +238,13 @@ export class BrowserSurfaceRegistry {
       errors.push(error);
     }
 
+    record.closed = true;
+
     if (errors.length > 0) {
       throw errors.length === 1
         ? errors[0]
         : new AggregateError(errors, `Failed to close browser surface ${record.name}`);
     }
-
-    record.closed = true;
   }
 
   public async closeAll(): Promise<void> {

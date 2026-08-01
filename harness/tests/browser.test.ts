@@ -36,6 +36,8 @@ class FakeClock {
 class FakeTracing {
   public readonly startCalls: unknown[] = [];
   public readonly stopCalls: unknown[] = [];
+  public stopError?: unknown;
+  public readonly stopErrors: unknown[] = [];
 
   public constructor(private readonly log: string[]) {}
 
@@ -47,6 +49,12 @@ class FakeTracing {
   public async stop(options: unknown): Promise<void> {
     this.stopCalls.push(options);
     this.log.push(`trace:stop:${String((options as { path?: string }).path ?? "")}`);
+    if (this.stopErrors.length > 0) {
+      throw this.stopErrors.shift();
+    }
+    if (this.stopError) {
+      throw this.stopError;
+    }
   }
 }
 
@@ -202,6 +210,7 @@ class FakePage {
   public readonly viewportCalls: Array<{ width: number; height: number }> = [];
   public closeCalls = 0;
   public gotoError?: unknown;
+  public closeError?: unknown;
   public screenshotError?: unknown;
   public viewportError?: unknown;
   private readonly locatorMap = new Map<string, FakeLocator>();
@@ -270,6 +279,9 @@ class FakePage {
 
   public async close(): Promise<void> {
     this.closeCalls += 1;
+    if (this.closeError) {
+      throw this.closeError;
+    }
   }
 
   public async screenshot(options: Record<string, unknown>): Promise<void> {
@@ -821,6 +833,51 @@ describe("BrowserDriver", () => {
       expect(
         readFileSync(join(workspace, "artifacts", "browser-surfaces", "02-pwa", "failed-requests.log"), "utf8")
       ).toBe("");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("throws cleanup failures once and treats a second browser surface close as a no-op", async () => {
+    const workspace = makeWorkspace("browser-surfaces-close-idempotent");
+    const log: string[] = [];
+    const defaultPage = new FakePage(log);
+    const failingPage = new FakePage(log);
+    const failingContext = new FakeBrowserContext([failingPage], log);
+    const browser = new FakeBrowser([failingContext]);
+
+    defaultPage.registerLocator('[data-testid="session-list"]');
+    failingPage.registerLocator('[data-testid="session-list"]');
+    failingContext.tracing.stopError = new Error("trace stop failed");
+    failingPage.screenshotError = new Error("screenshot failed");
+    failingContext.closeError = new Error("context close failed");
+
+    try {
+      const { driver } = createDriver({
+        log,
+        pages: [defaultPage],
+        browser,
+        artifactDir: join(workspace, "artifacts")
+      });
+      const surface = await driver.createSurface({
+        name: "broken",
+        viewport: { width: 1280, height: 720 }
+      });
+
+      await surface.open("http://127.0.0.1:43123/", 1_000);
+
+      await expect(surface.close()).rejects.toMatchObject({
+        name: "AggregateError",
+      });
+      await expect(surface.close()).resolves.toBeUndefined();
+
+      const tracePath = join(workspace, "artifacts", "browser-surfaces", "01-broken", "trace.zip");
+      const screenshotPath = join(workspace, "artifacts", "browser-surfaces", "01-broken", "closing.png");
+
+      expect(failingContext.tracing.stopCalls).toEqual([{ path: tracePath }]);
+      expect(failingPage.screenshotCalls).toEqual([{ path: screenshotPath, fullPage: true }]);
+      expect(failingPage.closeCalls).toBe(1);
+      expect(failingContext.closeCalls).toBe(1);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
