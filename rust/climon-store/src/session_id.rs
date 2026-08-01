@@ -1,5 +1,5 @@
 //! Human-readable session id generation. Ports `session-id.ts`: lowercase
-//! hyphen-separated ids (e.g. `rare-geckos-jam`) that re-roll on a metadata-file
+//! hyphen-separated ids (e.g. `accusingly-acceptable-albatross`) that re-roll on a metadata-file
 //! collision, with no random-suffix fallback.
 
 use crate::error::{StoreError, StoreResult};
