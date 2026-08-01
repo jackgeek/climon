@@ -26,6 +26,7 @@ struct ProbeState {
     rows: u16,
     last_token: String,
     resize_sequence: u64,
+    previous_size: Option<(u16, u16)>,
 }
 
 enum LiveInputState {
@@ -113,6 +114,7 @@ fn run_live(terminal: &mut TerminalGuard) -> io::Result<i32> {
                 if state.cols == cols && state.rows == rows {
                     continue;
                 }
+                state.previous_size = Some((state.cols, state.rows));
                 state.cols = cols;
                 state.rows = rows;
                 state.resize_sequence += 1;
@@ -141,6 +143,7 @@ fn run_scripted(mut stdin: BufReader<&mut impl Read>, stdout: &mut impl Write) -
                 emit_marker_and_render(stdout, &format!("DAR_CONTROL_INPUT {token}"), &state)?;
             }
             ScriptStep::Resize(cols, rows) => {
+                state.previous_size = Some((state.cols, state.rows));
                 state.cols = cols;
                 state.rows = rows;
                 state.resize_sequence += 1;
@@ -167,6 +170,7 @@ impl ProbeState {
             rows,
             last_token: "ready".to_string(),
             resize_sequence: 0,
+            previous_size: None,
         }
     }
 
@@ -176,8 +180,12 @@ impl ProbeState {
 }
 
 fn render_lines(state: &ProbeState) -> String {
+    let previous = state
+        .previous_size
+        .map(|(cols, rows)| format!("{cols}x{rows}"))
+        .unwrap_or_else(|| "none".to_string());
     format!(
-        "{READY_LABEL}\r\nsize={}x{}\r\nlast={}\r\nresizes={}\r\n",
+        "{READY_LABEL}\r\nsize={}x{}\r\nprevious={previous}\r\nlast={}\r\nresizes={}\r\n",
         state.cols, state.rows, state.last_token, state.resize_sequence
     )
 }
@@ -502,11 +510,12 @@ mod tests {
             rows: 30,
             last_token: "browser-token".to_string(),
             resize_sequence: 2,
+            previous_size: Some((99, 29)),
         };
 
         assert_eq!(
             render_lines(&state),
-            "DAR_CONTROL_READY\r\nsize=100x30\r\nlast=browser-token\r\nresizes=2\r\n"
+            "DAR_CONTROL_READY\r\nsize=100x30\r\nprevious=99x29\r\nlast=browser-token\r\nresizes=2\r\n"
         );
     }
 

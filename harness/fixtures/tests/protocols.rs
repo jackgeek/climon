@@ -42,6 +42,7 @@ fn control_probe_accepts_scripted_tokens_and_resize_sequences() {
     assert!(text.contains("DAR_CONTROL_INPUT surface-alpha"));
     assert!(text.contains("DAR_CONTROL_RESIZE 1 100 30"));
     assert!(text.contains("DAR_CONTROL_INPUT browser-token"));
+    assert!(text.contains("previous=80x24"));
     assert!(text.contains("last=browser-token"));
     assert!(text.contains("resizes=1"));
     assert_eq!(String::from_utf8(stderr).unwrap(), "");

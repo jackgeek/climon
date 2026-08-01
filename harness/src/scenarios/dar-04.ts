@@ -133,6 +133,15 @@ interface JiggleMarkers {
   restore: ResizeMarker;
 }
 
+interface ProbeFrameSnapshot {
+  cols: number;
+  rows: number;
+  previousSize?: { cols: number; rows: number };
+  lastToken: string;
+  resizeSequence: number;
+  raw: string;
+}
+
 export interface Dar04Dependencies {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -355,6 +364,22 @@ function parseProbeResizeSequence(text: string): number | undefined {
   return match ? Number.parseInt(match[1]!, 10) : undefined;
 }
 
+function parseProbePreviousSize(text: string): { cols: number; rows: number } | undefined {
+  const match = /previous=(none|(\d+)x(\d+))/.exec(text);
+  if (!match || match[1] === "none") {
+    return undefined;
+  }
+  return {
+    cols: Number.parseInt(match[2]!, 10),
+    rows: Number.parseInt(match[3]!, 10),
+  };
+}
+
+function parseProbeLastToken(text: string): string | undefined {
+  const match = /last=([^\n]+)/.exec(text);
+  return match?.[1];
+}
+
 function readMetaSize(meta: SessionMetaLike): { cols: number; rows: number } | undefined {
   if (
     typeof meta.cols === "number" &&
@@ -377,9 +402,30 @@ function expectedFrame(
   cols: number,
   rows: number,
   lastToken: string,
-  resizeSequence: number
+  resizeSequence: number,
+  previousSize?: { cols: number; rows: number }
 ): string {
-  return `DAR_CONTROL_READY\nsize=${cols}x${rows}\nlast=${lastToken}\nresizes=${resizeSequence}`;
+  const previous = previousSize ? `${previousSize.cols}x${previousSize.rows}` : "none";
+  return `DAR_CONTROL_READY\nsize=${cols}x${rows}\nprevious=${previous}\nlast=${lastToken}\nresizes=${resizeSequence}`;
+}
+
+function parseProbeFrame(text: string): ProbeFrameSnapshot | undefined {
+  const raw = normalizeSnapshot(text);
+  const size = parseProbeSize(raw);
+  const lastToken = parseProbeLastToken(raw);
+  const resizeSequence = parseProbeResizeSequence(raw);
+  if (!size || !lastToken || resizeSequence === undefined) {
+    return undefined;
+  }
+
+  return {
+    cols: size.cols,
+    rows: size.rows,
+    previousSize: parseProbePreviousSize(raw),
+    lastToken,
+    resizeSequence,
+    raw,
+  };
 }
 
 function parseResizeMarkers(output: string): ResizeMarker[] {
@@ -411,46 +457,20 @@ function normalizeSnapshot(snapshot: string): string {
   return snapshot.replace(/\r/g, "").split("\n").filter((line) => line.length > 0).join("\n");
 }
 
-async function alignSurfaceViewportToGrid(
-  surface: Dar04BrowserSurface,
-  sleep: (ms: number) => Promise<void>,
-  pollIntervalMs: number,
-  viewport: { width: number; height: number },
-  target: { cols: number; rows: number }
-): Promise<{ width: number; height: number }> {
-  let currentViewport = { ...viewport };
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g, "")
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "");
+}
 
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const snapshot = await surface.terminalText();
-    const size = parseProbeSize(snapshot);
-    if (size && size.cols === target.cols && size.rows === target.rows) {
-      await surface.resizeViewport(currentViewport.width, currentViewport.height);
-      return currentViewport;
-    }
-
-    const basisCols = size?.cols ?? target.cols;
-    const basisRows = size?.rows ?? target.rows;
-    const estimatedCellWidth = currentViewport.width / Math.max(1, basisCols);
-    const estimatedCellHeight = currentViewport.height / Math.max(1, basisRows);
-    let nextWidth = Math.max(320, Math.round(target.cols * estimatedCellWidth));
-    let nextHeight = Math.max(240, Math.round(target.rows * estimatedCellHeight));
-
-    if (nextWidth === currentViewport.width) {
-      nextWidth += target.cols >= basisCols ? 8 : -8;
-    }
-    if (nextHeight === currentViewport.height) {
-      nextHeight += target.rows >= basisRows ? 8 : -8;
-    }
-
-    currentViewport = { width: nextWidth, height: nextHeight };
-    await surface.resizeViewport(currentViewport.width, currentViewport.height);
-
-    if (attempt < 7) {
-      await sleep(Math.max(1, pollIntervalMs));
-    }
-  }
-
-  return currentViewport;
+function parseProbeFrames(text: string): ProbeFrameSnapshot[] {
+  const normalized = stripAnsi(text).replace(/\r/g, "");
+  const matches = normalized.matchAll(
+    /DAR_CONTROL_READY\nsize=\d+x\d+\nprevious=(?:none|\d+x\d+)\nlast=[^\n]+\nresizes=\d+/g
+  );
+  return Array.from(matches, (match) => parseProbeFrame(match[0]!)).filter(
+    (frame): frame is ProbeFrameSnapshot => frame !== undefined
+  );
 }
 
 async function waitForJiggleMarkers(
@@ -587,6 +607,35 @@ async function waitForBrowserFrame(
         ? true
         : undefined,
     `Timed out waiting for browser frame ${JSON.stringify(expected)}`
+  );
+}
+
+async function waitForDurableProbeFrame(
+  surface: Dar04BrowserSurface,
+  artifactsDir: string,
+  deadline: number,
+  now: () => number,
+  sleep: (ms: number) => Promise<void>,
+  pollIntervalMs: number,
+  readLocalOutput: (artifactsDir: string) => Promise<string>,
+  predicate: (frame: ProbeFrameSnapshot) => boolean,
+  timeoutMessage: string
+): Promise<ProbeFrameSnapshot> {
+  return waitForValue(
+    deadline,
+    now,
+    sleep,
+    pollIntervalMs,
+    async () => {
+      const browserFrame = parseProbeFrame(await surface.terminalText());
+      if (browserFrame && predicate(browserFrame)) {
+        return browserFrame;
+      }
+
+      const outputFrames = parseProbeFrames(await readLocalOutput(artifactsDir));
+      return [...outputFrames].reverse().find(predicate);
+    },
+    timeoutMessage
   );
 }
 
@@ -769,9 +818,7 @@ export async function runDar04(
   let largerBrowserReady = false;
   let localRestoreJiggle: JiggleMarkers | undefined;
   let localRestoreFrame: string | undefined;
-  let sameSizeJiggle: JiggleMarkers | undefined;
-  let sameSizeFrame: string | undefined;
-  let sameSizeViewport: { width: number; height: number } = { ...SAME_SIZE_BROWSER_VIEWPORT };
+  let sameSizeFrame: ProbeFrameSnapshot | undefined;
 
   const baseEvidence = () => {
     const evidence = [PTY_INPUT_ARTIFACT, PTY_OUTPUT_ARTIFACT];
@@ -955,7 +1002,8 @@ export async function runDar04(
           authoritativeLocalSize.cols,
           authoritativeLocalSize.rows,
           largerBrowserToken,
-          localRestoreJiggle!.restore.sequence
+          localRestoreJiggle!.restore.sequence,
+          { cols: localRestoreJiggle!.shrink.cols, rows: localRestoreJiggle!.shrink.rows }
         );
         await pty!.expectScreen((screen) => screen.contents() === localRestoreFrame, deadline);
         return {
@@ -989,7 +1037,7 @@ export async function runDar04(
         browser ??= createBrowserDriver(context);
         sameSizeBrowser ??= await browser.createSurface({
           name: "same-size-browser",
-          viewport: { ...sameSizeViewport },
+          viewport: { ...SAME_SIZE_BROWSER_VIEWPORT },
           displayMode: "browser",
         });
         createdSameSizeBrowser = true;
@@ -1085,46 +1133,37 @@ export async function runDar04(
         if (baselineSequence === undefined) {
           throw new Error("Unable to read local resize sequence before same-size browser control");
         }
-        sameSizeViewport = await alignSurfaceViewportToGrid(
-          sameSizeBrowser,
-          sleep,
-          pollIntervalMs,
-          sameSizeViewport,
-          authoritativeLocalSize
-        );
+        const sameSizeBaselineSequence = baselineSequence;
         await sameSizeBrowser.takeControl(trackedSessionId!, deadline);
         localDisplaced = true;
         waitForQuietBeforeExit = true;
-        sameSizeJiggle = await waitForJiggleMarkers(
+        sameSizeFrame = await waitForDurableProbeFrame(
+          sameSizeBrowser,
           context.runtime.artifacts.dir,
           deadline,
           now,
           sleep,
           pollIntervalMs,
           readLocalOutput,
-          baselineSequence,
-          authoritativeLocalSize,
-        );
-        await waitForSessionSize(
-          trackedSessionId!,
-          context.runtime.home,
-          deadline,
-          authoritativeLocalSize,
-          now,
-          sleep,
-          pollIntervalMs,
-          readSessionMeta
+          (frame) =>
+            frame.cols === authoritativeLocalSize.cols &&
+            frame.rows === authoritativeLocalSize.rows &&
+            frame.lastToken === sameSizeToken &&
+            frame.previousSize?.cols === authoritativeLocalSize.cols - 1 &&
+            frame.previousSize?.rows === authoritativeLocalSize.rows - 1 &&
+            frame.resizeSequence >= sameSizeBaselineSequence + 2,
+          `Timed out waiting for same-size browser frame ${authoritativeLocalSize.cols}x${authoritativeLocalSize.rows} after baseline resizes=${sameSizeBaselineSequence}`
         );
         return {
-          message: `Same-size browser jiggled ${sameSizeJiggle.shrink.cols}x${sameSizeJiggle.shrink.rows} -> ${sameSizeJiggle.restore.cols}x${sameSizeJiggle.restore.rows}`,
-          evidence: [sameSizeJiggle.shrink.raw, sameSizeJiggle.restore.raw],
+          message: `Same-size browser durable frame advanced resizes ${sameSizeBaselineSequence} -> ${sameSizeFrame.resizeSequence} via ${sameSizeFrame.previousSize!.cols}x${sameSizeFrame.previousSize!.rows}`,
+          evidence: [sameSizeFrame.raw],
         };
       }
     )
   );
 
   const sameSizeBlocked = () =>
-    sameSizeJiggle ? undefined : "same-size-browser-control-jiggle did not finish the same-size browser jiggle";
+    sameSizeFrame ? undefined : "same-size-browser-control-jiggle did not finish the same-size browser jiggle";
 
   results.push(
     await runSubcheck(
@@ -1138,11 +1177,12 @@ export async function runDar04(
         }
 
         const deadline = remainingDeadline("same-size-complete-repaint", overallDeadline, now);
-        sameSizeFrame = expectedFrame(
+        const expected = expectedFrame(
           authoritativeLocalSize.cols,
           authoritativeLocalSize.rows,
           sameSizeToken,
-          sameSizeJiggle!.restore.sequence
+          sameSizeFrame!.resizeSequence,
+          sameSizeFrame!.previousSize
         );
         await waitForBrowserFrame(
           sameSizeBrowser!,
@@ -1150,11 +1190,11 @@ export async function runDar04(
           now,
           sleep,
           pollIntervalMs,
-          sameSizeFrame
+          expected
         );
         return {
           message: `Same-size browser repaint completed at ${authoritativeLocalSize.cols}x${authoritativeLocalSize.rows}`,
-          evidence: [sameSizeFrame],
+          evidence: [expected],
         };
       }
     )

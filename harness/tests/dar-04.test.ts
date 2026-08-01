@@ -46,6 +46,7 @@ interface ScenarioState {
   currentController: string;
   lastToken: string;
   resizeSequence: number;
+  previousSize?: { cols: number; rows: number };
   localOutput: string;
   localScreen: string;
   pendingScreens: string[];
@@ -77,9 +78,11 @@ function renderProbeScreen(
   cols: number,
   rows: number,
   lastToken: string,
-  resizeSequence: number
+  resizeSequence: number,
+  previousSize?: { cols: number; rows: number }
 ): string {
-  return `DAR_CONTROL_READY\nsize=${cols}x${rows}\nlast=${lastToken}\nresizes=${resizeSequence}`;
+  const previous = previousSize ? `${previousSize.cols}x${previousSize.rows}` : "none";
+  return `DAR_CONTROL_READY\nsize=${cols}x${rows}\nprevious=${previous}\nlast=${lastToken}\nresizes=${resizeSequence}`;
 }
 
 function overlayScreen(): string {
@@ -91,12 +94,21 @@ function queueScreen(state: ScenarioState, screen: string): void {
   state.localScreen = screen;
 }
 
-function appendResize(state: ScenarioState, cols: number, rows: number): ResizeMarker {
+function appendResize(
+  state: ScenarioState,
+  cols: number,
+  rows: number,
+  options: { appendToLocalOutput?: boolean } = {}
+): ResizeMarker {
+  const previousSize = { cols: state.cols, rows: state.rows };
   state.cols = cols;
   state.rows = rows;
   state.resizeSequence += 1;
   const raw = `DAR_CONTROL_RESIZE ${state.resizeSequence} ${cols} ${rows}`;
-  state.localOutput += `${raw}\n`;
+  state.previousSize = previousSize;
+  if (options.appendToLocalOutput ?? true) {
+    state.localOutput += `${raw}\n`;
+  }
   return {
     sequence: state.resizeSequence,
     cols,
@@ -156,12 +168,24 @@ class FakePty implements Dar04Pty {
         const shrink = appendResize(this.state, this.state.localCols - 1, this.state.localRows - 1);
         queueScreen(
           this.state,
-          renderProbeScreen(shrink.cols, shrink.rows, this.state.lastToken, shrink.sequence)
+          renderProbeScreen(
+            shrink.cols,
+            shrink.rows,
+            this.state.lastToken,
+            shrink.sequence,
+            this.state.previousSize
+          )
         );
         const restore = appendResize(this.state, this.state.localCols, this.state.localRows);
         queueScreen(
           this.state,
-          renderProbeScreen(restore.cols, restore.rows, this.state.lastToken, restore.sequence)
+          renderProbeScreen(
+            restore.cols,
+            restore.rows,
+            this.state.lastToken,
+            restore.sequence,
+            this.state.previousSize
+          )
         );
       }
       this.requiresQuietBeforeResize ||= this.options.requireQuietBeforeResizeAfterReclaim ?? false;
@@ -188,7 +212,13 @@ class FakePty implements Dar04Pty {
       this.state.localOutput += `DAR_CONTROL_INPUT ${token}\n`;
       queueScreen(
         this.state,
-        renderProbeScreen(this.state.cols, this.state.rows, token, this.state.resizeSequence)
+        renderProbeScreen(
+          this.state.cols,
+          this.state.rows,
+          token,
+          this.state.resizeSequence,
+          this.state.previousSize
+        )
       );
     }
   }
@@ -204,7 +234,7 @@ class FakePty implements Dar04Pty {
     const resize = appendResize(this.state, cols, rows);
     queueScreen(
       this.state,
-      renderProbeScreen(cols, rows, this.state.lastToken, resize.sequence)
+      renderProbeScreen(cols, rows, this.state.lastToken, resize.sequence, this.state.previousSize)
     );
   }
 
@@ -273,8 +303,6 @@ class FakeSurface implements Dar04BrowserSurface {
   public readonly waitForTerminalTextCalls: string[] = [];
   public readonly resizeViewportCalls: Array<{ width: number; height: number }> = [];
   public readonly closeCalls: string[] = [];
-  private takeControlCount = 0;
-  private resizedSinceDisplaced = false;
 
   public constructor(
     public readonly name: string,
@@ -283,7 +311,7 @@ class FakeSurface implements Dar04BrowserSurface {
     private readonly size: { cols: number; rows: number },
     private readonly options: {
       takeControlError?: Error;
-      requireResizeViewportBeforeSecondTakeControl?: boolean;
+      suppressResizeMarkersFromLocalOutput?: boolean;
     } = {}
   ) {}
 
@@ -297,32 +325,45 @@ class FakeSurface implements Dar04BrowserSurface {
 
   public async takeControl(id: string): Promise<void> {
     this.takeControlCalls.push(id);
-    this.takeControlCount += 1;
     if (this.options.takeControlError) {
       throw this.options.takeControlError;
     }
     this.state.currentController = this.viewerId;
     const sameSize =
       this.state.cols === this.size.cols &&
-      this.state.rows === this.size.rows &&
-      (!this.options.requireResizeViewportBeforeSecondTakeControl ||
-        this.takeControlCount === 1 ||
-        this.resizedSinceDisplaced);
+      this.state.rows === this.size.rows;
     if (sameSize) {
-      const shrink = appendResize(this.state, this.size.cols - 1, this.size.rows - 1);
+      const shrink = appendResize(this.state, this.size.cols - 1, this.size.rows - 1, {
+        appendToLocalOutput: !(this.options.suppressResizeMarkersFromLocalOutput ?? false),
+      });
       queueScreen(
         this.state,
-        renderProbeScreen(shrink.cols, shrink.rows, this.state.lastToken, shrink.sequence)
+        renderProbeScreen(
+          shrink.cols,
+          shrink.rows,
+          this.state.lastToken,
+          shrink.sequence,
+          this.state.previousSize
+        )
       );
-      const restore = appendResize(this.state, this.size.cols, this.size.rows);
+      const restore = appendResize(this.state, this.size.cols, this.size.rows, {
+        appendToLocalOutput: !(this.options.suppressResizeMarkersFromLocalOutput ?? false),
+      });
       queueScreen(
         this.state,
-        renderProbeScreen(restore.cols, restore.rows, this.state.lastToken, restore.sequence)
+        renderProbeScreen(
+          restore.cols,
+          restore.rows,
+          this.state.lastToken,
+          restore.sequence,
+          this.state.previousSize
+        )
       );
     } else {
-      appendResize(this.state, this.size.cols, this.size.rows);
+      appendResize(this.state, this.size.cols, this.size.rows, {
+        appendToLocalOutput: !(this.options.suppressResizeMarkersFromLocalOutput ?? false),
+      });
     }
-    this.resizedSinceDisplaced = false;
     queueScreen(this.state, overlayScreen());
   }
 
@@ -348,7 +389,6 @@ class FakeSurface implements Dar04BrowserSurface {
 
   public async resizeViewport(width: number, height: number): Promise<void> {
     this.resizeViewportCalls.push({ width, height });
-    this.resizedSinceDisplaced = true;
   }
 
   public async terminalText(): Promise<string> {
@@ -357,7 +397,8 @@ class FakeSurface implements Dar04BrowserSurface {
         this.state.cols,
         this.state.rows,
         this.state.lastToken,
-        this.state.resizeSequence
+        this.state.resizeSequence,
+        this.state.previousSize
       ),
       this.state.cols
     );
@@ -384,7 +425,10 @@ class FakeBrowserDriver implements Dar04BrowserDriver {
 
   public constructor(
     private readonly state: ScenarioState,
-    private readonly options: { largerTakeControlError?: Error } = {}
+    private readonly options: {
+      largerTakeControlError?: Error;
+      suppressSameSizeResizeMarkersFromLocalOutput?: boolean;
+    } = {}
   ) {
     this.larger = new FakeSurface(
       "larger-browser",
@@ -398,7 +442,10 @@ class FakeBrowserDriver implements Dar04BrowserDriver {
       "surface-2-same-size",
       this.state,
       { cols: SAME_SIZE_COLS, rows: SAME_SIZE_ROWS },
-      { requireResizeViewportBeforeSecondTakeControl: true }
+      {
+        suppressResizeMarkersFromLocalOutput:
+          this.options.suppressSameSizeResizeMarkersFromLocalOutput,
+      }
     );
   }
 
@@ -476,7 +523,7 @@ function createContext(): Dar04Context {
 }
 
 describe("runDar04", () => {
-  test("runs all DAR-04 subchecks in order with marker-based jiggle assertions across both restore phases", async () => {
+  test("runs all DAR-04 subchecks in order with local raw restore markers and browser-owned same-size frame assertions", async () => {
     const state = createState();
     const context = createContext();
     const browser = new FakeBrowserDriver(state);
@@ -519,7 +566,6 @@ describe("runDar04", () => {
     ]);
     expect(browser.larger.takeControlCalls).toEqual([SESSION_ID]);
     expect(browser.sameSize.takeControlCalls).toEqual([SESSION_ID, SESSION_ID]);
-    expect(browser.sameSize.resizeViewportCalls.length).toBeGreaterThan(0);
     expect(results[0]?.evidence).toEqual(
       expect.arrayContaining([
         "DAR_CONTROL_RESIZE 1 132 44",
@@ -534,18 +580,17 @@ describe("runDar04", () => {
     );
     expect(results[2]?.evidence).toEqual(
       expect.arrayContaining([
-        "DAR_CONTROL_READY\nsize=100x30\nlast=dar04-browser-large-abc123\nresizes=3",
+        "DAR_CONTROL_READY\nsize=100x30\nprevious=99x29\nlast=dar04-browser-large-abc123\nresizes=3",
       ])
     );
     expect(results[3]?.evidence).toEqual(
       expect.arrayContaining([
-        "DAR_CONTROL_RESIZE 8 117 35",
-        "DAR_CONTROL_RESIZE 9 118 36",
+        "DAR_CONTROL_READY\nsize=118x36\nprevious=117x35\nlast=dar04-same-size-abc123\nresizes=9",
       ])
     );
     expect(results[4]?.evidence).toEqual(
       expect.arrayContaining([
-        "DAR_CONTROL_READY\nsize=118x36\nlast=dar04-same-size-abc123\nresizes=9",
+        "DAR_CONTROL_READY\nsize=118x36\nprevious=117x35\nlast=dar04-same-size-abc123\nresizes=9",
       ])
     );
     expect(pty.writeTextCalls).toEqual([" ", " ", "dar04-same-size-abc123\r", " ", "q"]);
@@ -623,6 +668,44 @@ describe("runDar04", () => {
       `writeText:${JSON.stringify("q")}`,
       "waitForExit",
     ]);
+  });
+
+  test("uses the controlling browser frame when same-size browser jiggle markers are absent from local output", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state, {
+      suppressSameSizeResizeMarkersFromLocalOutput: true,
+    });
+    const pty = new FakePty(state);
+
+    const results = await runDar04(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => ++current;
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 5,
+      createUuid: () => RUN_ID,
+      createBrowserDriver: () => browser,
+      spawnPty: () => pty,
+      findSession: async () => ({ id: SESSION_ID, status: "running", cols: state.cols, rows: state.rows }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+    });
+
+    expect(state.localOutput).not.toContain("DAR_CONTROL_RESIZE 8 117 35");
+    expect(state.localOutput).not.toContain("DAR_CONTROL_RESIZE 9 118 36");
+    expect(results.map((result) => result.status)).toEqual(Array(5).fill("passed"));
+    expect(results[3]?.evidence).toEqual(
+      expect.arrayContaining([
+        "DAR_CONTROL_READY\nsize=118x36\nprevious=117x35\nlast=dar04-same-size-abc123\nresizes=9",
+      ])
+    );
   });
 
   test("reports dependent failures after the larger browser cannot take control", async () => {

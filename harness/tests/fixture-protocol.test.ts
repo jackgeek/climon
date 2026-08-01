@@ -529,26 +529,37 @@ async function main() {
   try {
     await waitForMarker("DAR_CONTROL_READY 100 30");
     await waitFor("initial frame", () =>
-      contents() === "DAR_CONTROL_READY\nsize=100x30\nlast=ready\nresizes=0"
+      contents() === "DAR_CONTROL_READY\nsize=100x30\nprevious=none\nlast=ready\nresizes=0"
     );
 
     child.write("surface-alpha\r");
     await waitForMarker("DAR_CONTROL_INPUT surface-alpha");
     await waitFor("input frame", () =>
       contents() ===
-      "DAR_CONTROL_READY\nsize=100x30\nlast=surface-alpha\nresizes=0"
+      "DAR_CONTROL_READY\nsize=100x30\nprevious=none\nlast=surface-alpha\nresizes=0"
     );
 
-    if (mode === "resize" || mode === "resize-exit") {
+    if (mode === "resize" || mode === "resize-exit" || mode === "jiggle") {
       child.resize(120, 40);
       await waitForMarker("DAR_CONTROL_RESIZE 1 120 40");
       await waitFor("resize frame", () =>
         contents() ===
-        "DAR_CONTROL_READY\nsize=120x40\nlast=surface-alpha\nresizes=1"
+        "DAR_CONTROL_READY\nsize=120x40\nprevious=100x30\nlast=surface-alpha\nresizes=1"
       );
     }
 
-    if (mode === "resize") {
+    if (mode === "jiggle") {
+      child.resize(119, 39);
+      await waitForMarker("DAR_CONTROL_RESIZE 2 119 39");
+      child.resize(120, 40);
+      await waitForMarker("DAR_CONTROL_RESIZE 3 120 40");
+      await waitFor("jiggle frame", () =>
+        contents() ===
+        "DAR_CONTROL_READY\nsize=120x40\nprevious=119x39\nlast=surface-alpha\nresizes=3"
+      );
+    }
+
+    if (mode === "resize" || mode === "jiggle") {
       child.kill();
     } else {
       child.write("q");
@@ -1200,7 +1211,7 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
       await screenWrites;
       await waitForScreen(
         () => screen.contents(),
-        "DAR_CONTROL_READY\nsize=80x24\nlast=ready\nresizes=0"
+        "DAR_CONTROL_READY\nsize=80x24\nprevious=none\nlast=ready\nresizes=0"
       );
 
       await writeChunks(child.stdin, ["surface-alpha\r"]);
@@ -1208,7 +1219,7 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
       await screenWrites;
       await waitForScreen(
         () => screen.contents(),
-        "DAR_CONTROL_READY\nsize=80x24\nlast=surface-alpha\nresizes=0"
+        "DAR_CONTROL_READY\nsize=80x24\nprevious=none\nlast=surface-alpha\nresizes=0"
       );
 
       await writeChunks(child.stdin, ["\x1b[8;30;100t"]);
@@ -1216,7 +1227,7 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
       await screenWrites;
       await waitForScreen(
         () => screen.contents(),
-        "DAR_CONTROL_READY\nsize=100x30\nlast=surface-alpha\nresizes=1"
+        "DAR_CONTROL_READY\nsize=100x30\nprevious=80x24\nlast=surface-alpha\nresizes=1"
       );
 
       await writeChunks(child.stdin, ["browser-token\r", "q"]);
@@ -1225,7 +1236,7 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
       expect(text.stderr).toBe("");
       await screenWrites;
       expect(screen.contents()).toBe(
-        "DAR_CONTROL_READY\nsize=100x30\nlast=browser-token\nresizes=1"
+        "DAR_CONTROL_READY\nsize=100x30\nprevious=80x24\nlast=browser-token\nresizes=1"
       );
       expect(text.stdout).toContain("DAR_CONTROL_READY 80 24");
       expect(text.stdout).toContain("DAR_CONTROL_INPUT surface-alpha");
@@ -1270,7 +1281,7 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
         true
       );
       expect(result.finalScreen).toBe(
-        "DAR_CONTROL_READY\nsize=120x40\nlast=surface-alpha\nresizes=1"
+        "DAR_CONTROL_READY\nsize=120x40\nprevious=100x30\nlast=surface-alpha\nresizes=1"
       );
       expect(result.rawTail).toContain("\u001b[?1049h");
       expect(result.rawTail).toContain("DAR_CONTROL_READY 100 30");
@@ -1321,6 +1332,45 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
       expect(result.rawTail.indexOf("\u001b[?1049l")).toBeGreaterThan(
         result.rawTail.indexOf("DAR_CONTROL_RESIZE 1 120 40")
       );
+    },
+    REAL_PTY_TEST_TIMEOUT_MS
+  );
+
+  test.skipIf(!NODE_PATH)(
+    "retains the immediately previous resize target in the durable frame through node-pty",
+    async () => {
+      await buildFixture();
+      const child = spawn(NODE_PATH!, [
+        "--input-type=module",
+        "-e",
+        NODE_CONTROL_PROBE_DRIVER_SCRIPT,
+        FIXTURE_PATH,
+        "jiggle",
+        String(REAL_PTY_TEST_TIMEOUT_MS),
+      ], {
+        cwd: ROOT,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+      });
+      const exitPromise = once(child, "exit");
+      const text = collectProcessText(child);
+
+      const [code] = await exitPromise;
+      expect(code).toBe(0);
+      expect(text.stderr).toBe("");
+
+      const result = JSON.parse(text.stdout.trim()) as {
+        exitCode: number | null;
+        exitSignal: number | null;
+        finalScreen: string;
+        rawTail: string;
+      };
+
+      expect(result.finalScreen).toBe(
+        "DAR_CONTROL_READY\nsize=120x40\nprevious=119x39\nlast=surface-alpha\nresizes=3"
+      );
+      expect(result.rawTail).toContain("DAR_CONTROL_RESIZE 2 119 39");
+      expect(result.rawTail).toContain("DAR_CONTROL_RESIZE 3 120 40");
     },
     REAL_PTY_TEST_TIMEOUT_MS
   );
