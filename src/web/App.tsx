@@ -10,9 +10,6 @@ import {
   FluentProvider,
   Spinner,
   Text,
-  Toast,
-  ToastBody,
-  ToastTitle,
   Toaster,
   useId,
   useToastController,
@@ -91,6 +88,7 @@ import {
 } from "./pwa/pushData.js";
 import { createPresenceReporter } from "./pwa/presence.js";
 import { buildAttentionToast } from "./attentionToast.js";
+import { AttentionToastView } from "./components/AttentionToastView.js";
 import { computeViewedSessionId, viewedSessionAttentionAck } from "./viewedSession.js";
 import { parseShortcut, matchesShortcut } from "../hotkeys.js";
 import { webLog } from "./log.js";
@@ -821,16 +819,7 @@ export function App() {
     (session: SessionMeta): void => {
       const toast = buildAttentionToast(session);
       dispatchToast(
-        <Toast
-          onClick={() => {
-            popSession(toast.sessionId);
-            dismissToast(toast.toastId);
-          }}
-          style={{ cursor: "pointer" }}
-        >
-          <ToastTitle>{toast.message}</ToastTitle>
-          {toast.body ? <ToastBody>{toast.body}</ToastBody> : null}
-        </Toast>,
+        <AttentionToastView toast={toast} onOpen={popSession} onDismiss={dismissToast} />,
         { toastId: toast.toastId, intent: "warning", timeout: 6000 }
       );
     },
