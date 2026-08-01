@@ -119,7 +119,7 @@ export const SCENARIO_DEFINITIONS: readonly ScenarioDefinition[] = [
           "The latest Linux manual run verified repaint flow with Vim but did not cover the required frame-caching same-size repaint case.",
         tracking: "docs/manual-tests/results/linux.md",
         reviewAfter: "2026-08-31",
-        allowedFailedSubchecks: ["same-size-control-repaints-complete-frame"],
+        allowedFailedSubchecks: ["same-size-complete-repaint"],
       },
       macos: { expected: "pass" },
       windows: {
@@ -131,9 +131,9 @@ export const SCENARIO_DEFINITIONS: readonly ScenarioDefinition[] = [
         allowedFailedSubchecks: [
           "larger-browser-displaces-local",
           "local-restore-jiggles-both-dimensions",
-          "local-restore-repaints-complete-frame",
+          "local-restore-complete-authoritative-repaint",
           "same-size-browser-control-jiggle",
-          "same-size-control-repaints-complete-frame",
+          "same-size-complete-repaint",
         ],
       },
     },

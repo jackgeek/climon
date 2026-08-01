@@ -315,9 +315,9 @@ function expectedListOutput(): string {
     "  windows: known-failure | reason=The latest Windows manual run could not verify local displacement, Space reclaim, or PWA control from a real Windows console. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=local-starts-as-controller,displaced-local-non-space-suppressed,simulated-pwa-newest-controller,local-space-reclaims-control,local-resize-authoritative",
     "DAR-04 Local restore and same-size repaint jiggle",
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-04-local-restore-and-same-size-repaint-jiggle",
-    "  linux: partial | reason=The latest Linux manual run verified repaint flow with Vim but did not cover the required frame-caching same-size repaint case. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=same-size-control-repaints-complete-frame",
+    "  linux: partial | reason=The latest Linux manual run verified repaint flow with Vim but did not cover the required frame-caching same-size repaint case. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=same-size-complete-repaint",
     "  macos: pass",
-    "  windows: known-failure | reason=The latest Windows manual run could not attach the full-screen console workflow needed for restore and same-size repaint checks. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=larger-browser-displaces-local,local-restore-jiggles-both-dimensions,local-restore-repaints-complete-frame,same-size-browser-control-jiggle,same-size-control-repaints-complete-frame",
+    "  windows: known-failure | reason=The latest Windows manual run could not attach the full-screen console workflow needed for restore and same-size repaint checks. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=larger-browser-displaces-local,local-restore-jiggles-both-dimensions,local-restore-complete-authoritative-repaint,same-size-browser-control-jiggle,same-size-complete-repaint",
     "DAR-05 Attention flag, acknowledgement, and resize stickiness",
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-05-attention-flag-acknowledgement-and-resize-stickiness",
     "  linux: pass",
@@ -439,10 +439,10 @@ describe("runCli", () => {
       const options = createRunOptions(workspace, {
         definitions: SCENARIO_DEFINITIONS,
         scenarioRunners: {
-          "DAR-04": async () => [
+          "DAR-05": async () => [
             {
               name: "local-starts-as-controller",
-              title: "Returns from an injected DAR-04 runner",
+              title: "Returns from an injected DAR-05 runner",
               status: "passed",
               durationMs: 1,
             },
@@ -452,14 +452,14 @@ describe("runCli", () => {
       const cli = requireRunCli();
 
       await expect(
-        cli(["run", "DAR-04", "--artifact-root", artifactRoot], options)
+        cli(["run", "DAR-05", "--artifact-root", artifactRoot], options)
       ).resolves.toBe(1);
 
       const result = readJson(
-        join(artifactRoot, "cases", "DAR-04", "result.json")
+        join(artifactRoot, "cases", "DAR-05", "result.json")
       ) as CaseResult;
       expect(result).toMatchObject({
-        darId: "DAR-04",
+        darId: "DAR-05",
         platform: "linux",
         status: "setup-failure",
         blocking: true,
@@ -467,7 +467,7 @@ describe("runCli", () => {
         subchecks: [],
       });
       expect(result.message).toContain(
-        "DAR-04 returned subchecks without a registered subcheck contract"
+        "DAR-05 returned subchecks without a registered subcheck contract"
       );
     } finally {
       rmSync(workspace, { recursive: true, force: true });

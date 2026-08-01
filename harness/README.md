@@ -1,6 +1,6 @@
 # E2E harness
 
-Repo-local automation for the reusable cross-platform E2E harness. Its first DAR scenarios exercise `DAR-01`, `DAR-02`, and `DAR-03` from
+Repo-local automation for the reusable cross-platform E2E harness. Its first DAR scenarios exercise `DAR-01`, `DAR-02`, `DAR-03`, and `DAR-04` from
 [`docs/manual-tests/daemon-actor-rewrite.md`](../docs/manual-tests/daemon-actor-rewrite.md)
 and writes machine-readable results for local debugging and CI aggregation.
 
@@ -19,7 +19,7 @@ and writes machine-readable results for local debugging and CI aggregation.
 ```bash
 bun run harness -- doctor
 bun run harness list
-bun run harness -- run DAR-01 DAR-02 DAR-03 --artifact-root .test-tmp/e2e-harness/<platform>
+bun run harness -- run DAR-01 DAR-02 DAR-03 DAR-04 --artifact-root .test-tmp/e2e-harness/<platform>
 bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results
 ```
 
@@ -62,7 +62,7 @@ failed-subcheck allowlist, and `unsupported` stays non-blocking.
 
 - Start with `bun run harness -- doctor`; it checks toolchain, Chromium, fixture
   manifest, and scenario/manual wiring.
-- Run one or more DAR ids locally: `bun run harness -- run DAR-01 DAR-02 DAR-03 --artifact-root .test-tmp/e2e-harness/<platform>`
+- Run one or more DAR ids locally: `bun run harness -- run DAR-01 DAR-02 DAR-03 DAR-04 --artifact-root .test-tmp/e2e-harness/<platform>`
 - Inspect `summary.md`, `junit.xml`, and per-case `logs/`, `home/`, and
   `browser-trace.zip` artifacts before re-running.
 - Re-aggregate downloaded CI artifacts locally with
@@ -77,4 +77,4 @@ runtime it expects. The Node entrypoint still runs
 [`prepareNodePty`](src/node-pty-preflight.ts) before loading the harness. On
 non-Windows hosts it fixes executable bits on
 `node_modules/node-pty/prebuilds/*/spawn-helper`. Linux GitHub-hosted runners
-still need `CLIMON_DISABLE_SETSID=1` during `bun run harness -- run DAR-01 DAR-02 DAR-03`.
+still need `CLIMON_DISABLE_SETSID=1` during `bun run harness -- run DAR-01 DAR-02 DAR-03 DAR-04`.
