@@ -466,11 +466,59 @@ function sessionMetaEvidencePath(id: string): string {
   return `home/sessions/${id}.json`;
 }
 
-async function closeSurface(surface: Dar03BrowserSurface | undefined): Promise<void> {
+function cleanupFailure(message: string, error: unknown): Error {
+  return new Error(`${message}: ${stringifyError(error)}`, { cause: error });
+}
+
+function throwCleanupErrors(errors: Error[], aggregateMessage: string): void {
+  if (errors.length === 0) {
+    return;
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  throw new Error(errors.map((error) => error.message).join("; "), {
+    cause: new AggregateError(errors, aggregateMessage),
+  });
+}
+
+async function closeSurface(
+  surface: Dar03BrowserSurface | undefined,
+  label: string,
+  cleanupErrors: Error[]
+): Promise<void> {
   if (!surface) {
     return;
   }
-  await surface.close();
+  try {
+    await surface.close();
+  } catch (error) {
+    cleanupErrors.push(cleanupFailure(`${label} close failed`, error));
+  }
+}
+
+async function cleanupPty(
+  pty: Dar03Pty | undefined,
+  exitSent: boolean,
+  overallDeadline: number,
+  now: () => number,
+  cleanupErrors: Error[]
+): Promise<void> {
+  if (!pty || exitSent) {
+    return;
+  }
+
+  try {
+    pty.writeText("q");
+    await pty.waitForExit(Math.min(overallDeadline, now() + 5_000));
+  } catch (error) {
+    cleanupErrors.push(cleanupFailure("PTY cleanup failed", error));
+    try {
+      pty.kill();
+    } catch (killError) {
+      cleanupErrors.push(cleanupFailure("PTY cleanup failed", killError));
+    }
+  }
 }
 
 export async function runDar03(
@@ -862,19 +910,11 @@ export async function runDar03(
     })
   );
 
-  try {
-    await closeSurface(pwa);
-    await closeSurface(desktop);
-  } finally {
-    if (pty && !exitSent) {
-      try {
-        pty.writeText("q");
-        await pty.waitForExit(Math.min(overallDeadline, now() + 5_000));
-      } catch {
-        pty.kill();
-      }
-    }
-  }
+  const cleanupErrors: Error[] = [];
+  await closeSurface(pwa, "PWA surface", cleanupErrors);
+  await closeSurface(desktop, "Desktop surface", cleanupErrors);
+  await cleanupPty(pty, exitSent, overallDeadline, now, cleanupErrors);
+  throwCleanupErrors(cleanupErrors, "Failed to finalize DAR-03");
 
   return results;
 }

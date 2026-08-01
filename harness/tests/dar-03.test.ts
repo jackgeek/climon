@@ -193,6 +193,7 @@ class FakeSurface implements Dar03BrowserSurface {
     private readonly surfaceSize: { cols: number; rows: number },
     private readonly options: {
       takeControlError?: Error;
+      closeError?: Error;
     } = {}
   ) {}
 
@@ -244,6 +245,9 @@ class FakeSurface implements Dar03BrowserSurface {
 
   public async close(): Promise<void> {
     this.closeCalls.push(this.name);
+    if (this.options.closeError) {
+      throw this.options.closeError;
+    }
   }
 }
 
@@ -262,6 +266,8 @@ class FakeBrowserDriver implements Dar03BrowserDriver {
     options: {
       desktopTakeControlError?: Error;
       pwaTakeControlError?: Error;
+      desktopCloseError?: Error;
+      pwaCloseError?: Error;
     } = {}
   ) {
     this.desktop = new FakeSurface(
@@ -269,14 +275,20 @@ class FakeBrowserDriver implements Dar03BrowserDriver {
       "surface-1-desktop",
       state,
       { cols: DESKTOP_COLS, rows: DESKTOP_ROWS },
-      { takeControlError: options.desktopTakeControlError }
+      {
+        takeControlError: options.desktopTakeControlError,
+        closeError: options.desktopCloseError,
+      }
     );
     this.pwa = new FakeSurface(
       "pwa",
       "surface-2-pwa",
       state,
       { cols: PWA_COLS, rows: PWA_ROWS },
-      { takeControlError: options.pwaTakeControlError }
+      {
+        takeControlError: options.pwaTakeControlError,
+        closeError: options.pwaCloseError,
+      }
     );
   }
 
@@ -506,5 +518,54 @@ describe("runDar03", () => {
     expect(results[5]?.message).toContain(
       "local-space-reclaims-control did not restore local control"
     );
+  });
+
+  test("aggregates cleanup failures after the first surface close error and still cleans the PTY", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state, {
+      pwaCloseError: new Error("pwa close failed"),
+    });
+    const pty = new FakePty(state, {
+      waitForExitError: new Error("pty cleanup wait failed"),
+    });
+
+    await expect(
+      runDar03(context, {
+        now: (() => {
+          let current = 1_000;
+          return () => ++current;
+        })(),
+        sleep: async () => {},
+        pollIntervalMs: 5,
+        createUuid: () => RUN_ID,
+        createBrowserDriver: () => browser,
+        spawnPty: () => pty,
+        findSession: async () => ({
+          id: SESSION_ID,
+          status: "running",
+          cols: state.cols,
+          rows: state.rows,
+        }),
+        readLocalOutput: async () =>
+          state.localOutput
+            .split("\n")
+            .filter((line) => !line.startsWith("DAR_CONTROL_RESIZE "))
+            .join("\n"),
+        readSessionMeta: async () => ({
+          id: SESSION_ID,
+          status: state.status,
+          cols: state.cols,
+          rows: state.rows,
+        }),
+      })
+    ).rejects.toThrow(
+      "PWA surface close failed: pwa close failed; PTY cleanup failed: pty cleanup wait failed"
+    );
+
+    expect(browser.pwa.closeCalls).toEqual(["pwa"]);
+    expect(browser.desktop.closeCalls).toEqual(["desktop"]);
+    expect(pty.writeTextCalls).toContain("q");
+    expect(pty.killCalls).toBe(1);
   });
 });
