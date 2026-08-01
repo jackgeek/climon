@@ -8,7 +8,7 @@ use crate::paths::Env;
 /// Maximum candidate ids tried before giving up. Mirrors `MAX_ATTEMPTS`.
 pub const MAX_ATTEMPTS: usize = 50;
 
-/// Default id generator: `petname` produces lowercase adjective-noun-verb ids
+/// Default id generator: `petname` produces lowercase adverb-adjective-noun ids
 /// joined by `-` (verified filesystem-safe and matching `^[a-z]+(-[a-z]+){2}$`).
 pub fn default_session_id() -> String {
     petname::petname(3, "-").expect("petname medium word lists must not be empty")
