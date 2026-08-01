@@ -1,5 +1,32 @@
 [
   {
+    "version": "3.3.3",
+    "changes": [
+      "Prevent local terminals from freezing when a console write stalls by moving terminal output off the shared session-state lock",
+      "Refresh Rust and JavaScript dependencies and regenerate third-party license notices"
+    ]
+  },
+  {
+    "version": "3.3.2",
+    "changes": [
+      "Show the terminal Select/copy button on all devices instead of limiting it to touch devices"
+    ]
+  },
+  {
+    "version": "3.3.1",
+    "changes": [
+      "Harden tag-driven release and back-merge automation, including workflow permissions"
+    ]
+  },
+  {
+    "version": "3.3.0",
+    "changes": [
+      "Make Microsoft dev-tunnel failures actionable and retry transient failures with capped backoff across dashboard and remote-session connections",
+      "Fix dashboard session lists periodically going blank",
+      "Copy selected captured terminal text with whitespace collapsed to a clean single line"
+    ]
+  },
+  {
     "version": "3.2.1",
     "changes": [
       "Revert the 3.2.0 Windows self-update stub/installer rework that caused clients updating from 3.1.x to overwrite `climon` with the installer and break"

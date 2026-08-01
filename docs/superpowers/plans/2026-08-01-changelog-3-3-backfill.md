@@ -14,7 +14,6 @@
 
 **Files:**
 - Modify: `CHANGELOG.json`
-- Test: `tests/changelog.test.ts`
 - Test: `rust/climon-install/src/changelog.rs`
 
 - [ ] **Step 1: Add the four entries**
@@ -56,22 +55,12 @@ Prepend this content to the array in `CHANGELOG.json`:
 Run:
 
 ```bash
-bun -e 'JSON.parse(await Bun.file("CHANGELOG.json").text())'
+bun -e 'const log=JSON.parse(await Bun.file("CHANGELOG.json").text()); const expected=["3.3.3","3.3.2","3.3.1","3.3.0"]; if (JSON.stringify(log.slice(0,4).map((x:any)=>x.version)) !== JSON.stringify(expected)) throw new Error("3.3 entries missing or out of order")'
 ```
 
 Expected: exit code 0 with no output.
 
-- [ ] **Step 3: Run the focused Bun test**
-
-Run:
-
-```bash
-bun test tests/changelog.test.ts
-```
-
-Expected: all tests pass.
-
-- [ ] **Step 4: Run the focused Rust tests**
+- [ ] **Step 3: Run the focused Rust tests**
 
 Run from `rust/`:
 
@@ -81,7 +70,7 @@ cargo test -p climon-install changelog
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Commit the backfill**
+- [ ] **Step 4: Commit the backfill**
 
 ```bash
 git add CHANGELOG.json

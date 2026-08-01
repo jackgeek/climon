@@ -36,5 +36,5 @@ Prepend these entries to `CHANGELOG.json` in descending version order:
 
 ## Validation
 
-Parse `CHANGELOG.json` with Bun, run the focused Bun changelog test, and run the
-focused Rust changelog tests in `climon-install`.
+Parse `CHANGELOG.json` with Bun, verify the four versions are present in
+descending order, and run the focused Rust changelog tests in `climon-install`.
