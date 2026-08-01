@@ -187,3 +187,25 @@ presence heartbeat, so foregrounding one device never suppresses another.
 
 **Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
 | --- | --- | --- | --- | --- | --- |
+
+---
+
+## MT-FG-TOAST-08 — Explicit dismiss does not open the session
+
+- **ID:** MT-FG-TOAST-08
+- **Feature:** Foreground attention toast
+- **Preconditions:** Common preconditions; desktop or mobile/PWA, dashboard focused, viewing session B.
+- **Config-matrix cell:** desktop foreground dashboard; mobile/PWA foreground dashboard
+- **Platforms:** Desktop (Chrome/Edge/Firefox); Android/iOS PWA
+
+**Steps:**
+1. Keep the dashboard focused on session B.
+2. Drive session A into `needs-attention`.
+3. On the toast, activate the `Dismiss notification` close button.
+4. Later, trigger a distinct attention episode for session A so the toast appears again.
+5. Click/tap the non-close toast surface.
+
+**Expected result:** Step 3 dismisses only the toast: session B stays open, and session A remains in its attention state rather than being opened or cleared. A later attention episode for session A shows a fresh toast. Step 5 opens session A and dismisses the toast. Any untouched toast still auto-dismisses after six seconds.
+
+**Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
+| --- | --- | --- | --- | --- | --- |
