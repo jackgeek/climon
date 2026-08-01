@@ -82,7 +82,7 @@ mock.module("@fluentui/react-icons", () => ({
 const sessionItemModule = await import("../src/web/components/SessionItem.js");
 const { SessionItem, sessionAccessibleLabel, sessionDisplayTitle } = sessionItemModule;
 const sessionAutomationAttributes = (sessionItemModule as Record<string, unknown>).sessionAutomationAttributes as
-  | ((session: Pick<SessionMeta, "id" | "status">) => Record<string, string>)
+  | ((session: Pick<SessionMeta, "id" | "status" | "terminalTitle" | "progress">) => Record<string, string>)
   | undefined;
 
 function makeSession(overrides: Partial<SessionMeta> = {}): SessionMeta {
@@ -125,12 +125,17 @@ describe("sessionAutomationAttributes", () => {
     expect(
       sessionAutomationAttributes?.({
         id: "quiet-otters-run",
-        status: "running"
+        status: "running",
+        terminalTitle: "build.log",
+        progress: { state: "normal", value: 42 }
       })
     ).toEqual({
       "data-testid": "session-item",
       "data-session-id": "quiet-otters-run",
-      "data-session-status": "running"
+      "data-session-status": "running",
+      "data-terminal-title": "build.log",
+      "data-progress-state": "normal",
+      "data-progress-percent": "42"
     });
   });
 });
@@ -170,7 +175,12 @@ describe("SessionItem compact rendering", () => {
       createElement(SessionItem, {
         active: false,
         compact: false,
-        session: makeSession({ id: "dar-session", status: "paused" }),
+        session: makeSession({
+          id: "dar-session",
+          status: "paused",
+          terminalTitle: "build.log",
+          progress: { state: "warning" }
+        }),
         onClose: () => {},
         onEdit: () => {},
         onMaximize: () => {},
@@ -183,6 +193,9 @@ describe("SessionItem compact rendering", () => {
     expect(markup).toContain('data-testid="session-item"');
     expect(markup).toContain('data-session-id="dar-session"');
     expect(markup).toContain('data-session-status="paused"');
+    expect(markup).toContain('data-terminal-title="build.log"');
+    expect(markup).toContain('data-progress-state="warning"');
+    expect(markup).toContain('data-progress-percent=""');
   });
 
   test("keeps the session title as the only compact hover title", () => {

@@ -283,11 +283,17 @@ export function sessionAccessibleLabel(
   return `${sessionDisplayTitle(session)}, ${STATUS_LABELS[session.status]}`;
 }
 
-export function sessionAutomationAttributes(session: Pick<SessionMeta, "id" | "status">) {
+export function sessionAutomationAttributes(
+  session: Pick<SessionMeta, "id" | "status" | "terminalTitle" | "progress">
+) {
   return {
     "data-testid": "session-item",
     "data-session-id": session.id,
-    "data-session-status": session.status
+    "data-session-status": session.status,
+    "data-terminal-title": session.terminalTitle ?? "",
+    "data-progress-state": session.progress?.state ?? "",
+    "data-progress-percent":
+      typeof session.progress?.value === "number" ? String(session.progress.value) : ""
   } as const;
 }
 

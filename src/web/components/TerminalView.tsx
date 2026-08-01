@@ -1309,6 +1309,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         ref={containerRef}
         data-testid="session-terminal"
         data-session-id={readySessionId ?? undefined}
+        data-controller-id={controllerIdRef.current ?? ""}
         className={mergeClasses(styles.root, contentVisible ? undefined : styles.hidden)}
         style={{
           backgroundColor: xtermTheme.background ?? DEFAULT_TERMINAL_BACKGROUND,

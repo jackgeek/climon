@@ -6,7 +6,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { CaseArtifacts, caseArtifactDir } from "./artifacts.js";
 import type { BuildArtifacts } from "./build-cache.js";
 import type { CommandRunner, CommandSpec } from "./command.js";
-import { stopBrowserTracing } from "./drivers/browser.js";
+import { stopBrowserTracing, type BrowserSurfaceRegistry } from "./drivers/browser.js";
 import { ProcessLedger, type OwnedProcess } from "./process-ledger.js";
 import { SessionLedger, type SessionStatus } from "./session-ledger.js";
 import { HarnessError, type HarnessPlatform } from "./types.js";
@@ -32,6 +32,7 @@ export interface RuntimeContext {
   browser: Browser;
   context: BrowserContext;
   page: Page;
+  browserSurfaceRegistry?: BrowserSurfaceRegistry;
 }
 
 export interface RuntimeSupervisorOptions {
@@ -98,6 +99,7 @@ type ObservedServerExit =
   | { type: "error"; cause: unknown };
 
 interface CleanupProgress {
+  browserSurfacesClosed: boolean;
   browserTracingStopped: boolean;
   pageClosed: boolean;
   contextClosed: boolean;
@@ -517,6 +519,7 @@ export class RuntimeSupervisor {
   public readonly context: RuntimeContext;
   private disposed = false;
   private readonly cleanupProgress: CleanupProgress = {
+    browserSurfacesClosed: false,
     browserTracingStopped: false,
     pageClosed: false,
     contextClosed: false,
@@ -666,6 +669,7 @@ export class RuntimeSupervisor {
     const errors: unknown[] = [];
     const deadline = this.now() + this.options.cleanupTimeoutMs;
     if (this.cleanupProgress.browserClosed) {
+      this.cleanupProgress.browserSurfacesClosed = true;
       this.cleanupProgress.browserTracingStopped = true;
       this.cleanupProgress.contextClosed = true;
       this.cleanupProgress.pageClosed = true;
@@ -674,6 +678,15 @@ export class RuntimeSupervisor {
       this.cleanupProgress.pageClosed = true;
     } else if (this.cleanupProgress.pageClosed) {
       this.cleanupProgress.browserTracingStopped = true;
+    }
+
+    if (!this.cleanupProgress.browserSurfacesClosed) {
+      try {
+        await this.context.browserSurfaceRegistry?.closeAll();
+        this.cleanupProgress.browserSurfacesClosed = true;
+      } catch (error) {
+        errors.push(error);
+      }
     }
 
     if (!this.cleanupProgress.browserTracingStopped) {

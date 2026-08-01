@@ -88,73 +88,119 @@ function controlledProcess(
   };
 }
 
-function readyBrowser(log: string[] = []) {
-  let newPageCalls = 0;
+function readyBrowser(log: string[] = [], contextCount = 1) {
+  function makeTracing(index: number) {
+    return {
+      startCalls: [] as unknown[],
+      stopCalls: [] as unknown[],
+      stopErrors: [] as unknown[],
+      async start(options: unknown) {
+        this.startCalls.push(options);
+        log.push(index === 0 ? "trace:start" : `trace:${index}:start`);
+      },
+      async stop(options: unknown) {
+        this.stopCalls.push(options);
+        log.push(`trace${index === 0 ? "" : `:${index}`}:stop:${String((options as { path?: string }).path ?? "")}`);
+        const error = this.stopErrors.shift();
+        if (error !== undefined) {
+          throw error;
+        }
+      },
+    };
+  }
+
+  function makePage(index: number) {
+    const screenshotCalls: Array<Record<string, unknown>> = [];
+    const viewportCalls: Array<{ width: number; height: number }> = [];
+    return {
+      screenshotCalls,
+      viewportCalls,
+      locator(selector: string) {
+        return {
+          async waitFor() {
+            log.push(`wait:${selector}`);
+          },
+        };
+      },
+      async goto(url: string) {
+        log.push(`goto:${url}`);
+      },
+      on() {},
+      keyboard: {
+        async insertText() {},
+        async press() {},
+      },
+      async setViewportSize(viewport: { width: number; height: number }) {
+        viewportCalls.push(viewport);
+      },
+      async screenshot(options: Record<string, unknown>) {
+        screenshotCalls.push(options);
+      },
+      async close() {
+        log.push(index === 0 ? "page-close" : `page-close:${index}`);
+      },
+    } as unknown as Page & {
+      screenshotCalls: Array<Record<string, unknown>>;
+      viewportCalls: Array<{ width: number; height: number }>;
+    };
+  }
+
+  function makeContext(index: number) {
+    let newPageCalls = 0;
+    const page = makePage(index);
+    const tracing = makeTracing(index);
+    const addInitScriptCalls: Array<{ script: unknown; arg: unknown }> = [];
+    const context = {
+      tracing,
+      addInitScriptCalls,
+      get newPageCalls() {
+        return newPageCalls;
+      },
+      async addInitScript(script: unknown, arg: unknown) {
+        addInitScriptCalls.push({ script, arg });
+      },
+      async newPage() {
+        newPageCalls += 1;
+        return page;
+      },
+      async close() {
+        log.push(index === 0 ? "context-close" : `context-close:${index}`);
+      },
+    } as unknown as BrowserContext & {
+      newPageCalls: number;
+      addInitScriptCalls: Array<{ script: unknown; arg: unknown }>;
+    };
+    return { context, page, tracing };
+  }
+
   let newContextCalls = 0;
-  const tracing = {
-    startCalls: [] as unknown[],
-    stopCalls: [] as unknown[],
-    stopErrors: [] as unknown[],
-    async start(options: unknown) {
-      this.startCalls.push(options);
-      log.push("trace:start");
-    },
-    async stop(options: unknown) {
-      this.stopCalls.push(options);
-      log.push(`trace:stop:${String((options as { path?: string }).path ?? "")}`);
-      const error = this.stopErrors.shift();
-      if (error !== undefined) {
-        throw error;
-      }
-    },
-  };
-  const page = {
-    locator(selector: string) {
-      return {
-        async waitFor() {
-          log.push(`wait:${selector}`);
-        },
-      };
-    },
-    async goto(url: string) {
-      log.push(`goto:${url}`);
-    },
-    on() {},
-    keyboard: {
-      async insertText() {},
-      async press() {},
-    },
-    async close() {
-      log.push("page-close");
-    },
-  } as unknown as Page;
-  const context = {
-    tracing,
-    get newPageCalls() {
-      return newPageCalls;
-    },
-    async newPage() {
-      newPageCalls += 1;
-      return page;
-    },
-    async close() {
-      log.push("context-close");
-    },
-  } as unknown as BrowserContext & { newPageCalls: number };
+  const entries = Array.from({ length: Math.max(1, contextCount) }, (_, index) => makeContext(index));
   const browser = {
     get newContextCalls() {
       return newContextCalls;
     },
     async newContext() {
+      const entry = entries[newContextCalls];
       newContextCalls += 1;
-      return context;
+      if (!entry) {
+        throw new Error("No fake browser context available");
+      }
+      return entry.context;
     },
     async close() {
       log.push("browser-close");
     },
   } as unknown as Browser & { newContextCalls: number };
 
-  return { browser, context, page, tracing };
+  return {
+    browser,
+    context: entries[0]!.context,
+    page: entries[0]!.page,
+    tracing: entries[0]!.tracing,
+    extraContexts: entries.slice(1).map((entry) => entry.context),
+    extraPages: entries.slice(1).map((entry) => entry.page),
+    extraTracings: entries.slice(1).map((entry) => entry.tracing),
+  };
 }
 
 async function createReadySupervisor(
@@ -863,6 +909,54 @@ describe("RuntimeSupervisor.dispose", () => {
       expect(log.indexOf(`trace:stop:${tracePath}`)).toBeGreaterThan(-1);
       expect(log.indexOf(`trace:stop:${tracePath}`)).toBeLessThan(log.indexOf("page-close"));
       expect(log.indexOf("page-close")).toBeLessThan(log.indexOf("context-close"));
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("closes runtime-owned browser surfaces and preserves per-surface evidence during dispose", async () => {
+    const workspace = makeWorkspace("runtime-supervisor-owned-surfaces");
+    const log: string[] = [];
+    const options = runtimeOptions(workspace);
+    const fakeBrowser = readyBrowser(log, 2);
+
+    try {
+      const { supervisor } = await createReadySupervisor(options, {
+        launchBrowser: async () => fakeBrowser.browser,
+      });
+      const driver = new BrowserDriver(supervisor.context, {
+        now: () => 0,
+        sleep: async () => {},
+        pollIntervalMs: 1,
+      });
+      const pwa = await driver.createSurface({
+        name: "pwa",
+        viewport: { width: 390, height: 844 },
+        displayMode: "standalone",
+      });
+      const tracePath = join(supervisor.context.artifacts.dir, "browser-surfaces", "01-pwa", "trace.zip");
+
+      await pwa.open(supervisor.context.baseUrl, 1_000);
+      await supervisor.dispose();
+
+      expect(fakeBrowser.extraTracings[0]?.stopCalls).toEqual([{ path: tracePath }]);
+      expect(fakeBrowser.extraPages[0]?.screenshotCalls).toEqual([
+        {
+          path: join(supervisor.context.artifacts.dir, "browser-surfaces", "01-pwa", "closing.png"),
+          fullPage: true,
+        },
+      ]);
+      expect(
+        readFileSync(join(supervisor.context.artifacts.dir, "browser-surfaces", "01-pwa", "console.log"), "utf8")
+      ).toBe("");
+      expect(
+        readFileSync(
+          join(supervisor.context.artifacts.dir, "browser-surfaces", "01-pwa", "failed-requests.log"),
+          "utf8"
+        )
+      ).toBe("");
+      expect(log).toContain("page-close:1");
+      expect(log).toContain("context-close:1");
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
