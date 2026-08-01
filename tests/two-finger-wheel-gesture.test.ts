@@ -142,7 +142,7 @@ describe("two-finger wheel gesture", () => {
       ]
     };
 
-    const momentum = finishTwoFingerGesture(state, 0, false);
+    const momentum = finishTwoFingerGesture(state, 0, 120, false);
 
     expect(momentum?.velocity).toBeCloseTo(19 / 60, 10);
   });
@@ -161,17 +161,27 @@ describe("two-finger wheel gesture", () => {
     expect(active.state.phase).toBe("active");
     if (active.state.phase !== "active") return;
 
-    const momentum = finishTwoFingerGesture(active.state, 0, false);
+    const momentum = finishTwoFingerGesture(active.state, 0, 50, false);
 
     expect(momentum).not.toBeNull();
     expect(momentum?.point).toEqual({ clientX: 20, clientY: 10, screenX: 20, screenY: 10, timeStamp: 50 });
     expect(momentum?.velocity).toBe(0.4);
   });
 
+  test("finishing long after the last move suppresses stale momentum", () => {
+    const armed = beginTwoFingerGesture([touch(10, 20), touch(30, 40)], 0);
+    const active = moveTwoFingerGesture(armed, [touch(10, 0), touch(30, 20)], 50, false);
+
+    expect(active.state.phase).toBe("active");
+    if (active.state.phase !== "active") return;
+
+    expect(finishTwoFingerGesture(active.state, 0, 200, false)).toBeNull();
+  });
+
   test("one-touch finish cancels momentum", () => {
     const state = pendingState();
 
-    expect(finishTwoFingerGesture(state, 1, false)).toBeNull();
+    expect(finishTwoFingerGesture(state, 1, 100, false)).toBeNull();
   });
 
   test("wheel momentum clamps long frames and decays toward stop", () => {

@@ -199,13 +199,14 @@ export function moveTwoFingerGesture(
 export function finishTwoFingerGesture(
   state: TwoFingerGestureState,
   remainingTouchCount: number,
+  timeStamp: number,
   inverted: boolean
 ): WheelMomentum | null {
   if (remainingTouchCount !== 0 || state.phase !== "active") {
     return null;
   }
 
-  const samples = pruneSamples(state.samples, state.point.timeStamp);
+  const samples = pruneSamples(state.samples, timeStamp);
   if (samples.length < 2) {
     return null;
   }
