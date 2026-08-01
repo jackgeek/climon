@@ -54,13 +54,16 @@ git fetch origin
 git worktree add .worktrees/release-x.y.z -b release/x.y.z origin/dev
 cd .worktrees/release-x.y.z
 
-# 2. Bump the version + CLI fixtures in lockstep. Picks the level explicitly:
+# 2. Add the new version at the top of CHANGELOG.json, then validate the JSON.
+bun -e 'JSON.parse(await Bun.file("CHANGELOG.json").text())'
+
+# 3. Bump the version + CLI fixtures in lockstep. Picks the level explicitly:
 #    patch (default), minor, or major. This commits `chore(release): vX.Y.Z`
 #    and creates a local tag, but does NOT push.
 bun run release            # or: bun run release minor / major
 
-# 3. Push the release branch and open a PR into main.
-#    NOTE: the local tag from step 2 is deleted below and re-created on main.
+# 4. Push the release branch and open a PR into main.
+#    NOTE: the local tag from step 3 is deleted below and re-created on main.
 git push -u origin release/x.y.z
 gh pr create --base main --head release/x.y.z \
   --title "release: vX.Y.Z" --body "Release vX.Y.Z"
@@ -69,11 +72,11 @@ gh pr create --base main --head release/x.y.z \
 Wait for `rust-ci` and `bun-ci` to pass on the PR, then:
 
 ```bash
-# 4. Merge the release PR into main with a REAL MERGE COMMIT (never squash),
+# 5. Merge the release PR into main with a REAL MERGE COMMIT (never squash),
 #    so main and dev keep a shared ancestor.
 gh pr merge release/x.y.z --merge
 
-# 5. Tag the merged commit on main and push the tag — THIS ships the release.
+# 6. Tag the merged commit on main and push the tag — THIS ships the release.
 git fetch origin main
 git tag -a vX.Y.Z origin/main -m "vX.Y.Z"   # tag the main merge commit
 git push origin vX.Y.Z
@@ -87,10 +90,10 @@ git push origin vX.Y.Z
 Then finish up:
 
 ```bash
-# 6. Watch the release workflow.
+# 7. Watch the release workflow.
 gh run watch --workflow release.yml
 
-# 7. Merge the automated `main -> dev` back-merge PR (real merge commit) so the
+# 8. Merge the automated `main -> dev` back-merge PR (real merge commit) so the
 #    version bump reaches dev.
 gh pr list --base dev --head main
 gh pr merge <pr-number> --merge
@@ -105,7 +108,9 @@ git fetch origin
 git worktree add .worktrees/hotfix-x.y.z -b hotfix/x.y.z origin/main
 cd .worktrees/hotfix-x.y.z
 
-# fix the bug, commit it, then bump:
+# Fix the bug and commit it. Add the new version at the top of CHANGELOG.json,
+# then validate the JSON before bumping:
+bun -e 'JSON.parse(await Bun.file("CHANGELOG.json").text())'
 bun run release            # patch bump
 
 git push -u origin hotfix/x.y.z

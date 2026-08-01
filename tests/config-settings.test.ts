@@ -9,6 +9,7 @@ import {
   renderConfigSettingsHelp,
   renderConfigSettingsTable
 } from "../src/config-settings.js";
+import { PREF_TOUCH_WHEEL_INVERTED } from "../src/dashboard-preference-keys.js";
 
 describe("config settings registry", () => {
   test("declares every persisted config path with purpose and scope", () => {
@@ -22,6 +23,7 @@ describe("config settings registry", () => {
       "hotKeys.focusTopSession",
       "dashboard.theme",
       "dashboard.keyBarPinned",
+      "dashboard.touchWheelInverted",
       "dashboard.stateIconNoMotion",
       "attention.idleSeconds",
       "remote.enabled",
@@ -97,7 +99,7 @@ describe("config settings registry", () => {
         detachPrefix: 0x1c
       },
       hotKeys: { focusTopSession: "Alt+J" },
-      dashboard: { theme: "Default", keyBarPinned: true, stateIconNoMotion: false },
+      dashboard: { theme: "Default", keyBarPinned: true, touchWheelInverted: false, stateIconNoMotion: false },
       attention: { idleSeconds: 10 },
       remote: { discover: true, ingestPortRetryAttempts: 100, keepAlive: 60, autoLink: true },
       session: { color: "auto", priority: 500 },
@@ -146,6 +148,7 @@ describe("config settings registry", () => {
       "hotKeys.focusTopSession",
       "dashboard.theme",
       "dashboard.keyBarPinned",
+      "dashboard.touchWheelInverted",
       "dashboard.stateIconNoMotion",
       "remote.enabled",
       "remote.host",
@@ -176,7 +179,7 @@ describe("config settings registry", () => {
 
   test("allConfigKeys returns all config paths including internal keys", () => {
     expect(allConfigKeys()).toEqual(CONFIG_SETTINGS.map((setting) => setting.path));
-    expect(allConfigKeys().length).toBe(41);
+    expect(allConfigKeys().length).toBe(42);
   });
 
   test("coerces values through registry validators", () => {
@@ -270,11 +273,17 @@ describe("hotKeys.focusTopSession setting", () => {
 });
 
 describe("dashboard-writable settings", () => {
-  test("dashboard.theme and dashboard.keyBarPinned are registered and writable", () => {
+  test("dashboard preference keys expose the touch wheel inversion config path", () => {
+    expect(PREF_TOUCH_WHEEL_INVERTED).toBe("dashboard.touchWheelInverted");
+  });
+
+  test("dashboard.theme, dashboard.keyBarPinned, and dashboard.touchWheelInverted are registered and writable", () => {
     const theme = findConfigSetting("dashboard.theme");
     const pin = findConfigSetting("dashboard.keyBarPinned");
+    const touchWheel = findConfigSetting("dashboard.touchWheelInverted");
     expect(theme?.dashboardWritable).toBe(true);
     expect(pin?.dashboardWritable).toBe(true);
+    expect(touchWheel?.dashboardWritable).toBe(true);
   });
 
   test("every dashboardWritable setting is browser-scoped, validated, and not sensitive/internal", () => {
@@ -296,5 +305,23 @@ describe("dashboard-writable settings", () => {
     const pin = findConfigSetting("dashboard.keyBarPinned");
     expect(() => pin?.validate?.(true)).not.toThrow();
     expect(() => pin?.validate?.("yes")).toThrow();
+  });
+
+  test("dashboard.touchWheelInverted is a writable boolean defaulting to false", () => {
+    const touchWheel = findConfigSetting("dashboard.touchWheelInverted");
+    expect(touchWheel?.type).toBe("boolean");
+    expect(touchWheel?.defaultValue).toBe(false);
+    expect(touchWheel?.scope).toEqual(["server", "browser"]);
+    expect(touchWheel?.acceptInput).toBe(true);
+    expect(touchWheel?.dashboardWritable).toBe(true);
+    expect(touchWheel?.purpose).toBe(
+      "When true, reverses only the dashboard terminal's synthetic two-finger wheel gesture. Physical mouse and trackpad wheel direction is unchanged."
+    );
+  });
+
+  test("dashboard.touchWheelInverted validate rejects a non-boolean", () => {
+    const touchWheel = findConfigSetting("dashboard.touchWheelInverted");
+    expect(() => touchWheel?.validate?.(true)).not.toThrow();
+    expect(() => touchWheel?.validate?.("yes")).toThrow("dashboard.touchWheelInverted must be a boolean");
   });
 });

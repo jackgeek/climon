@@ -53,7 +53,7 @@ import { effectiveSidebarCollapsed, readSidebarCollapsed, writeSidebarCollapsed 
 import { clampFontSize, readFontSize, writeFontSize } from "./fontSize.js";
 import { addComposeEntry } from "./composeHistory.js";
 import { getTheme } from "./themes.js";
-import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED, PREF_STATE_ICON_NO_MOTION } from "../dashboard-preference-keys.js";
+import { DEFAULT_THEME_NAME, PREF_THEME, PREF_KEY_BAR_PINNED, PREF_TOUCH_WHEEL_INVERTED, PREF_STATE_ICON_NO_MOTION } from "../dashboard-preference-keys.js";
 import {
   readCachedPreference,
   setDashboardPreference,
@@ -544,6 +544,9 @@ export function App() {
   const [keyBarPinned, setKeyBarPinned] = useState<boolean>(
     () => readCachedPreference(PREF_KEY_BAR_PINNED) !== false
   );
+  const [touchWheelInverted, setTouchWheelInverted] = useState<boolean>(
+    () => readCachedPreference(PREF_TOUCH_WHEEL_INVERTED) === true
+  );
   const [stateIconNoMotion, setStateIconNoMotion] = useState<boolean>(
     () => readCachedPreference(PREF_STATE_ICON_NO_MOTION) === true
   );
@@ -946,6 +949,10 @@ export function App() {
         if (typeof serverPin === "boolean") {
           setKeyBarPinned(serverPin);
         }
+        const serverTouchWheelInverted = preferences[PREF_TOUCH_WHEEL_INVERTED];
+        if (typeof serverTouchWheelInverted === "boolean") {
+          setTouchWheelInverted(serverTouchWheelInverted);
+        }
         const serverNoMotion = preferences[PREF_STATE_ICON_NO_MOTION];
         if (typeof serverNoMotion === "boolean") {
           setStateIconNoMotion(serverNoMotion);
@@ -1280,6 +1287,14 @@ export function App() {
     });
   }, []);
 
+  const handleToggleTouchWheelInverted = useCallback((): void => {
+    setTouchWheelInverted((prev) => {
+      const next = !prev;
+      void setDashboardPreference(PREF_TOUCH_WHEEL_INVERTED, next);
+      return next;
+    });
+  }, []);
+
   const handleSelectTheme = useCallback((id: string): void => {
     setThemeId(id);
     void setDashboardPreference(PREF_THEME, id);
@@ -1480,8 +1495,11 @@ export function App() {
           showRemotesMenu={remotesEnabled}
           onRemoveDisconnected={handleRemoveDisconnected}
           isMobile={isMobile}
+          isTouchPrimary={isTouchPrimary}
           keyBarPinned={keyBarPinned}
           onToggleKeyBarPinned={handleToggleKeyBarPinned}
+          touchWheelInverted={touchWheelInverted}
+          onToggleTouchWheelInverted={handleToggleTouchWheelInverted}
           stateIconNoMotion={stateIconNoMotion}
           currentTheme={themeId}
           onSelectTheme={handleSelectTheme}
@@ -1518,6 +1536,7 @@ export function App() {
           onFontSizeChange={adjustFontSize}
           serverConnected={serverConnected}
           serverReconnectToken={serverReconnectToken}
+          touchWheelInverted={touchWheelInverted}
           onLiveInteraction={handleLiveInteraction}
         />
         {panelView !== "closed" && keyBarAvailable && (
