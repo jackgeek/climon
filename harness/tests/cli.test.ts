@@ -457,6 +457,50 @@ describe("runCli", () => {
     }
   });
 
+  test("fails when a scenario runner returns without a registered subcheck contract", async () => {
+    const workspace = makeWorkspace("cli-run-missing-contract");
+
+    try {
+      writeDoctorFixtureFiles(workspace);
+      const artifactRoot = join(workspace, "artifacts");
+      const options = createRunOptions(workspace, {
+        definitions: SCENARIO_DEFINITIONS,
+        scenarioRunners: {
+          "DAR-03": async () => [
+            {
+              name: "local-starts-as-controller",
+              title: "Returns from an injected DAR-03 runner",
+              status: "passed",
+              durationMs: 1,
+            },
+          ],
+        },
+      });
+      const cli = requireRunCli();
+
+      await expect(
+        cli(["run", "DAR-03", "--artifact-root", artifactRoot], options)
+      ).resolves.toBe(1);
+
+      const result = readJson(
+        join(artifactRoot, "cases", "DAR-03", "result.json")
+      ) as CaseResult;
+      expect(result).toMatchObject({
+        darId: "DAR-03",
+        platform: "linux",
+        status: "setup-failure",
+        blocking: true,
+        failedSubchecks: [],
+        subchecks: [],
+      });
+      expect(result.message).toContain(
+        "DAR-03 returned subchecks without a registered subcheck contract"
+      );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("rejects duplicate scenario ids, duplicate flags, and missing option values with usage exit code 2", async () => {
     const workspace = makeWorkspace("cli-usage");
 

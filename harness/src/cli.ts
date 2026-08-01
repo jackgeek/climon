@@ -352,6 +352,20 @@ const SUBCHECK_DEFINITIONS: Partial<Record<DarId, readonly SubcheckDefinition[]>
   "DAR-02": DAR_02_SUBCHECKS,
 };
 
+function registeredSubcheckDefinitions(
+  darId: DarId
+): readonly SubcheckDefinition[] {
+  const definitions = SUBCHECK_DEFINITIONS[darId];
+  if (definitions !== undefined) {
+    return definitions;
+  }
+
+  throw new HarnessError(
+    "assertion",
+    `${darId} returned subchecks without a registered subcheck contract. Register SUBCHECK_DEFINITIONS["${darId}"] before relying on this scenario.`
+  );
+}
+
 const runDar01Adapter: ScenarioRunner = async ({
   platform,
   overallDeadline,
@@ -840,10 +854,10 @@ async function executeRun(
             readDaemonLogArtifacts(sessionId, home, fs),
         });
 
-        const subcheckDefinitions = SUBCHECK_DEFINITIONS[definition.darId];
-        if (subcheckDefinitions !== undefined) {
-          validateSubcheckResults(subcheckDefinitions, subchecks);
-        }
+        validateSubcheckResults(
+          registeredSubcheckDefinitions(definition.darId),
+          subchecks
+        );
 
         result = caseResult(
           definition,
