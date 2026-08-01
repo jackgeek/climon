@@ -87,6 +87,7 @@ class FakePty implements Dar01Pty {
   public readonly sendMouseCalls: MouseEvent[] = [];
   public readonly resizeCalls: Array<{ cols: number; rows: number }> = [];
   public readonly expectRawCalls: Array<{ marker: string; deadline: number }> = [];
+  public readonly waitForQuietCalls: Array<{ quietPeriodMs: number; deadline: number }> = [];
   public readonly waitForExitCalls: number[] = [];
   public killCalls = 0;
 
@@ -95,6 +96,7 @@ class FakePty implements Dar01Pty {
       rawFailures?: Record<string, Error>;
       screenFrames?: FakeScreenFrame[];
       waitForExitError?: Error;
+      waitForExitResults?: Array<number | Error>;
       exitCode?: number;
     } = {}
   ) {}
@@ -147,9 +149,22 @@ class FakePty implements Dar01Pty {
       : Promise.reject(new Error(`Screen predicate failed for ${JSON.stringify(frame)}`));
   }
 
+  public waitForQuiet(quietPeriodMs: number, deadline: number): Promise<void> {
+    this.callLog.push(`waitForQuiet:${quietPeriodMs}`);
+    this.waitForQuietCalls.push({ quietPeriodMs, deadline });
+    return Promise.resolve();
+  }
+
   public waitForExit(deadline: number): Promise<number> {
     this.callLog.push("waitForExit");
     this.waitForExitCalls.push(deadline);
+    const nextResult = this.options.waitForExitResults?.shift();
+    if (nextResult instanceof Error) {
+      return Promise.reject(nextResult);
+    }
+    if (typeof nextResult === "number") {
+      return Promise.resolve(nextResult);
+    }
     if (this.options.waitForExitError) {
       return Promise.reject(this.options.waitForExitError);
     }
@@ -417,6 +432,7 @@ describe("runDar01", () => {
       "resize:120x40",
       "expectRaw:DAR_TUI_RESIZE 120 40",
       "expectScreen",
+      "waitForQuiet:500",
       "writeText:q",
       "waitForExit",
     ]);
@@ -428,7 +444,42 @@ describe("runDar01", () => {
       { kind: "wheel-up", col: 10, row: 6 },
     ]);
     expect(pty.resizeCalls).toEqual([{ cols: 120, rows: 40 }]);
+    expect(pty.waitForQuietCalls).toHaveLength(1);
     expect(pty.writeTextCalls).toEqual([expectedText, "q"]);
+  });
+
+  test("retries q after a late duplicate resize surfaces during clean exit", async () => {
+    const context = createContext();
+    const clock = createClock();
+    const pty = new FakePty({
+      screenFrames: passingScreens(),
+      waitForExitResults: [new Error("Timed out waiting for process exit"), 0],
+    });
+    const uuid = "late-resize";
+
+    const results = await runDar01(context, {
+      now: clock,
+      createUuid: () => uuid,
+      spawnPty: () => pty,
+      readArtifactText: async () =>
+        buildOutput(context.platform, `DAR-01-${uuid}`, `dar01-é-${uuid}`),
+    });
+
+    expect(results.find((result) => result.name === "clean-exit")).toMatchObject({
+      status: "passed",
+    });
+    expect(results.find((result) => result.name === "terminal-mode-restoration")).toMatchObject({
+      status: "passed",
+    });
+    expect(pty.callLog.slice(-6)).toEqual([
+      "waitForQuiet:500",
+      "writeText:q",
+      "waitForExit",
+      "waitForQuiet:500",
+      "writeText:q",
+      "waitForExit",
+    ]);
+    expect(pty.writeTextCalls.filter((call) => call === "q")).toHaveLength(2);
   });
 
   test("continues to clean exit and restoration after mouse-input fails", async () => {

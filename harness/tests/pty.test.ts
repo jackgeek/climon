@@ -179,13 +179,60 @@ class DeferredScreen implements ScreenLike {
   }
 }
 
+class ManualTimer {
+  public nowMs = 1_000;
+  private nextId = 1;
+  private readonly timers = new Map<number, { at: number; callback: () => void }>();
+
+  public now = (): number => this.nowMs;
+
+  public setTimeout = (callback: () => void, ms?: number): ReturnType<typeof globalThis.setTimeout> => {
+    const id = this.nextId++;
+    this.timers.set(id, { at: this.nowMs + Math.max(0, ms ?? 0), callback });
+    return id as unknown as ReturnType<typeof globalThis.setTimeout>;
+  };
+
+  public clearTimeout = (id: ReturnType<typeof globalThis.setTimeout>): void => {
+    this.timers.delete(id as unknown as number);
+  };
+
+  public async advance(ms: number): Promise<void> {
+    this.nowMs += ms;
+
+    while (true) {
+      const due = [...this.timers.entries()]
+        .filter(([, timer]) => timer.at <= this.nowMs)
+        .sort((left, right) => left[1].at - right[1].at || left[0] - right[0]);
+      if (due.length === 0) {
+        return;
+      }
+
+      for (const [id, timer] of due) {
+        if (!this.timers.delete(id)) {
+          continue;
+        }
+        timer.callback();
+        await Promise.resolve();
+      }
+    }
+  }
+}
+
 function futureDeadline(): number {
   return Date.now() + 1_000;
+}
+
+async function flushMicrotasks(turns = 4): Promise<void> {
+  for (let index = 0; index < turns; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 function createDriver(options?: {
   now?: () => number;
   appendText?: (path: string, text: string) => Promise<void>;
+  setTimeout?: typeof globalThis.setTimeout;
+  clearTimeout?: typeof globalThis.clearTimeout;
 }) {
   const screen = new FakeScreen();
   const pty = new FakePty();
@@ -207,6 +254,8 @@ function createDriver(options?: {
   const driver = PtyDriver.spawn(spec, {
     now: options?.now,
     appendText: options?.appendText,
+    setTimeout: options?.setTimeout,
+    clearTimeout: options?.clearTimeout,
     createScreen: () => screen,
     spawnPty(file, args, spawnOptions) {
       spawnCalls.push({ file, args, options: spawnOptions });
@@ -381,6 +430,60 @@ describe("PtyDriver", () => {
     expect(pty.resizeCalls).toEqual([{ cols: 120, rows: 40 }]);
     await expect(resized).resolves.toBeUndefined();
     expect(screen.resizeCalls).toEqual([{ cols: 120, rows: 40 }]);
+  });
+
+  test("treats resize activity as the start of a quiet-period wait", async () => {
+    const timer = new ManualTimer();
+    const { driver } = createDriver({
+      now: timer.now,
+      setTimeout: timer.setTimeout as unknown as typeof globalThis.setTimeout,
+      clearTimeout: timer.clearTimeout as unknown as typeof globalThis.clearTimeout,
+    });
+
+    await timer.advance(250);
+    driver.resize(120, 40);
+    await flushMicrotasks();
+    const quiet = driver.waitForQuiet(50, timer.now() + 500);
+    let settled = false;
+    quiet.then(() => {
+      settled = true;
+    });
+
+    await timer.advance(49);
+    expect(settled).toBe(false);
+
+    await timer.advance(1);
+    await expect(quiet).resolves.toBeUndefined();
+    expect(settled).toBe(true);
+  });
+
+  test("restarts the quiet-period wait when new output arrives", async () => {
+    const timer = new ManualTimer();
+    const { driver, pty } = createDriver({
+      now: timer.now,
+      setTimeout: timer.setTimeout as unknown as typeof globalThis.setTimeout,
+      clearTimeout: timer.clearTimeout as unknown as typeof globalThis.clearTimeout,
+    });
+    pty.emitData("before");
+    await driver.expectScreen((screen) => screen.contents().includes("before"), futureDeadline());
+
+    const quiet = driver.waitForQuiet(50, timer.now() + 500);
+    let settled = false;
+    quiet.then(() => {
+      settled = true;
+    });
+
+    await timer.advance(40);
+    expect(settled).toBe(false);
+    pty.emitData("after");
+    await driver.expectScreen((screen) => screen.contents().includes("beforeafter"), futureDeadline());
+
+    await timer.advance(49);
+    expect(settled).toBe(false);
+
+    await timer.advance(1);
+    await expect(quiet).resolves.toBeUndefined();
+    expect(settled).toBe(true);
   });
 
   test("returns the exact exit code for current and future callers", async () => {

@@ -21,6 +21,7 @@ export interface BuildPlan {
   serverPath: string;
   fixturePath: string;
   client: CommandSpec;
+  serverPrepare: CommandSpec;
   server: CommandSpec;
   fixture: CommandSpec;
 }
@@ -156,14 +157,23 @@ export function planBuild(
       stdoutPath: logPath(pathApi, cacheDir, "01-cargo-client", "stdout"),
       stderrPath: logPath(pathApi, cacheDir, "01-cargo-client", "stderr"),
     },
+    serverPrepare: {
+      file: "bun",
+      args: ["scripts/embed-assets.ts"],
+      cwd: root,
+      env: { ...process.env },
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      stdoutPath: logPath(pathApi, cacheDir, "02-bun-embed-assets", "stdout"),
+      stderrPath: logPath(pathApi, cacheDir, "02-bun-embed-assets", "stderr"),
+    },
     server: {
       file: "bun",
       args: [...compiledServerBuildArgs(artifacts.serverPath)],
       cwd: root,
       env: { ...process.env },
       timeoutMs: DEFAULT_TIMEOUT_MS,
-      stdoutPath: logPath(pathApi, cacheDir, "02-bun-server", "stdout"),
-      stderrPath: logPath(pathApi, cacheDir, "02-bun-server", "stderr"),
+      stdoutPath: logPath(pathApi, cacheDir, "03-bun-server", "stdout"),
+      stderrPath: logPath(pathApi, cacheDir, "03-bun-server", "stderr"),
     },
     fixture: {
       file: "cargo",
@@ -171,8 +181,8 @@ export function planBuild(
       cwd: root,
       env: { ...process.env },
       timeoutMs: DEFAULT_TIMEOUT_MS,
-      stdoutPath: logPath(pathApi, cacheDir, "03-cargo-fixture", "stdout"),
-      stderrPath: logPath(pathApi, cacheDir, "03-cargo-fixture", "stderr"),
+      stdoutPath: logPath(pathApi, cacheDir, "04-cargo-fixture", "stdout"),
+      stderrPath: logPath(pathApi, cacheDir, "04-cargo-fixture", "stderr"),
     },
   };
 }
@@ -486,7 +496,7 @@ async function runPlan(
   plan: BuildPlan,
   runner: CommandRunner
 ): Promise<void> {
-  for (const command of [plan.client, plan.server, plan.fixture]) {
+  for (const command of [plan.client, plan.serverPrepare, plan.server, plan.fixture]) {
     const result = await runner.run(command);
     if (result.code !== 0) {
       throw new HarnessError(

@@ -348,7 +348,7 @@ function expectedBaseEvidencePaths(sessionId = SESSION_ID): string[] {
 }
 
 describe("runDar02", () => {
-  test("runs all DAR-02 subchecks in order, tracks immediately, waits for launcher exit 0, and waits for READY before opening the browser", async () => {
+  test("runs all DAR-02 subchecks in order, tracks immediately, and opens the browser without waiting on persisted replay markers", async () => {
     const { browser, context, dependencies, events, process, sessions, spawnCalls } =
       createHarness(createState());
 
@@ -393,11 +393,35 @@ describe("runDar02", () => {
     expect(events.indexOf("process.wait")).toBeLessThan(
       events.indexOf(`sessions.wait:${SESSION_ID}:running`)
     );
-    expect(events.indexOf("scrollback.live")).toBeLessThan(
-      events.indexOf(`browser.open:${context.runtime.baseUrl}`)
-    );
+    expect(events).not.toContain("scrollback.live");
     expect(browser.sendTerminalLineCalls).toEqual([`CONTINUE ${RUN_ID}`, "EXIT 0"]);
     expect(process.waitForExitCalls).toHaveLength(1);
+  });
+
+  test("passes daemon-running from metadata and browser replay evidence even when persisted scrollback stays empty until exit", async () => {
+    const { clock, context, dependencies, events } = createHarness(
+      createState({
+        liveScrollback: "",
+        finalScrollback: undefined,
+      })
+    );
+
+    const results = await runDar02(context, dependencies);
+
+    expect(results.map((result) => result.status)).toEqual(Array(8).fill("passed"));
+    expect(results.find((result) => result.name === "daemon-running")).toMatchObject({
+      status: "passed",
+      message: expect.stringContaining(`Session ${SESSION_ID} is running`),
+    });
+    expect(results.find((result) => result.name === "replay-visible")).toMatchObject({
+      status: "passed",
+      evidence: expect.arrayContaining([READY_MARKER]),
+    });
+    expect(events).not.toContain("scrollback.live");
+    expect(events.indexOf("scrollback.final")).toBeGreaterThan(
+      events.indexOf("browser.send:EXIT 0")
+    );
+    expect(clock.sleepCalls).toEqual([]);
   });
 
   test("records persisted artifact evidence paths relative to the case artifact directory", async () => {
@@ -452,6 +476,20 @@ describe("runDar02", () => {
     ).toEqual(LIVE_MARKERS);
     expect(browser.waitForTerminalTextCalls.at(-1)).toBe(LAST_LIVE_MARKER);
     expect(browser.sendTerminalLineCalls).toEqual([`CONTINUE ${RUN_ID}`, "EXIT 0"]);
+  });
+
+  test("accepts live snapshots even when the browser surface also contains the typed CONTINUE line", async () => {
+    const state = createState();
+    const { context, dependencies } = createHarness(state);
+
+    dependencies.snapshotTerminalText = async () =>
+      `${state.terminalText}\nCONTINUE ${RUN_ID}`;
+
+    const results = await runDar02(context, dependencies);
+
+    expect(results.find((result) => result.name === "live-output")).toMatchObject({
+      status: "passed",
+    });
   });
 
   test("fails headless-launch for duplicate and unsafe client stdout session ids", async () => {

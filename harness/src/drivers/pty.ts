@@ -150,6 +150,7 @@ export class PtyDriver {
   private inputQueue: Promise<void> = Promise.resolve();
   private orderedOutputQueue: Promise<void> = Promise.resolve();
   private recentRaw = "";
+  private lastActivityAt: number;
   private pendingError: unknown;
   private exitResult?: Promise<number>;
   private closed = false;
@@ -169,6 +170,7 @@ export class PtyDriver {
       (spec.artifacts
         ? (artifactPath, text) => spec.artifacts!.appendText(artifactPath, text)
         : appendPathText);
+    this.lastActivityAt = this.now();
     this.screen = (dependencies.createScreen ?? defaultScreen)(spec.cols, spec.rows);
     this.pty = (dependencies.spawnPty ?? defaultSpawnPty)(spec.file, spec.args, {
       name: spec.name ?? spec.env.TERM ?? DEFAULT_TERM_NAME,
@@ -219,6 +221,7 @@ export class PtyDriver {
     this.pty.resize(cols, rows);
     this.enqueueOrderedOutput(async () => {
       this.screen.resize(cols, rows);
+      this.markActivity();
       this.resolveScreenWaiters();
     });
   }
@@ -247,6 +250,30 @@ export class PtyDriver {
         };
       }
     );
+  }
+
+  public async waitForQuiet(quietPeriodMs: number, deadline: Deadline): Promise<void> {
+    this.throwIfPendingError();
+    assertPositiveInteger(quietPeriodMs, "quietPeriodMs");
+
+    const deadlineAt = asAbsoluteDeadline(deadline);
+    while (true) {
+      this.throwIfPendingError();
+
+      const remainingQuietMs = quietPeriodMs - (this.now() - this.lastActivityAt);
+      if (remainingQuietMs <= 0) {
+        return;
+      }
+
+      const remainingDeadlineMs = deadlineAt - this.now();
+      if (remainingDeadlineMs <= 0) {
+        throw this.timeoutError(`quiet period ${quietPeriodMs}ms`);
+      }
+
+      await new Promise<void>((resolve) => {
+        this.setTimeoutFn(resolve, Math.min(remainingQuietMs, remainingDeadlineMs));
+      });
+    }
   }
 
   public expectScreen(
@@ -368,6 +395,7 @@ export class PtyDriver {
       this.durableRawChunks.push(data);
       this.resolveRawWaiters(data);
       await this.screen.write(data);
+      this.markActivity();
       this.resolveScreenWaiters();
     });
   }
@@ -474,6 +502,10 @@ export class PtyDriver {
       waiter.reject(this.pendingError);
     }
     this.exitWaiters.clear();
+  }
+
+  private markActivity(): void {
+    this.lastActivityAt = this.now();
   }
 
   private throwIfPendingError(): void {

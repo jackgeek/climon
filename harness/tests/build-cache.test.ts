@@ -105,6 +105,7 @@ describe("planBuild", () => {
       serverPath: plan.serverPath,
       fixturePath: plan.fixturePath,
       client: describeCommand(plan.client),
+      serverPrepare: describeCommand(plan.serverPrepare),
       server: describeCommand(plan.server),
       fixture: describeCommand(plan.fixture),
     }).toEqual({
@@ -119,6 +120,14 @@ describe("planBuild", () => {
         stdoutPath: "/cache/logs/01-cargo-client.stdout.log",
         stderrPath: "/cache/logs/01-cargo-client.stderr.log",
       },
+      serverPrepare: {
+        file: "bun",
+        args: ["scripts/embed-assets.ts"],
+        cwd: "/repo",
+        timeoutMs: 600_000,
+        stdoutPath: "/cache/logs/02-bun-embed-assets.stdout.log",
+        stderrPath: "/cache/logs/02-bun-embed-assets.stderr.log",
+      },
       server: {
         file: "bun",
         args: [
@@ -132,21 +141,21 @@ describe("planBuild", () => {
         ],
         cwd: "/repo",
         timeoutMs: 600_000,
-        stdoutPath: "/cache/logs/02-bun-server.stdout.log",
-        stderrPath: "/cache/logs/02-bun-server.stderr.log",
+        stdoutPath: "/cache/logs/03-bun-server.stdout.log",
+        stderrPath: "/cache/logs/03-bun-server.stderr.log",
       },
       fixture: {
         file: "cargo",
         args: ["build", "--release", "--manifest-path", "harness/fixtures/Cargo.toml"],
         cwd: "/repo",
         timeoutMs: 600_000,
-        stdoutPath: "/cache/logs/03-cargo-fixture.stdout.log",
-        stderrPath: "/cache/logs/03-cargo-fixture.stderr.log",
+        stdoutPath: "/cache/logs/04-cargo-fixture.stdout.log",
+        stderrPath: "/cache/logs/04-cargo-fixture.stderr.log",
       },
     });
     expect(Object.hasOwn(plan as object, "commands")).toBe(false);
 
-    for (const command of [plan.client, plan.server, plan.fixture]) {
+    for (const command of [plan.client, plan.serverPrepare, plan.server, plan.fixture]) {
       expect(command.env.PATH).toBe(process.env.PATH);
     }
   });
@@ -170,6 +179,10 @@ describe("buildArtifacts", () => {
       mkdirSync(dirname(spec.stdoutPath), { recursive: true });
       writeFileSync(spec.stdoutPath, `stdout:${spec.file}`);
       writeFileSync(spec.stderrPath, "");
+
+      if (spec.file === "bun" && spec.args[0] === "scripts/embed-assets.ts") {
+        return;
+      }
 
       if (spec.file === "bun") {
         writeFileSync(serverArtifactPath(cacheDir, platform), "server-binary");
@@ -201,7 +214,11 @@ describe("buildArtifacts", () => {
 
       expect(first).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
       expect(second).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
-      expect(runner.calls).toHaveLength(3);
+      expect(runner.calls).toHaveLength(4);
+      expect(runner.calls[1]).toMatchObject({
+        file: "bun",
+        args: ["scripts/embed-assets.ts"],
+      });
       expect(secondRunner.calls).toHaveLength(0);
 
       const manifest = JSON.parse(readFileSync(join(cacheDir, "manifest.json"), "utf8")) as {
@@ -249,6 +266,10 @@ describe("buildArtifacts", () => {
       writeFileSync(spec.stdoutPath, "");
       writeFileSync(spec.stderrPath, "");
 
+      if (spec.file === "bun" && spec.args[0] === "scripts/embed-assets.ts") {
+        return;
+      }
+
       if (spec.file === "bun") {
         writeFileSync(serverArtifactPath(cacheDir, platform), `server-${buildNumber}`);
         return;
@@ -279,7 +300,7 @@ describe("buildArtifacts", () => {
       );
 
       expect(rebuilt).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
-      expect(runner.calls).toHaveLength(6);
+      expect(runner.calls).toHaveLength(8);
       expect(readFileSync(serverArtifactPath(cacheDir, platform), "utf8")).toBe("server-1");
     } finally {
       rmSync(workspace, { recursive: true, force: true });
@@ -302,6 +323,10 @@ describe("buildArtifacts", () => {
       mkdirSync(dirname(spec.stdoutPath), { recursive: true });
       writeFileSync(spec.stdoutPath, "");
       writeFileSync(spec.stderrPath, "");
+
+      if (spec.file === "bun" && spec.args[0] === "scripts/embed-assets.ts") {
+        return;
+      }
 
       if (spec.file === "bun") {
         writeFileSync(serverArtifactPath(cacheDir, platform), "server");
@@ -331,7 +356,7 @@ describe("buildArtifacts", () => {
         })
       );
 
-      expect(runner.calls).toHaveLength(6);
+      expect(runner.calls).toHaveLength(8);
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
@@ -354,6 +379,10 @@ describe("buildArtifacts", () => {
       mkdirSync(dirname(spec.stdoutPath), { recursive: true });
       writeFileSync(spec.stdoutPath, "");
       writeFileSync(spec.stderrPath, "");
+
+      if (spec.file === "bun" && spec.args[0] === "scripts/embed-assets.ts") {
+        return;
+      }
 
       if (spec.file === "bun") {
         writeFileSync(serverArtifactPath(cacheDir, platform), `server-${buildNumber}`);
@@ -385,7 +414,7 @@ describe("buildArtifacts", () => {
       );
 
       expect(rebuilt).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
-      expect(runner.calls).toHaveLength(6);
+      expect(runner.calls).toHaveLength(8);
       expect(readFileSync(serverArtifactPath(cacheDir, platform), "utf8")).toBe("server-1");
     } finally {
       rmSync(workspace, { recursive: true, force: true });
@@ -409,6 +438,10 @@ describe("buildArtifacts", () => {
       mkdirSync(dirname(spec.stdoutPath), { recursive: true });
       writeFileSync(spec.stdoutPath, "");
       writeFileSync(spec.stderrPath, "");
+
+      if (spec.file === "bun" && spec.args[0] === "scripts/embed-assets.ts") {
+        return;
+      }
 
       if (spec.file === "bun") {
         writeFileSync(serverArtifactPath(cacheDir, platform), `server-${buildNumber}`);
@@ -442,7 +475,7 @@ describe("buildArtifacts", () => {
       );
 
       expect(rebuilt).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
-      expect(runner.calls).toHaveLength(6);
+      expect(runner.calls).toHaveLength(8);
       expect(readFileSync(serverArtifactPath(cacheDir, platform), "utf8")).toBe("server-1");
       expect(readFileSync(join(cacheDir, "manifest.json"), "utf8")).toBe(cleanManifest);
     } finally {
@@ -468,6 +501,10 @@ describe("buildArtifacts", () => {
       mkdirSync(dirname(spec.stdoutPath), { recursive: true });
       writeFileSync(spec.stdoutPath, "");
       writeFileSync(spec.stderrPath, "");
+
+      if (spec.file === "bun" && spec.args[0] === "scripts/embed-assets.ts") {
+        return;
+      }
 
       if (spec.file === "bun") {
         writeFileSync(serverArtifactPath(cacheDir, platform), `server-${buildNumber}`);
@@ -504,7 +541,7 @@ describe("buildArtifacts", () => {
       );
 
       expect(cleanBuild).toEqual(expectedArtifacts(root, cacheDir, platform, revision));
-      expect(runner.calls).toHaveLength(6);
+      expect(runner.calls).toHaveLength(8);
       expect(statSync(manifestPath).isFile()).toBe(true);
       expect(readFileSync(serverArtifactPath(cacheDir, platform), "utf8")).toBe("server-1");
     } finally {

@@ -11,6 +11,7 @@ const PTY_COLS = 100;
 const PTY_ROWS = 30;
 const RESIZED_COLS = 120;
 const RESIZED_ROWS = 40;
+const POST_RESIZE_QUIET_PERIOD_MS = 500;
 const PTY_INPUT_ARTIFACT = "pty/input.log";
 const PTY_OUTPUT_ARTIFACT = "pty/output.log";
 const QUIT_TEXT = "q";
@@ -60,6 +61,7 @@ export interface Dar01Pty {
   resize(cols: number, rows: number): void;
   expectRaw(marker: string, deadline: number): Promise<void>;
   expectScreen(predicate: (screen: ScreenLike) => boolean, deadline: number): Promise<void>;
+  waitForQuiet(quietPeriodMs: number, deadline: number): Promise<void>;
   waitForExit(deadline: number): Promise<number>;
   kill(): void;
 }
@@ -285,6 +287,10 @@ function sessionName(runId: string): string {
 
 function expectedFrame(cols: number, rows: number, lastEvent: string): string {
   return `DAR_TUI_READY\nsize=${cols}x${rows}\nlast=${lastEvent}`;
+}
+
+function isProcessExitTimeout(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("Timed out waiting for process exit");
 }
 
 async function expectTextMarkers(pty: Dar01Pty, text: string, deadline: number): Promise<void> {
@@ -538,10 +544,22 @@ export async function runDar01(
 
       try {
         if (!quitSent) {
+          await pty.waitForQuiet(POST_RESIZE_QUIET_PERIOD_MS, deadline);
           pty.writeText(QUIT_TEXT);
           quitSent = true;
         }
-        const exitCode = await pty.waitForExit(deadline);
+
+        let exitCode: number;
+        try {
+          exitCode = await pty.waitForExit(Math.min(deadline, now() + POST_RESIZE_QUIET_PERIOD_MS));
+        } catch (error) {
+          if (!isProcessExitTimeout(error)) {
+            throw error;
+          }
+          await pty.waitForQuiet(POST_RESIZE_QUIET_PERIOD_MS, deadline);
+          pty.writeText(QUIT_TEXT);
+          exitCode = await pty.waitForExit(deadline);
+        }
         if (exitCode !== 0) {
           throw new Error(`Expected exit code 0, received ${exitCode}`);
         }
