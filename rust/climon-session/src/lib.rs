@@ -14,7 +14,7 @@
 //! `src/ipc/frame.ts`. This crate never redefines those types.
 //!
 //! ## Idle fingerprint
-//! The idle detector samples a screen *fingerprint* once a second. That
+//! The idle detector samples a screen *fingerprint* at a jittered 800–1000ms interval. That
 //! fingerprint is **internal** daemon state — never sent over the wire — so it
 //! does not require byte-parity with xterm.js. We render PTY output into a
 //! [`vt100`]-backed grid ([`fingerprint::HeadlessGrid`]) and emit

@@ -12,19 +12,14 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-#[allow(dead_code)]
 const IDLE_SAMPLE_MIN_MS: u64 = 800;
-#[allow(dead_code)]
 const IDLE_SAMPLE_JITTER_VALUES: u64 = 201;
 
 /// Produces a fresh 800–1000ms delay for each idle-screen sample.
-/// Host consumer is wired in the next task.
-#[allow(dead_code)]
 pub(crate) struct IdleSampleSchedule {
     state: u64,
 }
 
-#[allow(dead_code)]
 impl IdleSampleSchedule {
     pub(crate) fn new(session_id: &str) -> Self {
         let mut hasher = DefaultHasher::new();
@@ -58,7 +53,7 @@ pub struct IdleTransition {
 /// to the child, whose redraw output arrives asynchronously on the PTY reader
 /// thread *after* the synchronous re-baseline. Without a settle window that
 /// trailing redraw is misread as activity and reverts an acknowledged or flagged
-/// session to `running`. Two idle samples (the loop ticks once a second) is ample
+/// session to `running`. Two idle samples (the loop samples every 800–1000ms) is ample
 /// for a shell to finish repainting.
 const RESIZE_SETTLE_MS: i64 = 2_000;
 

@@ -255,7 +255,7 @@ broken by most-recent update. This drives both the dashboard and `climon ls`.
 
 Detection is client-side and based on a static screen, not text patterns. While a
 local client is attached it feeds every PTY output byte into a headless
-`@xterm/headless` grid and, once per second, fingerprints the visible rows
+`@xterm/headless` grid and, at a jittered 800–1000ms interval, fingerprints the visible rows
 (`translateToString` joined per row). The pure `ScreenIdleDetector` compares
 successive fingerprints: if the screen stops changing for
 `attention.idleSeconds` (default 10) the client sends a `FrameType.Attention`

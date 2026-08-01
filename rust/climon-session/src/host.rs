@@ -33,7 +33,7 @@ use crate::attention::should_apply_user_attention_acknowledgement;
 use crate::control::{choose_controller, Surface};
 use crate::error::{SessionError, SessionResult};
 use crate::fingerprint::{render_screen_from_replay, HeadlessGrid};
-use crate::idle::ScreenIdleDetector;
+use crate::idle::{IdleSampleSchedule, ScreenIdleDetector};
 use crate::replay::{
     build_mouse_private_mode_replay_suffix, build_mouse_private_mode_restore_suffix,
     track_mouse_private_modes_from_output, TRACKED_MOUSE_PRIVATE_MODES,
@@ -1599,9 +1599,11 @@ fn spawn_restore_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<
 fn spawn_idle_thread(state: Shared, shutdown: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || {
         let log = climon_logging::logger::child("idle");
+        let session_id = state.lock().unwrap().id.clone();
+        let mut sample_schedule = IdleSampleSchedule::new(&session_id);
         let mut prev_body: Option<String> = None;
         loop {
-            thread::sleep(Duration::from_millis(1000));
+            thread::sleep(sample_schedule.next_delay());
             if shutdown.load(Ordering::SeqCst) {
                 break;
             }

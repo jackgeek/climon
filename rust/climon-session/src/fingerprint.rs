@@ -1,6 +1,6 @@
 //! Headless VT-grid fingerprint for static-screen idle detection.
 //!
-//! PTY output is mirrored into a [`vt100`] parser grid; once a second the
+//! PTY output is mirrored into a [`vt100`] parser grid; at a jittered 800–1000ms interval the
 //! [`HeadlessGrid::fingerprint`] is sampled and fed to the pure
 //! [`crate::idle::ScreenIdleDetector`]. The fingerprint is `{cols}x{rows}\n` plus
 //! one trailing-trimmed line per visible row, mirroring the TS daemon's
