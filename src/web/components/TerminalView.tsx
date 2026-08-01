@@ -1070,9 +1070,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     fitRef.current = fit;
     const disposeTouchWheel = installTerminalTouchWheel({
       container,
-      getTarget: () => term.element,
+      getTarget: () => term.element ?? null,
       getInverted: () => touchWheelInvertedRef.current
-    } as Parameters<typeof installTerminalTouchWheel>[0]);
+    });
     fitNow();
 
     const onWindowResize = (): void => fitNow();

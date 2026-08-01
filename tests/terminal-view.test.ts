@@ -286,7 +286,7 @@ describe("TerminalView", () => {
     expect(source).toMatch(
       /term\.open\(container\);\s*termRef\.current = term;\s*fitRef\.current = fit;\s*const disposeTouchWheel = installTerminalTouchWheel\(\{/
     );
-    expect(source).toContain("container,\n      getTarget: () => term.element,\n      getInverted: () => touchWheelInvertedRef.current");
+    expect(source).toContain("container,\n      getTarget: () => term.element ?? null,\n      getInverted: () => touchWheelInvertedRef.current");
     expect(source).toContain("disposeTouchWheel();\n      term.dispose();");
   });
 
