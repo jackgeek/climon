@@ -97,13 +97,13 @@ class FakePty implements Dar03Pty {
       return;
     }
 
-    if (text === "q") {
-      this.state.exited = true;
-      this.state.status = "completed";
+    if (this.state.currentController !== "local") {
       return;
     }
 
-    if (this.state.currentController !== "local") {
+    if (text === "q") {
+      this.state.exited = true;
+      this.state.status = "completed";
       return;
     }
 
@@ -182,6 +182,7 @@ class FakeSurface implements Dar03BrowserSurface {
   public readonly openCalls: string[] = [];
   public readonly openTerminalCalls: string[] = [];
   public readonly takeControlCalls: string[] = [];
+  public readonly controllerIdCalls: string[] = [];
   public readonly waitForTerminalTextCalls: string[] = [];
   public readonly sendTerminalLineCalls: string[] = [];
   public readonly closeCalls: string[] = [];
@@ -193,6 +194,7 @@ class FakeSurface implements Dar03BrowserSurface {
     private readonly surfaceSize: { cols: number; rows: number },
     private readonly options: {
       takeControlError?: Error;
+      sendTerminalLineError?: Error;
       closeError?: Error;
     } = {}
   ) {}
@@ -217,6 +219,7 @@ class FakeSurface implements Dar03BrowserSurface {
   }
 
   public async controllerId(): Promise<string> {
+    this.controllerIdCalls.push(this.state.currentController);
     return this.state.currentController;
   }
 
@@ -231,6 +234,9 @@ class FakeSurface implements Dar03BrowserSurface {
     this.sendTerminalLineCalls.push(text);
     if (this.state.currentController !== this.viewerId) {
       throw new Error(`${this.name} is not the controller`);
+    }
+    if (this.options.sendTerminalLineError) {
+      throw this.options.sendTerminalLineError;
     }
     this.state.lastToken = text;
     this.state.browserTranscript.push(`DAR_CONTROL_INPUT ${text}`);
@@ -266,6 +272,7 @@ class FakeBrowserDriver implements Dar03BrowserDriver {
     options: {
       desktopTakeControlError?: Error;
       pwaTakeControlError?: Error;
+      pwaSendTerminalLineError?: Error;
       desktopCloseError?: Error;
       pwaCloseError?: Error;
     } = {}
@@ -287,6 +294,7 @@ class FakeBrowserDriver implements Dar03BrowserDriver {
       { cols: PWA_COLS, rows: PWA_ROWS },
       {
         takeControlError: options.pwaTakeControlError,
+        sendTerminalLineError: options.pwaSendTerminalLineError,
         closeError: options.pwaCloseError,
       }
     );
@@ -518,6 +526,94 @@ describe("runDar03", () => {
     expect(results[5]?.message).toContain(
       "local-space-reclaims-control did not restore local control"
     );
+  });
+
+  test("cleanup reclaims displaced local control with Space before exiting after an early PWA failure", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state, {
+      pwaSendTerminalLineError: new Error("pwa send failed"),
+    });
+    const pty = new FakePty(state);
+
+    const results = await runDar03(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => ++current;
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 5,
+      createUuid: () => RUN_ID,
+      createBrowserDriver: () => browser,
+      spawnPty: () => pty,
+      findSession: async () => ({ id: SESSION_ID, status: "running", cols: state.cols, rows: state.rows }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+    });
+
+    expect(results.map((result) => result.status)).toEqual([
+      "passed",
+      "passed",
+      "passed",
+      "failed",
+      "failed",
+      "failed",
+    ]);
+    expect(results[3]?.message).toContain("pwa send failed");
+    expect(pty.writeTextCalls).toEqual([`dar03-local-suppressed-${RUN_ID}\r`, " ", "q"]);
+    expect(pty.callLog.slice(-4)).toEqual([
+      `writeText:${JSON.stringify(" ")}`,
+      "expectScreen",
+      `writeText:${JSON.stringify("q")}`,
+      "waitForExit",
+    ]);
+    expect(pty.killCalls).toBe(0);
+  });
+
+  test("cleanup exits directly with q when the local terminal was never displaced", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state, {
+      desktopTakeControlError: new Error("desktop refused control"),
+    });
+    const pty = new FakePty(state);
+
+    const results = await runDar03(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => ++current;
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 5,
+      createUuid: () => RUN_ID,
+      createBrowserDriver: () => browser,
+      spawnPty: () => pty,
+      findSession: async () => ({ id: SESSION_ID, status: "running", cols: state.cols, rows: state.rows }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+    });
+
+    expect(results.map((result) => result.status)).toEqual([
+      "passed",
+      "failed",
+      "failed",
+      "failed",
+      "failed",
+      "failed",
+    ]);
+    expect(pty.writeTextCalls).toEqual(["q"]);
+    expect(browser.desktop.controllerIdCalls).toHaveLength(0);
+    expect(pty.killCalls).toBe(0);
   });
 
   test("aggregates cleanup failures after the first surface close error and still cleans the PTY", async () => {

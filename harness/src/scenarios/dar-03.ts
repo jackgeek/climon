@@ -500,17 +500,56 @@ async function closeSurface(
 async function cleanupPty(
   pty: Dar03Pty | undefined,
   exitSent: boolean,
+  localDisplaced: boolean,
+  trackedSessionId: string | undefined,
+  home: string,
   overallDeadline: number,
   now: () => number,
+  sleep: (ms: number) => Promise<void>,
+  pollIntervalMs: number,
+  readSessionMeta: (sessionId: string, home: string) => Promise<SessionMetaLike | undefined>,
   cleanupErrors: Error[]
 ): Promise<void> {
   if (!pty || exitSent) {
     return;
   }
 
+  const cleanupDeadline = Math.min(overallDeadline, now() + 5_000);
+
+  if (localDisplaced) {
+    pty.writeText(" ");
+    try {
+      await pty.expectScreen(
+        (screen) =>
+          screen.contents().includes("DAR_CONTROL_READY") &&
+          !screen.contents().includes(OVERLAY_HINT),
+        cleanupDeadline
+      );
+    } catch (error) {
+      cleanupErrors.push(cleanupFailure("PTY cleanup reclaim wait failed", error));
+    }
+
+    if (trackedSessionId) {
+      try {
+        await waitForSessionSize(
+          trackedSessionId,
+          home,
+          cleanupDeadline,
+          { cols: LOCAL_COLS, rows: LOCAL_ROWS },
+          now,
+          sleep,
+          pollIntervalMs,
+          readSessionMeta
+        );
+      } catch (error) {
+        cleanupErrors.push(cleanupFailure("PTY cleanup reclaim wait failed", error));
+      }
+    }
+  }
+
   try {
     pty.writeText("q");
-    await pty.waitForExit(Math.min(overallDeadline, now() + 5_000));
+    await pty.waitForExit(cleanupDeadline);
   } catch (error) {
     cleanupErrors.push(cleanupFailure("PTY cleanup failed", error));
     try {
@@ -551,6 +590,7 @@ export async function runDar03(
   let desktopControlled = false;
   let pwaControlled = false;
   let localReclaimed = false;
+  let localDisplaced = false;
   let desktopSize: SurfaceSize | undefined;
   let exitSent = false;
   let createdDesktop = false;
@@ -658,6 +698,7 @@ export async function runDar03(
         await desktop.open(context.runtime.baseUrl, deadline);
         await desktop.openTerminal(trackedSessionId!, deadline);
         await desktop.takeControl(trackedSessionId!, deadline);
+        localDisplaced = true;
         const controllerId = await desktop.controllerId(trackedSessionId!, deadline);
         if (controllerId !== desktop.viewerId) {
           throw new Error(
@@ -762,6 +803,7 @@ export async function runDar03(
         await pwa.open(context.runtime.baseUrl, deadline);
         await pwa.openTerminal(trackedSessionId!, deadline);
         await pwa.takeControl(trackedSessionId!, deadline);
+        localDisplaced = true;
         const pwaController = await pwa.controllerId(trackedSessionId!, deadline);
         if (pwaController !== pwa.viewerId) {
           throw new Error(`Expected PWA controller ${pwa.viewerId}, received ${pwaController}`);
@@ -847,6 +889,7 @@ export async function runDar03(
         pty!.writeText(`${localToken}\r`);
         await pty!.expectRaw(`DAR_CONTROL_INPUT ${localToken}`, deadline);
         localReclaimed = true;
+        localDisplaced = false;
         return {
           message: `Local Space reclaimed control and accepted ${localToken}`,
           evidence: ["local", `DAR_CONTROL_INPUT ${localToken}`],
@@ -913,7 +956,19 @@ export async function runDar03(
   const cleanupErrors: Error[] = [];
   await closeSurface(pwa, "PWA surface", cleanupErrors);
   await closeSurface(desktop, "Desktop surface", cleanupErrors);
-  await cleanupPty(pty, exitSent, overallDeadline, now, cleanupErrors);
+  await cleanupPty(
+    pty,
+    exitSent,
+    localDisplaced,
+    trackedSessionId,
+    context.runtime.home,
+    overallDeadline,
+    now,
+    sleep,
+    pollIntervalMs,
+    readSessionMeta,
+    cleanupErrors
+  );
   throwCleanupErrors(cleanupErrors, "Failed to finalize DAR-03");
 
   return results;
