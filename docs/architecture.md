@@ -25,8 +25,9 @@ sockets.
 climon <cmd>  ──spawn(detached)──►  session daemon  ──portable-pty──►  user command
      │  (local attach client)            │  owns PTY + scrollback ring buffer
      │  raw-mode stdin/stdout            │  listens on per-session socket
-     │  static-screen attention det.     │  (single writer of session metadata)
+     │  receives output frames           │  (single writer of session metadata)
      └──────── IPC socket ───────────────┤  applies client attention frames
+                                          │  PTY-output attention detection
                                           │  writes ~/.climon/sessions/<id>.json
 climon server (Bun.serve)                 │  persists final buffer + status on exit
      │  scans ~/.climon/sessions/*.json   │
