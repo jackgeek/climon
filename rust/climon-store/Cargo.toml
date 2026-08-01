@@ -9,7 +9,7 @@ description = "climon metadata store: atomic session-metadata IO, per-process pa
 climon-proto = { path = "../climon-proto", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-human_id = { workspace = true }
+petname = { workspace = true }
 getrandom = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

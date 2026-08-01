@@ -5,7 +5,7 @@ byte/format-compatible with the unchanged Bun/TypeScript server, which reads the
 same `$CLIMON_HOME/sessions/*.json` files. They cover atomic metadata writes (no
 partially-written file ever visible to a reader), the two-layer patch
 serialization model (per-process burst coalescing over a cross-process directory
-lock with stale-owner recovery), `$CLIMON_HOME` path layout, `human_id` session
+lock with stale-owner recovery), `$CLIMON_HOME` path layout, `petname` session
 ids with collision reroll, the `server.json` server-state file, and the
 cross-language golden fixtures under `fixtures/store/`.
 
@@ -240,7 +240,7 @@ steps are called out per case.
 
 ---
 
-## MT-P5-08 — License gate + attribution freshness (`human_id` added)
+## MT-P5-08 — License gate + attribution freshness (`petname` dependency)
 
 - **ID:** MT-P5-08
 - **Feature / phase:** Phase 5 — license tooling
@@ -250,8 +250,7 @@ steps are called out per case.
 
 **Steps:**
 1. Baseline: `cargo deny check` — advisories/bans/licenses/sources all ok
-   (the new `human_id` dependency is `Unlicense OR MIT`; its transitive crates are
-   covered by the existing permissive allowlist).
+   (`petname` is Apache-2.0; its transitive crates are covered by the existing permissive allowlist).
 2. Attribution freshness: regenerate and diff against the committed file:
    `cargo about generate about.hbs > NOTICES.tmp.md && diff -u THIRD-PARTY-LICENSES.md NOTICES.tmp.md && rm NOTICES.tmp.md`
    — expect **no diff**.
@@ -259,7 +258,7 @@ steps are called out per case.
    `cargo deny check`, confirm it fails, then revert.
 
 **Expected result:**
-- Step 1 passes with `human_id` and its transitive dependencies.
+- Step 1 passes with `petname` and its transitive dependencies.
 - Step 2 produces no diff (the committed `THIRD-PARTY-LICENSES.md` is current).
 - Step 3 fails the gate on a non-allowlisted license, then is green after revert.
 
