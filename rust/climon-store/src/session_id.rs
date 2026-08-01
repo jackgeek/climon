@@ -8,15 +8,15 @@ use crate::paths::Env;
 /// Maximum candidate ids tried before giving up. Mirrors `MAX_ATTEMPTS`.
 pub const MAX_ATTEMPTS: usize = 50;
 
-/// Default id generator: `human_id` produces lowercase adjective-noun-verb ids
+/// Default id generator: `petname` produces lowercase adjective-noun-verb ids
 /// joined by `-` (verified filesystem-safe and matching `^[a-z]+(-[a-z]+){2}$`).
-pub fn default_human_id() -> String {
-    human_id::id("-", false)
+pub fn default_session_id() -> String {
+    petname::petname(3, "-").expect("petname medium word lists must not be empty")
 }
 
-/// Generates a unique session id using the default `human_id` generator.
+/// Generates a unique session id using the default word generator.
 pub fn generate_session_id(env: &Env) -> StoreResult<String> {
-    generate_session_id_with(env, default_human_id)
+    generate_session_id_with(env, default_session_id)
 }
 
 /// Generates a session id using a caller-supplied generator. Re-rolls when the
@@ -49,11 +49,14 @@ mod tests {
     }
 
     #[test]
-    fn returns_lowercase_adjective_noun_verb_id() {
-        let env = env_for("sid-format");
-        let id = generate_session_id(&env).unwrap();
+    fn default_generator_returns_three_lowercase_words_from_medium_list() {
+        let id = default_session_id();
         let parts: Vec<&str> = id.split('-').collect();
         assert_eq!(parts.len(), 3, "expected three segments in {id}");
+        let words = petname::lang::english::Petnames::medium();
+        assert!(words.adverbs.iter().any(|word| *word == parts[0]));
+        assert!(words.adjectives.iter().any(|word| *word == parts[1]));
+        assert!(words.nouns.iter().any(|word| *word == parts[2]));
         for part in parts {
             assert!(!part.is_empty());
             assert!(
@@ -61,7 +64,6 @@ mod tests {
                 "segment {part} not lowercase ascii"
             );
         }
-        let _ = fs::remove_dir_all(env.climon_home());
     }
 
     #[test]
