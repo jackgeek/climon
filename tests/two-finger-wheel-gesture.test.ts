@@ -61,7 +61,7 @@ describe("two-finger wheel gesture", () => {
 
   test("horizontal motion past the threshold is rejected", () => {
     const state = pendingState();
-    const move = moveTwoFingerGesture(state, [touch(2, 20), touch(48, 40)], 110, false);
+    const move = moveTwoFingerGesture(state, [touch(20, 20), touch(40, 40)], 110, false);
 
     expect(move.state.phase).toBe("rejected");
     expect(move.claimed).toBe(true);
