@@ -71,6 +71,12 @@ describe("decideTerminalClipboardAction", () => {
       ).toBe("copy");
     });
 
+    test("Ctrl+Shift+C with no selection swallows the key and never sends SIGINT", () => {
+      expect(
+        decideTerminalClipboardAction(ev({ key: "c", ctrlKey: true, shiftKey: true, hasSelection: false }))
+      ).toBe("copy");
+    });
+
     test("Ctrl+V pastes instead of sending a literal ^V", () => {
       expect(decideTerminalClipboardAction(ev({ key: "v", ctrlKey: true }))).toBe("paste");
     });

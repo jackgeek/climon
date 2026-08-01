@@ -22,9 +22,9 @@ export interface TerminalClipboardEvent {
  *
  * Behaviour (Windows Terminal style):
  *   - macOS: Cmd+C copies the selection, Cmd+V pastes.
- *   - Windows/Linux: Ctrl+Shift+C / Ctrl+Shift+V copy/paste; additionally plain
- *     Ctrl+C copies when text is selected (otherwise it stays a SIGINT) and plain
- *     Ctrl+V pastes.
+ *   - Windows/Linux: Ctrl+Shift+C / Ctrl+Shift+V copy/paste; Ctrl+Shift+C always
+ *     swallows the key (never SIGINT), even when nothing is selected. Plain Ctrl+C
+ *     copies when text is selected, otherwise stays a SIGINT. Plain Ctrl+V pastes.
  *
  * Actions:
  *   - "copy"        Write the current selection to the clipboard and swallow the
@@ -49,8 +49,14 @@ export function decideTerminalClipboardAction(
   if (key === "v") {
     return "paste";
   }
-  // key === "c": copy the selection, or fall back to the terminal's default
-  // (SIGINT on Windows/Linux, nothing on macOS) when nothing is selected.
+  // key === "c": Ctrl+Shift+C (Windows/Linux) is an explicit clipboard chord that
+  // must never fall through to SIGINT, even when nothing is selected. TUI apps such
+  // as Copilot CLI capture mouse events, which prevents normal drag-selection, so
+  // without this rule pressing Ctrl+Shift+C with no visible selection would send
+  // SIGINT to the running process. Plain Ctrl+C retains the SIGINT fallback.
+  if (!event.isMac && event.shiftKey) {
+    return "copy";
+  }
   return event.hasSelection ? "copy" : "passthrough";
 }
 
