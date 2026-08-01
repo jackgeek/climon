@@ -5,7 +5,7 @@ byte/format-compatible with the unchanged Bun/TypeScript server, which reads the
 same `$CLIMON_HOME/sessions/*.json` files. They cover atomic metadata writes (no
 partially-written file ever visible to a reader), the two-layer patch
 serialization model (per-process burst coalescing over a cross-process directory
-lock with stale-owner recovery), `$CLIMON_HOME` path layout, `human_id` session
+lock with stale-owner recovery), `$CLIMON_HOME` path layout, `petname` session
 ids with collision reroll, the `server.json` server-state file, and the
 cross-language golden fixtures under `fixtures/store/`.
 
