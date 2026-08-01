@@ -45,6 +45,10 @@ import {
   DAR_04_SUBCHECKS,
   runDar04 as runDar04Impl,
 } from "./scenarios/dar-04.js";
+import {
+  DAR_05_SUBCHECKS,
+  runDar05 as runDar05Impl,
+} from "./scenarios/dar-05.js";
 import { notImplementedRunner } from "./scenarios/shared.js";
 import { validateSubcheckResults, type SubcheckDefinition } from "./subchecks.js";
 import {
@@ -360,6 +364,7 @@ const SUBCHECK_DEFINITIONS: Partial<Record<DarId, readonly SubcheckDefinition[]>
   "DAR-02": DAR_02_SUBCHECKS,
   "DAR-03": DAR_03_SUBCHECKS,
   "DAR-04": DAR_04_SUBCHECKS,
+  "DAR-05": DAR_05_SUBCHECKS,
 };
 
 function registeredSubcheckDefinitions(
@@ -518,12 +523,49 @@ const runDar04Adapter: ScenarioRunner = async ({
   );
 };
 
+const runDar05Adapter: ScenarioRunner = async ({
+  platform,
+  overallDeadline,
+  build,
+  runtime,
+  createBrowserDriver,
+}) => {
+  const browser = createBrowserDriver() as BrowserSnapshotDriver & {
+    createSurface?: unknown;
+  };
+  if (typeof browser.createSurface !== "function") {
+    throw new HarnessError(
+      "browser",
+      "Browser driver does not expose createSurface() for DAR-05"
+    );
+  }
+
+  return runDar05Impl(
+    {
+      platform,
+      overallDeadline,
+      build,
+      runtime: {
+        root: runtime.root,
+        home: runtime.home,
+        baseUrl: runtime.baseUrl,
+        env: runtime.env,
+        artifacts: runtime.artifacts,
+        sessions: runtime.sessions,
+      },
+    },
+    {
+      createBrowserDriver: () => browser as never,
+    }
+  );
+};
+
 const DEFAULT_SCENARIO_RUNNERS: Record<DarId, ScenarioRunner> = {
   "DAR-01": runDar01Adapter,
   "DAR-02": runDar02Adapter,
   "DAR-03": runDar03Adapter,
   "DAR-04": runDar04Adapter,
-  "DAR-05": notImplementedRunner("DAR-05"),
+  "DAR-05": runDar05Adapter,
   "DAR-06": notImplementedRunner("DAR-06"),
   "DAR-07": notImplementedRunner("DAR-07"),
   "DAR-08": notImplementedRunner("DAR-08"),

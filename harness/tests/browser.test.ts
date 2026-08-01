@@ -208,11 +208,13 @@ class FakePage {
   public readonly gotoCalls: Array<{ url: string; options: Record<string, unknown> }> = [];
   public readonly screenshotCalls: Array<Record<string, unknown>> = [];
   public readonly viewportCalls: Array<{ width: number; height: number }> = [];
+  public readonly evaluateCalls: Array<{ arg: unknown }> = [];
   public closeCalls = 0;
   public gotoError?: unknown;
   public closeError?: unknown;
   public screenshotError?: unknown;
   public viewportError?: unknown;
+  public evaluateError?: unknown;
   private readonly locatorMap = new Map<string, FakeLocator>();
   private readonly roleMap = new Map<string, FakeLocator>();
   private readonly consoleListeners = new Set<(message: FakeConsoleMessage) => void>();
@@ -296,6 +298,20 @@ class FakePage {
     if (this.viewportError) {
       throw this.viewportError;
     }
+  }
+
+  public evaluateImpl?: <A, R>(fn: (arg: A) => R | Promise<R>, arg: A) => Promise<R>;
+
+  public async evaluate<A, R>(fn: (arg: A) => R | Promise<R>, arg: A): Promise<R> {
+    this.evaluateCalls.push({ arg });
+    if (this.evaluateError) {
+      throw this.evaluateError;
+    }
+    if (this.evaluateImpl) {
+      return this.evaluateImpl(fn, arg);
+    }
+    // Fake: record the call but do not execute browser-only code in Node.js context.
+    return undefined as unknown as R;
   }
 
   public emitConsole(type: string, text: string): void {
@@ -878,6 +894,344 @@ describe("BrowserDriver", () => {
       expect(failingPage.screenshotCalls).toEqual([{ path: screenshotPath, fullPage: true }]);
       expect(failingPage.closeCalls).toBe(1);
       expect(failingContext.closeCalls).toBe(1);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
+
+describe("BrowserSurface.acknowledgeAttentionToken", () => {
+  function makeAttentionSurfaceFixture(log: string[]) {
+    const primaryPage = new FakePage(log);
+    primaryPage.registerLocator('[data-testid="session-list"]');
+    const surfacePage = new FakePage(log);
+    const surfaceContext = new FakeBrowserContext([surfacePage], log);
+    const browser = new FakeBrowser([surfaceContext]);
+    const workspace = resolve(import.meta.dir, "..", ".test-workspace", `ack-token-${Date.now()}`);
+    mkdirSync(workspace, { recursive: true });
+    const { driver } = createDriver({
+      log,
+      pages: [primaryPage],
+      browser,
+      artifactDir: join(workspace, "artifacts"),
+    });
+    return { driver, surfacePage, workspace };
+  }
+
+  test("calls page.evaluate with the session id and token", async () => {
+    if (!BrowserDriver) return;
+    const log: string[] = [];
+    const { driver, surfacePage, workspace } = makeAttentionSurfaceFixture(log);
+
+    try {
+      surfacePage.registerLocator('[data-testid="session-list"]');
+      const surface = await driver.createSurface({
+        name: "attention",
+        viewport: { width: 1280, height: 800 },
+      });
+
+      await surface.acknowledgeAttentionToken("session-abc", "token-xyz", 1_000);
+
+      expect(surfacePage.evaluateCalls).toHaveLength(1);
+      expect(surfacePage.evaluateCalls[0]!.arg).toEqual({
+        id: "session-abc",
+        token: "token-xyz",
+        timeoutMs: 1_000,
+      });
+
+      await surface.close();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("throws prerequisite HarnessError for empty session id", async () => {
+    if (!BrowserDriver) return;
+    const log: string[] = [];
+    const { driver, surfacePage, workspace } = makeAttentionSurfaceFixture(log);
+
+    try {
+      surfacePage.registerLocator('[data-testid="session-list"]');
+      const surface = await driver.createSurface({
+        name: "attention",
+        viewport: { width: 1280, height: 800 },
+      });
+
+      await expect(
+        surface.acknowledgeAttentionToken("", "token-xyz", 1_000)
+      ).rejects.toMatchObject({ kind: "prerequisite" });
+      expect(surfacePage.evaluateCalls).toHaveLength(0);
+
+      await surface.close();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("throws prerequisite HarnessError for empty token", async () => {
+    if (!BrowserDriver) return;
+    const log: string[] = [];
+    const { driver, surfacePage, workspace } = makeAttentionSurfaceFixture(log);
+
+    try {
+      surfacePage.registerLocator('[data-testid="session-list"]');
+      const surface = await driver.createSurface({
+        name: "attention",
+        viewport: { width: 1280, height: 800 },
+      });
+
+      await expect(
+        surface.acknowledgeAttentionToken("session-abc", "", 1_000)
+      ).rejects.toMatchObject({ kind: "prerequisite" });
+      expect(surfacePage.evaluateCalls).toHaveLength(0);
+
+      await surface.close();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("wraps page.evaluate errors as browser HarnessErrors", async () => {
+    if (!BrowserDriver) return;
+    const log: string[] = [];
+    const { driver, surfacePage, workspace } = makeAttentionSurfaceFixture(log);
+
+    try {
+      surfacePage.registerLocator('[data-testid="session-list"]');
+      const surface = await driver.createSurface({
+        name: "attention",
+        viewport: { width: 1280, height: 800 },
+      });
+      surfacePage.evaluateError = new Error("WebSocket refused");
+
+      await expect(
+        surface.acknowledgeAttentionToken("session-abc", "token-xyz", 1_000)
+      ).rejects.toMatchObject({ kind: "browser" });
+
+      await surface.close();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("throws browser HarnessError when page lacks evaluate support", async () => {
+    if (!BrowserDriver) return;
+    const log: string[] = [];
+    const { driver, surfacePage, workspace } = makeAttentionSurfaceFixture(log);
+
+    try {
+      surfacePage.registerLocator('[data-testid="session-list"]');
+      const surface = await driver.createSurface({
+        name: "attention",
+        viewport: { width: 1280, height: 800 },
+      });
+      // Simulate a page that does not support evaluate (e.g., older Playwright).
+      (surfacePage as unknown as Record<string, unknown>).evaluate = undefined;
+
+      await expect(
+        surface.acknowledgeAttentionToken("session-abc", "token-xyz", 1_000)
+      ).rejects.toMatchObject({ kind: "browser" });
+
+      await surface.close();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects promptly with translated HarnessError when WebSocket never opens (bounded open timeout)", async () => {
+    // FAILS against current code: page.evaluate hangs forever because the script has no open
+    // timeout — the Promise never settles when the WebSocket never fires "open".
+    // PASSES after fix: a bounded openTimer fires after the computed remainingMs and rejects.
+    if (!BrowserDriver) return;
+    const log: string[] = [];
+    const { driver, surfacePage, workspace } = makeAttentionSurfaceFixture(log);
+
+    try {
+      const surface = await driver.createSurface({
+        name: "never-open-ws-test",
+        viewport: { width: 1280, height: 800 },
+      });
+
+      // Inject a WebSocket that never fires any event — simulates a hung/refused connection.
+      surfacePage.evaluateImpl = async <A, R>(fn: (arg: A) => R | Promise<R>, arg: A): Promise<R> => {
+        const globalAny = globalThis as Record<string, unknown>;
+        const savedLocation = globalAny["location"];
+        const savedWebSocket = globalAny["WebSocket"];
+        try {
+          globalAny["location"] = { protocol: "http:", host: "localhost:54321" };
+          globalAny["WebSocket"] = function FakeNeverOpenWebSocket() {
+            return {
+              bufferedAmount: 0,
+              send(_data: string) {},
+              close() {},
+              addEventListener(_event: string, _cb: () => void) {
+                // Deliberately never fires "open", "close", or "error".
+              },
+            };
+          };
+          return await (fn(arg) as Promise<R>);
+        } finally {
+          globalAny["location"] = savedLocation;
+          globalAny["WebSocket"] = savedWebSocket;
+        }
+      };
+
+      // deadline=50: FakeClock.nowMs=0 → timeoutMs=50 → openTimer fires after ~50ms.
+      // A 400ms race guard catches the case where current code hangs (guard fires first,
+      // error has no `kind` property, assertion fails → RED).
+      const guardError = new Error("guard: acknowledgeAttentionToken did not reject within time");
+      await expect(
+        Promise.race([
+          surface.acknowledgeAttentionToken("session-abc", "token-xyz", 50),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(guardError), 400)
+          ),
+        ])
+      ).rejects.toMatchObject({ kind: expect.stringMatching(/^(browser|timeout)$/) });
+
+      await surface.close();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("waits for bufferedAmount to drain before closing the WebSocket", async () => {
+    // This test proves the evaluate script must NOT call ws.close() while bufferedAmount > 0.
+    // FAILS against current code (ws.close() called synchronously after ws.send()).
+    // PASSES after the fix (polls bufferedAmount until 0 before closing).
+    if (!BrowserDriver) return;
+    const log: string[] = [];
+    const { driver, surfacePage, workspace } = makeAttentionSurfaceFixture(log);
+
+    try {
+      const surface = await driver.createSurface({
+        name: "flush-test",
+        viewport: { width: 1280, height: 800 },
+      });
+
+      let bufferedAmount = 1; // Non-zero: kernel buffer not yet flushed
+      const wsEvents: string[] = [];
+      let closedWithBufferedAmount = -1;
+
+      surfacePage.evaluateImpl = async <A, R>(fn: (arg: A) => R | Promise<R>, arg: A): Promise<R> => {
+        const listeners: Record<string, Array<() => void>> = {};
+        const fakeWs = {
+          get bufferedAmount() { return bufferedAmount; },
+          send(data: string) { wsEvents.push(`send:${data.substring(0, 20)}`); },
+          close() {
+            closedWithBufferedAmount = bufferedAmount;
+            wsEvents.push("close");
+            Promise.resolve().then(() => {
+              for (const cb of listeners["close"] ?? []) cb();
+            });
+          },
+          addEventListener(event: string, cb: () => void) {
+            (listeners[event] ??= []).push(cb);
+          },
+        };
+
+        const globalAny = globalThis as Record<string, unknown>;
+        const savedLocation = globalAny["location"];
+        const savedWebSocket = globalAny["WebSocket"];
+        try {
+          globalAny["location"] = { protocol: "http:", host: "localhost:54321" };
+          globalAny["WebSocket"] = function FakeWebSocketCtor() { return fakeWs; };
+
+          // Drain bufferedAmount to 0 after 15 ms — simulates kernel flush.
+          const drainTimer = setTimeout(() => { bufferedAmount = 0; }, 15);
+          const result = fn(arg);
+          // Trigger "open" on the next microtick so the script's open handler runs.
+          await Promise.resolve();
+          for (const cb of listeners["open"] ?? []) cb();
+          await result;
+          clearTimeout(drainTimer);
+          return undefined as unknown as R;
+        } finally {
+          globalAny["location"] = savedLocation;
+          globalAny["WebSocket"] = savedWebSocket;
+        }
+      };
+
+      await surface.acknowledgeAttentionToken("session-abc", "token-xyz", 1_000);
+
+      // After the fix: close must only be called once bufferedAmount has drained to 0.
+      expect(closedWithBufferedAmount).toBe(0);
+      expect(wsEvents.some((e) => e.startsWith("send:"))).toBe(true);
+      expect(wsEvents).toContain("close");
+
+      await surface.close();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects by absolute deadline when close event never fires after send", async () => {
+    // FAILS against current code: once ws.open fires the openTimer is cleared; ws.send() runs,
+    // tryClose() calls ws.close() synchronously (bufferedAmount === 0), but the close event
+    // never fires — the Promise hangs forever because no timer remains active.
+    // PASSES after fix: a single deadlineTimer spans all phases and rejects on timeout.
+    if (!BrowserDriver) return;
+    const log: string[] = [];
+    const { driver, surfacePage, workspace } = makeAttentionSurfaceFixture(log);
+
+    try {
+      const surface = await driver.createSurface({
+        name: "close-hang-test",
+        viewport: { width: 1280, height: 800 },
+      });
+
+      const wsEvents: string[] = [];
+
+      surfacePage.evaluateImpl = async <A, R>(fn: (arg: A) => R | Promise<R>, arg: A): Promise<R> => {
+        const listeners: Record<string, Array<() => void>> = {};
+        const fakeWs = {
+          bufferedAmount: 0,
+          send(data: string) { wsEvents.push(`send:${data.substring(0, 20)}`); },
+          close() {
+            wsEvents.push("close-called");
+            // Deliberately never emits the "close" event — simulates kernel-level hang.
+          },
+          addEventListener(event: string, cb: () => void) {
+            (listeners[event] ??= []).push(cb);
+          },
+        };
+
+        const globalAny = globalThis as Record<string, unknown>;
+        const savedLocation = globalAny["location"];
+        const savedWebSocket = globalAny["WebSocket"];
+        try {
+          globalAny["location"] = { protocol: "http:", host: "localhost:54321" };
+          globalAny["WebSocket"] = function FakeWebSocketCtor() { return fakeWs; };
+
+          const result = fn(arg);
+          // Trigger "open" on the next microtick so the open handler runs.
+          await Promise.resolve();
+          for (const cb of listeners["open"] ?? []) cb();
+          return await result;
+        } finally {
+          globalAny["location"] = savedLocation;
+          globalAny["WebSocket"] = savedWebSocket;
+        }
+      };
+
+      // deadline=100: FakeClock.nowMs=0 → timeoutMs=100 → deadlineTimer fires after ~100 ms.
+      // A 800 ms race guard catches the case where current code hangs (guard fires first;
+      // the caught error has no `kind` property → assertion fails → RED).
+      const guardError = new Error("guard: acknowledgeAttentionToken did not reject within time");
+      await expect(
+        Promise.race([
+          surface.acknowledgeAttentionToken("session-abc", "token-xyz", 100),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(guardError), 800)
+          ),
+        ])
+      ).rejects.toMatchObject({ kind: expect.stringMatching(/^(browser|timeout)$/) });
+
+      // close must have been attempted on the timeout path.
+      expect(wsEvents).toContain("close-called");
+
+      await surface.close();
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

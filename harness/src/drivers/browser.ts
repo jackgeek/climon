@@ -57,6 +57,7 @@ interface PageLike {
   on(event: "requestfailed", listener: (request: RequestLike) => void): void;
   setViewportSize?(viewport: { width: number; height: number }): Promise<unknown>;
   screenshot?(options: { path: string; fullPage?: boolean }): Promise<unknown>;
+  evaluate?<A, R>(fn: (arg: A) => R | Promise<R>, arg: A): Promise<R>;
   keyboard: KeyboardLike;
 }
 
@@ -111,6 +112,7 @@ export interface BrowserSurface {
   controllerId(id: string, deadline: number): Promise<string>;
   waitForDisplaced(id: string, deadline: number): Promise<string>;
   acknowledgeAttention(id: string, deadline: number): Promise<void>;
+  acknowledgeAttentionToken(id: string, token: string, deadline: number): Promise<void>;
   resizeViewport(width: number, height: number): Promise<void>;
   terminalText(): Promise<string>;
   status(id: string, deadline: number): Promise<string | null>;
@@ -807,6 +809,93 @@ class BrowserSurfaceSession implements BrowserSurface {
         throw this.timeoutError("attention acknowledgement", diagnostics());
       }
       await this.dependencies.sleep(Math.max(1, Math.min(this.dependencies.pollIntervalMs, deadline - this.dependencies.now())));
+    }
+  }
+
+  public async acknowledgeAttentionToken(
+    id: string,
+    token: string,
+    deadline: number
+  ): Promise<void> {
+    assertAbsoluteDeadline(deadline);
+    const sessionId = assertToken("id", id);
+    const attentionToken = assertToken("token", token);
+    const page = this.requirePage();
+    const diagnostics = () => ({
+      id: JSON.stringify(sessionId),
+      token: JSON.stringify(attentionToken),
+    });
+
+    if (typeof page.evaluate !== "function") {
+      throw new HarnessError(
+        "browser",
+        `Browser surface ${this.name} does not support page.evaluate(); cannot send attention token`
+      );
+    }
+
+    const timeoutMs = this.remainingMs(
+      deadline,
+      () => this.timeoutError("attention token acknowledgement", diagnostics())
+    );
+
+    try {
+      await page.evaluate(
+        (args: { id: string; token: string; timeoutMs: number }) => {
+          const proto = location.protocol === "https:" ? "wss:" : "ws:";
+          const wsUrl = `${proto}//${location.host}/api/sessions/${args.id}/attach`;
+          return new Promise<void>((resolve, reject) => {
+            let settled = false;
+            let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+            let flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+            const settle = (err?: Error) => {
+              if (settled) return;
+              settled = true;
+              if (deadlineTimer !== undefined) { clearTimeout(deadlineTimer); deadlineTimer = undefined; }
+              if (flushTimer !== undefined) { clearTimeout(flushTimer); flushTimer = undefined; }
+              if (err !== undefined) reject(err);
+              else resolve();
+            };
+
+            // Single overall deadline timer — remains active through open, buffer drain, and
+            // close handshake.  On expiry we attempt ws.close() and reject with a TimeoutError
+            // so the outer throwTranslatedError translates it to a HarnessError("timeout").
+            deadlineTimer = setTimeout(() => {
+              try { ws.close(); } catch { /* ignore close errors on timeout path */ }
+              settle(Object.assign(new Error("Timed out waiting for attention token acknowledgement"), { name: "TimeoutError" }));
+            }, args.timeoutMs);
+
+            const ws = new WebSocket(wsUrl);
+
+            ws.addEventListener("open", () => {
+              ws.send(
+                JSON.stringify({
+                  type: "attention",
+                  needsAttention: false,
+                  attentionMatchedAt: args.token,
+                })
+              );
+              ws.addEventListener("close", () => settle());
+              const tryClose = () => {
+                if (settled) return;
+                if (ws.bufferedAmount === 0) {
+                  ws.close();
+                } else {
+                  flushTimer = setTimeout(tryClose, 10);
+                }
+              };
+              tryClose();
+            });
+
+            ws.addEventListener("error", () => {
+              settle(new Error("WebSocket error during attention token acknowledgement"));
+            });
+          });
+        },
+        { id: sessionId, token: attentionToken, timeoutMs }
+      );
+    } catch (error) {
+      this.throwTranslatedError("attention token acknowledgement", error, diagnostics());
     }
   }
 
