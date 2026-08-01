@@ -1736,7 +1736,7 @@ mod tests {
 mod spawn_dispatch_tests {
     use super::*;
     use crate::mux::ControlMessage;
-    use crate::spawn_auth::{sign_control, RejectReason};
+    use crate::spawn_auth::{sign_now, RejectReason};
 
     fn spawn_msg() -> ControlMessage {
         ControlMessage::Spawn {
@@ -1821,7 +1821,7 @@ mod spawn_dispatch_tests {
     #[test]
     fn signed_control_unwrapped_when_secret_present() {
         let mut guard = ReplayGuard::new(30_000);
-        let env = sign_control("sekret", &ControlMessage::Ping, "n1", 1000);
+        let env = sign_now("sekret", &ControlMessage::Ping, 1000);
         let got = unwrap_inbound(Some("sekret"), &mut guard, env, 1000);
         assert_eq!(got, Ok(ControlMessage::Ping));
     }
