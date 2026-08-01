@@ -164,8 +164,11 @@ interface Props {
   onRemoveDisconnected: () => void;
   onMaximize: (id: string) => void;
   isMobile: boolean;
+  isTouchPrimary?: boolean;
   keyBarPinned: boolean;
   onToggleKeyBarPinned: () => void;
+  touchWheelInverted?: boolean;
+  onToggleTouchWheelInverted?: () => void;
   stateIconNoMotion?: boolean;
   currentTheme?: string;
   onSelectTheme?: (id: string) => void;
@@ -196,8 +199,11 @@ export function Sidebar({
   onRemoveDisconnected,
   onMaximize,
   isMobile,
+  isTouchPrimary: _isTouchPrimary = false,
   keyBarPinned,
   onToggleKeyBarPinned,
+  touchWheelInverted: _touchWheelInverted = false,
+  onToggleTouchWheelInverted: _onToggleTouchWheelInverted,
   stateIconNoMotion = false,
   currentTheme = DEFAULT_THEME_NAME,
   onSelectTheme,
