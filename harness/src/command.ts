@@ -1,6 +1,7 @@
-import { open, mkdir } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, open } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ReadableStream as WebReadableStream } from "node:stream/web";
+import { Readable } from "node:stream";
 import { HarnessError } from "./types.js";
 
 export interface CommandSpec {
@@ -29,63 +30,95 @@ interface StreamCollector {
   abort(): Promise<void>;
 }
 
-function collectStream(
-  stream: WebReadableStream<Uint8Array>,
-  path: string
-) : StreamCollector {
-  const reader = stream.getReader();
-  let aborted = false;
-
-  const promise = (async (): Promise<string> => {
-    await mkdir(dirname(path), { recursive: true });
-    const file = await open(path, "w");
-    const decoder = new TextDecoder();
-    let output = "";
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-
-        if (value === undefined) {
-          continue;
-        }
-
-        const bytes = value instanceof Uint8Array ? value : Buffer.from(value);
-        await file.write(bytes);
-        output += decoder.decode(bytes, { stream: true });
-      }
-
-      output += decoder.decode();
-      return output;
-    } catch (error) {
-      if (!aborted) {
-        throw error;
-      }
-
-      output += decoder.decode();
-      return output;
-    } finally {
-      reader.releaseLock();
+function emptyCollector(path: string): StreamCollector {
+  return {
+    promise: (async () => {
+      await mkdir(dirname(path), { recursive: true });
+      const file = await open(path, "w");
       await file.close();
-    }
-  })();
+      return "";
+    })(),
+    async abort() {},
+  };
+}
+
+function collectStream(stream: Readable | null, path: string): StreamCollector {
+  if (stream === null) {
+    return emptyCollector(path);
+  }
+
+  let aborted = false;
+  let settled = false;
+  let output = "";
+  const decoder = new TextDecoder();
+  let writeQueue = Promise.resolve();
+  let finalize:
+    | ((error?: unknown) => Promise<void>)
+    | undefined;
+
+  const promise = new Promise<string>((resolve, reject) => {
+    void (async () => {
+      try {
+        await mkdir(dirname(path), { recursive: true });
+        const file = await open(path, "w");
+        const onData = (chunk: string | Buffer) => {
+          const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+          writeQueue = writeQueue.then(async () => {
+            await file.write(bytes);
+            output += decoder.decode(bytes, { stream: true });
+          });
+        };
+        const onEnd = () => {
+          void finalize?.();
+        };
+        const onClose = () => {
+          if (aborted) {
+            void finalize?.();
+          }
+        };
+        const onError = (error: unknown) => {
+          void finalize?.(error);
+        };
+
+        finalize = async (error?: unknown) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          stream.off("data", onData);
+          stream.off("end", onEnd);
+          stream.off("close", onClose);
+          stream.off("error", onError);
+          await writeQueue.catch(() => undefined);
+          output += decoder.decode();
+          await file.close();
+          if (error === undefined || aborted) {
+            resolve(output);
+            return;
+          }
+          reject(error);
+        };
+
+        stream.on("data", onData);
+        stream.on("end", onEnd);
+        stream.on("close", onClose);
+        stream.on("error", onError);
+      } catch (error) {
+        settled = true;
+        reject(error);
+      }
+    })();
+  });
 
   return {
     promise,
     async abort() {
-      if (aborted) {
+      if (aborted || settled) {
         return;
       }
-
       aborted = true;
-      try {
-        await reader.cancel();
-      } catch {
-        // Ignore cancellation errors while timing out.
-      }
+      stream.destroy();
+      await finalize?.();
     },
   };
 }
@@ -93,20 +126,15 @@ function collectStream(
 export class BunCommandRunner implements CommandRunner {
   public async run(spec: CommandSpec): Promise<CommandResult> {
     const startedAt = performance.now();
-    const spawnOptions = {
-      cwd: spec.cwd,
-      env: spec.env,
-      shell: false,
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    };
-    let subprocess: ReturnType<typeof Bun.spawn>;
+    let subprocess;
+
     try {
-      subprocess = Bun.spawn(
-        [spec.file, ...spec.args],
-        spawnOptions as Parameters<typeof Bun.spawn>[1]
-      );
+      subprocess = spawn(spec.file, spec.args, {
+        cwd: spec.cwd,
+        env: spec.env,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
     } catch (error) {
       throw new HarnessError(
         "prerequisite",
@@ -115,26 +143,46 @@ export class BunCommandRunner implements CommandRunner {
       );
     }
 
-    const stdoutCollector = collectStream(
-      subprocess.stdout as unknown as WebReadableStream<Uint8Array>,
-      spec.stdoutPath
+    const stdoutCollector = collectStream(subprocess.stdout, spec.stdoutPath);
+    const stderrCollector = collectStream(subprocess.stderr, spec.stderrPath);
+    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        subprocess.once("error", (error) => {
+          reject(
+            new HarnessError(
+              "prerequisite",
+              `Failed to start command: ${spec.file} ${spec.args.join(" ")}`,
+              { cause: error }
+            )
+          );
+        });
+        subprocess.once("exit", (code, signal) => {
+          resolve({ code, signal });
+        });
+      }
     );
-    const stderrCollector = collectStream(
-      subprocess.stderr as unknown as WebReadableStream<Uint8Array>,
-      spec.stderrPath
-    );
-    const completionPromise = Promise.all([
-      subprocess.exited,
-      Promise.all([
-        stdoutCollector.promise,
-        stderrCollector.promise,
-      ]),
-    ]).then(([code, [stdout, stderr]]) => {
-      return { code, stdout, stderr };
+    const closePromise = new Promise<void>((resolve) => {
+      subprocess.once("error", (error) => {
+        void error;
+        resolve();
+      });
+      subprocess.once("close", () => {
+        resolve();
+      });
     });
+    const completionPromise = Promise.all([
+      exitPromise,
+      closePromise,
+      stdoutCollector.promise,
+      stderrCollector.promise,
+    ]).then(([exit, , stdout, stderr]) => ({
+      code: exit.code ?? 0,
+      signal: exit.signal,
+      stdout,
+      stderr,
+    }));
 
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
     let elapsedAtTimeout = 0;
 
     try {
@@ -146,7 +194,6 @@ export class BunCommandRunner implements CommandRunner {
         new Promise<{ timedOut: true }>((resolve) => {
           timer = setTimeout(() => {
             void (async () => {
-              timedOut = true;
               elapsedAtTimeout = Math.round(performance.now() - startedAt);
               try {
                 subprocess.kill("SIGKILL");
@@ -156,7 +203,7 @@ export class BunCommandRunner implements CommandRunner {
               await Promise.allSettled([
                 stdoutCollector.abort(),
                 stderrCollector.abort(),
-                subprocess.exited,
+                exitPromise,
               ]);
               resolve({ timedOut: true });
             })();
@@ -164,7 +211,7 @@ export class BunCommandRunner implements CommandRunner {
         }),
       ]);
 
-      if (exit.timedOut || timedOut) {
+      if (exit.timedOut) {
         throw new HarnessError(
           "timeout",
           `Command timed out after ${elapsedAtTimeout}ms: ${spec.file} ${spec.args.join(" ")}`
@@ -186,19 +233,14 @@ export class BunCommandRunner implements CommandRunner {
       await Promise.allSettled([
         stdoutCollector.abort(),
         stderrCollector.abort(),
-        subprocess.exited,
+        exitPromise,
+        closePromise,
       ]);
       throw error;
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);
       }
-
-      await Promise.allSettled([
-        completionPromise,
-        stdoutCollector.promise,
-        stderrCollector.promise,
-      ]);
     }
   }
 }

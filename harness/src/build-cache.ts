@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path, { join } from "node:path";
-import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { compiledServerBuildArgs } from "../../scripts/server-build.js";
 import type { CommandRunner, CommandSpec } from "./command.js";
 import { HarnessError, type HarnessPlatform } from "./types.js";
@@ -276,98 +276,61 @@ async function readGitRevision(root: string): Promise<string> {
 }
 
 async function readGitWorktreeClean(root: string): Promise<boolean> {
-  const spawnOptions = {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-    shell: false,
-  };
-  let subprocess: ReturnType<typeof Bun.spawn>;
+  const result = spawnSync(
+    "git",
+    ["-C", root, "status", "--porcelain", "--untracked-files=no"],
+    {
+      cwd: root,
+      env: process.env,
+      encoding: "utf8",
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
 
-  try {
-    subprocess = Bun.spawn(
-      ["git", "-C", root, "status", "--porcelain", "--untracked-files=no"],
-      spawnOptions as Parameters<typeof Bun.spawn>[1]
-    );
-  } catch (error) {
+  if (result.error) {
     throw new HarnessError(
       "prerequisite",
       `Failed to start git status for ${root}`,
-      { cause: error }
+      { cause: result.error }
     );
   }
 
-  const stdout = await readStreamText(subprocess.stdout);
-  const stderr = await readStreamText(subprocess.stderr);
-  const code = await subprocess.exited;
-
-  if (code !== 0) {
+  if (result.status !== 0) {
     throw new HarnessError(
       "prerequisite",
-      `Failed to check git worktree status for ${root}: ${stderr.trim() || stdout.trim() || `exit code ${code}`}`
+      `Failed to check git worktree status for ${root}: ${result.stderr.trim() || result.stdout.trim() || `exit code ${String(result.status)}`}`
     );
   }
 
-  return stdout.trim().length === 0;
+  return result.stdout.trim().length === 0;
 }
 
 async function readRustVersion(): Promise<string> {
-  const spawnOptions = {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
+  const result = spawnSync("rustc", ["--version"], {
+    env: process.env,
+    encoding: "utf8",
     shell: false,
-  };
-  let subprocess: ReturnType<typeof Bun.spawn>;
-  try {
-    subprocess = Bun.spawn(
-      ["rustc", "--version"],
-      spawnOptions as Parameters<typeof Bun.spawn>[1]
-    );
-  } catch (error) {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  if (result.error) {
     throw new HarnessError(
       "prerequisite",
       "Failed to start rustc --version",
-      { cause: error }
+      { cause: result.error }
     );
   }
-  const stdout = await readStreamText(subprocess.stdout);
-  const stderr = await readStreamText(subprocess.stderr);
-  const code = await subprocess.exited;
 
-  if (code !== 0) {
+  if (result.status !== 0) {
     throw new HarnessError(
       "prerequisite",
-      `Failed to read rustc version: ${stderr.trim() || stdout.trim()}`
+      `Failed to read rustc version: ${result.stderr.trim() || result.stdout.trim()}`
     );
   }
 
-  const version = stdout.trim().split(/\s+/)[1];
-  return version ?? stdout.trim();
-}
-
-async function readStreamText(stream: unknown): Promise<string> {
-  const reader = (stream as unknown as WebReadableStream<Uint8Array>).getReader();
-  const decoder = new TextDecoder();
-  let output = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      if (value !== undefined) {
-        output += decoder.decode(value, { stream: true });
-      }
-    }
-
-    output += decoder.decode();
-    return output;
-  } finally {
-    reader.releaseLock();
-  }
+  const version = result.stdout.trim().split(/\s+/)[1];
+  return version ?? result.stdout.trim();
 }
 
 async function readInstalledToolVersions(): Promise<ToolVersions> {
@@ -387,8 +350,28 @@ async function readInstalledToolVersions(): Promise<ToolVersions> {
     throw new HarnessError("prerequisite", "Unable to determine Chromium version");
   }
 
+  const bunVersion = spawnSync("bun", ["--version"], {
+    env: process.env,
+    encoding: "utf8",
+    shell: false,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  if (bunVersion.error) {
+    throw new HarnessError("prerequisite", "Failed to start bun --version", {
+      cause: bunVersion.error,
+    });
+  }
+
+  if (bunVersion.status !== 0) {
+    throw new HarnessError(
+      "prerequisite",
+      `Failed to read bun version: ${bunVersion.stderr.trim() || bunVersion.stdout.trim()}`
+    );
+  }
+
   return {
-    bun: Bun.version,
+    bun: bunVersion.stdout.trim(),
     node: process.versions.node,
     rust: await readRustVersion(),
     playwright: playwrightPackage.version,

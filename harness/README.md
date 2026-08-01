@@ -70,7 +70,10 @@ failed-subcheck allowlist, and `unsupported` stays non-blocking.
 
 ## Native `node-pty` notes
 
-The CLI entrypoint runs
+`bun run harness` first bundles [`src/main.ts`](src/main.ts) for Node into
+`.test-tmp/e2e-harness/tooling/` and then launches `node` without a shell.
+That keeps the Bun CLI entrypoint while running `node-pty` under the Node 24
+runtime it expects. The Node entrypoint still runs
 [`prepareNodePty`](src/node-pty-preflight.ts) before loading the harness. On
 non-Windows hosts it fixes executable bits on
 `node_modules/node-pty/prebuilds/*/spawn-helper`. Linux GitHub-hosted runners

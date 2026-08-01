@@ -376,6 +376,33 @@ describe("runCli", () => {
     }
   });
 
+  test("fails doctor when the launcher is not using Node 24", async () => {
+    const workspace = makeWorkspace("cli-doctor-node-version");
+
+    try {
+      writeDoctorFixtureFiles(workspace);
+      const options = createRunOptions(workspace, {
+        readToolVersions: async () => ({
+          bun: "1.3.10",
+          node: "v22.15.0",
+          rustc: "rustc 1.89.0",
+          cargo: "cargo 1.89.0",
+          playwright: "1.62.1",
+        }),
+      });
+      const cli = requireRunCli();
+
+      await expect(cli(["doctor"], options)).resolves.toBe(2);
+
+      expect((options.stdout as CapturedStream).text).toContain("Doctor failed");
+      expect((options.stdout as CapturedStream).text).toContain(
+        "Unsupported Node.js version for the E2E harness launcher: v22.15.0 (expected v24.x)"
+      );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("runs only the selected scenario, disposes the runtime, and writes stable reports", async () => {
     const workspace = makeWorkspace("cli-run-selected");
 

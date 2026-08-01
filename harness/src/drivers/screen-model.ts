@@ -1,5 +1,11 @@
-import { Terminal } from "@xterm/headless";
+import xtermHeadless from "@xterm/headless";
 import { HarnessError } from "../types.js";
+
+type HeadlessTerminal = import("@xterm/headless").Terminal;
+
+const { Terminal } = xtermHeadless as {
+  Terminal: new (...args: ConstructorParameters<typeof import("@xterm/headless").Terminal>) => HeadlessTerminal;
+};
 
 export interface ScreenCursor {
   col: number;
@@ -16,7 +22,7 @@ function assertPositiveInteger(value: number): void {
 }
 
 export class ScreenModel {
-  private readonly terminal: Terminal;
+  private readonly terminal: HeadlessTerminal;
   private writeQueue: Promise<void> = Promise.resolve();
 
   public constructor(cols: number, rows: number) {

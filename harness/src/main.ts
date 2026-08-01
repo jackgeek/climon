@@ -1,14 +1,35 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { prepareNodePty } from "./node-pty-preflight.js";
 
-async function main(): Promise<number> {
-  const root = resolve(import.meta.dir, "..", "..");
-  await prepareNodePty(root);
-  const { runCli } = await import("./cli.js");
-  return runCli(process.argv.slice(2), { root });
+export function resolveHarnessRoot(
+  moduleUrl: string,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  return env.CLIMON_HARNESS_ROOT
+    ? resolve(env.CLIMON_HARNESS_ROOT)
+    : resolve(dirname(fileURLToPath(moduleUrl)), "..", "..");
 }
 
-if (import.meta.main) {
+export function isHarnessEntrypoint(
+  moduleUrl: string,
+  argvEntry = process.argv[1]
+): boolean {
+  if (argvEntry === undefined) {
+    return false;
+  }
+
+  return fileURLToPath(moduleUrl) === resolve(argvEntry);
+}
+
+export async function main(args = process.argv.slice(2)): Promise<number> {
+  const root = resolveHarnessRoot(import.meta.url);
+  await prepareNodePty(root);
+  const { runCli } = await import("./cli.js");
+  return runCli(args, { root });
+}
+
+if (isHarnessEntrypoint(import.meta.url)) {
   const exitCode = await main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;

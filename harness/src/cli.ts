@@ -83,6 +83,18 @@ interface DoctorVersions {
   playwright: string;
 }
 
+function assertSupportedNodeVersion(version: string): void {
+  const match = /^v?(\d+)\./.exec(version.trim());
+  if (match?.[1] === "24") {
+    return;
+  }
+
+  throw new HarnessError(
+    "prerequisite",
+    `Unsupported Node.js version for the E2E harness launcher: ${version} (expected v24.x)`
+  );
+}
+
 interface BrowserSnapshotDriver extends Dar02BrowserDriver {
   terminalText?(): Promise<string>;
   snapshotTerminalText?(): Promise<string>;
@@ -428,8 +440,8 @@ async function defaultReadToolVersions(
   }
 
   return {
-    bun: Bun.version,
-    node: process.version,
+    bun: await commandVersion("bun", "bun", ["--version"]),
+    node: await commandVersion("node", "node", ["--version"]),
     rustc: await commandVersion("rustc-version", "rustc", ["--version"]),
     cargo: await commandVersion("cargo-version", "cargo", ["--version"]),
     playwright: playwrightPackage.version,
@@ -853,6 +865,7 @@ async function executeDoctor(
     const versions = await (options.readToolVersions ?? ((root: string) => defaultReadToolVersions(root, runner)))(
       options.root
     );
+    assertSupportedNodeVersion(versions.node);
     checks.push(`bun: ${versions.bun}`);
     checks.push(`node: ${versions.node}`);
     checks.push(`rustc: ${versions.rustc}`);

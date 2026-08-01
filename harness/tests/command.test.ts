@@ -147,7 +147,7 @@ describe("BunCommandRunner", () => {
     }
   });
 
-  test("keeps the timeout deadline even if the parent exits before inherited pipes close", async () => {
+  test("completes once the parent exits even if a detached descendant inherited stdout", async () => {
     const workspace = makeWorkspace("command-timeout-parent-exits");
     const runner = new BunCommandRunner();
     const stdoutPath = join(workspace, "logs", "stdout.log");
@@ -187,8 +187,12 @@ describe("BunCommandRunner", () => {
       }
 
       expect(outcome).not.toBe("hung");
-      expect(outcome).toBeInstanceOf(HarnessError);
-      expect((outcome as HarnessError).kind).toBe("timeout");
+      expect(outcome).toEqual({
+        code: 0,
+        stdout: "starting",
+        stderr: "",
+        durationMs: expect.any(Number),
+      });
       expect(readFileSync(stdoutPath, "utf8")).toBe("starting");
     } finally {
       if (descendantPid !== undefined && Number.isFinite(descendantPid)) {

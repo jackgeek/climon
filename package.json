@@ -29,7 +29,7 @@
     "lint": "bun run typecheck && bun run messages:check",
     "test": "bun test tests",
     "test:harness": "bun test harness/tests",
-    "harness": "bun harness/src/main.ts",
+    "harness": "bun harness/src/launcher.ts",
     "release": "bun scripts/release.ts",
     "dev": "bun scripts/dev.ts",
     "server": "bun src/server.ts server",

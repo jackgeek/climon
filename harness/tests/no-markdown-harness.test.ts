@@ -7,6 +7,7 @@ const MANUAL_TESTS_ROOT = join(REPOSITORY_ROOT, "docs", "manual-tests");
 const HARNESS_README_PATH = join(REPOSITORY_ROOT, "harness", "README.md");
 const SKIP_DIRECTORIES = new Set([
   ".git",
+  ".test-tmp",
   ".test-workspace",
   ".worktrees",
   "build",
