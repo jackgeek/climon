@@ -1,29 +1,19 @@
 import {
   beginTwoFingerGesture,
-  finishTwoFingerGesture,
-  isWheelMomentumActive,
   moveTwoFingerGesture,
-  stepWheelMomentum,
   type GesturePoint,
   type GestureTouch,
-  type TwoFingerGestureState,
-  type WheelMomentum
+  type TwoFingerGestureState
 } from "./twoFingerWheelGesture.js";
 
 export interface WheelDispatchTarget {
   dispatchEvent(event: Event): boolean;
 }
 
-export interface AnimationScheduler {
-  request(callback: FrameRequestCallback): number;
-  cancel(id: number): void;
-}
-
 export type TerminalTouchWheelOptions = {
   container: HTMLElement;
   getTarget(): WheelDispatchTarget | null;
   getInverted(): boolean;
-  scheduler?: AnimationScheduler;
   createEvent?: (type: string, init: WheelEventInit) => Event;
 };
 
@@ -32,13 +22,6 @@ const touchListenerOptions = { capture: true, passive: false };
 
 function createNativeWheelEvent(type: string, init: WheelEventInit): Event {
   return new WheelEvent(type, init);
-}
-
-function nativeAnimationScheduler(): AnimationScheduler {
-  return {
-    request: (callback) => requestAnimationFrame(callback),
-    cancel: (id) => cancelAnimationFrame(id)
-  };
 }
 
 function mapTouches(touches: TouchList): GestureTouch[] {
@@ -87,52 +70,10 @@ export function dispatchTerminalWheel(
 }
 
 export function installTerminalTouchWheel(options: TerminalTouchWheelOptions): () => void {
-  const scheduler = options.scheduler ?? nativeAnimationScheduler();
   const createEvent = options.createEvent ?? createNativeWheelEvent;
   let state: TwoFingerGestureState = { phase: "idle" };
-  let momentum: WheelMomentum | null = null;
-  let momentumFrameId: number | null = null;
-  let lastMomentumFrameTime: number | null = null;
-
-  const cancelMomentum = (): void => {
-    momentum = null;
-    lastMomentumFrameTime = null;
-    if (momentumFrameId !== null) {
-      scheduler.cancel(momentumFrameId);
-      momentumFrameId = null;
-    }
-  };
-
-  const scheduleMomentum = (): void => {
-    if (!momentum || !isWheelMomentumActive(momentum.velocity) || !momentum.point) {
-      momentum = null;
-      return;
-    }
-
-    momentumFrameId = scheduler.request((timeStamp) => {
-      momentumFrameId = null;
-      if (!momentum || !momentum.point) {
-        return;
-      }
-
-      const elapsedMs = lastMomentumFrameTime === null ? 16 : timeStamp - lastMomentumFrameTime;
-      lastMomentumFrameTime = timeStamp;
-      const next = stepWheelMomentum(momentum.velocity, elapsedMs);
-      const point = momentum.point;
-      dispatchTerminalWheel(options.getTarget(), next.deltaY ?? 0, point, createEvent);
-      momentum = { velocity: next.velocity, point };
-
-      if (isWheelMomentumActive(momentum.velocity)) {
-        scheduleMomentum();
-      } else {
-        momentum = null;
-        lastMomentumFrameTime = null;
-      }
-    });
-  };
 
   const handleTouchStart = (event: TouchEvent): void => {
-    cancelMomentum();
     state = beginTwoFingerGesture(mapTouches(event.touches), event.timeStamp);
     if (state.phase === "pending") {
       claimTouchEvent(event);
@@ -151,22 +92,12 @@ export function installTerminalTouchWheel(options: TerminalTouchWheelOptions): (
     dispatchTerminalWheel(options.getTarget(), move.deltaY, move.point, createEvent);
   };
 
-  const handleTouchEnd = (event: TouchEvent): void => {
-    const nextMomentum = finishTwoFingerGesture(state, event.touches.length, event.timeStamp, options.getInverted());
+  const handleTouchEnd = (): void => {
     state = { phase: "idle" };
-    momentum = nextMomentum;
-    lastMomentumFrameTime = null;
-
-    if (momentum && isWheelMomentumActive(momentum.velocity)) {
-      scheduleMomentum();
-    } else {
-      momentum = null;
-    }
   };
 
   const handleTouchCancel = (): void => {
     state = { phase: "idle" };
-    cancelMomentum();
   };
 
   options.container.addEventListener("touchstart", handleTouchStart, touchListenerOptions);
@@ -175,7 +106,6 @@ export function installTerminalTouchWheel(options: TerminalTouchWheelOptions): (
   options.container.addEventListener("touchcancel", handleTouchCancel, touchListenerOptions);
 
   return () => {
-    cancelMomentum();
     options.container.removeEventListener("touchstart", handleTouchStart, true);
     options.container.removeEventListener("touchmove", handleTouchMove, true);
     options.container.removeEventListener("touchend", handleTouchEnd, true);

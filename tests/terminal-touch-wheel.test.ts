@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   dispatchTerminalWheel,
   installTerminalTouchWheel,
-  type AnimationScheduler,
   type WheelDispatchTarget
 } from "../src/web/components/terminalTouchWheel.js";
 
@@ -81,29 +80,6 @@ class FakeWheelTarget implements WheelDispatchTarget {
   }
 }
 
-class FakeScheduler implements AnimationScheduler {
-  nextId = 1;
-  readonly callbacks = new Map<number, FrameRequestCallback>();
-  readonly cancelled: number[] = [];
-
-  request(callback: FrameRequestCallback): number {
-    const id = this.nextId++;
-    this.callbacks.set(id, callback);
-    return id;
-  }
-
-  cancel(id: number): void {
-    this.cancelled.push(id);
-    this.callbacks.delete(id);
-  }
-
-  runNext(timeStamp: number): void {
-    const [id, callback] = this.callbacks.entries().next().value as [number, FrameRequestCallback];
-    this.callbacks.delete(id);
-    callback(timeStamp);
-  }
-}
-
 function touch(clientX: number, clientY: number, screenX = clientX + 100, screenY = clientY + 200): FakeTouch {
   return { clientX, clientY, screenX, screenY };
 }
@@ -114,17 +90,15 @@ function createWheelEvent(type: string, init: WheelEventInit): Event {
 
 function installHarness(options: { inverted?: boolean; target?: FakeWheelTarget | null } = {}) {
   const container = new FakeContainer();
-  const scheduler = new FakeScheduler();
   const target = options.target === undefined ? new FakeWheelTarget() : options.target;
   const dispose = installTerminalTouchWheel({
     container: container as unknown as HTMLElement,
     getTarget: () => target,
     getInverted: () => options.inverted ?? false,
-    scheduler,
     createEvent: createWheelEvent
   });
 
-  return { container, scheduler, target, dispose };
+  return { container, target, dispose };
 }
 
 describe("terminal touch wheel adapter", () => {
@@ -225,62 +199,28 @@ describe("terminal touch wheel adapter", () => {
     expect(pinch.target?.events).toHaveLength(0);
   });
 
-  test("touch count changes finish without momentum", () => {
-    const { container, scheduler, target } = installHarness();
+  test("touch count changes finish without another wheel event", () => {
+    const { container, target } = installHarness();
 
     container.emit("touchstart", new FakeTouchEvent([touch(10, 20), touch(30, 40)], 0));
     container.emit("touchmove", new FakeTouchEvent([touch(10, 0), touch(30, 20)], 50));
     container.emit("touchend", new FakeTouchEvent([touch(10, 0)], 50));
 
     expect(target?.events.map((event) => event.init.deltaY)).toEqual([20]);
-    expect(scheduler.callbacks.size).toBe(0);
   });
 
-  test("release momentum emits decaying deltas from the last point", () => {
-    const { container, scheduler, target } = installHarness();
+  test("release stops scrolling without scheduling momentum", () => {
+    const { container, target } = installHarness();
 
     container.emit("touchstart", new FakeTouchEvent([touch(10, 20), touch(30, 40)], 0));
     container.emit("touchmove", new FakeTouchEvent([touch(10, 0), touch(30, 20)], 50));
     container.emit("touchend", new FakeTouchEvent([], 50));
-    scheduler.runNext(66);
-    scheduler.runNext(82);
-
-    expect(target?.events.map((event) => event.init.deltaY)).toEqual([20, 6.4, 5.888000000000001]);
-    expect(target?.events.at(-1)?.init).toMatchObject({
-      clientX: 20,
-      clientY: 10,
-      screenX: 120,
-      screenY: 210
-    });
-  });
-
-  test("release after more than 100ms of silence does not schedule momentum", () => {
-    const { container, scheduler, target } = installHarness();
-
-    container.emit("touchstart", new FakeTouchEvent([touch(10, 20), touch(30, 40)], 0));
-    container.emit("touchmove", new FakeTouchEvent([touch(10, 0), touch(30, 20)], 50));
-    container.emit("touchend", new FakeTouchEvent([], 151));
 
     expect(target?.events.map((event) => event.init.deltaY)).toEqual([20]);
-    expect(scheduler.callbacks.size).toBe(0);
   });
 
-  test("new touches cancel active momentum", () => {
-    const { container, scheduler } = installHarness();
-
-    container.emit("touchstart", new FakeTouchEvent([touch(10, 20), touch(30, 40)], 0));
-    container.emit("touchmove", new FakeTouchEvent([touch(10, 0), touch(30, 20)], 50));
-    container.emit("touchend", new FakeTouchEvent([], 50));
-    const [frameId] = scheduler.callbacks.keys();
-
-    container.emit("touchstart", new FakeTouchEvent([touch(10, 20)], 60));
-
-    expect(scheduler.cancelled).toEqual([frameId]);
-    expect(scheduler.callbacks.size).toBe(0);
-  });
-
-  test("disposer removes touch listeners and cancels scheduled momentum", () => {
-    const { container, scheduler, dispose } = installHarness();
+  test("disposer removes touch listeners", () => {
+    const { container, dispose } = installHarness();
 
     for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
       expect(container.listeners.get(type)).toEqual([
@@ -288,14 +228,8 @@ describe("terminal touch wheel adapter", () => {
       ]);
     }
 
-    container.emit("touchstart", new FakeTouchEvent([touch(10, 20), touch(30, 40)], 0));
-    container.emit("touchmove", new FakeTouchEvent([touch(10, 0), touch(30, 20)], 50));
-    container.emit("touchend", new FakeTouchEvent([], 50));
-    const [frameId] = scheduler.callbacks.keys();
-
     dispose();
 
-    expect(scheduler.cancelled).toEqual([frameId]);
     for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
       expect(container.listeners.get(type)).toEqual([]);
     }

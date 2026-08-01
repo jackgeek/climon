@@ -1,7 +1,7 @@
 # Two-finger terminal wheel gesture
 
 Manual checks for the dashboard terminal's touch-primary two-finger wheel
-gesture: normal scrollback, mouse-aware TUIs, inversion, momentum, and the
+gesture: normal scrollback, mouse-aware TUIs, inversion, stop-on-release behavior, and the
 menu/CLI preference that flips it.
 
 Common preconditions: one live session with enough output to scroll, and a
@@ -76,20 +76,16 @@ with an attached mouse/trackpad or equivalent wheel input.
   tablet/touch mode.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
-## TFW-5 — Momentum decays after release and a new touch stops it
+## TFW-5 — Scrolling stops when both fingers are released
 
-- **Feature:** Two-finger terminal wheel gesture — momentum
+- **Feature:** Two-finger terminal wheel gesture — release behavior
 - **Preconditions:** Live session with plenty of scrollback.
 - **Config-matrix cell:** Touch-primary browser; default inversion off.
 - **Steps:**
-  1. Perform a quick two-finger flick so the terminal starts moving with
-     momentum.
-  2. Release both fingers and watch the continued scrolling.
-  3. While the momentum is still moving, put two fingers back down and start a
-     fresh gesture.
-- **Expected result:** After release, scrolling continues briefly and slows down
-  naturally. A new touch sequence stops the old momentum immediately; the view
-  continues from the current position without a jump.
+  1. Perform a quick two-finger flick.
+  2. Release both fingers and watch the terminal position.
+- **Expected result:** The terminal moves only while the fingers move. Releasing
+  both fingers stops scrolling immediately without a coast or jump.
 - **Platforms:** iPadOS Safari, Android Chrome, touch-capable desktop browser in
   tablet/touch mode.
 - **Result:** _date / tester / platform / pass-fail / notes_
@@ -153,21 +149,20 @@ with an attached mouse/trackpad or equivalent wheel input.
   Chrome/Firefox/Safari.
 - **Result:** _date / tester / platform / pass-fail / notes_
 
-## TFW-9 — Count changes, touchcancel, and backgrounding stop momentum without a jump
+## TFW-9 — Count changes and touchcancel stop gesture input without a jump
 
 - **Feature:** Two-finger terminal wheel gesture — interruption handling
 - **Preconditions:** Live session with long scrollback; touch-primary browser.
 - **Config-matrix cell:** Touch-primary browser; default inversion off.
 - **Steps:**
-  1. Start a momentum scroll with a quick two-finger flick.
-  2. While it is still moving, lift one finger early so the touch count changes
-     away from two.
-  3. Repeat the flick, then while both fingers are still down background the
-     page or switch away so the browser sends `touchcancel`.
+  1. Begin a two-finger vertical gesture, then lift one finger while moving.
+  2. Release the remaining finger and inspect the terminal position.
+  3. Begin another two-finger gesture, then background the page or switch away
+     while both fingers are still down so the browser sends `touchcancel`.
   4. Return to the dashboard and inspect the terminal position.
-- **Expected result:** Each interruption stops the fling at the current
-  position without a visible jump. The touchcancel path stops the fling where
-  it is; the return to the app does not replay the old momentum.
+- **Expected result:** Each interruption stops gesture input at the current
+  position without a visible jump. Releasing the remaining finger or returning
+  to the app does not add another wheel event or resume scrolling.
 - **Platforms:** iPadOS Safari, Android Chrome, touch-capable desktop browser in
   tablet/touch mode.
 - **Result:** _date / tester / platform / pass-fail / notes_

@@ -157,9 +157,8 @@ newer version is available instead of applying it automatically.
     swiping down moves toward older scrollback, swiping up moves back toward
     newer output, and apps that track the mouse receive a synthetic wheel event
     with coordinates at the touch point. A one-finger swipe stays native to the
-    browser/OS and does not drive the terminal wheel. The gesture carries
-    momentum that decays naturally after release, and a new touch sequence stops
-    the old momentum immediately. The gesture does not trigger the browser's
+    browser/OS and does not drive the terminal wheel. Scrolling stops when the
+    fingers are released. The gesture does not trigger the browser's
     pull-to-refresh while you are over the terminal.
 - **Sharing control between viewers**: several browsers, PWAs, and an attached
   local terminal can view the same session at once, but only one — the

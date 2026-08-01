@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   beginTwoFingerGesture,
-  finishTwoFingerGesture,
-  isWheelMomentumActive,
   moveTwoFingerGesture,
-  stepWheelMomentum,
-  type GesturePoint,
   type GestureTouch,
   type TwoFingerGestureState
 } from "../src/web/components/twoFingerWheelGesture.js";
@@ -16,10 +12,6 @@ function touch(clientX: number, clientY: number, screenX = clientX, screenY = cl
 
 function pendingState(): TwoFingerGestureState {
   return beginTwoFingerGesture([touch(10, 20), touch(30, 40)], 100);
-}
-
-function point(clientX: number, clientY: number, timeStamp: number): GesturePoint {
-  return { ...touch(clientX, clientY), timeStamp };
 }
 
 describe("two-finger wheel gesture", () => {
@@ -129,75 +121,4 @@ describe("two-finger wheel gesture", () => {
     expect(cancelled.deltaY).toBe(0);
   });
 
-  test("samples older than 100ms are pruned from finish velocity", () => {
-    const state: TwoFingerGestureState = {
-      phase: "active",
-      anchor: point(20, 100, 0),
-      point: point(20, 80, 120),
-      initialSpan: 20,
-      samples: [
-        { y: 100, timeStamp: 0 },
-        { y: 99, timeStamp: 60 },
-        { y: 80, timeStamp: 120 }
-      ]
-    };
-
-    const momentum = finishTwoFingerGesture(state, 0, 120, false);
-
-    expect(momentum?.velocity).toBeCloseTo(19 / 60, 10);
-  });
-
-  test("negative elapsed clamps to zero", () => {
-    const step = stepWheelMomentum(2, -16);
-
-    expect(step.deltaY).toBe(0);
-    expect(step.velocity).toBe(2);
-  });
-
-  test("finishing an active gesture returns momentum with a velocity and last point", () => {
-    const armed = beginTwoFingerGesture([touch(10, 20), touch(30, 40)], 0);
-    const active = moveTwoFingerGesture(armed, [touch(10, 0), touch(30, 20)], 50, false);
-
-    expect(active.state.phase).toBe("active");
-    if (active.state.phase !== "active") return;
-
-    const momentum = finishTwoFingerGesture(active.state, 0, 50, false);
-
-    expect(momentum).not.toBeNull();
-    expect(momentum?.point).toEqual({ clientX: 20, clientY: 10, screenX: 20, screenY: 10, timeStamp: 50 });
-    expect(momentum?.velocity).toBe(0.4);
-  });
-
-  test("finishing long after the last move suppresses stale momentum", () => {
-    const armed = beginTwoFingerGesture([touch(10, 20), touch(30, 40)], 0);
-    const active = moveTwoFingerGesture(armed, [touch(10, 0), touch(30, 20)], 50, false);
-
-    expect(active.state.phase).toBe("active");
-    if (active.state.phase !== "active") return;
-
-    expect(finishTwoFingerGesture(active.state, 0, 200, false)).toBeNull();
-  });
-
-  test("one-touch finish cancels momentum", () => {
-    const state = pendingState();
-
-    expect(finishTwoFingerGesture(state, 1, 100, false)).toBeNull();
-  });
-
-  test("wheel momentum clamps long frames and decays toward stop", () => {
-    const step = stepWheelMomentum(1, 1000);
-
-    expect(step.deltaY).toBe(48);
-    expect(step.velocity).toBeCloseTo(Math.pow(0.92, 48 / 16), 10);
-
-    let velocity = 0.021;
-    let active = isWheelMomentumActive(velocity);
-    expect(active).toBe(true);
-
-    const decayed = stepWheelMomentum(velocity, 48);
-    velocity = decayed.velocity;
-    active = isWheelMomentumActive(velocity);
-
-    expect(active).toBe(false);
-  });
 });
