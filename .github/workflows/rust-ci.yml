@@ -16,6 +16,8 @@ defaults:
 
 jobs:
   test:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +47,8 @@ jobs:
           CLIMON_DISABLE_SETSID: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
 
   licenses:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

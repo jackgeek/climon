@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn round_trips_a_valid_signed_control() {
         let mut guard = ReplayGuard::new(DEFAULT_FRESHNESS_WINDOW_MS);
-        let env = sign_control("sekret", &ping(), "nonce-1", 1_000);
+        let env = sign_now("sekret", &ping(), 1_000);
         let inner = verify_signed_control("sekret", &env, &mut guard, 1_000).unwrap();
         assert_eq!(inner, ControlMessage::Ping);
     }
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn rejects_a_forged_signature() {
         let mut guard = ReplayGuard::new(DEFAULT_FRESHNESS_WINDOW_MS);
-        let env = sign_control("sekret", &ping(), "nonce-1", 1_000);
+        let env = sign_now("sekret", &ping(), 1_000);
         assert_eq!(
             verify_signed_control("wrong-secret", &env, &mut guard, 1_000),
             Err(RejectReason::BadSignature)
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn rejects_a_stale_timestamp() {
         let mut guard = ReplayGuard::new(30_000);
-        let env = sign_control("sekret", &ping(), "nonce-1", 1_000);
+        let env = sign_now("sekret", &ping(), 1_000);
         assert_eq!(
             verify_signed_control("sekret", &env, &mut guard, 1_000 + 30_001),
             Err(RejectReason::Stale)
@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn rejects_a_replayed_nonce() {
         let mut guard = ReplayGuard::new(30_000);
-        let env = sign_control("sekret", &ping(), "nonce-1", 1_000);
+        let env = sign_now("sekret", &ping(), 1_000);
         assert!(verify_signed_control("sekret", &env, &mut guard, 1_000).is_ok());
         assert_eq!(
             verify_signed_control("sekret", &env, &mut guard, 1_001),
