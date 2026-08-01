@@ -1,8 +1,9 @@
+import { failedSubcheckLabels } from "../subchecks.js";
 import type { PlatformExpectation } from "../types.js";
 import type { ResultsReport } from "./json.js";
 
-function failedLabel(failedSubchecks: readonly string[]): string {
-  return failedSubchecks.join(",") || "-";
+function failedLabel(reportResult: ResultsReport["results"][number]): string {
+  return failedSubcheckLabels(reportResult.subchecks).join(", ") || "-";
 }
 
 function writeGovernanceLines(lines: string[], expectation: PlatformExpectation): void {
@@ -37,7 +38,7 @@ export function renderMarkdownReport(report: ResultsReport): string {
     lines.push(
       `| ${result.platform} | ${result.darId} | ${result.title} | ${result.status} | ${
         result.blocking ? "yes" : "no"
-      } | ${result.expectation.expected} | ${failedLabel(result.failedSubchecks)} |`
+      } | ${result.expectation.expected} | ${failedLabel(result)} |`
     );
   }
 
@@ -47,7 +48,7 @@ export function renderMarkdownReport(report: ResultsReport): string {
       `## ${result.platform} / ${result.darId} — ${result.title}`,
       `- expected: ${result.expectation.expected}`,
       `- actual status: ${result.status}`,
-      `- actual failed: ${failedLabel(result.failedSubchecks)}`,
+      `- actual failed: ${failedLabel(result)}`,
       `- blocking: ${result.blocking ? "yes" : "no"}`
     );
     writeGovernanceLines(lines, result.expectation);

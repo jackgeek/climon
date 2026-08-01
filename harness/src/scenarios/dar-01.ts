@@ -5,6 +5,7 @@ import { PtyDriver, type PtyDriverDependencies, type PtySpawnSpec, type ScreenLi
 import type { MouseEvent, NamedKey } from "../drivers/terminal-input.js";
 import type { RuntimeContext } from "../runtime-supervisor.js";
 import type { BuildArtifacts } from "../build-cache.js";
+import type { SubcheckDefinition } from "../subchecks.js";
 import type { HarnessPlatform, SubcheckResult } from "../types.js";
 
 const PTY_COLS = 100;
@@ -30,19 +31,54 @@ const SUBCHECK_TIMEOUTS_MS = {
   "terminal-mode-restoration": 10_000,
 } as const;
 
-export const DAR_01_SUBCHECK_NAMES = [
-  "baseline-terminal-mode",
-  "attached-startup",
-  "text-input-output",
-  "control-and-key-input",
-  "mouse-input",
-  "alternate-screen-render",
-  "resize-repaint",
-  "clean-exit",
-  "terminal-mode-restoration",
-] as const;
+export const DAR_01_SUBCHECKS = [
+  {
+    name: "baseline-terminal-mode",
+    title: "Captures the baseline terminal mode before attach",
+  },
+  {
+    name: "attached-startup",
+    title: "Waits for the attached TUI startup marker",
+  },
+  {
+    name: "text-input-output",
+    title: "Echoes unique UTF-8 text through the attached shell",
+  },
+  {
+    name: "control-and-key-input",
+    title: "Sends control and named-key input through the attached shell",
+  },
+  {
+    name: "mouse-input",
+    title: "Sends mouse input through the attached shell",
+  },
+  {
+    name: "alternate-screen-render",
+    title: "Renders the expected alternate-screen frame",
+  },
+  {
+    name: "resize-repaint",
+    title: "Repaints the frame after a resize",
+  },
+  {
+    name: "clean-exit",
+    title: "Exits the attached client cleanly",
+  },
+  {
+    name: "terminal-mode-restoration",
+    title: "Restores terminal mode after exit",
+  },
+] as const satisfies readonly SubcheckDefinition[];
 
-export type Dar01SubcheckName = (typeof DAR_01_SUBCHECK_NAMES)[number];
+export type Dar01SubcheckName = (typeof DAR_01_SUBCHECKS)[number]["name"];
+
+export const DAR_01_SUBCHECK_NAMES: readonly Dar01SubcheckName[] = DAR_01_SUBCHECKS.map(
+  (subcheck) => subcheck.name
+);
+
+const DAR_01_SUBCHECKS_BY_NAME = new Map(
+  DAR_01_SUBCHECKS.map((subcheck) => [subcheck.name, subcheck] as const)
+);
 
 export interface Dar01Context {
   platform: HarnessPlatform;
@@ -327,8 +363,14 @@ function withEvidence(
   durationMs: number,
   options: { message?: string; evidence?: string[] } = {}
 ): SubcheckResult {
+  const definition = DAR_01_SUBCHECKS_BY_NAME.get(name);
+  if (!definition) {
+    throw new Error(`Unknown DAR-01 subcheck: ${name}`);
+  }
+
   return {
     name,
+    title: definition.title,
     status,
     durationMs,
     message: options.message,

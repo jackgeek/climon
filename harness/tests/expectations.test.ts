@@ -8,6 +8,7 @@ import type {
 function failedSubcheck(name: string): SubcheckResult {
   return {
     name,
+    title: `Title for ${name}`,
     status: "failed",
     durationMs: 25,
   };
@@ -16,6 +17,7 @@ function failedSubcheck(name: string): SubcheckResult {
 function passedSubcheck(name: string): SubcheckResult {
   return {
     name,
+    title: `Title for ${name}`,
     status: "passed",
     durationMs: 10,
   };

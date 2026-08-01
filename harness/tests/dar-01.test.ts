@@ -13,6 +13,18 @@ import type {
   ScreenLike,
 } from "../src/drivers/pty.js";
 
+const DAR_01_SUBCHECK_TITLES = [
+  "Captures the baseline terminal mode before attach",
+  "Waits for the attached TUI startup marker",
+  "Echoes unique UTF-8 text through the attached shell",
+  "Sends control and named-key input through the attached shell",
+  "Sends mouse input through the attached shell",
+  "Renders the expected alternate-screen frame",
+  "Repaints the frame after a resize",
+  "Exits the attached client cleanly",
+  "Restores terminal mode after exit",
+] as const;
+
 interface FakeScreenFrame {
   contents: string;
   cursor: { col: number; row: number };
@@ -365,6 +377,7 @@ describe("runDar01", () => {
     });
 
     expect(results.map((result) => result.name)).toEqual([...DAR_01_SUBCHECK_NAMES]);
+    expect(results.map((result) => result.title)).toEqual([...DAR_01_SUBCHECK_TITLES]);
     expect(results.map((result) => result.status)).toEqual([
       "passed",
       "passed",
@@ -381,6 +394,7 @@ describe("runDar01", () => {
     expect(results.every((result) => result.evidence?.includes("pty/output.log"))).toBe(true);
     expect(results[0]).toMatchObject({
       name: "baseline-terminal-mode",
+      title: "Captures the baseline terminal mode before attach",
       status: "passed",
       message: expect.stringContaining("before.kind=unix"),
       evidence: expect.arrayContaining([expect.stringContaining("DAR_MODE_BASELINE ")]),

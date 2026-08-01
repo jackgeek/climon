@@ -12,6 +12,17 @@ import {
   spawnHeadlessProcessWithChildProcess,
 } from "../src/scenarios/dar-02.js";
 
+const DAR_02_SUBCHECK_TITLES = [
+  "Launches a headless session and captures its session id",
+  "Persists running session metadata and daemon ownership",
+  "Attaches the dashboard terminal while the session is running",
+  "Replays the pre-attach stream in the dashboard terminal",
+  "Sends browser terminal input to the live session",
+  "Streams live output after browser attach",
+  "Keeps the session running while viewers reconnect",
+  "Finalizes the headless session with exit code 0",
+] as const;
+
 const SESSION_ID = "steady-otters-jam";
 const RUN_ID = "abc123";
 const READY_MARKER = "DAR_STREAM_READY";
@@ -355,6 +366,7 @@ describe("runDar02", () => {
     const results = await runDar02(context, dependencies);
 
     expect(results.map((result) => result.name)).toEqual([...DAR_02_SUBCHECK_NAMES]);
+    expect(results.map((result) => result.title)).toEqual([...DAR_02_SUBCHECK_TITLES]);
     expect(results.map((result) => result.status)).toEqual([
       "passed",
       "passed",
@@ -410,10 +422,12 @@ describe("runDar02", () => {
 
     expect(results.map((result) => result.status)).toEqual(Array(8).fill("passed"));
     expect(results.find((result) => result.name === "daemon-running")).toMatchObject({
+      title: "Persists running session metadata and daemon ownership",
       status: "passed",
       message: expect.stringContaining(`Session ${SESSION_ID} is running`),
     });
     expect(results.find((result) => result.name === "replay-visible")).toMatchObject({
+      title: "Replays the pre-attach stream in the dashboard terminal",
       status: "passed",
       evidence: expect.arrayContaining([READY_MARKER]),
     });

@@ -7,6 +7,8 @@ import { CaseArtifacts, caseArtifactDir } from "../src/artifacts.js";
 import type { ReportCaseResult } from "../src/reporters/json.js";
 import type { RuntimeContext, RuntimeSupervisorOptions } from "../src/runtime-supervisor.js";
 import type { ScenarioDefinition } from "../src/scenario-registry.js";
+import { DAR_01_SUBCHECKS } from "../src/scenarios/dar-01.js";
+import { DAR_02_SUBCHECKS } from "../src/scenarios/dar-02.js";
 import type { Dar02BrowserDriver } from "../src/scenarios/dar-02.js";
 import type { CaseResult, HarnessPlatform, PlatformExpectation, SubcheckResult } from "../src/types.js";
 
@@ -15,6 +17,10 @@ const runCli = (cliModule as { runCli?: (args: string[], options: Record<string,
 
 const FIXED_NOW = new Date("2026-07-31T21:27:33.660Z");
 const DEFAULT_REVISION = "d7fa2160cad31941dfb4480fdf07cce0c796dcee";
+const SUBCHECK_TITLES = {
+  "attached-startup": "Waits for the attached TUI startup marker",
+  "replay-visible": "Replays the pre-attach stream in the dashboard terminal",
+} as const;
 
 interface CapturedStream {
   text: string;
@@ -118,6 +124,7 @@ function createDefinitions(
 function passedSubcheck(name: string): SubcheckResult {
   return {
     name,
+    title: SUBCHECK_TITLES[name as keyof typeof SUBCHECK_TITLES] ?? `Test title for ${name}`,
     status: "passed",
     durationMs: 12,
   };
@@ -126,10 +133,35 @@ function passedSubcheck(name: string): SubcheckResult {
 function failedSubcheck(name: string, message = `${name} failed`): SubcheckResult {
   return {
     name,
+    title: SUBCHECK_TITLES[name as keyof typeof SUBCHECK_TITLES] ?? `Test title for ${name}`,
     status: "failed",
     durationMs: 12,
     message,
   };
+}
+
+function dar01Subchecks(
+  overrides: Partial<Record<string, Partial<SubcheckResult>>> = {}
+): SubcheckResult[] {
+  return DAR_01_SUBCHECKS.map(({ name, title }) => ({
+    name,
+    title,
+    status: "passed",
+    durationMs: 12,
+    ...overrides[name],
+  }));
+}
+
+function dar02Subchecks(
+  overrides: Partial<Record<string, Partial<SubcheckResult>>> = {}
+): SubcheckResult[] {
+  return DAR_02_SUBCHECKS.map(({ name, title }) => ({
+    name,
+    title,
+    status: "passed",
+    durationMs: 12,
+    ...overrides[name],
+  }));
 }
 
 function createRuntimeFactory(record: { disposals: string[]; createCalls: string[] }) {
@@ -212,8 +244,14 @@ function createRunOptions(
       }) satisfies BuildArtifacts,
     createRuntimeSupervisor: createRuntimeFactory(runtimeRecord),
     createBrowserDriver: () => new FakeBrowserDriver(),
-    runDar01: async () => [passedSubcheck("attached-startup")],
-    runDar02: async () => [failedSubcheck("replay-visible", "Replay was intentionally allowed to fail.")],
+    runDar01: async () => dar01Subchecks(),
+    runDar02: async () =>
+      dar02Subchecks({
+        "replay-visible": {
+          status: "failed",
+          message: "Replay was intentionally allowed to fail.",
+        },
+      }),
     runtimeRecord,
     ...overrides,
   };
@@ -450,21 +488,19 @@ describe("runCli", () => {
               "Expected partial result: Replay is still flaky on Linux in this unit test. (tracking: docs/manual-tests/results/linux.md; review after: 2026-08-31)",
             platform: "linux",
             status: "expected-partial",
-            subchecks: [
-              {
-                durationMs: 12,
-                message: "Replay was intentionally allowed to fail.",
-                name: "replay-visible",
+            subchecks: dar02Subchecks({
+              "replay-visible": {
                 status: "failed",
+                message: "Replay was intentionally allowed to fail.",
               },
-            ],
+            }),
             title: "Headless session dashboard replay and live output",
           },
         ],
       });
 
       expect(readFileSync(join(workspace, "artifacts", "summary.md"), "utf8")).toContain(
-        "| linux | DAR-02 | Headless session dashboard replay and live output | expected-partial | no | partial | replay-visible |"
+        "| linux | DAR-02 | Headless session dashboard replay and live output | expected-partial | no | partial | Replays the pre-attach stream in the dashboard terminal (replay-visible) |"
       );
       expect(readFileSync(join(workspace, "artifacts", "junit.xml"), "utf8")).toContain(
         '<skipped message="expected-partial"'
@@ -497,7 +533,13 @@ describe("runCli", () => {
             manifestPath: join(workspace, ".test-tmp", "e2e-harness", "build", "manifest.json"),
           } satisfies BuildArtifacts;
         },
-        runDar01: async () => [failedSubcheck("attached-startup")],
+        runDar01: async () =>
+          dar01Subchecks({
+            "attached-startup": {
+              status: "failed",
+              message: "attached-startup failed",
+            },
+          }),
       });
       const cli = requireRunCli();
 
@@ -525,14 +567,12 @@ describe("runCli", () => {
             failedSubchecks: ["attached-startup"],
             platform: "linux",
             status: "unexpected-failure",
-            subchecks: [
-              {
-                durationMs: 12,
-                message: "attached-startup failed",
-                name: "attached-startup",
+            subchecks: dar01Subchecks({
+              "attached-startup": {
                 status: "failed",
+                message: "attached-startup failed",
               },
-            ],
+            }),
             title: "Attached shell input, output, and terminal restoration",
           },
         ],
@@ -584,7 +624,13 @@ describe("runCli", () => {
             },
           };
         },
-        runDar01: async () => [failedSubcheck("attached-startup", "scenario failed first")],
+        runDar01: async () =>
+          dar01Subchecks({
+            "attached-startup": {
+              status: "failed",
+              message: "scenario failed first",
+            },
+          }),
       });
       const cli = requireRunCli();
 
@@ -598,6 +644,50 @@ describe("runCli", () => {
       expect(result.message).toContain("runtime cleanup failed");
       expect(result.message).toContain("unexpected-failure");
       expect(runtimeRecord.disposals).toEqual(["DAR-01"]);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("treats subcheck title drift as a setup failure before comparing outcomes", async () => {
+    const workspace = makeWorkspace("cli-run-subcheck-title-drift");
+
+    try {
+      writeDoctorFixtureFiles(workspace);
+      const options = createRunOptions(workspace, {
+        runDar02: async () =>
+          dar02Subchecks({
+            "replay-visible": {
+              status: "failed",
+              message: "Replay was intentionally allowed to fail.",
+              title: "Wrong title",
+            },
+          }),
+      });
+      const cli = requireRunCli();
+
+      await expect(cli(["run", "DAR-02"], options)).resolves.toBe(1);
+
+      const result = readJson(
+        join(
+          workspace,
+          ".test-tmp",
+          "e2e-harness",
+          "linux",
+          "cases",
+          "DAR-02",
+          "result.json"
+        )
+      ) as CaseResult;
+      expect(result).toMatchObject({
+        darId: "DAR-02",
+        platform: "linux",
+        status: "setup-failure",
+        blocking: true,
+        failedSubchecks: [],
+        subchecks: [],
+      });
+      expect(result.message).toContain("Subcheck title mismatch for replay-visible");
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

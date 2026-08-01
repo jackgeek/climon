@@ -54,6 +54,7 @@ export type PlatformExpectation =
 
 export interface SubcheckResult {
   name: string;
+  title: string;
   status: SubcheckStatus;
   durationMs: number;
   message?: string;

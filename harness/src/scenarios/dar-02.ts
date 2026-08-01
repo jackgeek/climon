@@ -7,6 +7,7 @@ import type { BuildArtifacts } from "../build-cache.js";
 import type { OwnedProcess } from "../process-ledger.js";
 import type { RuntimeContext } from "../runtime-supervisor.js";
 import type { SessionLedger, SessionStatus } from "../session-ledger.js";
+import type { SubcheckDefinition } from "../subchecks.js";
 import type { HarnessPlatform, SubcheckResult } from "../types.js";
 
 const HEADLESS_STDOUT_ARTIFACT = "headless/stdout.log";
@@ -25,16 +26,44 @@ const SUBCHECK_TIMEOUTS_MS = {
   "successful-finalization": 30_000,
 } as const;
 
-export const DAR_02_SUBCHECK_NAMES = [
-  "headless-launch",
-  "daemon-running",
-  "midstream-attach",
-  "replay-visible",
-  "browser-input",
-  "live-output",
-  "viewer-independence",
-  "successful-finalization",
-] as const;
+export const DAR_02_SUBCHECKS = [
+  {
+    name: "headless-launch",
+    title: "Launches a headless session and captures its session id",
+  },
+  {
+    name: "daemon-running",
+    title: "Persists running session metadata and daemon ownership",
+  },
+  {
+    name: "midstream-attach",
+    title: "Attaches the dashboard terminal while the session is running",
+  },
+  {
+    name: "replay-visible",
+    title: "Replays the pre-attach stream in the dashboard terminal",
+  },
+  {
+    name: "browser-input",
+    title: "Sends browser terminal input to the live session",
+  },
+  {
+    name: "live-output",
+    title: "Streams live output after browser attach",
+  },
+  {
+    name: "viewer-independence",
+    title: "Keeps the session running while viewers reconnect",
+  },
+  {
+    name: "successful-finalization",
+    title: "Finalizes the headless session with exit code 0",
+  },
+] as const satisfies readonly SubcheckDefinition[];
+
+export const DAR_02_SUBCHECK_NAMES: readonly Dar02SubcheckName[] = DAR_02_SUBCHECKS.map(
+  (subcheck) => subcheck.name
+);
 
 export const DAR_02_REPLAY_MARKERS = Array.from({ length: 20 }, (_, index) => {
   const phase = String(index + 1).padStart(3, "0");
@@ -46,7 +75,11 @@ export const DAR_02_LIVE_MARKERS = Array.from({ length: 20 }, (_, index) => {
   return `DAR_STREAM_LIVE ${phase}`;
 });
 
-export type Dar02SubcheckName = (typeof DAR_02_SUBCHECK_NAMES)[number];
+export type Dar02SubcheckName = (typeof DAR_02_SUBCHECKS)[number]["name"];
+
+const DAR_02_SUBCHECKS_BY_NAME = new Map(
+  DAR_02_SUBCHECKS.map((subcheck) => [subcheck.name, subcheck] as const)
+);
 
 export interface Dar02BrowserDriver {
   open(baseUrl: string, deadline: number): Promise<void>;
@@ -335,8 +368,14 @@ function withEvidence(
   baseEvidence: string[],
   options: { message?: string; evidence?: string[] } = {}
 ): SubcheckResult {
+  const definition = DAR_02_SUBCHECKS_BY_NAME.get(name);
+  if (!definition) {
+    throw new Error(`Unknown DAR-02 subcheck: ${name}`);
+  }
+
   return {
     name,
+    title: definition.title,
     status,
     durationMs,
     message: options.message,

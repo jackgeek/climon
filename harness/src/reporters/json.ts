@@ -132,6 +132,7 @@ function isReportCaseResult(value: unknown): value is ReportCaseResult {
       const subcheck = entry as Record<string, unknown>;
       return (
         typeof subcheck.name === "string" &&
+        typeof subcheck.title === "string" &&
         (subcheck.status === "passed" || subcheck.status === "failed") &&
         typeof subcheck.durationMs === "number" &&
         (subcheck.message === undefined || typeof subcheck.message === "string") &&

@@ -59,8 +59,11 @@ function systemOutPayload(result: ReportCaseResult): string {
 function renderTestCase(result: ReportCaseResult): string[] {
   const lines = [
     `  <testcase classname="${xmlEscape(`${result.platform}.${result.darId}`)}" name="${xmlEscape(
-      `${result.darId} ${result.title}`
+      result.title
     )}" time="${durationSeconds(result.durationMs)}">`,
+    "    <properties>",
+    `      <property name="darId" value="${xmlEscape(result.darId)}"/>`,
+    "    </properties>",
   ];
 
   if (SKIPPED_STATUSES.has(result.status)) {

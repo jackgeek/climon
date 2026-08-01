@@ -28,11 +28,16 @@ import {
   type DarId,
   type ScenarioDefinition,
 } from "./scenario-registry.js";
-import { runDar01 as runDar01Impl } from "./scenarios/dar-01.js";
 import {
+  DAR_01_SUBCHECKS,
+  runDar01 as runDar01Impl,
+} from "./scenarios/dar-01.js";
+import {
+  DAR_02_SUBCHECKS,
   runDar02 as runDar02Impl,
   type Dar02BrowserDriver,
 } from "./scenarios/dar-02.js";
+import { validateSubcheckResults } from "./subchecks.js";
 import {
   HarnessError,
   type CaseResult,
@@ -320,6 +325,17 @@ function caseResult(
     failedSubchecks: outcome.failedSubchecks,
     message: outcome.message,
   };
+}
+
+function subcheckDefinitionsFor(
+  darId: DarId
+): typeof DAR_01_SUBCHECKS | typeof DAR_02_SUBCHECKS {
+  switch (darId) {
+    case "DAR-01":
+      return DAR_01_SUBCHECKS;
+    case "DAR-02":
+      return DAR_02_SUBCHECKS;
+  }
 }
 
 async function writeAtomicText(
@@ -768,6 +784,8 @@ async function executeRun(
             }
           );
         }
+
+        validateSubcheckResults(subcheckDefinitionsFor(definition.darId), subchecks);
 
         result = caseResult(
           definition,
