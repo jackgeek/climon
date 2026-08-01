@@ -195,7 +195,8 @@ presence heartbeat, so foregrounding one device never suppresses another.
 
 - **ID:** MT-FG-TOAST-08
 - **Feature:** Foreground attention toast
-- **Preconditions:** Common preconditions; desktop or mobile/PWA, dashboard focused, viewing session B.
+- **Preconditions:** Common preconditions; desktop or mobile/PWA, dashboard
+  focused, viewing session B.
 - **Config-matrix cell:** desktop foreground dashboard; mobile/PWA foreground dashboard
 - **Platforms:** Desktop (Chrome/Edge/Firefox); Android/iOS PWA
 
