@@ -2,10 +2,7 @@
   {
     "version": "3.4.0",
     "changes": [
-      "Scroll terminal history and mouse-aware terminal apps with a two-finger gesture on touch devices",
-      "Choose the two-finger scrolling direction with a shared dashboard preference",
-      "Stop touch scrolling immediately when fingers are released instead of applying momentum",
-      "Regenerate bundled third-party license notices at the path used by the Rust release build"
+      "Scroll terminal history and mouse-aware terminal apps with a two-finger gesture on touch devices"
     ]
   },
   {
