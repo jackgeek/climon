@@ -1255,7 +1255,7 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
       const exitPromise = once(child, "exit");
       const text = collectProcessText(child);
 
-      const [code, signal] = await exitPromise;
+      const [code] = await exitPromise;
       expect(code).toBe(0);
       expect(text.stderr).toBe("");
 

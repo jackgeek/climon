@@ -312,7 +312,7 @@ function expectedListOutput(): string {
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-03-dashboard-pwa-take-control-and-local-space-reclaim",
     "  linux: pass",
     "  macos: pass",
-    "  windows: known-failure | reason=The latest Windows manual run could not verify local displacement, Space reclaim, or PWA control from a real Windows console. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=local-starts-as-controller,displaced-local-input-suppressed,pwa-newest-controller-wins,local-space-reclaims-control,local-resize-restores-authority",
+    "  windows: known-failure | reason=The latest Windows manual run could not verify local displacement, Space reclaim, or PWA control from a real Windows console. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=local-starts-as-controller,displaced-local-non-space-suppressed,simulated-pwa-newest-controller,local-space-reclaims-control,local-resize-authoritative",
     "DAR-04 Local restore and same-size repaint jiggle",
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-04-local-restore-and-same-size-repaint-jiggle",
     "  linux: partial | reason=The latest Linux manual run verified repaint flow with Vim but did not cover the required frame-caching same-size repaint case. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=same-size-control-repaints-complete-frame",
@@ -430,33 +430,6 @@ describe("runCli", () => {
     }
   });
 
-  test("reports an explicit placeholder failure for unimplemented default scenarios", async () => {
-    const workspace = makeWorkspace("cli-run-placeholder");
-
-    try {
-      writeDoctorFixtureFiles(workspace);
-      const artifactRoot = join(workspace, "artifacts");
-      const options = createRunOptions(workspace, {
-        definitions: SCENARIO_DEFINITIONS,
-      });
-      const cli = requireRunCli();
-
-      await expect(
-        cli(["run", "DAR-03", "--artifact-root", artifactRoot], options)
-      ).resolves.toBe(1);
-
-      const result = readJson(
-        join(artifactRoot, "cases", "DAR-03", "result.json")
-      ) as CaseResult;
-      expect(result.status).toBe("setup-failure");
-      expect(result.message).toContain(
-        "DAR-03 is not implemented in the E2E harness yet. Replace the placeholder runner before relying on this scenario."
-      );
-    } finally {
-      rmSync(workspace, { recursive: true, force: true });
-    }
-  });
-
   test("fails when a scenario runner returns without a registered subcheck contract", async () => {
     const workspace = makeWorkspace("cli-run-missing-contract");
 
@@ -466,10 +439,10 @@ describe("runCli", () => {
       const options = createRunOptions(workspace, {
         definitions: SCENARIO_DEFINITIONS,
         scenarioRunners: {
-          "DAR-03": async () => [
+          "DAR-04": async () => [
             {
               name: "local-starts-as-controller",
-              title: "Returns from an injected DAR-03 runner",
+              title: "Returns from an injected DAR-04 runner",
               status: "passed",
               durationMs: 1,
             },
@@ -479,14 +452,14 @@ describe("runCli", () => {
       const cli = requireRunCli();
 
       await expect(
-        cli(["run", "DAR-03", "--artifact-root", artifactRoot], options)
+        cli(["run", "DAR-04", "--artifact-root", artifactRoot], options)
       ).resolves.toBe(1);
 
       const result = readJson(
-        join(artifactRoot, "cases", "DAR-03", "result.json")
+        join(artifactRoot, "cases", "DAR-04", "result.json")
       ) as CaseResult;
       expect(result).toMatchObject({
-        darId: "DAR-03",
+        darId: "DAR-04",
         platform: "linux",
         status: "setup-failure",
         blocking: true,
@@ -494,7 +467,7 @@ describe("runCli", () => {
         subchecks: [],
       });
       expect(result.message).toContain(
-        "DAR-03 returned subchecks without a registered subcheck contract"
+        "DAR-04 returned subchecks without a registered subcheck contract"
       );
     } finally {
       rmSync(workspace, { recursive: true, force: true });

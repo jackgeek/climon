@@ -99,10 +99,10 @@ describe("SCENARIO_DEFINITIONS", () => {
             reviewAfter: "2026-08-31",
             allowedFailedSubchecks: [
               "local-starts-as-controller",
-              "displaced-local-input-suppressed",
-              "pwa-newest-controller-wins",
+              "displaced-local-non-space-suppressed",
+              "simulated-pwa-newest-controller",
               "local-space-reclaims-control",
-              "local-resize-restores-authority",
+              "local-resize-authoritative",
             ],
           },
         } satisfies Record<HarnessPlatform, PlatformExpectation>,
