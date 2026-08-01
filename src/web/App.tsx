@@ -1518,6 +1518,7 @@ export function App() {
           onFontSizeChange={adjustFontSize}
           serverConnected={serverConnected}
           serverReconnectToken={serverReconnectToken}
+          touchWheelInverted={false}
           onLiveInteraction={handleLiveInteraction}
         />
         {panelView !== "closed" && keyBarAvailable && (

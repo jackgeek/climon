@@ -47,7 +47,8 @@ describe("TerminalView", () => {
         xtermTheme: { background: "#0d1117" },
         onFontSizeChange: () => {},
         serverConnected: true,
-        serverReconnectToken: 0
+        serverReconnectToken: 0,
+        touchWheelInverted: false
       })
     );
 
@@ -278,6 +279,29 @@ describe("TerminalView", () => {
     expect(source).toContain("configureTerminalUnicode(term, new Unicode11Addon());");
   });
 
+  test("installs terminal touch wheel adapter on xterm creation and disposes it before terminal teardown", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain('import { installTerminalTouchWheel } from "./terminalTouchWheel.js";');
+    expect(source).toMatch(
+      /term\.open\(container\);\s*termRef\.current = term;\s*fitRef\.current = fit;\s*const disposeTouchWheel = installTerminalTouchWheel\(\{/
+    );
+    expect(source).toContain("container,\n      getTarget: () => term.element,\n      getInverted: () => touchWheelInvertedRef.current");
+    expect(source).toContain("disposeTouchWheel();\n      term.dispose();");
+  });
+
+  test("requires and tracks touch wheel inversion through a current-prop ref", () => {
+    const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
+
+    expect(source).toContain("touchWheelInverted: boolean;");
+    expect(source).toMatch(
+      /serverReconnectToken,\s*onLiveInteraction,\s*touchWheelInverted\s*\}/
+    );
+    expect(source).toContain("const touchWheelInvertedRef = useRef(touchWheelInverted);");
+    expect(source).toContain("touchWheelInvertedRef.current = touchWheelInverted;");
+    expect(source).toContain("}, [touchWheelInverted]);");
+  });
+
   test("installed FitAddon computes dimensions against the xterm 6 core without the removed viewport API", () => {
     // Regression guard for the addon-fit/xterm version mismatch: xterm 6 removed
     // `terminal._core.viewport`, which addon-fit@0.10 read as
@@ -411,6 +435,8 @@ describe("TerminalView", () => {
   test("leaves mouse-tracking wheel events for xterm to forward to the terminal", () => {
     const source = readFileSync("src/web/components/TerminalView.tsx", "utf8");
 
+    expect(source).toContain("term.attachCustomWheelEventHandler((event) => {");
+    expect(source).toContain("shouldHandleWheelAsScrollback({");
     expect(
       shouldHandleWheelAsScrollback({
         mouseTrackingMode: "vt200",

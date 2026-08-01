@@ -20,6 +20,7 @@ import { readIsStandalone } from "../pwa/pwaContext.js";
 import { ANSI_HIGHLIGHT_CSS } from "../colors.js";
 import { ACTIVE_SESSION_COLOR_ACCENT_WIDTH } from "../layout.js";
 import { DEFAULT_FONT_SIZE } from "../fontSize.js";
+import { installTerminalTouchWheel } from "./terminalTouchWheel.js";
 
 interface FocusableTerminal {
   focus: () => void;
@@ -443,6 +444,7 @@ interface Props {
   onFontSizeChange: (delta: number) => void;
   serverConnected: boolean;
   serverReconnectToken: number;
+  touchWheelInverted: boolean;
   onLiveInteraction?: () => void;
 }
 
@@ -458,7 +460,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     onFontSizeChange,
     serverConnected,
     serverReconnectToken,
-    onLiveInteraction
+    onLiveInteraction,
+    touchWheelInverted
   },
   ref
 ) {
@@ -482,6 +485,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   const fontSizeRef = useRef(fontSize);
   const xtermThemeRef = useRef(xtermTheme);
   const onFontSizeChangeRef = useRef(onFontSizeChange);
+  const touchWheelInvertedRef = useRef(touchWheelInverted);
   const [displayState, setDisplayState] = useState<ControlState>("controlling");
   // False while an attach's replay/reflow is in flight so the xterm content is
   // hidden over the solid theme background; flipped true (fading the content in)
@@ -517,6 +521,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   useEffect(() => {
     onFontSizeChangeRef.current = onFontSizeChange;
   }, [onFontSizeChange]);
+
+  useEffect(() => {
+    touchWheelInvertedRef.current = touchWheelInverted;
+  }, [touchWheelInverted]);
 
   // Apply font-size changes driven from App state (panel buttons or the
   // Ctrl +/- shortcut, which both flow through App as the single source of
@@ -1060,6 +1068,11 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     term.open(container);
     termRef.current = term;
     fitRef.current = fit;
+    const disposeTouchWheel = installTerminalTouchWheel({
+      container,
+      getTarget: () => term.element,
+      getInverted: () => touchWheelInvertedRef.current
+    } as Parameters<typeof installTerminalTouchWheel>[0]);
     fitNow();
 
     const onWindowResize = (): void => fitNow();
@@ -1160,6 +1173,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       window.removeEventListener("resize", onWindowResize);
       dataDisposable.dispose();
       closeWs();
+      disposeTouchWheel();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
