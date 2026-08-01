@@ -193,9 +193,11 @@ newer version is available instead of applying it automatically.
   bar** toggle are stored in `config.jsonc` (`dashboard.theme` and
   `dashboard.keyBarPinned`), so they persist across reloads and are shared across
   every browser and device — including remote Tunnel Link viewers. On
-  touch-primary devices, the menu also exposes **Invert two-finger scrolling**,
-  stored as `dashboard.touchWheelInverted`; it reverses only the synthetic
-  two-finger gesture and leaves physical mouse/trackpad wheel direction alone.
+  touch-primary devices, the menu also exposes **Invert two-finger scrolling**;
+  when that setting is on, the label changes to **Use natural two-finger
+  scrolling**. It is stored as `dashboard.touchWheelInverted` and reverses only
+  the synthetic two-finger gesture, leaving physical mouse/trackpad wheel
+  direction alone.
   You can also set them from the CLI with `climon config dashboard.theme
   "<name>"` (a theme display name, e.g. `"Dracula"`), `climon config
   dashboard.keyBarPinned <bool>`, and `climon config

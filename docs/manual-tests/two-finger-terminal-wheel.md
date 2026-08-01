@@ -103,10 +103,13 @@ with an attached mouse/trackpad or equivalent wheel input.
   toggled on.
 - **Steps:**
   1. Set **Invert two-finger scrolling** on (or run `climon config
-     dashboard.touchWheelInverted true`).
+     dashboard.touchWheelInverted true`). Once it is on, the same toggle reads
+     **Use natural two-finger scrolling**; use that label to turn inversion off
+     again.
   2. Perform a two-finger vertical swipe down and up.
   3. Use the physical mouse/trackpad wheel down and up.
-  4. Set inversion back off and repeat step 2.
+  4. Set **Use natural two-finger scrolling** off (or run `climon config
+     dashboard.touchWheelInverted false`) and repeat step 2.
 - **Expected result:** The two-finger gesture reverses only while the setting is
   on. The physical mouse/trackpad wheel direction does not change.
 - **Platforms:** iPadOS Safari, Android Chrome, touch-capable desktop browser in
@@ -159,12 +162,12 @@ with an attached mouse/trackpad or equivalent wheel input.
   1. Start a momentum scroll with a quick two-finger flick.
   2. While it is still moving, lift one finger early so the touch count changes
      away from two.
-  3. Repeat the flick, then background the page or switch away so the browser
-     cancels the touch sequence.
+  3. Repeat the flick, then while both fingers are still down background the
+     page or switch away so the browser sends `touchcancel`.
   4. Return to the dashboard and inspect the terminal position.
 - **Expected result:** Each interruption stops the fling at the current
-  position without a visible jump. The scroll position stays where it stopped;
-  the return to the app does not replay the old momentum.
+  position without a visible jump. The touchcancel path stops the fling where
+  it is; the return to the app does not replay the old momentum.
 - **Platforms:** iPadOS Safari, Android Chrome, touch-capable desktop browser in
   tablet/touch mode.
 - **Result:** _date / tester / platform / pass-fail / notes_
