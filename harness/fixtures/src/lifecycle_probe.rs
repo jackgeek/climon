@@ -6,12 +6,12 @@ use crate::cli::CliError;
 
 const MAX_FLOOD_LINES: u32 = 10_000;
 const LIFECYCLE_USAGE: &str =
-    "lifecycle-probe requires: lifecycle-probe <fast-success|failed-exit|flood <count 1..=10000> <gate-token>|signal-hold|engine-echo>";
+    "lifecycle-probe requires: lifecycle-probe <fast-success [<gate-token>]|failed-exit [<gate-token>]|flood <count 1..=10000> <gate-token>|signal-hold|engine-echo>";
 
 #[derive(Debug, PartialEq, Eq)]
 enum LifecycleMode {
-    FastSuccess,
-    FailedExit,
+    FastSuccess { token: Option<String> },
+    FailedExit { token: Option<String> },
     Flood { count: u32, token: String },
     SignalHold,
     EngineEcho,
@@ -23,13 +23,19 @@ pub fn run(
     stdout: &mut impl Write,
 ) -> Result<i32, CliError> {
     match parse_mode(args)? {
-        LifecycleMode::FastSuccess => {
+        LifecycleMode::FastSuccess { token: None } => {
             emit_line(stdout, "DAR_LIFECYCLE_EARLY success")?;
             Ok(0)
         }
-        LifecycleMode::FailedExit => {
+        LifecycleMode::FastSuccess { token: Some(ref t) } => {
+            run_gated("success", 0, t, stdin, stdout)
+        }
+        LifecycleMode::FailedExit { token: None } => {
             emit_line(stdout, "DAR_LIFECYCLE_EARLY failure")?;
             Ok(7)
+        }
+        LifecycleMode::FailedExit { token: Some(ref t) } => {
+            run_gated("failure", 7, t, stdin, stdout)
         }
         LifecycleMode::Flood { count, token } => run_flood(count, &token, stdin, stdout),
         LifecycleMode::SignalHold => run_signal_hold(stdout),
@@ -45,13 +51,50 @@ fn parse_mode(args: &[String]) -> Result<LifecycleMode, CliError> {
         return Err(CliError::Usage(LIFECYCLE_USAGE.to_string()));
     };
     match mode {
-        "fast-success" => Ok(LifecycleMode::FastSuccess),
-        "failed-exit" => Ok(LifecycleMode::FailedExit),
+        "fast-success" => {
+            if args.len() > 2 {
+                return Err(CliError::Usage(LIFECYCLE_USAGE.to_string()));
+            }
+            let token = args.get(1).cloned().filter(|t| !t.is_empty());
+            Ok(LifecycleMode::FastSuccess { token })
+        }
+        "failed-exit" => {
+            if args.len() > 2 {
+                return Err(CliError::Usage(LIFECYCLE_USAGE.to_string()));
+            }
+            let token = args.get(1).cloned().filter(|t| !t.is_empty());
+            Ok(LifecycleMode::FailedExit { token })
+        }
         "signal-hold" => Ok(LifecycleMode::SignalHold),
         "engine-echo" => Ok(LifecycleMode::EngineEcho),
         "flood" => parse_flood_mode(&args[1..]),
         _ => Err(CliError::Usage(LIFECYCLE_USAGE.to_string())),
     }
+}
+
+/// Run the gated protocol: emit the early marker and a durable gate marker,
+/// then block until the correct `RELEASE <token>` line arrives on stdin.
+///
+/// EOF or a mismatched release line is a usage error.
+fn run_gated(
+    outcome: &str,
+    exit_code: i32,
+    token: &str,
+    stdin: &mut impl BufRead,
+    stdout: &mut impl Write,
+) -> Result<i32, CliError> {
+    emit_line(stdout, &format!("DAR_LIFECYCLE_EARLY {outcome}"))?;
+    emit_line(stdout, &format!("DAR_LIFECYCLE_GATE {token}"))?;
+
+    let expected = format!("RELEASE {token}");
+    let line = read_required_line(stdin, &expected)?;
+    if line != expected {
+        return Err(CliError::Usage(format!(
+            "Malformed lifecycle input: expected \"{expected}\", got \"{line}\""
+        )));
+    }
+
+    Ok(exit_code)
 }
 
 fn parse_flood_mode(args: &[String]) -> Result<LifecycleMode, CliError> {
@@ -137,11 +180,11 @@ mod tests {
     fn parses_lifecycle_modes_and_bounds_flood_counts() {
         assert_eq!(
             parse_mode(&["fast-success".to_string()]).unwrap(),
-            LifecycleMode::FastSuccess
+            LifecycleMode::FastSuccess { token: None }
         );
         assert_eq!(
             parse_mode(&["failed-exit".to_string()]).unwrap(),
-            LifecycleMode::FailedExit
+            LifecycleMode::FailedExit { token: None }
         );
         assert_eq!(
             parse_mode(&["signal-hold".to_string()]).unwrap(),
@@ -174,7 +217,65 @@ mod tests {
     }
 
     #[test]
-    fn emits_early_exit_lines_and_engine_echo() {
+    fn rejects_extra_args_for_fast_success_and_failed_exit() {
+        // More than one optional arg is a usage error.
+        assert_eq!(
+            parse_mode(&[
+                "fast-success".to_string(),
+                "my-token".to_string(),
+                "unexpected-extra".to_string()
+            ]),
+            Err(CliError::Usage(LIFECYCLE_USAGE.to_string()))
+        );
+        assert_eq!(
+            parse_mode(&[
+                "failed-exit".to_string(),
+                "my-token".to_string(),
+                "unexpected-extra".to_string()
+            ]),
+            Err(CliError::Usage(LIFECYCLE_USAGE.to_string()))
+        );
+    }
+
+    #[test]
+    fn empty_token_arg_is_treated_as_no_token_for_fast_success_and_failed_exit() {
+        // An explicit empty string behaves the same as omitting the token.
+        assert_eq!(
+            parse_mode(&["fast-success".to_string(), String::new()]).unwrap(),
+            LifecycleMode::FastSuccess { token: None }
+        );
+        assert_eq!(
+            parse_mode(&["failed-exit".to_string(), String::new()]).unwrap(),
+            LifecycleMode::FailedExit { token: None }
+        );
+    }
+
+    #[test]
+    fn parses_optional_gate_token_for_fast_success_and_failed_exit() {
+        // With token — both variants parse to Some(token).
+        assert_eq!(
+            parse_mode(&["fast-success".to_string(), "my-gate-token".to_string()]).unwrap(),
+            LifecycleMode::FastSuccess {
+                token: Some("my-gate-token".to_string())
+            }
+        );
+        assert_eq!(
+            parse_mode(&["failed-exit".to_string(), "dar07-gate-failure-abc123ef".to_string()])
+                .unwrap(),
+            LifecycleMode::FailedExit {
+                token: Some("dar07-gate-failure-abc123ef".to_string())
+            }
+        );
+        // Empty string is treated as no token (same as omitted).
+        assert_eq!(
+            parse_mode(&["fast-success".to_string(), String::new()]).unwrap(),
+            LifecycleMode::FastSuccess { token: None }
+        );
+    }
+
+    #[test]
+    fn emits_early_exit_lines_and_engine_echo_unchanged_without_token() {
+        // Ungated (no token): behavior is identical to the original.
         for (args, expected_code, expected_stdout) in [
             (
                 vec![
@@ -210,6 +311,87 @@ mod tests {
             assert_eq!(exit_code, expected_code);
             assert_eq!(String::from_utf8(stdout).unwrap(), expected_stdout);
         }
+    }
+
+    #[test]
+    fn gated_fast_success_emits_early_gate_then_awaits_release() {
+        let token = "dar07-gate-success-abc12345";
+        let stdin_data = format!("RELEASE {token}\n");
+        let mut stdin = Cursor::new(stdin_data.into_bytes());
+        let mut stdout = Vec::new();
+
+        let exit_code = run(
+            &["fast-success".to_string(), token.to_string()],
+            &mut stdin,
+            &mut stdout,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!("DAR_LIFECYCLE_EARLY success\nDAR_LIFECYCLE_GATE {token}\n")
+        );
+    }
+
+    #[test]
+    fn gated_failed_exit_emits_early_gate_then_awaits_release() {
+        let token = "dar07-gate-failure-abc12345";
+        let stdin_data = format!("RELEASE {token}\n");
+        let mut stdin = Cursor::new(stdin_data.into_bytes());
+        let mut stdout = Vec::new();
+
+        let exit_code = run(
+            &["failed-exit".to_string(), token.to_string()],
+            &mut stdin,
+            &mut stdout,
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 7);
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            format!("DAR_LIFECYCLE_EARLY failure\nDAR_LIFECYCLE_GATE {token}\n")
+        );
+    }
+
+    #[test]
+    fn malformed_release_token_returns_usage_error() {
+        let token = "dar07-gate-success-abc12345";
+        let mut stdin = Cursor::new(b"RELEASE wrong-token\n".to_vec());
+        let mut stdout = Vec::new();
+
+        let error = run(
+            &["fast-success".to_string(), token.to_string()],
+            &mut stdin,
+            &mut stdout,
+        )
+        .expect_err("mismatched release token should be a usage error");
+
+        assert!(
+            matches!(error, CliError::Usage(ref msg) if msg.contains("wrong-token")),
+            "error should mention the received token: {error:?}"
+        );
+    }
+
+    #[test]
+    fn eof_on_release_returns_usage_error() {
+        let token = "dar07-gate-success-abc12345";
+        // Empty stdin → immediate EOF
+        let mut stdin = Cursor::new(Vec::<u8>::new());
+        let mut stdout = Vec::new();
+
+        let error = run(
+            &["fast-success".to_string(), token.to_string()],
+            &mut stdin,
+            &mut stdout,
+        )
+        .expect_err("EOF before RELEASE should be a usage error");
+
+        assert!(
+            matches!(error, CliError::Usage(_)),
+            "EOF should produce a Usage error: {error:?}"
+        );
     }
 
     #[test]
