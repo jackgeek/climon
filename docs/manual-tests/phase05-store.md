@@ -240,7 +240,7 @@ steps are called out per case.
 
 ---
 
-## MT-P5-08 — License gate + attribution freshness (`human_id` added)
+## MT-P5-08 — License gate + attribution freshness (`petname` dependency)
 
 - **ID:** MT-P5-08
 - **Feature / phase:** Phase 5 — license tooling
@@ -250,8 +250,7 @@ steps are called out per case.
 
 **Steps:**
 1. Baseline: `cargo deny check` — advisories/bans/licenses/sources all ok
-   (the new `human_id` dependency is `Unlicense OR MIT`; its transitive crates are
-   covered by the existing permissive allowlist).
+   (`petname` is Apache-2.0; its transitive crates are covered by the existing permissive allowlist).
 2. Attribution freshness: regenerate and diff against the committed file:
    `cargo about generate about.hbs > NOTICES.tmp.md && diff -u THIRD-PARTY-LICENSES.md NOTICES.tmp.md && rm NOTICES.tmp.md`
    — expect **no diff**.
@@ -259,7 +258,7 @@ steps are called out per case.
    `cargo deny check`, confirm it fails, then revert.
 
 **Expected result:**
-- Step 1 passes with `human_id` and its transitive dependencies.
+- Step 1 passes with `petname` and its transitive dependencies.
 - Step 2 produces no diff (the committed `THIRD-PARTY-LICENSES.md` is current).
 - Step 3 fails the gate on a non-allowlisted license, then is green after revert.
 
