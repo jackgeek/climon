@@ -44,6 +44,7 @@ export type TwoFingerGestureState = IdleGestureState | RejectedGestureState | Pe
 
 export type GestureMove = {
   state: TwoFingerGestureState;
+  claimed: boolean;
   deltaY: number;
   point?: GesturePoint;
 };
@@ -104,6 +105,7 @@ function settlePending(
   if (Math.abs(span - state.initialSpan) >= PINCH_REJECTION_PX) {
     return {
       state: { phase: "rejected", point, initialSpan: state.initialSpan },
+      claimed: true,
       deltaY: 0,
       point
     };
@@ -113,6 +115,7 @@ function settlePending(
   if (movement < ACTIVATION_PX) {
     return {
       state: { ...state, point, samples },
+      claimed: true,
       deltaY: 0,
       point
     };
@@ -121,6 +124,7 @@ function settlePending(
   if (Math.abs(dy) < Math.abs(dx) * VERTICAL_DOMINANCE_RATIO) {
     return {
       state: { phase: "rejected", point, initialSpan: state.initialSpan },
+      claimed: true,
       deltaY: 0,
       point
     };
@@ -128,6 +132,7 @@ function settlePending(
 
   return {
     state: { phase: "active", anchor: state.anchor, point, initialSpan: state.initialSpan, samples },
+    claimed: true,
     deltaY: deltaY(state.point, point, inverted),
     point
   };
@@ -137,6 +142,7 @@ function settleActive(state: ActiveGestureState, point: GesturePoint, inverted: 
   const samples = appendSample(state.samples, point);
   return {
     state: { ...state, point, samples },
+    claimed: true,
     deltaY: deltaY(state.point, point, inverted),
     point
   };
@@ -164,7 +170,7 @@ export function moveTwoFingerGesture(
   inverted: boolean
 ): GestureMove {
   if (touches.length !== 2) {
-    return { state: { phase: "idle" }, deltaY: 0 };
+    return { state: { phase: "idle" }, claimed: false, deltaY: 0 };
   }
 
   const point = midpoint(touches, timeStamp);
@@ -181,12 +187,13 @@ export function moveTwoFingerGesture(
   if (state.phase === "rejected") {
     return {
       state: { ...state, point },
+      claimed: true,
       deltaY: 0,
       point
     };
   }
 
-  return { state: { phase: "idle" }, deltaY: 0 };
+  return { state: { phase: "idle" }, claimed: false, deltaY: 0 };
 }
 
 export function finishTwoFingerGesture(
