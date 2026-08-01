@@ -20,7 +20,7 @@ const OVERLAY_HINT = "Press Space to take control.";
 const LOCAL_QUIET_PERIOD_MS = 500;
 const SUBCHECK_TIMEOUTS_MS = {
   "larger-browser-displaces-local": 30_000,
-  "local-restore-jiggles-both-dimensions": 30_000,
+  "local-restore-resizes-to-local-grid": 30_000,
   "local-restore-complete-authoritative-repaint": 30_000,
   "same-size-browser-control-jiggle": 30_000,
   "same-size-complete-repaint": 30_000,
@@ -32,8 +32,8 @@ export const DAR_04_SUBCHECKS = [
     title: "Resizes the shared PTY when a larger browser acquires control",
   },
   {
-    name: "local-restore-jiggles-both-dimensions",
-    title: "Jiggles both terminal dimensions when local control is restored",
+    name: "local-restore-resizes-to-local-grid",
+    title: "Restores the shared PTY to the local grid when local control is reclaimed",
   },
   {
     name: "local-restore-complete-authoritative-repaint",
@@ -126,11 +126,6 @@ interface ResizeMarker {
   cols: number;
   rows: number;
   raw: string;
-}
-
-interface JiggleMarkers {
-  shrink: ResizeMarker;
-  restore: ResizeMarker;
 }
 
 interface ProbeFrameSnapshot {
@@ -473,45 +468,6 @@ function parseProbeFrames(text: string): ProbeFrameSnapshot[] {
   );
 }
 
-async function waitForJiggleMarkers(
-  artifactsDir: string,
-  deadline: number,
-  now: () => number,
-  sleep: (ms: number) => Promise<void>,
-  pollIntervalMs: number,
-  readLocalOutput: (artifactsDir: string) => Promise<string>,
-  afterSequence: number,
-  target: { cols: number; rows: number },
-): Promise<JiggleMarkers> {
-  return waitForValue(
-    deadline,
-    now,
-    sleep,
-    pollIntervalMs,
-    async () => {
-      const markers = parseResizeMarkers(await readLocalOutput(artifactsDir)).filter(
-        (marker) => marker.sequence > afterSequence
-      );
-      for (const shrink of markers) {
-        if (shrink.cols !== target.cols - 1 || shrink.rows !== target.rows - 1) {
-          continue;
-        }
-        const restore = markers.find(
-          (marker) =>
-            marker.sequence > shrink.sequence &&
-            marker.cols === target.cols &&
-            marker.rows === target.rows
-        );
-        if (restore) {
-          return { shrink, restore };
-        }
-      }
-      return undefined;
-    },
-    `Timed out waiting for jiggle markers ${target.cols - 1}x${target.rows - 1} -> ${target.cols}x${target.rows}`
-  );
-}
-
 async function waitForSessionSize(
   sessionId: string,
   home: string,
@@ -816,8 +772,9 @@ export async function runDar04(
   let waitForQuietBeforeExit = false;
   let authoritativeLocalSize = { cols: LOCAL_COLS, rows: LOCAL_ROWS };
   let largerBrowserReady = false;
-  let localRestoreJiggle: JiggleMarkers | undefined;
-  let localRestoreFrame: string | undefined;
+  let localRestoreBaselineSequence: number | undefined;
+  let localRestoreSize: SurfaceSize | undefined;
+  let localRestoreFrame: ProbeFrameSnapshot | undefined;
   let sameSizeFrame: ProbeFrameSnapshot | undefined;
 
   const baseEvidence = () => {
@@ -929,7 +886,7 @@ export async function runDar04(
 
   results.push(
     await runSubcheck(
-      "local-restore-jiggles-both-dimensions",
+      "local-restore-resizes-to-local-grid",
       now,
       baseEvidence,
       async () => {
@@ -939,28 +896,18 @@ export async function runDar04(
         }
 
         const deadline = remainingDeadline(
-          "local-restore-jiggles-both-dimensions",
+          "local-restore-resizes-to-local-grid",
           overallDeadline,
           now
         );
-        const baselineSequence = await readLatestResizeSequence(
+        localRestoreBaselineSequence = await readLatestResizeSequence(
           context.runtime.artifacts.dir,
           readLocalOutput
         );
         pty!.writeText(" ");
         localDisplaced = false;
         waitForQuietBeforeExit = true;
-        localRestoreJiggle = await waitForJiggleMarkers(
-          context.runtime.artifacts.dir,
-          deadline,
-          now,
-          sleep,
-          pollIntervalMs,
-          readLocalOutput,
-          baselineSequence,
-          authoritativeLocalSize,
-        );
-        await waitForSessionSize(
+        localRestoreSize = await waitForSessionSize(
           trackedSessionId!,
           context.runtime.home,
           deadline,
@@ -972,15 +919,17 @@ export async function runDar04(
         );
         await largerBrowser!.waitForDisplaced(trackedSessionId!, deadline);
         return {
-          message: `Local restore jiggled ${localRestoreJiggle.shrink.cols}x${localRestoreJiggle.shrink.rows} -> ${localRestoreJiggle.restore.cols}x${localRestoreJiggle.restore.rows}`,
-          evidence: [localRestoreJiggle.shrink.raw, localRestoreJiggle.restore.raw],
+          message: `Local reclaim restored the shared PTY to ${localRestoreSize.marker}`,
+          evidence: [localRestoreSize.marker],
         };
       }
     )
   );
 
   const localRestoreBlocked = () =>
-    localRestoreJiggle ? undefined : "local-restore-jiggles-both-dimensions did not finish the restore jiggle";
+    localRestoreSize
+      ? undefined
+      : "local-restore-resizes-to-local-grid did not return the shared PTY to the local grid";
 
   results.push(
     await runSubcheck(
@@ -998,17 +947,37 @@ export async function runDar04(
           overallDeadline,
           now
         );
-        localRestoreFrame = expectedFrame(
-          authoritativeLocalSize.cols,
-          authoritativeLocalSize.rows,
-          largerBrowserToken,
-          localRestoreJiggle!.restore.sequence,
-          { cols: localRestoreJiggle!.shrink.cols, rows: localRestoreJiggle!.shrink.rows }
-        );
-        await pty!.expectScreen((screen) => screen.contents() === localRestoreFrame, deadline);
+        const baselineSequence = localRestoreBaselineSequence;
+        if (baselineSequence === undefined) {
+          throw new Error("Unable to read the local restore baseline resize sequence");
+        }
+        await pty!.expectScreen((screen) => {
+          const contents = screen.contents();
+          if (contents.includes(OVERLAY_HINT)) {
+            return false;
+          }
+          const frame = parseProbeFrame(contents);
+          if (!frame) {
+            return false;
+          }
+          if (
+            frame.cols !== authoritativeLocalSize.cols ||
+            frame.rows !== authoritativeLocalSize.rows ||
+            frame.lastToken !== largerBrowserToken ||
+            frame.resizeSequence < baselineSequence + 1
+          ) {
+            return false;
+          }
+          localRestoreFrame = frame;
+          return true;
+        }, deadline);
+        const restoredFrame = localRestoreFrame;
+        if (!restoredFrame) {
+          throw new Error("Unable to capture the restored local frame");
+        }
         return {
           message: `Local restore repainted ${authoritativeLocalSize.cols}x${authoritativeLocalSize.rows}`,
-          evidence: [localRestoreFrame],
+          evidence: [restoredFrame.raw],
         };
       }
     )

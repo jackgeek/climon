@@ -260,8 +260,8 @@ differ per cell call it out.
 ## DAR-04 — Local restore and same-size repaint jiggle
 
 - **ID:** DAR-04
-- **Feature / phase:** Daemon actor rewrite — jiggle-repaint on restore /
-  same-size take-control (both-dimension jiggle across two timer ticks)
+- **Feature / phase:** Daemon actor rewrite — local-grid restore repaint /
+  same-size take-control jiggle
 - **Preconditions:** Built client; a running dashboard.
 - **Config-matrix cell:** all (local terminal + one browser viewer)
 - **Platforms:** macOS, Linux, Windows
@@ -278,13 +278,16 @@ differ per cell call it out.
    whose grid already matches the PTY size, and take control **without** resizing.
 
 **Expected result:**
-- When control moves to a surface at (or back to) the same PTY size — so no
-  `SIGWINCH` would otherwise fire — the daemon jiggles the PTY one column
-  narrower and one row shorter, then back, across two timer ticks. Changing
-  **both** dimensions forces even frame-caching TUIs (Ink / `copilot`) to redraw,
-  and the inter-tick gap defeats resize coalescing, so the wrapped app repaints
-  its authoritative screen on top of climon's shadow-grid repaint. At most a
-  brief one-column/one-row flicker is acceptable; no stale or half-painted screen.
+- When the browser is larger than the local terminal, reclaiming control
+  returns the shared PTY to the local grid and the wrapped app repaints a
+  complete authoritative frame there; no stale or half-painted screen.
+- When control moves to a surface at the same PTY size — so no `SIGWINCH` would
+  otherwise fire — the daemon jiggles the PTY one column narrower and one row
+  shorter, then back, across two timer ticks. Changing **both** dimensions
+  forces even frame-caching TUIs (Ink / `copilot`) to redraw, and the
+  inter-tick gap defeats resize coalescing, so the wrapped app repaints its
+  authoritative screen on top of climon's shadow-grid repaint. At most a brief
+  one-column/one-row flicker is acceptable.
 
 **Result-tracking row:**
 

@@ -317,7 +317,7 @@ function expectedListOutput(): string {
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-04-local-restore-and-same-size-repaint-jiggle",
     "  linux: partial | reason=The latest Linux manual run verified repaint flow with Vim but did not cover the required frame-caching same-size repaint case. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=same-size-complete-repaint",
     "  macos: pass",
-    "  windows: known-failure | reason=The latest Windows manual run could not attach the full-screen console workflow needed for restore and same-size repaint checks. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=larger-browser-displaces-local,local-restore-jiggles-both-dimensions,local-restore-complete-authoritative-repaint,same-size-browser-control-jiggle,same-size-complete-repaint",
+    "  windows: known-failure | reason=The latest Windows manual run could not attach the full-screen console workflow needed for restore and same-size repaint checks. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=larger-browser-displaces-local,local-restore-resizes-to-local-grid,local-restore-complete-authoritative-repaint,same-size-browser-control-jiggle,same-size-complete-repaint",
     "DAR-05 Attention flag, acknowledgement, and resize stickiness",
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-05-attention-flag-acknowledgement-and-resize-stickiness",
     "  linux: pass",

@@ -11,7 +11,7 @@ import {
 
 const DAR_04_SUBCHECK_TITLES = [
   "Resizes the shared PTY when a larger browser acquires control",
-  "Jiggles both terminal dimensions when local control is restored",
+  "Restores the shared PTY to the local grid when local control is reclaimed",
   "Repaints a complete authoritative frame after local restore",
   "Jiggles both terminal dimensions when same-size browser control is acquired",
   "Repaints a complete authoritative frame after same-size control handoff",
@@ -144,6 +144,7 @@ class FakePty implements Dar04Pty {
   public constructor(
     private readonly state: ScenarioState,
     private readonly options: {
+      reclaimRestoreMode?: "jiggle" | "direct";
       requireQuietBeforeResizeAfterReclaim?: boolean;
       requireQuietBeforeExitAfterReclaim?: boolean;
       takeControlError?: Error;
@@ -165,17 +166,20 @@ class FakePty implements Dar04Pty {
     if (text === " ") {
       if (!this.localOwnsControl()) {
         this.state.currentController = this.state.localControllerId;
-        const shrink = appendResize(this.state, this.state.localCols - 1, this.state.localRows - 1);
-        queueScreen(
-          this.state,
-          renderProbeScreen(
-            shrink.cols,
-            shrink.rows,
-            this.state.lastToken,
-            shrink.sequence,
-            this.state.previousSize
-          )
-        );
+        const restoreMode = this.options.reclaimRestoreMode ?? "jiggle";
+        if (restoreMode === "jiggle") {
+          const shrink = appendResize(this.state, this.state.localCols - 1, this.state.localRows - 1);
+          queueScreen(
+            this.state,
+            renderProbeScreen(
+              shrink.cols,
+              shrink.rows,
+              this.state.lastToken,
+              shrink.sequence,
+              this.state.previousSize
+            )
+          );
+        }
         const restore = appendResize(this.state, this.state.localCols, this.state.localRows);
         queueScreen(
           this.state,
@@ -523,11 +527,13 @@ function createContext(): Dar04Context {
 }
 
 describe("runDar04", () => {
-  test("runs all DAR-04 subchecks in order with local raw restore markers and browser-owned same-size frame assertions", async () => {
+  test("runs all DAR-04 subchecks in order when local reclaim naturally returns to the local grid and same-size control still proves a jiggle", async () => {
     const state = createState();
     const context = createContext();
     const browser = new FakeBrowserDriver(state);
-    const pty = new FakePty(state);
+    const pty = new FakePty(state, {
+      reclaimRestoreMode: "direct",
+    });
 
     const results = await runDar04(context, {
       now: (() => {
@@ -574,23 +580,22 @@ describe("runDar04", () => {
     );
     expect(results[1]?.evidence).toEqual(
       expect.arrayContaining([
-        "DAR_CONTROL_RESIZE 2 99 29",
-        "DAR_CONTROL_RESIZE 3 100 30",
+        "100x30",
       ])
     );
     expect(results[2]?.evidence).toEqual(
       expect.arrayContaining([
-        "DAR_CONTROL_READY\nsize=100x30\nprevious=99x29\nlast=dar04-browser-large-abc123\nresizes=3",
+        "DAR_CONTROL_READY\nsize=100x30\nprevious=132x44\nlast=dar04-browser-large-abc123\nresizes=2",
       ])
     );
     expect(results[3]?.evidence).toEqual(
       expect.arrayContaining([
-        "DAR_CONTROL_READY\nsize=118x36\nprevious=117x35\nlast=dar04-same-size-abc123\nresizes=9",
+        "DAR_CONTROL_READY\nsize=118x36\nprevious=117x35\nlast=dar04-same-size-abc123\nresizes=7",
       ])
     );
     expect(results[4]?.evidence).toEqual(
       expect.arrayContaining([
-        "DAR_CONTROL_READY\nsize=118x36\nprevious=117x35\nlast=dar04-same-size-abc123\nresizes=9",
+        "DAR_CONTROL_READY\nsize=118x36\nprevious=117x35\nlast=dar04-same-size-abc123\nresizes=7",
       ])
     );
     expect(pty.writeTextCalls).toEqual([" ", " ", "dar04-same-size-abc123\r", " ", "q"]);
@@ -747,7 +752,7 @@ describe("runDar04", () => {
       "larger-browser-displaces-local did not leave the local terminal displaced by a larger browser"
     );
     expect(results[2]?.message).toContain(
-      "local-restore-jiggles-both-dimensions did not finish the restore jiggle"
+      "local-restore-resizes-to-local-grid did not return the shared PTY to the local grid"
     );
     expect(results[3]?.message).toContain(
       "local-restore-complete-authoritative-repaint did not verify the restored local frame"

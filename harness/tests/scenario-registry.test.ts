@@ -132,7 +132,7 @@ describe("SCENARIO_DEFINITIONS", () => {
             reviewAfter: "2026-08-31",
             allowedFailedSubchecks: [
               "larger-browser-displaces-local",
-              "local-restore-jiggles-both-dimensions",
+              "local-restore-resizes-to-local-grid",
               "local-restore-complete-authoritative-repaint",
               "same-size-browser-control-jiggle",
               "same-size-complete-repaint",

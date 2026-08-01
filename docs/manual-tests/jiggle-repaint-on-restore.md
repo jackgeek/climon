@@ -1,18 +1,18 @@
-# Jiggle-repaint on local restore
+# Restore repaint and same-size jiggle
 
-Verifies that when a surface (the local terminal, or a dashboard/PWA taking
-control) regains/takes control, climon jiggles the PTY size — one column narrower
-and one row away, then back — so the wrapped command repaints its authoritative
-screen (in addition to climon's shadow-grid repaint). Changing both dimensions
-forces a redraw even in frame-caching TUIs such as `copilot` (Ink), where a
-rows-only jiggle is skipped.
+Verifies that when the local terminal reclaims control from a larger browser,
+climon returns the shared PTY to the local grid and the wrapped command repaints
+its authoritative screen (in addition to climon's shadow-grid repaint). When a
+dashboard/PWA takes control at the same PTY size, climon still jiggles the PTY
+size — one column narrower and one row away, then back — so frame-caching TUIs
+such as `copilot` (Ink) redraw instead of reusing a stale frame.
 
 Source: `rust/climon-session/src/host.rs` (`LocalRestoreDecision::Repaint` arm,
 `jiggle_rows`).
 
 ## MT-JIGGLE-01 — Full-screen app redraws its true state on restore
 
-**Feature:** Jiggle-repaint on local restore
+**Feature:** Restore repaint on local reclaim
 **Config-matrix cell:** default config; local terminal + one browser viewer.
 
 **Preconditions:**
@@ -32,10 +32,12 @@ Source: `rust/climon-session/src/host.rs` (`LocalRestoreDecision::Repaint` arm,
    browser viewer back to the local size and disconnect it).
 
 **Expected result:**
-- The local terminal is restored: first the clean shadow repaint appears, then
-  the app's own redraw lands on top within a moment (e.g. htop's live rows /
-  vim's buffer are fully and correctly painted, with no stale/blank regions and
-  correct colors). There is at most a brief one-row flicker during the jiggle.
+- The local terminal is restored to its own grid: first the clean shadow
+  repaint appears, then the app's own redraw lands on top within a moment
+  (e.g. htop's live rows / vim's buffer are fully and correctly painted, with
+  no stale/blank regions and correct colors). A direct resize back to the local
+  grid is sufficient; a separate jiggle is not required on this larger-browser
+  reclaim path.
 
 **Platforms:** macOS, Linux, Windows.
 
@@ -45,7 +47,7 @@ Source: `rust/climon-session/src/host.rs` (`LocalRestoreDecision::Repaint` arm,
 
 ## MT-JIGGLE-02 — Frame-caching TUI (copilot) redraws on reclaim
 
-**Feature:** Jiggle-repaint on local restore (both-dimension jiggle)
+**Feature:** Restore repaint on local reclaim
 **Config-matrix cell:** default config; local terminal + one browser viewer.
 
 **Preconditions:**
@@ -62,8 +64,8 @@ Source: `rust/climon-session/src/host.rs` (`LocalRestoreDecision::Repaint` arm,
 
 **Expected result:**
 - `copilot` fully repaints its true current state on reclaim (no stale or
-  half-painted screen). A brief one-column/one-row flicker during the jiggle is
-  acceptable.
+  half-painted screen) once the PTY returns to the local grid. A separate
+  jiggle is not required on this larger-browser reclaim path.
 
 **Platforms:** macOS, Linux, Windows.
 
