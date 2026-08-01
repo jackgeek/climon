@@ -10,10 +10,11 @@ hidden/backgrounded or closed.
 Implementation: `src/web/attentionAlerts.ts` (manager fires `onAttention` +
 sound + vibration, gated by `alertsVisible`), `src/web/attentionToast.ts`
 (toast content — title `<session name> needs attention`, terminal title as a
-second line), the Fluent `Toaster` wiring in `src/web/App.tsx`, and **per-device
-server-side push suppression**: the client presence reporter
-(`src/web/pwa/presence.ts`, wired in `App.tsx`) POSTs `/api/push/presence`, and
-the server's `src/server/push/presence.ts` skips foreground endpoints when
+second line), `src/web/components/AttentionToastView.tsx` (toast interaction
+and dismiss behavior), the Fluent `Toaster` wiring in `src/web/App.tsx`, and
+**per-device server-side push suppression**: the client presence reporter
+(`src/web/pwa/presence.ts`, wired in `App.tsx`) POSTs `/api/push/presence`,
+and the server's `src/server/push/presence.ts` skips foreground endpoints when
 sending. The service worker (`src/web/pwa/swPush.ts` / `src/web/sw.ts`) now
 **always** shows a notification for every push (iOS/WebKit requires it).
 See the [design spec](../superpowers/specs/2026-07-04-ios-safe-push-suppression-design.md).
@@ -202,10 +203,18 @@ presence heartbeat, so foregrounding one device never suppresses another.
 1. Keep the dashboard focused on session B.
 2. Drive session A into `needs-attention`.
 3. On the toast, activate the `Dismiss notification` close button.
-4. Later, trigger a distinct attention episode for session A so the toast appears again.
-5. Click/tap the non-close toast surface.
+4. Later, trigger a distinct attention episode for session A so the toast
+   appears again.
+5. Leave the fresh toast untouched for at least six seconds and observe it
+   disappear on its own.
+6. Trigger one more distinct attention episode for session A.
+7. Click/tap the non-close toast surface.
 
-**Expected result:** Step 3 dismisses only the toast: session B stays open, and session A remains in its attention state rather than being opened or cleared. A later attention episode for session A shows a fresh toast. Step 5 opens session A and dismisses the toast. Any untouched toast still auto-dismisses after six seconds.
+**Expected result:** Step 3 dismisses only the toast: session B stays open, and
+session A remains in its attention state rather than being opened or cleared.
+Step 5 confirms an untouched toast auto-dismisses after six seconds. Step 7
+opens session A and dismisses the toast. The later distinct episode proves the
+toast can appear again after being dismissed, and non-close click still opens A.
 
 **Result tracking:** | Version | Date | Tester | Platform | Pass/Fail | Notes |
 | --- | --- | --- | --- | --- | --- |
