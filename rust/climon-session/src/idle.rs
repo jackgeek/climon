@@ -12,14 +12,19 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
+#[allow(dead_code)]
 const IDLE_SAMPLE_MIN_MS: u64 = 800;
+#[allow(dead_code)]
 const IDLE_SAMPLE_JITTER_VALUES: u64 = 201;
 
 /// Produces a fresh 800–1000ms delay for each idle-screen sample.
+/// Host consumer is wired in the next task.
+#[allow(dead_code)]
 pub(crate) struct IdleSampleSchedule {
     state: u64,
 }
 
+#[allow(dead_code)]
 impl IdleSampleSchedule {
     pub(crate) fn new(session_id: &str) -> Self {
         let mut hasher = DefaultHasher::new();
