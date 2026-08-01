@@ -6,6 +6,7 @@ import type { BuildArtifacts } from "../src/build-cache.js";
 import { CaseArtifacts, caseArtifactDir } from "../src/artifacts.js";
 import type { ReportCaseResult } from "../src/reporters/json.js";
 import type { RuntimeContext, RuntimeSupervisorOptions } from "../src/runtime-supervisor.js";
+import { SCENARIO_DEFINITIONS } from "../src/scenario-registry.js";
 import type { ScenarioDefinition } from "../src/scenario-registry.js";
 import { DAR_01_SUBCHECKS } from "../src/scenarios/dar-01.js";
 import { DAR_02_SUBCHECKS } from "../src/scenarios/dar-02.js";
@@ -17,6 +18,18 @@ const runCli = (cliModule as { runCli?: (args: string[], options: Record<string,
 
 const FIXED_NOW = new Date("2026-07-31T21:27:33.660Z");
 const DEFAULT_REVISION = "d7fa2160cad31941dfb4480fdf07cce0c796dcee";
+const ALL_DAR_IDS = [
+  "DAR-01",
+  "DAR-02",
+  "DAR-03",
+  "DAR-04",
+  "DAR-05",
+  "DAR-06",
+  "DAR-07",
+  "DAR-08",
+  "DAR-09",
+  "DAR-10",
+] as const;
 const SUBCHECK_TITLES = {
   "attached-startup": "Waits for the attached TUI startup marker",
   "replay-visible": "Replays the pre-attach stream in the dashboard terminal",
@@ -214,6 +227,18 @@ function createRunOptions(
   const stdout = new MemoryStream();
   const stderr = new MemoryStream();
   const runtimeRecord = { disposals: [] as string[], createCalls: [] as string[] };
+  const runDar01 =
+    (overrides as { runDar01?: () => Promise<SubcheckResult[]> }).runDar01 ??
+    (async () => dar01Subchecks());
+  const runDar02 =
+    (overrides as { runDar02?: () => Promise<SubcheckResult[]> }).runDar02 ??
+    (async () =>
+      dar02Subchecks({
+        "replay-visible": {
+          status: "failed",
+          message: "Replay was intentionally allowed to fail.",
+        },
+      }));
 
   return {
     root: workspace,
@@ -244,14 +269,10 @@ function createRunOptions(
       }) satisfies BuildArtifacts,
     createRuntimeSupervisor: createRuntimeFactory(runtimeRecord),
     createBrowserDriver: () => new FakeBrowserDriver(),
-    runDar01: async () => dar01Subchecks(),
-    runDar02: async () =>
-      dar02Subchecks({
-        "replay-visible": {
-          status: "failed",
-          message: "Replay was intentionally allowed to fail.",
-        },
-      }),
+    scenarioRunners: {
+      "DAR-01": runDar01,
+      "DAR-02": runDar02,
+    },
     runtimeRecord,
     ...overrides,
   };
@@ -281,12 +302,52 @@ function expectedListOutput(): string {
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-01-attached-shell-input-output-and-raw-mode-restoration",
     "  linux: pass",
     "  macos: pass",
-    "  windows: unsupported | reason=Windows coverage is intentionally skipped in this unit test.",
+    "  windows: known-failure | reason=The latest Windows manual run could not verify attached console fidelity or mode restoration. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=attached-startup,text-input-output,control-and-key-input,mouse-input,alternate-screen-render,resize-repaint,terminal-mode-restoration",
     "DAR-02 Headless session dashboard replay and live output",
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-02-headless-session-and-dashboard-attach-replay",
-    "  linux: partial | reason=Replay is still flaky on Linux in this unit test. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=replay-visible",
+    "  linux: pass",
     "  macos: pass",
-    "  windows: unsupported | reason=Windows coverage is intentionally skipped in this unit test.",
+    "  windows: partial | reason=The latest Windows manual run showed the session but did not verify rendered replay plus continued live output. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=replay-visible,browser-input,live-output",
+    "DAR-03 Dashboard and PWA take-control with local Space reclaim",
+    "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-03-dashboard-pwa-take-control-and-local-space-reclaim",
+    "  linux: pass",
+    "  macos: pass",
+    "  windows: known-failure | reason=The latest Windows manual run could not verify local displacement, Space reclaim, or PWA control from a real Windows console. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=local-starts-as-controller,displaced-local-input-suppressed,pwa-newest-controller-wins,local-space-reclaims-control,local-resize-restores-authority",
+    "DAR-04 Local restore and same-size repaint jiggle",
+    "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-04-local-restore-and-same-size-repaint-jiggle",
+    "  linux: partial | reason=The latest Linux manual run verified repaint flow with Vim but did not cover the required frame-caching same-size repaint case. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=same-size-control-repaints-complete-frame",
+    "  macos: pass",
+    "  windows: known-failure | reason=The latest Windows manual run could not attach the full-screen console workflow needed for restore and same-size repaint checks. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=larger-browser-displaces-local,local-restore-jiggles-both-dimensions,local-restore-repaints-complete-frame,same-size-browser-control-jiggle,same-size-control-repaints-complete-frame",
+    "DAR-05 Attention flag, acknowledgement, and resize stickiness",
+    "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-05-attention-flag-acknowledgement-and-resize-stickiness",
+    "  linux: pass",
+    "  macos: pass",
+    "  windows: partial | reason=The latest Windows manual run only verified initial attention and acknowledgement; body-change reset and resize stickiness remain blocked. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=body-change-reset,reflag-after-body-change,resize-stickiness,stale-token-rejection,second-token-acknowledgement",
+    "DAR-06 Terminal title and progress capture",
+    "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-06-terminal-title-and-progress-capture",
+    "  linux: pass",
+    "  macos: pass",
+    "  windows: known-failure | reason=The latest Windows manual run observed partial OSC output but could not isolate title and progress behavior from the broader ConPTY lifecycle failure. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=osc-2-title,progress-clear,progress-indeterminate,progress-error,progress-warning,raw-sequence-passthrough",
+    "DAR-07 Fast exit, failed exit, final scrollback, and socket cleanup",
+    "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-07-fast-exit-failed-exit-final-scrollback-and-socket-cleanup",
+    "  linux: pass",
+    "  macos: pass",
+    "  windows: known-failure | reason=The latest Windows manual run did not observe process exit finalization after fast-success or failed-exit commands. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=success-finalization,success-socket-cleanup,failure-finalization,failure-socket-cleanup",
+    "DAR-08 Slow and disconnecting viewer isolation",
+    "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-08-slow-disconnecting-viewer-isolation",
+    "  linux: known-failure | reason=The latest Linux manual run found a reproducible crash under concurrent viewers on high-volume output. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=disconnecting-viewer-isolated,healthy-viewer-stays-live,session-finalizes-after-flood,daemon-remains-panic-free",
+    "  macos: pass",
+    "  windows: known-failure | reason=The latest Windows manual run did not exercise streamed output or viewer backpressure isolation. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=healthy-viewer-receives-initial-stream,disconnecting-viewer-isolated,healthy-viewer-stays-live,session-finalizes-after-flood,daemon-remains-panic-free",
+    "DAR-09 SIGINT, SIGTERM, and Windows process termination",
+    "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-09-sigint-sigterm-and-windows-process-termination",
+    "  linux: partial | reason=The latest Linux manual run did not capture repeated-signal idempotency or directly isolate the resize path. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=repeated-signal-idempotency,attached-resize-path",
+    "  macos: pass",
+    "  windows: partial | reason=The latest Windows manual run verified forced host termination only; interactive resize polling remains blocked. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=windows-console-resize-poller",
+    "DAR-10 Actor-to-legacy rollback via CLIMON_SESSION_ENGINE",
+    "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-10-actor-to-legacy-rollback-via-climonsessionengine",
+    "  linux: pass",
+    "  macos: pass",
+    "  windows: partial | reason=The latest Windows manual run verified invalid-engine diagnostics only; actor and legacy interactive parity remains blocked by the non-interactive ConPTY environment. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=default-legacy-engine,explicit-actor-engine,explicit-legacy-rollback,external-parity",
   ].join("\n") + "\n";
 }
 
@@ -355,13 +416,42 @@ describe("runCli", () => {
     const workspace = makeWorkspace("cli-list");
 
     try {
-      const options = createRunOptions(workspace);
+      const options = createRunOptions(workspace, {
+        definitions: SCENARIO_DEFINITIONS,
+      });
       const cli = requireRunCli();
 
       await expect(cli(["list"], options)).resolves.toBe(0);
 
       expect((options.stdout as CapturedStream).text).toBe(expectedListOutput());
       expect((options.stderr as CapturedStream).text).toBe("");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("reports an explicit placeholder failure for unimplemented default scenarios", async () => {
+    const workspace = makeWorkspace("cli-run-placeholder");
+
+    try {
+      writeDoctorFixtureFiles(workspace);
+      const artifactRoot = join(workspace, "artifacts");
+      const options = createRunOptions(workspace, {
+        definitions: SCENARIO_DEFINITIONS,
+      });
+      const cli = requireRunCli();
+
+      await expect(
+        cli(["run", "DAR-03", "--artifact-root", artifactRoot], options)
+      ).resolves.toBe(1);
+
+      const result = readJson(
+        join(artifactRoot, "cases", "DAR-03", "result.json")
+      ) as CaseResult;
+      expect(result.status).toBe("setup-failure");
+      expect(result.message).toContain(
+        "DAR-03 is not implemented in the E2E harness yet. Replace the placeholder runner before relying on this scenario."
+      );
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
@@ -505,6 +595,42 @@ describe("runCli", () => {
       expect(readFileSync(join(workspace, "artifacts", "junit.xml"), "utf8")).toContain(
         '<skipped message="expected-partial"'
       );
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("routes each DAR id through the injected scenario runner mapping", async () => {
+    const workspace = makeWorkspace("cli-runner-routing");
+    const cli = requireRunCli();
+
+    try {
+      for (const darId of ALL_DAR_IDS) {
+        const artifactRoot = join(workspace, darId.toLowerCase());
+        const options = createRunOptions(workspace, {
+          definitions: SCENARIO_DEFINITIONS,
+          scenarioRunners: Object.fromEntries(
+            ALL_DAR_IDS.map((candidateDarId) => [
+              candidateDarId,
+              async () => {
+                throw new Error(`injected runner for ${candidateDarId}`);
+              },
+            ])
+          ),
+        });
+
+        await expect(
+          cli(["run", darId, "--artifact-root", artifactRoot], options)
+        ).resolves.toBe(1);
+
+        expect((options.runtimeRecord as { createCalls: string[] }).createCalls).toEqual([darId]);
+
+        const result = readJson(
+          join(artifactRoot, "cases", darId, "result.json")
+        ) as CaseResult;
+        expect(result.status).toBe("setup-failure");
+        expect(result.message).toContain(`injected runner for ${darId}`);
+      }
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

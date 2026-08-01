@@ -37,7 +37,8 @@ import {
   runDar02 as runDar02Impl,
   type Dar02BrowserDriver,
 } from "./scenarios/dar-02.js";
-import { validateSubcheckResults } from "./subchecks.js";
+import { notImplementedRunner } from "./scenarios/shared.js";
+import { validateSubcheckResults, type SubcheckDefinition } from "./subchecks.js";
 import {
   HarnessError,
   type CaseResult,
@@ -49,12 +50,13 @@ import {
 
 const require = createRequire(import.meta.url);
 const playwrightPackage = require("playwright/package.json") as { version: string };
+const DAR_ID_USAGE = SCENARIO_DEFINITIONS.map((definition) => definition.darId).join("|");
 
 const USAGE = [
   "Usage:",
   "  bun run harness -- doctor",
   "  bun run harness -- list",
-  "  bun run harness -- run [DAR-01|DAR-02 ...] [--artifact-root <path>]",
+  `  bun run harness -- run [${DAR_ID_USAGE} ...] [--artifact-root <path>]`,
   "  bun run harness -- aggregate [--results-root <path>]",
 ].join("\n");
 
@@ -105,6 +107,25 @@ interface BrowserSnapshotDriver extends Dar02BrowserDriver {
   snapshotTerminalText?(): Promise<string>;
 }
 
+interface ScenarioRunContext {
+  darId: DarId;
+  platform: HarnessPlatform;
+  overallDeadline: number;
+  build: BuildArtifacts;
+  runtime: RuntimeContext;
+  createBrowserDriver: () => BrowserSnapshotDriver;
+  readLiveSessionArtifacts: (
+    sessionId: string,
+    home: string
+  ) => Promise<string | undefined>;
+  readDaemonLogArtifacts: (
+    sessionId: string,
+    home: string
+  ) => Promise<string | undefined>;
+}
+
+type ScenarioRunner = (context: ScenarioRunContext) => Promise<SubcheckResult[]>;
+
 async function ensureDirectory(pathToCreate: string): Promise<void> {
   await mkdir(pathToCreate, { recursive: true });
 }
@@ -136,8 +157,7 @@ export interface RunCliOptions {
     options: RuntimeSupervisorOptions
   ) => Promise<{ context: RuntimeContext; dispose(): Promise<void> }>;
   createBrowserDriver?: (runtime: RuntimeContext) => BrowserSnapshotDriver;
-  runDar01?: typeof runDar01Impl;
-  runDar02?: typeof runDar02Impl;
+  scenarioRunners?: Partial<Record<DarId, ScenarioRunner>>;
 }
 
 type ParsedCommand =
@@ -327,16 +347,91 @@ function caseResult(
   };
 }
 
-function subcheckDefinitionsFor(
-  darId: DarId
-): typeof DAR_01_SUBCHECKS | typeof DAR_02_SUBCHECKS {
-  switch (darId) {
-    case "DAR-01":
-      return DAR_01_SUBCHECKS;
-    case "DAR-02":
-      return DAR_02_SUBCHECKS;
-  }
-}
+const SUBCHECK_DEFINITIONS: Partial<Record<DarId, readonly SubcheckDefinition[]>> = {
+  "DAR-01": DAR_01_SUBCHECKS,
+  "DAR-02": DAR_02_SUBCHECKS,
+};
+
+const runDar01Adapter: ScenarioRunner = async ({
+  platform,
+  overallDeadline,
+  build,
+  runtime,
+}) =>
+  runDar01Impl(
+    {
+      platform,
+      overallDeadline,
+      build,
+      runtime: {
+        root: runtime.root,
+        env: runtime.env,
+        artifacts: runtime.artifacts,
+      },
+    },
+    {}
+  );
+
+const runDar02Adapter: ScenarioRunner = async ({
+  platform,
+  overallDeadline,
+  build,
+  runtime,
+  createBrowserDriver,
+  readLiveSessionArtifacts,
+  readDaemonLogArtifacts,
+}) => {
+  const browser = createBrowserDriver();
+  const snapshotTerminalText = async () => {
+    if (typeof browser.snapshotTerminalText === "function") {
+      return browser.snapshotTerminalText();
+    }
+    if (typeof browser.terminalText === "function") {
+      return browser.terminalText();
+    }
+    throw new HarnessError(
+      "browser",
+      "Browser driver does not expose terminalText() or snapshotTerminalText()"
+    );
+  };
+
+  return runDar02Impl(
+    {
+      platform,
+      overallDeadline,
+      build,
+      browser,
+      runtime: {
+        root: runtime.root,
+        home: runtime.home,
+        baseUrl: runtime.baseUrl,
+        env: runtime.env,
+        artifacts: runtime.artifacts,
+        processes: runtime.processes,
+        sessions: runtime.sessions,
+      },
+    },
+    {
+      readLiveScrollback: (sessionId, home) =>
+        readLiveSessionArtifacts(sessionId, home),
+      readDaemonLog: (sessionId, home) => readDaemonLogArtifacts(sessionId, home),
+      snapshotTerminalText,
+    }
+  );
+};
+
+const DEFAULT_SCENARIO_RUNNERS: Record<DarId, ScenarioRunner> = {
+  "DAR-01": runDar01Adapter,
+  "DAR-02": runDar02Adapter,
+  "DAR-03": notImplementedRunner("DAR-03"),
+  "DAR-04": notImplementedRunner("DAR-04"),
+  "DAR-05": notImplementedRunner("DAR-05"),
+  "DAR-06": notImplementedRunner("DAR-06"),
+  "DAR-07": notImplementedRunner("DAR-07"),
+  "DAR-08": notImplementedRunner("DAR-08"),
+  "DAR-09": notImplementedRunner("DAR-09"),
+  "DAR-10": notImplementedRunner("DAR-10"),
+};
 
 async function writeAtomicText(
   filePath: string,
@@ -689,9 +784,12 @@ async function executeRun(
   }
 
   const createRuntimeSupervisor = options.createRuntimeSupervisor ?? RuntimeSupervisor.create;
-  const createBrowserDriver = options.createBrowserDriver ?? ((runtime: RuntimeContext) => new BrowserDriver(runtime));
-  const runDar01 = options.runDar01 ?? runDar01Impl;
-  const runDar02 = options.runDar02 ?? runDar02Impl;
+  const createBrowserDriver =
+    options.createBrowserDriver ?? ((runtime: RuntimeContext) => new BrowserDriver(runtime));
+  const scenarioRunners: Record<DarId, ScenarioRunner> = {
+    ...DEFAULT_SCENARIO_RUNNERS,
+    ...(options.scenarioRunners ?? {}),
+  };
   const results: ReportCaseResult[] = [];
 
   for (const definition of selectedDefinitions) {
@@ -729,63 +827,23 @@ async function executeRun(
           runner,
         });
 
-        let subchecks: SubcheckResult[];
-        if (definition.darId === "DAR-01") {
-          subchecks = await runDar01(
-            {
-              platform,
-              overallDeadline: startedAt + definition.timeoutMs,
-              build,
-              runtime: {
-                root: runtime.context.root,
-                env: runtime.context.env,
-                artifacts: runtime.context.artifacts,
-              },
-            },
-            {}
-          );
-        } else {
-          const browser = createBrowserDriver(runtime.context) as BrowserSnapshotDriver;
-          const snapshotTerminalText = async () => {
-            if (typeof browser.snapshotTerminalText === "function") {
-              return browser.snapshotTerminalText();
-            }
-            if (typeof browser.terminalText === "function") {
-              return browser.terminalText();
-            }
-            throw new HarnessError(
-              "browser",
-              "Browser driver does not expose terminalText() or snapshotTerminalText()"
-            );
-          };
+        const subchecks = await scenarioRunners[definition.darId]({
+          darId: definition.darId,
+          platform,
+          overallDeadline: startedAt + definition.timeoutMs,
+          build,
+          runtime: runtime.context,
+          createBrowserDriver: () => createBrowserDriver(runtime!.context),
+          readLiveSessionArtifacts: (sessionId, home) =>
+            readLiveSessionArtifacts(sessionId, home, fs),
+          readDaemonLogArtifacts: (sessionId, home) =>
+            readDaemonLogArtifacts(sessionId, home, fs),
+        });
 
-          subchecks = await runDar02(
-            {
-              platform,
-              overallDeadline: startedAt + definition.timeoutMs,
-              build,
-              browser,
-              runtime: {
-                root: runtime.context.root,
-                home: runtime.context.home,
-                baseUrl: runtime.context.baseUrl,
-                env: runtime.context.env,
-                artifacts: runtime.context.artifacts,
-                processes: runtime.context.processes,
-                sessions: runtime.context.sessions,
-              },
-            },
-            {
-              readLiveScrollback: (sessionId, home) =>
-                readLiveSessionArtifacts(sessionId, home, fs),
-              readDaemonLog: (sessionId, home) =>
-                readDaemonLogArtifacts(sessionId, home, fs),
-              snapshotTerminalText,
-            }
-          );
+        const subcheckDefinitions = SUBCHECK_DEFINITIONS[definition.darId];
+        if (subcheckDefinitions !== undefined) {
+          validateSubcheckResults(subcheckDefinitions, subchecks);
         }
-
-        validateSubcheckResults(subcheckDefinitionsFor(definition.darId), subchecks);
 
         result = caseResult(
           definition,
