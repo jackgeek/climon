@@ -37,6 +37,7 @@ import {
   notificationsMenuLabel,
   removeDisconnectedMenuLabel,
   remotesMenuLabel,
+  touchWheelInversionMenuLabel,
   scrollActiveSessionIntoView,
   type StableSessionItemRefRegistry
 } from "../sidebar-utils.js";
@@ -164,11 +165,11 @@ interface Props {
   onRemoveDisconnected: () => void;
   onMaximize: (id: string) => void;
   isMobile: boolean;
-  isTouchPrimary?: boolean;
+  isTouchPrimary: boolean;
   keyBarPinned: boolean;
   onToggleKeyBarPinned: () => void;
-  touchWheelInverted?: boolean;
-  onToggleTouchWheelInverted?: () => void;
+  touchWheelInverted: boolean;
+  onToggleTouchWheelInverted: () => void;
   stateIconNoMotion?: boolean;
   currentTheme?: string;
   onSelectTheme?: (id: string) => void;
@@ -199,11 +200,11 @@ export function Sidebar({
   onRemoveDisconnected,
   onMaximize,
   isMobile,
-  isTouchPrimary: _isTouchPrimary = false,
+  isTouchPrimary,
   keyBarPinned,
   onToggleKeyBarPinned,
-  touchWheelInverted: _touchWheelInverted = false,
-  onToggleTouchWheelInverted: _onToggleTouchWheelInverted,
+  touchWheelInverted,
+  onToggleTouchWheelInverted,
   stateIconNoMotion = false,
   currentTheme = DEFAULT_THEME_NAME,
   onSelectTheme,
@@ -244,6 +245,11 @@ export function Sidebar({
                 <MenuItem onClick={onToggleNotifications}>{notificationsMenuLabel(notificationsEnabled)}</MenuItem>
                 {isMobile && (
                   <MenuItem onClick={onToggleKeyBarPinned}>{keyBarPinnedMenuLabel(keyBarPinned)}</MenuItem>
+                )}
+                {isTouchPrimary && (
+                  <MenuItem onClick={onToggleTouchWheelInverted}>
+                    {touchWheelInversionMenuLabel(touchWheelInverted)}
+                  </MenuItem>
                 )}
                 {canInstallPwa && (
                   <MenuItem onClick={onInstallPwa}>{installPwaMenuLabel}</MenuItem>

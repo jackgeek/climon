@@ -9,6 +9,10 @@ export function keyBarPinnedMenuLabel(pinned: boolean): string {
   return pinned ? "Unpin key bar" : "Pin key bar";
 }
 
+export function touchWheelInversionMenuLabel(inverted: boolean): string {
+  return inverted ? "Use natural two-finger scrolling" : "Invert two-finger scrolling";
+}
+
 export type SessionItemRef = (element: HTMLElement | null) => void;
 
 export interface StableSessionItemRefRegistry {

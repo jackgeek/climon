@@ -316,9 +316,9 @@ describe("scheduleTerminalRefit", () => {
       expect(source).not.toContain("touchWheelInverted={false}");
       expect(source).toContain("isTouchPrimary={isTouchPrimary}");
       expect(source).toContain("onToggleTouchWheelInverted={handleToggleTouchWheelInverted}");
-      expect(sidebarSource).toContain("isTouchPrimary?: boolean;");
-      expect(sidebarSource).toContain("touchWheelInverted?: boolean;");
-      expect(sidebarSource).toContain("onToggleTouchWheelInverted?: () => void;");
+      expect(sidebarSource).toContain("isTouchPrimary: boolean;");
+      expect(sidebarSource).toContain("touchWheelInverted: boolean;");
+      expect(sidebarSource).toContain("onToggleTouchWheelInverted: () => void;");
     });
   });
 });

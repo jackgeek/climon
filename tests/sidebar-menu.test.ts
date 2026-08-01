@@ -28,6 +28,7 @@ import {
   getStableSessionItemRef,
   keyBarPinnedMenuLabel,
   notificationsMenuLabel,
+  touchWheelInversionMenuLabel,
   remotesMenuLabel,
   scrollActiveSessionIntoView,
   type StableSessionItemRefRegistry
@@ -117,6 +118,11 @@ describe("Sidebar menu", () => {
     expect(keyBarPinnedMenuLabel(true)).toBe("Unpin key bar");
   });
 
+  test("labels the touch wheel inversion action", () => {
+    expect(touchWheelInversionMenuLabel(false)).toBe("Invert two-finger scrolling");
+    expect(touchWheelInversionMenuLabel(true)).toBe("Use natural two-finger scrolling");
+  });
+
   test("shows the pin key bar item only on mobile", () => {
     const commonProps = {
       sessions: [],
@@ -140,8 +146,11 @@ describe("Sidebar menu", () => {
       onCloseTunnelLink: () => {},
       onMaximize: () => {},
       onRemoveDisconnected: () => {},
+      isTouchPrimary: false,
       keyBarPinned: false,
-      onToggleKeyBarPinned: () => {}
+      onToggleKeyBarPinned: () => {},
+      touchWheelInverted: false,
+      onToggleTouchWheelInverted: () => {}
     };
 
     const desktop = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, isMobile: false }));
@@ -220,9 +229,12 @@ describe("Sidebar menu", () => {
       onCloseTunnelLink: () => {},
       onMaximize: () => {},
       onRemoveDisconnected: () => {},
+      isTouchPrimary: false,
       isMobile: false,
       keyBarPinned: false,
-      onToggleKeyBarPinned: () => {}
+      onToggleKeyBarPinned: () => {},
+      touchWheelInverted: false,
+      onToggleTouchWheelInverted: () => {}
     };
 
     const disabled = renderToStaticMarkup(createElement(Sidebar, commonProps));
@@ -255,14 +267,58 @@ describe("Sidebar menu", () => {
       onCloseTunnelLink: () => {},
       onMaximize: () => {},
       onRemoveDisconnected: () => {},
+      isTouchPrimary: false,
       isMobile: false,
       keyBarPinned: false,
-      onToggleKeyBarPinned: () => {}
+      onToggleKeyBarPinned: () => {},
+      touchWheelInverted: false,
+      onToggleTouchWheelInverted: () => {}
     };
 
     const html = renderToStaticMarkup(createElement(Sidebar, commonProps));
 
     expect(html).not.toContain("Clamp size");
     expect(html).not.toContain("Clamp terminal size");
+  });
+
+  test("shows the touch wheel inversion item only on touch-primary devices", () => {
+    const commonProps = {
+      sessions: [],
+      activeId: null,
+      collapsed: false,
+      collapsible: true,
+      onCollapsedChange: () => {},
+      onSelect: () => {},
+      onClose: () => {},
+      onNew: () => {},
+      onNewFrom: () => {},
+      onEdit: () => {},
+      onPauseToggle: () => {},
+      onManageRemote: () => {},
+      notificationsEnabled: false,
+      onToggleNotifications: () => {},
+      canInstallPwa: false,
+      onInstallPwa: () => {},
+      tunnelLinkStatus: null,
+      onTunnelLink: () => {},
+      onCloseTunnelLink: () => {},
+      onMaximize: () => {},
+      onRemoveDisconnected: () => {},
+      isMobile: false,
+      isTouchPrimary: true,
+      keyBarPinned: false,
+      onToggleKeyBarPinned: () => {},
+      touchWheelInverted: false,
+      onToggleTouchWheelInverted: () => {}
+    };
+
+    const desktop = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, isTouchPrimary: false }));
+    const touchDesktop = renderToStaticMarkup(createElement(Sidebar, commonProps));
+    const inverted = renderToStaticMarkup(createElement(Sidebar, { ...commonProps, touchWheelInverted: true }));
+
+    expect(desktop).not.toContain("Invert two-finger scrolling");
+    expect(desktop).not.toContain("Use natural two-finger scrolling");
+    expect(touchDesktop).toContain("Invert two-finger scrolling");
+    expect(inverted).toContain("Use natural two-finger scrolling");
   });
 });
