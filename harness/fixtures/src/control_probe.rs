@@ -90,11 +90,10 @@ fn run_live(terminal: &mut TerminalGuard) -> io::Result<i32> {
     let (cols, rows) = size().unwrap_or((DEFAULT_COLS, DEFAULT_ROWS));
     let mut state = ProbeState::new(cols, rows);
     let mut pending = String::new();
-    let mut maybe_buffered_events = false;
     terminal.render(&state.ready_marker(), &state)?;
 
     loop {
-        let step = match next_live_input(&mut pending, &mut maybe_buffered_events)? {
+        let step = match next_live_input(&mut pending)? {
             LiveInputState::Idle => {
                 let Some((cols, rows)) = pending_live_resize(&state) else {
                     continue;
@@ -209,20 +208,15 @@ fn pending_live_resize(state: &ProbeState) -> Option<(u16, u16)> {
 
 fn next_live_input(
     pending: &mut String,
-    maybe_buffered_events: &mut bool,
 ) -> io::Result<LiveInputState> {
-    if *maybe_buffered_events {
-        if let Some(step) = take_buffered_live_step(pending)? {
-            return Ok(step);
-        }
-        *maybe_buffered_events = false;
+    if let Some(step) = take_buffered_live_step(pending)? {
+        return Ok(step);
     }
 
     match wait_for_live_input()? {
         LiveReadiness::Idle => Ok(LiveInputState::Idle),
         LiveReadiness::Disconnect => Ok(LiveInputState::Disconnect),
         LiveReadiness::Ready => {
-            *maybe_buffered_events = true;
             match read() {
                 Ok(event) => Ok(classify_live_event(event, pending)
                     .map(LiveInputState::Step)

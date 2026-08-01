@@ -514,31 +514,51 @@ async function main() {
     );
   });
 
+  let markerOffset = 0;
+  const waitForMarker = async (marker) => {
+    await waitFor("marker " + marker, () => {
+      const index = raw.indexOf(marker, markerOffset);
+      if (index < 0) {
+        return false;
+      }
+      markerOffset = index + marker.length;
+      return true;
+    });
+  };
+
   try {
-    await waitFor("ready marker", () => raw.includes("DAR_CONTROL_READY 100 30"));
+    await waitForMarker("DAR_CONTROL_READY 100 30");
     await waitFor("initial frame", () =>
       contents() === "DAR_CONTROL_READY\nsize=100x30\nlast=ready\nresizes=0"
     );
 
     child.write("surface-alpha\r");
-    await waitFor("input marker", () => raw.includes("DAR_CONTROL_INPUT surface-alpha"));
+    await waitForMarker("DAR_CONTROL_INPUT surface-alpha");
     await waitFor("input frame", () =>
       contents() ===
       "DAR_CONTROL_READY\nsize=100x30\nlast=surface-alpha\nresizes=0"
     );
 
-    if (mode === "resize") {
+    if (mode === "resize" || mode === "resize-exit") {
       child.resize(120, 40);
-      await waitFor("resize marker", () => raw.includes("DAR_CONTROL_RESIZE 1 120 40"));
+      await waitForMarker("DAR_CONTROL_RESIZE 1 120 40");
       await waitFor("resize frame", () =>
         contents() ===
         "DAR_CONTROL_READY\nsize=120x40\nlast=surface-alpha\nresizes=1"
       );
+    }
+
+    if (mode === "resize") {
       child.kill();
     } else {
       child.write("q");
+      await waitFor("alternate-screen restore", () => {
+        const leaveAlternateIndex = raw.indexOf("\u001b[?1049l", markerOffset);
+        return leaveAlternateIndex >= 0 && contents() === "";
+      });
     }
     await exitPromise;
+    await writeQueue;
 
     console.log(
       JSON.stringify({
@@ -1260,7 +1280,7 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
   );
 
   test.skipIf(!NODE_PATH)(
-    "restores control-probe alternate-screen state on q through node-pty",
+    "resizes then restores control-probe alternate-screen state on q through node-pty",
     async () => {
       await buildFixture();
       const child = spawn(NODE_PATH!, [
@@ -1268,7 +1288,7 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
         "-e",
         NODE_CONTROL_PROBE_DRIVER_SCRIPT,
         FIXTURE_PATH,
-        "exit",
+        "resize-exit",
         String(REAL_PTY_TEST_TIMEOUT_MS),
       ], {
         cwd: ROOT,
@@ -1292,14 +1312,14 @@ describe("climon-harness-fixture DAR control, metadata, and lifecycle protocols"
 
       expect(result.exitCode).toBe(0);
       expect(result.exitSignal === null || result.exitSignal === 0).toBe(true);
-      expect(
-        result.finalScreen === "" ||
-          result.finalScreen ===
-            "DAR_CONTROL_READY\nsize=100x30\nlast=surface-alpha\nresizes=0"
-      ).toBe(true);
+      expect(result.finalScreen).toBe("");
       expect(result.rawTail).toContain("\u001b[?1049h");
+      expect(result.rawTail).toContain("DAR_CONTROL_RESIZE 1 120 40");
       expect(result.rawTail).toContain("\u001b[?1049l");
       expect(result.rawTail).toContain("DAR_CONTROL_INPUT surface-alpha");
+      expect(result.rawTail.indexOf("\u001b[?1049l")).toBeGreaterThan(
+        result.rawTail.indexOf("DAR_CONTROL_RESIZE 1 120 40")
+      );
     },
     REAL_PTY_TEST_TIMEOUT_MS
   );
