@@ -439,11 +439,13 @@ describe("runCli", () => {
       const options = createRunOptions(workspace, {
         definitions: SCENARIO_DEFINITIONS,
         scenarioRunners: {
-          "DAR-05": async () => [
+          // DAR-09 has no SUBCHECK_DEFINITIONS entry — returning subchecks from
+          // it must trigger the "no registered subcheck contract" guard.
+          "DAR-09": async () => [
             {
-              name: "local-starts-as-controller",
-              title: "Returns from an injected DAR-05 runner",
-              status: "passed",
+              name: "some-subcheck",
+              title: "Returns from an injected DAR-09 runner without a contract",
+              status: "passed" as const,
               durationMs: 1,
             },
           ],
@@ -452,14 +454,14 @@ describe("runCli", () => {
       const cli = requireRunCli();
 
       await expect(
-        cli(["run", "DAR-05", "--artifact-root", artifactRoot], options)
+        cli(["run", "DAR-09", "--artifact-root", artifactRoot], options)
       ).resolves.toBe(1);
 
       const result = readJson(
-        join(artifactRoot, "cases", "DAR-05", "result.json")
+        join(artifactRoot, "cases", "DAR-09", "result.json")
       ) as CaseResult;
       expect(result).toMatchObject({
-        darId: "DAR-05",
+        darId: "DAR-09",
         platform: "linux",
         status: "setup-failure",
         blocking: true,
@@ -467,7 +469,7 @@ describe("runCli", () => {
         subchecks: [],
       });
       expect(result.message).toContain(
-        "DAR-05 returned subchecks without a registered subcheck contract"
+        "DAR-09 returned subchecks without a registered subcheck contract"
       );
     } finally {
       rmSync(workspace, { recursive: true, force: true });
@@ -1495,6 +1497,34 @@ describe("runCli", () => {
 
       await expect(cli(["aggregate", "--results-root", root], options)).resolves.toBe(2);
       expect((options.stdout as CapturedStream).text).toContain("invalid report shape");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("DAR-08 adapter requires createSurface: driver without it becomes setup-failure (createBrowserDriver wiring regression)", async () => {
+    const workspace = makeWorkspace("cli-run-dar08-browser-wiring");
+
+    try {
+      writeDoctorFixtureFiles(workspace);
+      const artifactRoot = join(workspace, "artifacts");
+      const options = createRunOptions(workspace, {
+        definitions: SCENARIO_DEFINITIONS,
+        createBrowserDriver: () => ({}) as never,
+      });
+      const cli = requireRunCli();
+
+      await expect(
+        cli(["run", "DAR-08", "--artifact-root", artifactRoot], options)
+      ).resolves.toBe(1);
+
+      const result = readJson(
+        join(artifactRoot, "cases", "DAR-08", "result.json")
+      ) as CaseResult;
+      expect(result.status).toBe("setup-failure");
+      expect(result.blocking).toBe(true);
+      expect(result.message).toContain("createSurface");
+      expect(result.message).toContain("DAR-08");
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
