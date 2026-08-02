@@ -371,6 +371,30 @@ describe("DaemonClient attach handshake (TCP loopback)", () => {
 });
 
 describe("DaemonClient output accumulation", () => {
+  test("initial Replay payload is searchable before live Output", async () => {
+    const { server, port, destroyAll } = await makeTcpServer((conn) => {
+      conn.write(
+        Buffer.concat([
+          makeJsonFrame(FrameType.PtySize, { cols: 80, rows: 24 }),
+          makeFrame(FrameType.Replay, "DAR_LIFECYCLE_HOLD_READY\r\n"),
+          makeFrame(FrameType.Output, "LIVE_AFTER_REPLAY\r\n"),
+        ])
+      );
+      conn.end();
+    });
+    cleanup.push(() => shutdownServer(server, destroyAll));
+
+    const client = new DaemonClient(makeSocketRef(port));
+    cleanup.push(() => client.destroy());
+
+    await client.waitForAttached(Date.now() + 5000);
+    await client.waitForOutput("DAR_LIFECYCLE_HOLD_READY", Date.now() + 5000);
+    await client.waitForOutput("LIVE_AFTER_REPLAY", Date.now() + 5000);
+    expect(client.accumulatedOutput).toBe(
+      "DAR_LIFECYCLE_HOLD_READY\r\nLIVE_AFTER_REPLAY\r\n"
+    );
+  });
+
   test("waitForOutput resolves when output contains marker", async () => {
     const { server, port, destroyAll } = await makeTcpServer((conn) => {
       conn.write(makeAttachHandshake());

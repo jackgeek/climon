@@ -61,6 +61,10 @@ import {
   DAR_08_SUBCHECKS,
   runDar08 as runDar08Impl,
 } from "./scenarios/dar-08.js";
+import {
+  DAR_09_SUBCHECKS,
+  runDar09 as runDar09Impl,
+} from "./scenarios/dar-09.js";
 import { notImplementedRunner } from "./scenarios/shared.js";
 import { validateSubcheckResults, type SubcheckDefinition } from "./subchecks.js";
 import {
@@ -380,6 +384,7 @@ const SUBCHECK_DEFINITIONS: Partial<Record<DarId, readonly SubcheckDefinition[]>
   "DAR-06": DAR_06_SUBCHECKS,
   "DAR-07": DAR_07_SUBCHECKS,
   "DAR-08": DAR_08_SUBCHECKS,
+  "DAR-09": DAR_09_SUBCHECKS,
 };
 
 function registeredSubcheckDefinitions(
@@ -668,6 +673,25 @@ const runDar08Adapter: ScenarioRunner = async ({
   );
 };
 
+const runDar09Adapter: ScenarioRunner = async ({
+  platform,
+  overallDeadline,
+  build,
+  runtime,
+}) =>
+  runDar09Impl({
+    platform,
+    overallDeadline,
+    build,
+    runtime: {
+      root: runtime.root,
+      home: runtime.home,
+      env: runtime.env,
+      artifacts: runtime.artifacts,
+      sessions: runtime.sessions,
+    },
+  });
+
 const DEFAULT_SCENARIO_RUNNERS: Record<DarId, ScenarioRunner> = {
   "DAR-01": runDar01Adapter,
   "DAR-02": runDar02Adapter,
@@ -677,7 +701,7 @@ const DEFAULT_SCENARIO_RUNNERS: Record<DarId, ScenarioRunner> = {
   "DAR-06": runDar06Adapter,
   "DAR-07": runDar07Adapter,
   "DAR-08": runDar08Adapter,
-  "DAR-09": notImplementedRunner("DAR-09"),
+  "DAR-09": runDar09Adapter,
   "DAR-10": notImplementedRunner("DAR-10"),
 };
 

@@ -439,12 +439,12 @@ describe("runCli", () => {
       const options = createRunOptions(workspace, {
         definitions: SCENARIO_DEFINITIONS,
         scenarioRunners: {
-          // DAR-09 has no SUBCHECK_DEFINITIONS entry — returning subchecks from
+          // DAR-10 has no SUBCHECK_DEFINITIONS entry — returning subchecks from
           // it must trigger the "no registered subcheck contract" guard.
-          "DAR-09": async () => [
+          "DAR-10": async () => [
             {
               name: "some-subcheck",
-              title: "Returns from an injected DAR-09 runner without a contract",
+              title: "Returns from an injected DAR-10 runner without a contract",
               status: "passed" as const,
               durationMs: 1,
             },
@@ -454,14 +454,14 @@ describe("runCli", () => {
       const cli = requireRunCli();
 
       await expect(
-        cli(["run", "DAR-09", "--artifact-root", artifactRoot], options)
+        cli(["run", "DAR-10", "--artifact-root", artifactRoot], options)
       ).resolves.toBe(1);
 
       const result = readJson(
-        join(artifactRoot, "cases", "DAR-09", "result.json")
+        join(artifactRoot, "cases", "DAR-10", "result.json")
       ) as CaseResult;
       expect(result).toMatchObject({
-        darId: "DAR-09",
+        darId: "DAR-10",
         platform: "linux",
         status: "setup-failure",
         blocking: true,
@@ -469,7 +469,7 @@ describe("runCli", () => {
         subchecks: [],
       });
       expect(result.message).toContain(
-        "DAR-09 returned subchecks without a registered subcheck contract"
+        "DAR-10 returned subchecks without a registered subcheck contract"
       );
     } finally {
       rmSync(workspace, { recursive: true, force: true });

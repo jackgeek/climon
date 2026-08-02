@@ -198,6 +198,10 @@ export class PtyDriver {
     this.writeRaw(text);
   }
 
+  public readLocalOutput(): string {
+    return this.durableRawChunks.join("");
+  }
+
   public writeLine(text: string): void {
     this.writeRaw(`${text}\r`);
   }

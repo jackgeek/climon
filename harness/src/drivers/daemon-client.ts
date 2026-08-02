@@ -339,6 +339,9 @@ export class DaemonClient {
     switch (frame.type) {
       case FrameType.Replay:
         this.replayReceived = true;
+        if (frame.payload.length > 0) {
+          this.outputParts.push(frame.payload.toString("utf8"));
+        }
         break;
 
       case FrameType.Output:
