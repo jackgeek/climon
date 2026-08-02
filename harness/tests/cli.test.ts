@@ -430,7 +430,7 @@ describe("runCli", () => {
     }
   });
 
-  test("fails when a scenario runner returns without a registered subcheck contract", async () => {
+  test("fails when a scenario runner returns subchecks that do not match the registered contract", async () => {
     const workspace = makeWorkspace("cli-run-missing-contract");
 
     try {
@@ -439,12 +439,13 @@ describe("runCli", () => {
       const options = createRunOptions(workspace, {
         definitions: SCENARIO_DEFINITIONS,
         scenarioRunners: {
-          // DAR-10 has no SUBCHECK_DEFINITIONS entry — returning subchecks from
-          // it must trigger the "no registered subcheck contract" guard.
+          // DAR-10 now has a registered subcheck contract (7 subchecks). An
+          // injected runner that returns fewer/different subchecks must trigger
+          // the subcheck-count-mismatch guard.
           "DAR-10": async () => [
             {
               name: "some-subcheck",
-              title: "Returns from an injected DAR-10 runner without a contract",
+              title: "Returns from an injected DAR-10 runner with wrong count",
               status: "passed" as const,
               durationMs: 1,
             },
@@ -469,7 +470,7 @@ describe("runCli", () => {
         subchecks: [],
       });
       expect(result.message).toContain(
-        "DAR-10 returned subchecks without a registered subcheck contract"
+        "Expected 7 subchecks, received 1"
       );
     } finally {
       rmSync(workspace, { recursive: true, force: true });
