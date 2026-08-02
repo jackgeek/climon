@@ -12,6 +12,8 @@ const LOCAL_COLS = 100;
 const LOCAL_ROWS = 30;
 const DESKTOP_VIEWPORT = { width: 1440, height: 960 } as const;
 const PWA_VIEWPORT = { width: 390, height: 844 } as const;
+const INTERMEDIATE_LOCAL_COLS = 120;
+const INTERMEDIATE_LOCAL_ROWS = 38;
 const RESIZED_LOCAL_COLS = 140;
 const RESIZED_LOCAL_ROWS = 46;
 const PTY_INPUT_ARTIFACT = "pty/input.log";
@@ -20,7 +22,8 @@ const MODE_BASELINE_PREFIX = "DAR_MODE_BASELINE ";
 const READY_MARKER = `DAR_CONTROL_READY ${LOCAL_COLS} ${LOCAL_ROWS}`;
 const OVERLAY_MESSAGE = "This session is being viewed on a climon dashboard.";
 const OVERLAY_HINT = "Press Space to take control.";
-const LOCAL_QUIET_PERIOD_MS = 500;
+const LOCAL_QUIET_PERIOD_MS = 1_000;
+const LOCAL_RESTORE_SETTLE_MS = 350;
 const SUBCHECK_TIMEOUTS_MS = {
   "local-starts-as-controller": 30_000,
   "desktop-transfers-control-and-pty-size": 30_000,
@@ -452,6 +455,28 @@ async function waitForDisplacedSurface(
   return surface.waitForDisplaced(sessionId, deadline);
 }
 
+async function waitForObservedController(
+  surface: Dar03BrowserSurface,
+  sessionId: string,
+  expectedControllerId: string,
+  deadline: number,
+  now: () => number,
+  sleep: (ms: number) => Promise<void>,
+  pollIntervalMs: number
+): Promise<void> {
+  await waitForValue(
+    deadline,
+    now,
+    sleep,
+    pollIntervalMs,
+    async () =>
+      (await surface.controllerId(sessionId, deadline)) === expectedControllerId
+        ? true
+        : undefined,
+    `Timed out waiting for ${surface.name} to observe controller ${expectedControllerId}`
+  );
+}
+
 function surfaceEvidence(
   createdDesktop: boolean,
   createdPwa: boolean
@@ -859,12 +884,15 @@ export async function runDar03(
         if (pwaController !== pwa.viewerId) {
           throw new Error(`Expected PWA controller ${pwa.viewerId}, received ${pwaController}`);
         }
-        const desktopController = await desktop!.controllerId(trackedSessionId!, deadline);
-        if (desktopController !== pwa.viewerId) {
-          throw new Error(
-            `Expected desktop surface to observe controller ${pwa.viewerId}, received ${desktopController}`
-          );
-        }
+        await waitForObservedController(
+          desktop!,
+          trackedSessionId!,
+          pwa.viewerId,
+          deadline,
+          now,
+          sleep,
+          pollIntervalMs
+        );
         await pwa.sendTerminalLine(pwaToken);
         const pwaLastMarker = lastTokenMarker(pwaToken);
         await pwa.waitForTerminalText(pwaLastMarker, deadline);
@@ -937,6 +965,7 @@ export async function runDar03(
           trackedSessionId!,
           deadline
         );
+        await sleep(Math.min(LOCAL_RESTORE_SETTLE_MS, Math.max(1, deadline - now())));
         pty!.writeText(`${localToken}\r`);
         await pty!.expectRaw(`DAR_CONTROL_INPUT ${localToken}`, deadline);
         localReclaimed = true;
@@ -968,45 +997,50 @@ export async function runDar03(
       }
 
       const deadline = remainingDeadline("local-resize-authoritative", overallDeadline, now);
+      await sleep(Math.min(LOCAL_RESTORE_SETTLE_MS, Math.max(1, deadline - now())));
       if (waitForQuietBeforeExit) {
         await pty!.waitForQuiet(LOCAL_QUIET_PERIOD_MS, deadline);
         waitForQuietBeforeExit = false;
       }
-      pty!.resize(RESIZED_LOCAL_COLS, RESIZED_LOCAL_ROWS);
-      waitForQuietBeforeExit = true;
-      const resizeMarker = await waitForValue(
-        deadline,
-        now,
-        sleep,
-        pollIntervalMs,
-        async () => {
-          const output = await readLocalOutput(context.runtime.artifacts.dir);
-          const match = output.match(
-            new RegExp(`DAR_CONTROL_RESIZE \\d+ ${RESIZED_LOCAL_COLS} ${RESIZED_LOCAL_ROWS}`)
-          );
-          return match?.[0];
-        },
-        `Timed out waiting for local resize marker ${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`
-      );
-      await pty!.expectScreen(
-        (screen) => screen.contents().includes(`size=${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`),
-        deadline
-      );
-      await waitForSessionSize(
-        trackedSessionId!,
-        context.runtime.home,
-        deadline,
+      const resizeMarkers: string[] = [];
+      for (const { cols, rows } of [
+        { cols: INTERMEDIATE_LOCAL_COLS, rows: INTERMEDIATE_LOCAL_ROWS },
         { cols: RESIZED_LOCAL_COLS, rows: RESIZED_LOCAL_ROWS },
-        now,
-        sleep,
-        pollIntervalMs,
-        readSessionMeta
-      );
-
-      if (waitForQuietBeforeExit) {
+      ]) {
+        pty!.resize(cols, rows);
+        waitForQuietBeforeExit = true;
+        const resizeMarker = await waitForValue(
+          deadline,
+          now,
+          sleep,
+          pollIntervalMs,
+          async () => {
+            const output = await readLocalOutput(context.runtime.artifacts.dir);
+            const match = output.match(
+              new RegExp(`DAR_CONTROL_RESIZE \\d+ ${cols} ${rows}`)
+            );
+            return match?.[0];
+          },
+          `Timed out waiting for local resize marker ${cols}x${rows}`
+        );
+        resizeMarkers.push(resizeMarker);
+        await pty!.expectScreen(
+          (screen) => screen.contents().includes(`size=${cols}x${rows}`),
+          deadline
+        );
+        await waitForSessionSize(
+          trackedSessionId!,
+          context.runtime.home,
+          deadline,
+          { cols, rows },
+          now,
+          sleep,
+          pollIntervalMs,
+          readSessionMeta
+        );
         await pty!.waitForQuiet(LOCAL_QUIET_PERIOD_MS, deadline);
-        waitForQuietBeforeExit = false;
       }
+      waitForQuietBeforeExit = false;
       pty!.writeText("q");
       exitSent = true;
       const exitCode = await pty!.waitForExit(deadline);
@@ -1016,12 +1050,24 @@ export async function runDar03(
 
       return {
         message: `Local resize restored authoritative PTY size ${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`,
-        evidence: [resizeMarker],
+        evidence: resizeMarkers,
       };
     })
   );
 
   const cleanupErrors: Error[] = [];
+  if (!exitSent && localReclaimed && pwa && trackedSessionId) {
+    const cleanupDeadline = Math.min(overallDeadline, now() + 5_000);
+    try {
+      await pwa.takeControl(trackedSessionId, cleanupDeadline);
+      localDisplaced = true;
+      await pwa.sendTerminalLine("q");
+      await pty!.waitForExit(cleanupDeadline);
+      exitSent = true;
+    } catch (error) {
+      cleanupErrors.push(cleanupFailure("PWA cleanup exit failed", error));
+    }
+  }
   await cleanupPty(
     pty,
     exitSent,

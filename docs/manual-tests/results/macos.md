@@ -30,3 +30,12 @@ available x86_64 macOS host and x86_64 branch-built binary.
 remediation reruns. Seven unchanged cells remain evidence from the original
 matrix commit; the final cross-platform release gate still requires one
 same-candidate sweep before changing the default engine.
+
+## Current automated harness tracking
+
+The historical manual rows above remain unchanged. Current automated runs on
+the E2E harness track these narrower gaps separately:
+
+| DAR | Automated gap | Review after |
+|---|---|---|
+| DAR-04 | Larger-browser displacement and local restore work, but the same-size two-dimension jiggle and resulting authoritative repaint remain unresolved. | 2026-08-31 |

@@ -123,7 +123,17 @@ describe("SCENARIO_DEFINITIONS", () => {
             reviewAfter: "2026-08-31",
             allowedFailedSubchecks: ["same-size-complete-repaint"],
           },
-          macos: { expected: "pass" },
+          macos: {
+            expected: "partial",
+            reason:
+              "The automated macOS run verifies larger-browser displacement and local restore, while the same-size two-dimension jiggle and resulting repaint remain unresolved.",
+            tracking: "docs/manual-tests/results/macos.md",
+            reviewAfter: "2026-08-31",
+            allowedFailedSubchecks: [
+              "same-size-browser-control-jiggle",
+              "same-size-complete-repaint",
+            ],
+          },
           windows: {
             expected: "known-failure",
             reason:

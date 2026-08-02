@@ -26,22 +26,22 @@ against a release candidate yet, so none is "passed". Record real runs in
 The repo-local E2E harness in [`../../harness/README.md`](../../harness/README.md)
 is the generic cross-platform harness, and the CI workflow
 [`../../.github/workflows/e2e-harness.yml`](../../.github/workflows/e2e-harness.yml)
-exercise a narrower automated slice of this matrix:
+exercise this matrix:
 
 - `bun run harness -- doctor` validates toolchain, Playwright Chromium,
   fixture, and manual-heading wiring.
-- `DAR-01` and `DAR-02` are the harness's first DAR scenarios, exercised today
-  by `bun run harness -- run DAR-01 DAR-02` with typed per-platform
-  expectations from `harness/src/scenario-registry.ts`.
+- `DAR-01` through `DAR-10` are the harness's first DAR scenarios, exercised by
+  one typed run with per-platform expectations from
+  `harness/src/scenario-registry.ts`.
 - `bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results`
   merges per-platform `results.json` files into combined `results.json`,
   `summary.md`, and `junit.xml` outputs for CI after recursively scanning nested
   downloaded artifact folders under `.test-tmp/e2e-harness-results/`.
 
-**Automation status:** useful regression coverage, **not** proof that the full
-Windows/macOS/Linux release gate has passed. `DAR-03` through `DAR-10`, real PWA
-coverage, and any scenario that needs a human-operated interactive console
-remain manual until explicitly automated and recorded here.
+**Automation status:** all ten DAR cases have automated regression coverage,
+but a green workflow is **not** proof that a release-candidate matrix has been
+manually recorded. Real PWA coverage and any case that requires a
+human-operated interactive console remain manual.
 
 Background: the [idiomatic-Rust daemon-rewrite
 plan](../superpowers/plans/2026-07-17-idiomatic-rust-daemon-rewrite.md) and its

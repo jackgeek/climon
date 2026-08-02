@@ -1203,6 +1203,12 @@ async function executeRun(
       stdout,
       `${result.platform} ${result.darId} ${result.status}${result.message ? ` — ${result.message}` : ""}`
     );
+    for (const subcheck of result.subchecks.filter(({ status }) => status === "failed")) {
+      writeLine(
+        stdout,
+        `  ${subcheck.name}: ${subcheck.title}${subcheck.message ? ` — ${subcheck.message}` : ""}`
+      );
+    }
   }
 
   return finalReport.results.some((result) => result.blocking) ? 1 : 0;

@@ -193,6 +193,51 @@ describe("ProcessLedger", () => {
     }
   });
 
+  test(
+    "times out waiting for SIGKILL and continues terminating later processes",
+    async () => {
+      const workspace = makeWorkspace("process-ledger-wait-timeout");
+      const killCalls: number[] = [];
+      const stuck = controlledProcess({
+        pid: 500,
+        label: "stuck-client",
+        platform: "linux",
+      });
+      const worker = controlledProcess({
+        pid: 600,
+        label: "worker",
+        platform: "linux",
+      });
+      const ledger = new ProcessLedger(join(workspace, "case"), {
+        kill(pid) {
+          killCalls.push(pid);
+          if (pid === 600) {
+            worker.exit(0);
+          }
+        },
+      });
+
+      try {
+        await ledger.register(stuck.process);
+        await ledger.register(worker.process);
+
+        const error = await ledger.terminateAll(20).catch((caught: unknown) => caught);
+
+        expect(killCalls).toEqual([500, 600]);
+        expect(error).toEqual(
+          expect.objectContaining({
+            name: "HarnessError",
+            kind: "cleanup",
+            message: expect.stringContaining("timed out"),
+          })
+        );
+      } finally {
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    },
+    500
+  );
+
   test("marks an already-exited process without sending a termination signal", async () => {
     const workspace = makeWorkspace("process-ledger-already-exited");
     const ledger = new ProcessLedger(join(workspace, "case"), {

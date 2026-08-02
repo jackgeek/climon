@@ -45,11 +45,14 @@ describe("E2E harness workflow", () => {
 
   test("runs doctor and the DAR suite with exact package-script commands", () => {
     const workflow = readWorkflow();
+    const completeSuite =
+      "bun run harness -- run DAR-01 DAR-02 DAR-03 DAR-04 DAR-05 DAR-06 DAR-07 DAR-08 DAR-09 DAR-10";
 
     expect(workflow).toContain("run: bun run harness -- doctor");
     expect(workflow).toContain(
-      "run: bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/e2e-harness/${{ matrix.platform }}"
+      `run: ${completeSuite} --artifact-root .test-tmp/e2e-harness/\${{ matrix.platform }}`
     );
+    expect(workflow.match(new RegExp(completeSuite, "g"))).toHaveLength(1);
     expect(workflow).toContain(
       "CLIMON_DISABLE_SETSID: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}"
     );

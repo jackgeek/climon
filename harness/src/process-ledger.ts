@@ -42,6 +42,8 @@ const defaultDependencies: Required<ProcessLedgerDependencies> = {
   },
 };
 
+const PROCESS_EXIT_TIMEOUT = Symbol("process-exit-timeout");
+
 export class ProcessLedger {
   private readonly entries = new Map<number, OwnedEntry>();
   private readonly dependencies: Required<ProcessLedgerDependencies>;
@@ -84,9 +86,10 @@ export class ProcessLedger {
     await this.log("exit", entry.process, { exitCode });
   }
 
-  public async terminateAll(): Promise<void> {
+  public async terminateAll(timeoutMs = 10_000): Promise<void> {
     const failures: Error[] = [];
     const stillRunning = Symbol("still-running");
+    const deadline = Date.now() + Math.max(0, timeoutMs);
 
     for (const entry of this.entries.values()) {
       if (!entry.live) {
@@ -129,7 +132,11 @@ export class ProcessLedger {
           this.dependencies.kill(targetPid, "SIGKILL");
         }
 
-        await this.markExited(owned.pid, await owned.wait());
+        const exitCode = await this.waitForExit(owned, deadline);
+        if (exitCode === PROCESS_EXIT_TIMEOUT) {
+          throw new Error(`timed out after ${timeoutMs}ms waiting for process exit`);
+        }
+        await this.markExited(owned.pid, exitCode);
       } catch (error) {
         const exitAfterFailure = await Promise.race([
           owned.wait(),
@@ -169,6 +176,30 @@ export class ProcessLedger {
         "cleanup",
         `Owned processes still running: ${survivors.join(", ")}`
       );
+    }
+  }
+
+  private async waitForExit(
+    owned: OwnedProcess,
+    deadline: number
+  ): Promise<number | null | typeof PROCESS_EXIT_TIMEOUT> {
+    const remainingMs = Math.max(0, deadline - Date.now());
+    if (remainingMs === 0) {
+      return PROCESS_EXIT_TIMEOUT;
+    }
+
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        owned.wait(),
+        new Promise<typeof PROCESS_EXIT_TIMEOUT>((resolve) => {
+          timer = setTimeout(() => resolve(PROCESS_EXIT_TIMEOUT), remainingMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 

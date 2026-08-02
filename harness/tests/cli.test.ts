@@ -316,7 +316,7 @@ function expectedListOutput(): string {
     "DAR-04 Local restore and same-size repaint jiggle",
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-04-local-restore-and-same-size-repaint-jiggle",
     "  linux: partial | reason=The latest Linux manual run verified repaint flow with Vim but did not cover the required frame-caching same-size repaint case. | tracking=docs/manual-tests/results/linux.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=same-size-complete-repaint",
-    "  macos: pass",
+    "  macos: partial | reason=The automated macOS run verifies larger-browser displacement and local restore, while the same-size two-dimension jiggle and resulting repaint remain unresolved. | tracking=docs/manual-tests/results/macos.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=same-size-browser-control-jiggle,same-size-complete-repaint",
     "  windows: known-failure | reason=The latest Windows manual run could not attach the full-screen console workflow needed for restore and same-size repaint checks. | tracking=docs/manual-tests/results/windows.md | reviewAfter=2026-08-31 | allowedFailedSubchecks=larger-browser-displaces-local,local-restore-resizes-to-local-grid,local-restore-complete-authoritative-repaint,same-size-browser-control-jiggle,same-size-complete-repaint",
     "DAR-05 Attention flag, acknowledgement, and resize stickiness",
     "  manual: docs/manual-tests/daemon-actor-rewrite.md#dar-05-attention-flag-acknowledgement-and-resize-stickiness",
@@ -723,6 +723,25 @@ describe("runCli", () => {
           },
         ],
       });
+      const attachedStartupTitle = DAR_01_SUBCHECKS.find(
+        ({ name }) => name === "attached-startup"
+      )!.title;
+      expect((options.stdout as CapturedStream).text).toContain("attached-startup");
+      expect((options.stdout as CapturedStream).text).toContain(attachedStartupTitle);
+      expect(
+        readFileSync(
+          join(workspace, ".test-tmp", "e2e-harness", "linux", "summary.md"),
+          "utf8"
+        )
+      ).toContain(`${attachedStartupTitle} (attached-startup)`);
+      const junit = readFileSync(
+        join(workspace, ".test-tmp", "e2e-harness", "linux", "junit.xml"),
+        "utf8"
+      );
+      expect(junit).toContain("&quot;name&quot;:&quot;attached-startup&quot;");
+      expect(junit).toContain(
+        `&quot;title&quot;:&quot;${attachedStartupTitle}&quot;`
+      );
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }

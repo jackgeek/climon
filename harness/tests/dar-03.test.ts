@@ -27,6 +27,8 @@ const DESKTOP_COLS = 132;
 const DESKTOP_ROWS = 44;
 const PWA_COLS = 48;
 const PWA_ROWS = 18;
+const INTERMEDIATE_LOCAL_COLS = 120;
+const INTERMEDIATE_LOCAL_ROWS = 38;
 const RESIZED_LOCAL_COLS = 140;
 const RESIZED_LOCAL_ROWS = 46;
 const OVERLAY_MESSAGE = "This session is being viewed on a climon dashboard.";
@@ -85,6 +87,7 @@ class FakePty implements Dar03Pty {
       requireQuietBeforeExitAfterReclaim?: boolean;
       requireQuietBeforeResizeAfterReclaim?: boolean;
       requireQuietBeforeExitAfterResize?: boolean;
+      ignoreResize?: boolean;
     } = {}
   ) {}
 
@@ -114,7 +117,6 @@ class FakePty implements Dar03Pty {
     if (!this.localOwnsControl()) {
       return;
     }
-
     if (text === "q") {
       this.state.exited = true;
       this.state.status = "completed";
@@ -136,6 +138,9 @@ class FakePty implements Dar03Pty {
     this.callLog.push(`resize:${cols}x${rows}`);
     this.resizeCalls.push({ cols, rows });
     if (!this.localOwnsControl()) {
+      return;
+    }
+    if (this.options.ignoreResize) {
       return;
     }
     if (this.requiresQuietBeforeResize) {
@@ -219,6 +224,8 @@ class FakeSurface implements Dar03BrowserSurface {
       takeControlError?: Error;
       sendTerminalLineError?: Error;
       closeError?: Error;
+      controllerIdResponses?: string[];
+      controllerIdOverride?: (current: string, callIndex: number) => string;
     } = {}
   ) {}
 
@@ -242,8 +249,13 @@ class FakeSurface implements Dar03BrowserSurface {
   }
 
   public async controllerId(): Promise<string> {
-    this.controllerIdCalls.push(this.state.currentController);
-    return this.state.currentController;
+    const callIndex = this.controllerIdCalls.length;
+    const response =
+      this.options.controllerIdResponses?.shift() ??
+      this.options.controllerIdOverride?.(this.state.currentController, callIndex) ??
+      this.state.currentController;
+    this.controllerIdCalls.push(response);
+    return response;
   }
 
   public async waitForDisplaced(): Promise<string> {
@@ -271,6 +283,10 @@ class FakeSurface implements Dar03BrowserSurface {
     }
     this.state.lastToken = text;
     this.state.browserTranscript.push(`DAR_CONTROL_INPUT ${text}`);
+    if (text === "q") {
+      this.state.exited = true;
+      this.state.status = "completed";
+    }
   }
 
   public async terminalText(): Promise<string> {
@@ -306,6 +322,8 @@ class FakeBrowserDriver implements Dar03BrowserDriver {
       pwaSendTerminalLineError?: Error;
       desktopCloseError?: Error;
       pwaCloseError?: Error;
+      desktopControllerIdResponses?: string[];
+      desktopControllerIdOverride?: (current: string, callIndex: number) => string;
     } = {}
   ) {
     this.desktop = new FakeSurface(
@@ -316,6 +334,8 @@ class FakeBrowserDriver implements Dar03BrowserDriver {
       {
         takeControlError: options.desktopTakeControlError,
         closeError: options.desktopCloseError,
+        controllerIdResponses: options.desktopControllerIdResponses,
+        controllerIdOverride: options.desktopControllerIdOverride,
       }
     );
     this.pwa = new FakeSurface(
@@ -522,9 +542,14 @@ describe("runDar03", () => {
     );
     expect(results[5]?.evidence).toEqual(
       expect.arrayContaining([
-        `DAR_CONTROL_RESIZE 1 ${RESIZED_LOCAL_COLS} ${RESIZED_LOCAL_ROWS}`,
+        `DAR_CONTROL_RESIZE 1 ${INTERMEDIATE_LOCAL_COLS} ${INTERMEDIATE_LOCAL_ROWS}`,
+        `DAR_CONTROL_RESIZE 2 ${RESIZED_LOCAL_COLS} ${RESIZED_LOCAL_ROWS}`,
       ])
     );
+    expect(pty.resizeCalls).toEqual([
+      { cols: INTERMEDIATE_LOCAL_COLS, rows: INTERMEDIATE_LOCAL_ROWS },
+      { cols: RESIZED_LOCAL_COLS, rows: RESIZED_LOCAL_ROWS },
+    ]);
     expect(pty.killCalls).toBe(0);
   });
 
@@ -569,6 +594,47 @@ describe("runDar03", () => {
     expect(results[3]?.evidence).toEqual(
       expect.arrayContaining(["last=dar03-pwa-df3d19d3", `${PWA_COLS}x${PWA_ROWS}`])
     );
+  });
+
+  test("waits for the desktop surface to observe the PWA controller handoff", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state, {
+      desktopControllerIdOverride: (current, callIndex) =>
+        current === "surface-2-pwa" && callIndex === 2
+          ? "surface-1-desktop"
+          : current,
+    });
+    const pty = new FakePty(state);
+
+    const results = await runDar03(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => ++current;
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 1,
+      createUuid: () => RUN_ID,
+      spawnPty: () => pty,
+      findSession: async () => ({
+        id: SESSION_ID,
+        status: "running",
+        cols: state.cols,
+        rows: state.rows,
+      }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+      createBrowserDriver: () => browser,
+    });
+
+    expect(results.map((result) => result.status)).toEqual(Array(6).fill("passed"));
+    expect(browser.desktop.controllerIdCalls).toContain("surface-1-desktop");
+    expect(browser.desktop.controllerIdCalls).toContain("surface-2-pwa");
   });
 
   test("accepts a non-literal local controller id once both browser viewers are displaced", async () => {
@@ -641,7 +707,7 @@ describe("runDar03", () => {
     expect(pty.callLog.slice(-5)).toEqual([
       `resize:${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`,
       "expectScreen",
-      `waitForQuiet:500`,
+      `waitForQuiet:1000`,
       `writeText:${JSON.stringify("q")}`,
       "waitForExit",
     ]);
@@ -654,13 +720,17 @@ describe("runDar03", () => {
     const pty = new FakePty(state, {
       requireQuietBeforeResizeAfterReclaim: true,
     });
+    const sleepCalls: number[] = [];
 
     const results = await runDar03(context, {
       now: (() => {
         let current = 1_000;
         return () => ++current;
       })(),
-      sleep: async () => {},
+      sleep: async (ms) => {
+        sleepCalls.push(ms);
+        pty.callLog.push(`sleep:${ms}`);
+      },
       pollIntervalMs: 5,
       createUuid: () => RUN_ID,
       createBrowserDriver: () => browser,
@@ -678,12 +748,21 @@ describe("runDar03", () => {
     expect(results.map((result) => result.status)).toEqual(Array(6).fill("passed"));
     expect(pty.callLog).toEqual(
       expect.arrayContaining([
-        `waitForQuiet:500`,
+        `waitForQuiet:1000`,
         `resize:${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`,
       ])
     );
-    const reclaimQuietIndex = pty.callLog.indexOf(`waitForQuiet:500`);
+    const reclaimQuietIndex = pty.callLog.indexOf(`waitForQuiet:1000`);
     const resizeIndex = pty.callLog.indexOf(`resize:${RESIZED_LOCAL_COLS}x${RESIZED_LOCAL_ROWS}`);
+    const localTokenIndex = pty.callLog.indexOf(
+      `writeText:${JSON.stringify(`dar03-local-${RUN_ID}\r`)}`
+    );
+    const settleIndexes = pty.callLog
+      .map((entry, index) => (entry === "sleep:350" ? index : -1))
+      .filter((index) => index >= 0);
+    expect(sleepCalls.filter((ms) => ms === 350)).toHaveLength(2);
+    expect(settleIndexes[0]).toBeLessThan(localTokenIndex);
+    expect(settleIndexes[1]).toBeLessThan(resizeIndex);
     expect(reclaimQuietIndex).toBeGreaterThan(-1);
     expect(resizeIndex).toBeGreaterThan(reclaimQuietIndex);
   });
@@ -781,10 +860,49 @@ describe("runDar03", () => {
     expect(pty.callLog.slice(-5)).toEqual([
       `writeText:${JSON.stringify(" ")}`,
       "expectScreen",
-      `waitForQuiet:500`,
+      `waitForQuiet:1000`,
       `writeText:${JSON.stringify("q")}`,
       "waitForExit",
     ]);
+    expect(pty.killCalls).toBe(0);
+  });
+
+  test("uses the PWA to exit cleanly after local resize failure", async () => {
+    const state = createState();
+    const context = createContext();
+    const browser = new FakeBrowserDriver(state);
+    const pty = new FakePty(state, {
+      ignoreResize: true,
+    });
+
+    const results = await runDar03(context, {
+      now: (() => {
+        let current = 1_000;
+        return () => (current += 1_000);
+      })(),
+      sleep: async () => {},
+      pollIntervalMs: 1,
+      createUuid: () => RUN_ID,
+      createBrowserDriver: () => browser,
+      spawnPty: () => pty,
+      findSession: async () => ({
+        id: SESSION_ID,
+        status: "running",
+        cols: state.cols,
+        rows: state.rows,
+      }),
+      readLocalOutput: async () => state.localOutput,
+      readSessionMeta: async () => ({
+        id: SESSION_ID,
+        status: state.status,
+        cols: state.cols,
+        rows: state.rows,
+      }),
+    });
+
+    expect(results[5]?.status).toBe("failed");
+    expect(browser.pwa.takeControlCalls).toHaveLength(2);
+    expect(browser.pwa.sendTerminalLineCalls.at(-1)).toBe("q");
     expect(pty.killCalls).toBe(0);
   });
 
@@ -869,7 +987,7 @@ describe("runDar03", () => {
         }),
       })
     ).rejects.toThrow(
-      "PTY cleanup failed: pty cleanup wait failed; PWA surface close failed: pwa close failed"
+      "PWA cleanup exit failed: pty cleanup wait failed; PTY cleanup failed: pty cleanup wait failed; PWA surface close failed: pwa close failed"
     );
 
     expect(browser.pwa.closeCalls).toEqual(["pwa"]);

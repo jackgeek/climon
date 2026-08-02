@@ -74,7 +74,7 @@ jobs:
       - name: Run E2E harness
         env:
           CLIMON_DISABLE_SETSID: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
-        run: bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/e2e-harness/${{ matrix.platform }}
+        run: bun run harness -- run DAR-01 DAR-02 DAR-03 DAR-04 DAR-05 DAR-06 DAR-07 DAR-08 DAR-09 DAR-10 --artifact-root .test-tmp/e2e-harness/${{ matrix.platform }}
 
       - name: Upload E2E harness artifact
         if: ${{ always() }}

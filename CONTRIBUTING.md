@@ -76,9 +76,12 @@ bun install --frozen-lockfile
 bun run harness:install-browser             # macOS / Windows
 bunx playwright install --with-deps chromium # Linux CI-style hosts
 bun run harness -- doctor
-bun run harness -- run DAR-01 DAR-02 --artifact-root .test-tmp/e2e-harness/<platform>
+bun run harness -- run DAR-01 DAR-02 DAR-03 DAR-04 DAR-05 DAR-06 DAR-07 DAR-08 DAR-09 DAR-10 --artifact-root .test-tmp/e2e-harness/<platform>
 bun run harness -- aggregate --results-root .test-tmp/e2e-harness-results
 ```
+
+For native Windows use `.test-tmp/e2e-harness/windows-native`. In WSL, set
+`CLIMON_DISABLE_SETSID=1` and use `.test-tmp/e2e-harness/wsl`.
 
 `bun run harness -- doctor` checks the toolchain, Chromium install, fixture
 manifest, and manual-heading wiring before a run. The aggregate step writes

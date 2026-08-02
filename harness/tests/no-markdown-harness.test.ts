@@ -40,6 +40,11 @@ const DOCUMENTATION_RENAME_CHECKS = [
       ".test-tmp/e2e-harness/<platform>/",
       ".test-tmp/e2e-harness-results/",
       "first DAR scenarios",
+      "windows-native",
+      "CLIMON_DISABLE_SETSID=1",
+      ".test-tmp/e2e-harness/wsl",
+      "descriptive title",
+      "stable subcheck ID",
     ],
   },
   {
@@ -48,6 +53,8 @@ const DOCUMENTATION_RENAME_CHECKS = [
       "### E2E harness",
       ".test-tmp/e2e-harness/<platform>",
       ".test-tmp/e2e-harness-results",
+      "windows-native",
+      ".test-tmp/e2e-harness/wsl",
     ],
   },
   {
@@ -56,6 +63,7 @@ const DOCUMENTATION_RENAME_CHECKS = [
       "| cli-26 | Cross-platform E2E harness |",
       ".github/workflows/e2e-harness.yml",
       "first DAR scenarios",
+      "`DAR-01` through `DAR-10`",
     ],
   },
   {
@@ -64,6 +72,7 @@ const DOCUMENTATION_RENAME_CHECKS = [
       "repo-local E2E harness",
       "../../.github/workflows/e2e-harness.yml",
       "first DAR scenarios",
+      "`DAR-01` through `DAR-10`",
     ],
   },
   {
@@ -73,6 +82,7 @@ const DOCUMENTATION_RENAME_CHECKS = [
       "../../.github/workflows/e2e-harness.yml",
       "first DAR scenarios",
       ".test-tmp/e2e-harness-results",
+      "`DAR-01` through `DAR-10`",
     ],
   },
 ] as const;

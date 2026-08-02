@@ -759,7 +759,9 @@ export class RuntimeSupervisor {
 
     if (!this.cleanupProgress.clientProcessesTerminated) {
       try {
-        await this.context.processes.terminateAll();
+        await this.context.processes.terminateAll(
+          Math.max(0, deadline - this.now())
+        );
         this.cleanupProgress.clientProcessesTerminated = true;
       } catch (error) {
         errors.push(error);
@@ -768,7 +770,9 @@ export class RuntimeSupervisor {
 
     if (!this.cleanupProgress.serverProcessesTerminated) {
       try {
-        await this.serverProcesses.terminateAll();
+        await this.serverProcesses.terminateAll(
+          Math.max(0, deadline - this.now())
+        );
         this.cleanupProgress.serverProcessesTerminated = true;
       } catch (error) {
         errors.push(error);
