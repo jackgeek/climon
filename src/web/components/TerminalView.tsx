@@ -1096,7 +1096,10 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
         hasSelection: term.hasSelection()
       });
       if (clipboardAction === "copy") {
-        void copyToClipboard(term.getSelection());
+        const text = term.getSelection();
+        if (text) {
+          void copyToClipboard(text);
+        }
         return false;
       }
       if (clipboardAction === "paste") {
@@ -1141,6 +1144,20 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       return false;
     });
 
+    // Right-click with a selection copies to the browser clipboard and suppresses
+    // the browser context menu, matching native terminal behaviour. Without a
+    // selection we let the event fall through: when mouse events are active xterm
+    // will suppress the context menu and forward the right-click to the PTY (e.g.
+    // so Copilot CLI can handle it); otherwise the browser shows its default menu.
+    const onContextMenu = (event: MouseEvent): void => {
+      const text = term.getSelection();
+      if (text) {
+        event.preventDefault();
+        void copyToClipboard(text);
+      }
+    };
+    container.addEventListener("contextmenu", onContextMenu);
+
     // Register input handling once and route to the current socket. Registering
     // this per-connection would duplicate every keystroke.
     const dataDisposable = term.onData((data) => {
@@ -1171,6 +1188,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
     return () => {
       window.removeEventListener("resize", onWindowResize);
+      container.removeEventListener("contextmenu", onContextMenu);
       dataDisposable.dispose();
       closeWs();
       disposeTouchWheel();
